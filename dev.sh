@@ -131,7 +131,7 @@ fetch() {
 }
 
 py_sync() { (cd "$ROOT/builder" && uv sync --locked --all-extras --group coverage); }
-rust_build() { (cd "$ROOT/runner" && cargo build --release --locked --bin aeiou); }
+rust_build() { (cd "$ROOT/runner" && cargo build --release --locked --bin aeiou --bin aeiou-trace); }
 link_header() { ln -sf ../../../builder/.venv/bin/aeiou-header "$ROOT/runner/target/release/aeiou-header"; }
 
 # The jobs of .github/workflows/ci.yml, one function each.

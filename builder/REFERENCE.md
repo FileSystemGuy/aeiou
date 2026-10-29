@@ -401,8 +401,23 @@ The trace side of the locality-metrics check (`GRAMMAR_OPTIONS.md` §5.4, `PROJE
 numbers, by the definitions of `runner/REFERENCE.md` §10 and in the same document
 (~~`aeiou_metrics: 1`~~ `aeiou_metrics: 2` since 2026-10-22, reuse and popularity over extents
 and, under `--metrics-block`, blocks, `DESIGN_REVIEW.md` §3.79; with `"source": "strace"`), from an `strace` of the application the
-abstract models, and compares two such documents. Standard library only (`aeiou/trace.py`);
-the reasoning is in `DESIGN_REVIEW.md` §3.42. **The choices below were made while building
+abstract models, and compares two such documents. ~~Standard library only (`aeiou/trace.py`);~~
+*Since 2026-10-29 (`DESIGN_REVIEW.md` §3.89, stage 1):* `aeiou-trace` is a binary of the runner's
+crate (`runner/aeiou/src/bin/aeiou_trace.rs`), and its `metrics` and `export` are Rust: the strace
+reader `strace.rs`, the exporter and the trace file's metrics `export.rs`, the object-store log
+reader `objectlog.rs`, the metrics core shared with the dry run (`metrics.rs`, `TraceMetrics`).
+The Python parser, metrics, exporter, and object-log reader that this section describes were
+ported line for line and deleted; their behavior is kept as the golden corpus
+`runner/aeiou/tests/strace/` (every trace the Python tests fed them, with what they made of it,
+reproduced exactly by `tests/strace_corpus.rs`), and the Python tests drive the binary as its
+acceptance tests. `compare` and `digest` stay in `aeiou/trace.py` and `aeiou/digest.py` until
+their stages of §3.89, run by the binary as `python3 -m aeiou.trace` (or `$AEIOU_PYTHON`); the
+digest takes a trace's calls from `aeiou-trace export` (`trace.export_of`, which finds the binary
+through `$AEIOU_TRACE`, beside `$AEIOU_RUNNER`, on the `PATH`, or in the checkout's build). The
+export reads its input twice, the first pass learning what only the end of the trace says, so
+its memory is per open and per path, never per call; on a synthetic strace of 211 MB the port
+took 2.8 s and 0.15 GB for the metrics (the Python 36 s and 0.61 GB) and 3.2 s and 0.06 GB for
+the export (the Python 50 s and 1.46 GB). The reasoning is in `DESIGN_REVIEW.md` §3.42. **The choices below were made while building
 and confirmed by the user the same day (decided 2026-10-01).**
 
 ```
@@ -718,7 +733,8 @@ a question's candidates, and `site_line` the one line of evidence the interview 
 show per kind. A site's `projection` holds its kind's facts, given or None, and which were
 asserted. `tests/test_digest.py` holds each kind to constructed traces (`calls_strace`).
 
-**Object-store request logs (`aeiou/objectlog.py`, built 2026-10-29, §3.88):** a MinIO audit log
+**Object-store request logs (~~`aeiou/objectlog.py`~~ `runner/aeiou/src/objectlog.rs` since the port
+the same day, §3.89; built 2026-10-29, §3.88):** a MinIO audit log
 or an Amazon S3 server access log read in place of an strace by `metrics`, `export`, and
 `digest`. `source_of(first_line)` tells the format; `export_of(lines, "BUCKET[/PREFIX]", kind)`
 turns each request (`Request`, from `minio_request` or `s3_request`) into the calls the runner's
@@ -730,9 +746,12 @@ open-directory/readdir/close of the prefix, multipart open at the start, a write
 a lane per client host; errors by status (404 `ENOENT`, 403 `EACCES`, else `EIO`) as the
 open's or the stat's `ret`; requests outside the root, without an engine call behind them,
 without a time, or parts without a start are counted under `notes`, as is `ranges_unknown`
-for an access log's partial GET. `trace.metrics_of_events` gives the metrics of events in memory,
-`trace.object_log_events` is the commands' hook, and `digest.analyze` detects the log itself.
-`tests/test_objectlog.py` holds both formats to constructed logs and the commands to them.
+for an access log's partial GET. ~~`trace.metrics_of_events` gives the metrics of events in memory,
+`trace.object_log_events` is the commands' hook, and `digest.analyze` detects the log itself.~~
+Since the port, the binary tells a log from an strace by its first line, in `metrics` and `export`
+alike, and `digest.analyze` takes a log's calls from `aeiou-trace export` as it takes an
+strace's. `tests/test_objectlog.py` holds both formats to constructed logs and the commands to
+them, through the binary.
 
 **The application records (`applications/`, `aeiou/applications.py`, built 2026-10-29, §3.88):**
 what the digest knows about the applications whose traces it reads, as data a person extends by

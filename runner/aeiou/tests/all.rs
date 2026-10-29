@@ -18,4 +18,6 @@ mod options;
 mod report;
 mod run;
 mod trace;
+mod strace_corpus;
+mod trace_tool;
 mod usage;

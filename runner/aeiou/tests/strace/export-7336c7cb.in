@@ -1,0 +1,73 @@
+100 1700000000.000000 chdir("/d") = 0 <0.000005>
+100 1700000000.001000 openat(AT_FDCWD, "rel/a.bin", O_RDWR|O_CREAT|O_TRUNC|O_LARGEFILE|O_NONBLOCK, 0644) = 3 <0.000010>
+100 1700000000.002000 write(3, "x"..., 4096) = 4096 <0.000010>
+100 1700000000.003000 fallocate(3, 0, 0, 65536) = 0 <0.000010>
+100 1700000000.004000 ftruncate(3, 8192) = 0 <0.000010>
+100 1700000000.005000 fadvise64(3, 0, 4096, POSIX_FADV_DONTNEED) = 0 <0.000010>
+100 1700000000.006000 fadvise64(3, 0, 4096, 99) = 0 <0.000010>
+100 1700000000.007000 ioctl(3, TCGETS, 0x7ffd) = -1 ENOTTY (Inappropriate ioctl for device) <0.000010>
+100 1700000000.008000 ioctl(3, FS_IOC_GETFLAGS, 0x7ffd) = 0 <0.000010>
+100 1700000000.009000 ftruncate(3, junk) = 0 <0.000010>
+100 1700000000.010000 fcntl(3</d/rel/a.bin>, F_DUPFD_CLOEXEC, 10) = 10</d/rel/a.bin> <0.000010>
+100 1700000000.011000 fcntl(3</d/rel/a.bin>, F_GETFL) = 0x8002 (flags O_RDWR|O_LARGEFILE) <0.000010>
+100 1700000000.012000 dup2(10</d/rel/a.bin>, 11) = 11</d/rel/a.bin> <0.000010>
+100 1700000000.013000 read(11</d/rel/a.bin>, ""..., 4096) = 0 <0.000010>
+100 1700000000.014000 mmap(NULL, 8192, PROT_READ, MAP_SHARED, 3</d/rel/a.bin>, 0) = 0x7f0000000000 <0.000010>
+100 1700000000.015000 statx(3</d/rel/a.bin>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_ALL}) = 0 <0.000010>
+100 1700000000.016000 newfstatat(AT_FDCWD</d>, "rel/a.bin", {st_mode=S_IFREG|0644, st_size=8192, ...}, 0) = 0 <0.000010>
+100 1700000000.017000 rename("/d/rel/a.bin", "/d/rel/b.bin") = 0 <0.000010>
+100 1700000000.018000 rename("/d/rel/b.bin", "/elsewhere/c.bin") = 0 <0.000010>
+100 1700000000.019000 renameat2(AT_FDCWD</d>, "rel/x", AT_FDCWD</d>, "rel/y", RENAME_NOREPLACE) = -1 ENOENT (No such file or directory) <0.000010>
+100 1700000000.020000 truncate("/d/rel/y", 100) = 0 <0.000010>
+100 1700000000.021000 mkdirat(AT_FDCWD</d>, "rel/sub", 0755) = 0 <0.000010>
+100 1700000000.022000 mkdir("/d", 0755) = -1 EEXIST (File exists) <0.000010>
+100 1700000000.023000 unlinkat(AT_FDCWD</d>, "rel/sub", AT_REMOVEDIR) = 0 <0.000010>
+100 1700000000.024000 openat(AT_FDCWD</d>, "/d/rel", O_RDONLY|O_DIRECTORY) = 4</d/rel> <0.000010>
+100 1700000000.025000 getdents64(4</d/rel>, 0x55 /* 3 entries */, 32768) = 80 <0.000010>
+100 1700000000.026000 getdents64(4</d/rel>, 0x55 /* 0 entries */, 32768) = 0 <0.000010>
+100 1700000000.027000 lseek(4</d/rel>, 0, SEEK_SET) = 0 <0.000010>
+100 1700000000.028000 getdents64(4</d/rel>, 0x55 /* 3 entries */, 32768) = 80 <0.000010>
+100 1700000000.029000 close(4</d/rel>) = 0 <0.000010>
+100 1700000000.030000 fchdir(5</d/rel>) = 0 <0.000010>
+100 1700000000.031000 openat(AT_FDCWD, "c.bin", O_WRONLY|O_APPEND) = 6 <0.000010>
+100 1700000000.032000 write(6, "x"..., 10) = 10 <0.000010>
+100 1700000000.033000 openat(AT_FDCWD, "d.bin", O_WRONLY|O_CREAT|O_EXCL|O_APPEND, 0600) = 7 <0.000010>
+100 1700000000.034000 write(7, "x"..., 10) = 10 <0.000010>
+100 1700000000.035000 pwrite64(7, "x"..., 10, 500) = 10 <0.000010>
+100 1700000000.036000 writev(7, [{iov_base="x", iov_len=5}, {iov_base="y", iov_len=5}], 2) = 10 <0.000010>
+100 1700000000.037000 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_THREAD, exit_signal=0}, 88 <unfinished ...>
+101 1700000000.038000 read(7</d/rel/d.bin>, ""..., 10) = 0 <0.000010>
+100 1700000000.039000 <... clone3 resumed>) = 101 <0.000020>
+101 1700000000.040000 close(7 <unfinished ...>
+100 1700000000.041000 openat(AT_FDCWD, "/d/rel/e.bin", O_RDONLY) = 7 <0.000010>
+101 1700000000.042000 <... close resumed>) = 0 <0.000030>
+100 1700000000.043000 read(7, "e"..., 100) = 100 <0.000010>
+100 1700000000.044000 read(12</d/old.bin>, "o"..., 100) = 100 <0.000010>
+102 1700000000.045000 read(12</d/old.bin>, "o"..., 100) = 100 <0.000010>
+100 1700000000.046000 read(99, "o"..., 100) = 100 <0.000010>
+100 1700000000.047000 openat(AT_FDCWD, "/d/rel/f.bin", O_RDONLY) = -1 ENOENT (No such file or directory) <0.000010>
+100 1700000000.048000 write <unfinished ...>
+100 1700000000.049000 <... read resumed>) = 1 <0.000010>
+100 1700000000.050000 io_setup(8, [0x7f01]) = 0 <0.000010>
+100 1700000000.051000 io_setup(8, [0x7f02]) = 0 <0.000010>
+100 1700000000.052000 openat(AT_FDCWD, "/d/rel/g.bin", O_RDWR|O_CREAT, 0644) = 8 <0.000010>
+100 1700000000.053000 io_submit(0x7f01, 3, [{aio_data=0x1, aio_lio_opcode=IOCB_CMD_PWRITE, aio_fildes=8</d/rel/g.bin>, aio_buf=0x1, aio_nbytes=4096, aio_offset=0}, {aio_data=0x2, aio_lio_opcode=IOCB_CMD_FSYNC, aio_fildes=8</d/rel/g.bin>, aio_nbytes=0, aio_offset=0}, {aio_data=0x3, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=8</d/rel/g.bin>, aio_buf=0x1, aio_nbytes=4096, aio_offset=4096}]) = 3 <0.000010>
+100 1700000000.054000 io_getevents(0x7f01, 1, 8, [{data=0x1, obj=0x9, res=4096, res2=0}, {data=0x3, obj=0x9, res=-5, res2=0}], NULL) = 2 <0.000010>
+100 1700000000.055000 ftruncate(8, 100) = 0 <0.000010>
+100 1700000000.056000 fallocate(8, 0, 0, junk) = 0 <0.000010>
+100 1700000000.057000 io_submit(0x7f01, 1, [{aio_data=0x4, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=8</d/rel/g.bin>, aio_buf=0x1, aio_nbytes=10, aio_offset=0}]) = 1 <0.000010>
+100 1700000000.158000 io_submit(0x7f01, 1, [{aio_data=0x5, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=8</d/rel/g.bin>, aio_buf=0x1, aio_nbytes=10, aio_offset=10}]) = 1 <0.000010>
+100 1700000000.159000 rename("/d/rel/g.bin", "/d/rel/h.bin") = 0 <0.000010>
+100 1700000000.160000 unlink("/d/rel/h.bin") = 0 <0.000010>
+100 1700000000.161000 lseek(3, 0, SEEK_END) = 8192 <0.000010>
+100 1700000000.162000 close(3) = 0 <0.000010>
+100 1700000000.163000 openat(AT_FDCWD, "/d", O_RDONLY|O_CREAT, 0755) = 9 <0.000010>
+100 1700000000.164000 stat("/d/rel/missing", 0x7ffd) = -1 ENOENT (No such file or directory) <0.000010>
+100 1700000000.165000 lstat("/d/rel/e.bin", {st_mode=S_IFREG|0644, st_size=100, ...}) = 0 <0.000010>
+100 1700000000.166000 renameat(AT_FDCWD</d>, "rel/e.bin", AT_FDCWD</d>, "rel/e2.bin") = 0 <0.000010>
+100 1700000000.167000 rmdir("/d") = -1 EBUSY (Device or resource busy) <0.000010>
+100 1700000000.168000 fork() = 103 <0.000010>
+103 1700000000.169000 read(7</d/rel/e.bin>, "e"..., 10) = 10 <0.000010>
+103 1700000000.170000 +++ exited with 0 +++
+100 1700000000.171000 vfork() = ? <0.000010>
+100 1700000000.172000 --- SIGCHLD {si_signo=SIGCHLD} ---

@@ -40,9 +40,8 @@ import re
 import string
 from collections import Counter
 
-from . import objectlog
 from .nodes import BuildError
-from .trace import KINDS, TRACE_FORMAT, LogHist, export_of, nothing_counted
+from .trace import KINDS, TRACE_FORMAT, LogHist, export_of
 
 FORMAT = 1
 P_REFUTE = 0.05                 # a candidate whose chance of producing the evidence is below this is refuted
@@ -937,9 +936,9 @@ class Analysis:
 
 
 def analyze(lines, root: str | None, *, exclude=(), cwd=None) -> Analysis:
-    """Read an strace (needs `root`), an exported trace file (carries its root; `root`, when
-    given, must be it), or an object-store request log (`objectlog`; needs `root`, the bucket
-    and prefix)."""
+    """Read an exported trace file (carries its root; `root`, when given, must be it), or an
+    strace or an object-store request log (needs `root`: the directory, or the bucket and
+    prefix), whose calls the runner's `aeiou-trace export` turns into the exported lines."""
     import itertools
     it = iter(lines)
     first = next(it, "")
@@ -952,22 +951,11 @@ def analyze(lines, root: str | None, *, exclude=(), cwd=None) -> Analysis:
         root = header["root"]
         if not events:
             raise BuildError("a trace file with no call in it")
-    elif (kind := objectlog.source_of(first)) is not None:
-        if root is None:
-            raise BuildError(f"an object log ({kind}) needs --root BUCKET[/PREFIX]")
-        header, events = objectlog.export_of(rest, root, kind)
-        source = kind
-        if not events:
-            raise BuildError(f"no request under --root {root.strip('/')} ({header['requests']} request(s) read)")
-        root = header["root"]
     else:
         if root is None:
-            raise BuildError("an strace needs --root")
-        seen: dict = {}
-        header, events = export_of(rest, os.path.abspath(root), seen=seen, exclude=list(exclude), cwd=cwd)
-        source = "strace"
-        if not events:
-            raise BuildError(nothing_counted([header["root"]], seen))
+            raise BuildError("an strace or an object-store request log needs --root (the directory, or BUCKET[/PREFIX])")
+        header, events = export_of(rest, root, exclude=list(exclude), cwd=cwd)
+        source = header.get("source", "strace")
         root = header["root"]
     d = Digester()
     for e in events:

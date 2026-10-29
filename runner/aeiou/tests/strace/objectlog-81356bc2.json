@@ -1,0 +1,1 @@
+{"kind":"objectlog","args":{"root":"b","format":"ceph"},"export":{"error":"not an object log format: ceph"}}

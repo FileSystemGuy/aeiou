@@ -1,0 +1,9 @@
+{"aeiou_trace":1,"source":"strace","root":"/d","lanes":1,"lines":8,"opens":2,"creates":["out"],"notes":{}}
+{"lane":0,"t":0,"dur":10014,"op":"open","fd":0,"path":"out","flags":["WRONLY","CREAT","TRUNC"],"mode":420}
+{"lane":0,"t":99897,"dur":10014,"op":"write","fd":0,"len":8192,"ret":5000}
+{"lane":0,"t":200033,"dur":10014,"op":"write","fd":0,"len":3192,"ret":"ENOSPC"}
+{"lane":0,"t":299931,"dur":10014,"op":"write","fd":0,"len":3192,"ret":3192}
+{"lane":0,"t":400066,"dur":10014,"op":"close","fd":0}
+{"lane":0,"t":499964,"dur":10014,"op":"open","fd":1,"path":"out","flags":["RDONLY"]}
+{"lane":0,"t":600100,"dur":10014,"op":"read","fd":1,"len":8192,"ret":8192}
+{"lane":0,"t":699997,"dur":10014,"op":"close","fd":1}

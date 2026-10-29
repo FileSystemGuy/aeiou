@@ -20,7 +20,6 @@ s3 = ["obstore>=0.11"]
 aeiou-build = "aeiou.cli:main"
 aeiou-params = "aeiou.params:main"
 aeiou-datagen = "aeiou.datagen:main"
-aeiou-trace = "aeiou.trace:main"
 aeiou-catalog = "aeiou.catalog:main"
 aeiou-header = "aeiou.header:main"
 

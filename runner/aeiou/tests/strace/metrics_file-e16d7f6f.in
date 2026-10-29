@@ -1,0 +1,12 @@
+{"aeiou_trace":1,"source":"strace","root":"/d","lanes":1,"lines":11,"opens":1,"creates":[],"notes":{"threads_without_clone":1}}
+{"lane":0,"t":0,"dur":10014,"op":"open","fd":0,"path":"a","flags":["RDONLY","CLOEXEC"]}
+{"lane":0,"t":99897,"dur":10014,"op":"fstat","fd":0}
+{"lane":0,"t":200033,"dur":10014,"op":"read","fd":0,"len":4096,"ret":4096}
+{"lane":0,"t":299931,"dur":100136,"op":"read","fd":0,"len":4096,"ret":4096}
+{"lane":0,"t":499964,"dur":10014,"op":"read","fd":0,"len":4096,"ret":1808}
+{"lane":0,"t":600100,"dur":10014,"op":"read","fd":0,"len":4096}
+{"lane":0,"t":699997,"dur":10014,"op":"lseek","fd":0,"offset":0,"whence":"SET"}
+{"lane":0,"t":799894,"dur":10014,"op":"read","fd":0,"len":100,"ret":100}
+{"lane":0,"t":900030,"dur":10014,"op":"read","fd":0,"len":200,"ret":200,"offset":8192}
+{"lane":0,"t":999928,"dur":10014,"op":"close","fd":0}
+{"lane":0,"t":1100063,"dur":10014,"op":"stat","path":"missing","ret":"ENOENT"}

@@ -1,0 +1,1593 @@
+422443 1793313239.082852 execve("/src/aeiou/runner/target/release/aeiou", ["/src/aeiou"..., "run", "/src/aeiou"..., "--gpus", "1", "--param", "context=8192", "--param", "prefill_per_token=40000", "--param", "decode_per_token=12000000", "--param", "prefill_step=8192", "--param", "retain=5000", "--param", "turn_in={\"empirical\": {\"values\":"..., "--param", "turn_out={\"empirical\": {\"values\""..., "--param", "sys_pop={\"zipf\": {\"s\": 1.1}}", "--param", "sys_prompts=3", "--param", "sys_tokens=6", "--param", "chunk_bytes=262144", "--param", "concurrency=3", "--param", "warm=4", "--param", ...], 0x7ffccc2f5cd0 /* 42 vars */) = 0 <0.000189>
+422443 1793313239.083266 mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x784095b43000 <0.000031>
+422443 1793313239.083344 access("/etc/ld.so.preload", R_OK) = -1 ENOENT (No such file or directory) <0.000029>
+422443 1793313239.083418 openat(AT_FDCWD</src/aeiou/builder>, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3</etc/ld.so.cache> <0.000030>
+422443 1793313239.083529 fstat(3</etc/ld.so.cache>, {st_mode=S_IFREG|0644, st_size=46091, ...}) = 0 <0.000027>
+422443 1793313239.083611 mmap(NULL, 46091, PROT_READ, MAP_PRIVATE, 3</etc/ld.so.cache>, 0) = 0x784095b37000 <0.000037>
+422443 1793313239.083693 close(3</etc/ld.so.cache>) = 0 <0.000031>
+422443 1793313239.083793 openat(AT_FDCWD</src/aeiou/builder>, "/lib/x86_64-linux-gnu/libgcc_s.so.1", O_RDONLY|O_CLOEXEC) = 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1> <0.000034>
+422443 1793313239.083878 read(3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0\1\0\0\0\0\0\0\0\0\0\0\0"..., 832) = 832 <0.000042>
+422443 1793313239.083979 fstat(3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, {st_mode=S_IFREG|0644, st_size=183024, ...}) = 0 <0.000028>
+422443 1793313239.084061 mmap(NULL, 185256, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 0) = 0x784095b09000 <0.000039>
+422443 1793313239.084204 mmap(0x784095b0d000, 147456, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 0x4000) = 0x784095b0d000 <0.000040>
+422443 1793313239.084296 mmap(0x784095b31000, 16384, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 0x28000) = 0x784095b31000 <0.000036>
+422443 1793313239.084370 mmap(0x784095b35000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 0x2b000) = 0x784095b35000 <0.000030>
+422443 1793313239.084447 close(3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>) = 0 <0.000028>
+422443 1793313239.084514 openat(AT_FDCWD</src/aeiou/builder>, "/lib/x86_64-linux-gnu/libm.so.6", O_RDONLY|O_CLOEXEC) = 3</usr/lib/x86_64-linux-gnu/libm.so.6> <0.000038>
+422443 1793313239.084595 read(3</usr/lib/x86_64-linux-gnu/libm.so.6>, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0>\0\1\0\0\0\0\0\0\0\0\0\0\0"..., 832) = 832 <0.000029>
+422443 1793313239.084664 fstat(3</usr/lib/x86_64-linux-gnu/libm.so.6>, {st_mode=S_IFREG|0644, st_size=952616, ...}) = 0 <0.000028>
+422443 1793313239.084731 mmap(NULL, 950296, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libm.so.6>, 0) = 0x784095a20000 <0.000033>
+422443 1793313239.084800 mmap(0x784095a30000, 520192, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libm.so.6>, 0x10000) = 0x784095a30000 <0.000032>
+422443 1793313239.084870 mmap(0x784095aaf000, 360448, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libm.so.6>, 0x8f000) = 0x784095aaf000 <0.000030>
+422443 1793313239.084936 mmap(0x784095b07000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libm.so.6>, 0xe7000) = 0x784095b07000 <0.000029>
+422443 1793313239.085011 close(3</usr/lib/x86_64-linux-gnu/libm.so.6>) = 0 <0.000028>
+422443 1793313239.085077 openat(AT_FDCWD</src/aeiou/builder>, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3</usr/lib/x86_64-linux-gnu/libc.so.6> <0.000030>
+422443 1793313239.085151 read(3</usr/lib/x86_64-linux-gnu/libc.so.6>, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0>\0\1\0\0\0\220\243\2\0\0\0\0\0"..., 832) = 832 <0.000028>
+422443 1793313239.085216 pread64(3</usr/lib/x86_64-linux-gnu/libc.so.6>, "\6\0\0\0\4\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0"..., 784, 64) = 784 <0.000028>
+422443 1793313239.085282 fstat(3</usr/lib/x86_64-linux-gnu/libc.so.6>, {st_mode=S_IFREG|0755, st_size=2129424, ...}) = 0 <0.000028>
+422443 1793313239.085348 pread64(3</usr/lib/x86_64-linux-gnu/libc.so.6>, "\6\0\0\0\4\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0"..., 784, 64) = 784 <0.000028>
+422443 1793313239.085414 mmap(NULL, 2174352, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libc.so.6>, 0) = 0x784095800000 <0.000030>
+422443 1793313239.085481 mmap(0x784095828000, 1609728, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libc.so.6>, 0x28000) = 0x784095828000 <0.000032>
+422443 1793313239.085549 mmap(0x7840959b1000, 323584, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libc.so.6>, 0x1b1000) = 0x7840959b1000 <0.000038>
+422443 1793313239.085624 mmap(0x784095a00000, 24576, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libc.so.6>, 0x1ff000) = 0x784095a00000 <0.000030>
+422443 1793313239.085693 mmap(0x784095a06000, 52624, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x784095a06000 <0.000029>
+422443 1793313239.085764 close(3</usr/lib/x86_64-linux-gnu/libc.so.6>) = 0 <0.000028>
+422443 1793313239.085837 mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x784095a1e000 <0.000029>
+422443 1793313239.086909 poll([{fd=0</dev/null<char 1:3>>, events=0}, {fd=1<pipe:[1447165]>, events=0}, {fd=2<pipe:[1447166]>, events=0}], 3, 0) = 0 (Timeout) <0.000029>
+422443 1793313239.087280 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/maps", O_RDONLY|O_CLOEXEC) = 3</proc/422443/maps> <0.000037>
+422443 1793313239.087421 fstat(3</proc/422443/maps>, {st_mode=S_IFREG|0444, st_size=0, ...}) = 0 <0.000028>
+422443 1793313239.087488 read(3</proc/422443/maps>, "642c27498000-642c27845000 r--p 0"..., 1024) = 1024 <0.000034>
+422443 1793313239.087568 read(3</proc/422443/maps>, "01ff000 08:30 841686            "..., 1024) = 1024 <0.000030>
+422443 1793313239.087638 read(3</proc/422443/maps>, "x86_64-linux-gnu/libgcc_s.so.1\n7"..., 1024) = 1024 <0.000030>
+422443 1793313239.087708 read(3</proc/422443/maps>, "2\n784095b83000-784095b85000 r--p"..., 1024) = 323 <0.000029>
+422443 1793313239.087774 close(3</proc/422443/maps>) = 0 <0.000029>
+422443 1793313239.088017 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784095b40000 <0.000029>
+422443 1793313239.089201 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7840955ff000 <0.000030>
+422443 1793313239.089391 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840957ff990, parent_tid=0x7840957ff990, exit_signal=0, stack=0x7840955ff000, stack_size=0x1ffe00, tls=0x7840957ff6c0} => {parent_tid=[422444]}, 88) = 422444 <0.000098>
+422443 1793313239.089601 openat(AT_FDCWD</src/aeiou/builder>, "/src/aeiou/workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json", O_RDONLY|O_CLOEXEC) = 3</src/aeiou/workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json> <0.000038>
+422443 1793313239.089697 statx(3</src/aeiou/workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_ALL|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=90210, ...}) = 0 <0.000033>
+422443 1793313239.089782 read(3</src/aeiou/workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json>,  <unfinished ...>
+422444 1793313239.089803 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x78408d400000 <0.000044>
+422443 1793313239.089885 <... read resumed>"{\n  \"ast\": \"0.13\",\n  \"name\": \"lm"..., 90210) = 90210 <0.000091>
+422443 1793313239.090007 read(3</src/aeiou/workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json>, "", 32) = 0 <0.000036>
+422443 1793313239.090092 close(3</src/aeiou/workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json>) = 0 <0.000083>
+422444 1793313239.090528 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784095b3d000 <0.000044>
+422443 1793313239.093253 readlink("/tmp", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000031>
+422443 1793313239.093331 readlink("/tmp/pytest-of-user", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.093395 readlink("/tmp/pytest-of-user/pytest-60", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.093459 readlink("/tmp/pytest-of-user/pytest-60/test_trace_of_the_runner_match1", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.093523 readlink("/t/runner_match1/root", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000029>
+422443 1793313239.093587 readlink("/t/runner_match1/root/kv", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.093651 readlink("/t/runner_match1/root/kv/sub", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.093719 readlink("/tmp", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.093783 readlink("/tmp/pytest-of-user", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.093846 readlink("/tmp/pytest-of-user/pytest-60", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.093909 readlink("/tmp/pytest-of-user/pytest-60/test_trace_of_the_runner_match1", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.093973 readlink("/t/runner_match1/root", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.094036 readlink("/t/runner_match1/root/kv", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.094099 readlink("/t/runner_match1/root/kv/sys", 0x7fff49b84b30, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.094167 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/422443/cgroup> <0.000036>
+422443 1793313239.094248 statx(3</proc/422443/cgroup>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.094318 lseek(3</proc/422443/cgroup>, 0, SEEK_CUR) = 0 <0.000028>
+422443 1793313239.094383 read(3</proc/422443/cgroup>, "0::/non-systemd\n", 128) = 16 <0.000031>
+422443 1793313239.094451 read(3</proc/422443/cgroup>, "", 112) = 0 <0.000028>
+422443 1793313239.094515 close(3</proc/422443/cgroup>) = 0 <0.000029>
+422443 1793313239.094580 statx(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", AT_STATX_SYNC_AS_STAT, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000035>
+422443 1793313239.094655 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000032>
+422443 1793313239.094729 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.094802 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000027>
+422443 1793313239.094867 read(3</sys/fs/cgroup/non-systemd/cpu.max>, "max 100000\n", 32) = 11 <0.000029>
+422443 1793313239.094933 read(3</sys/fs/cgroup/non-systemd/cpu.max>, "", 32) = 0 <0.000027>
+422443 1793313239.094998 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000028>
+422443 1793313239.095063 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000030>
+422443 1793313239.095133 statx(3</sys/fs/cgroup/cpu.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.095199 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000027>
+422443 1793313239.095263 read(3</sys/fs/cgroup/cpu.max>, "max 100000\n", 32) = 11 <0.000028>
+422443 1793313239.095328 read(3</sys/fs/cgroup/cpu.max>, "", 32) = 0 <0.000027>
+422443 1793313239.095391 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000027>
+422443 1793313239.095619 write(1<pipe:[1447165]>, "abstract lmcache_local_disk  sha"..., 100) = 100 <0.000047>
+422443 1793313239.095732 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000044>
+422443 1793313239.095830 write(1<pipe:[1447165]>, "options (cli > env > config > de"..., 39) = 39 <0.000045>
+422443 1793313239.095925 write(1<pipe:[1447165]>, "  abstract = /home/user/MLPerf"..., 116) = 116 <0.000038>
+422443 1793313239.096005 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.096112 write(1<pipe:[1447165]>, "  case = none                   "..., 84) = 84 <0.000040>
+422443 1793313239.096209 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000039>
+422443 1793313239.096294 write(1<pipe:[1447165]>, "  case-file = none              "..., 84) = 84 <0.000038>
+422443 1793313239.096375 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000038>
+422443 1793313239.096456 write(1<pipe:[1447165]>, "  case-run = none               "..., 84) = 84 <0.000038>
+422443 1793313239.096537 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000043>
+422443 1793313239.096620 write(1<pipe:[1447165]>, "  workloads = none              "..., 84) = 84 <0.000037>
+422443 1793313239.096698 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000038>
+422443 1793313239.096780 write(1<pipe:[1447165]>, "  expect-case-sha = none        "..., 84) = 84 <0.000038>
+422443 1793313239.096859 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000038>
+422443 1793313239.096941 write(1<pipe:[1447165]>, "  expect-workload-id = none     "..., 84) = 84 <0.000038>
+422443 1793313239.097021 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000038>
+422443 1793313239.097104 write(1<pipe:[1447165]>, "  param = context=8192 prefill_p"..., 765) = 765 <0.000039>
+422443 1793313239.097184 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.097264 write(1<pipe:[1447165]>, "  params-file = none            "..., 84) = 84 <0.000037>
+422443 1793313239.097344 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.097425 write(1<pipe:[1447165]>, "  gpus = 1                      "..., 80) = 80 <0.000037>
+422443 1793313239.097503 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.097584 write(1<pipe:[1447165]>, "  seed = 5                      "..., 80) = 80 <0.000037>
+422443 1793313239.097663 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.097743 write(1<pipe:[1447165]>, "  posix = the abstract's        "..., 84) = 84 <0.000037>
+422443 1793313239.097822 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.097902 write(1<pipe:[1447165]>, "  cache = the abstract's        "..., 84) = 84 <0.000037>
+422443 1793313239.097981 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.098061 write(1<pipe:[1447165]>, "  s3 = the abstract's           "..., 84) = 84 <0.000037>
+422443 1793313239.098140 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000038>
+422443 1793313239.098226 write(1<pipe:[1447165]>, "  subset = false                "..., 84) = 84 <0.000037>
+422443 1793313239.098305 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.098385 write(1<pipe:[1447165]>, "  expect-fingerprint = none     "..., 84) = 84 <0.000037>
+422443 1793313239.098469 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.098553 write(1<pipe:[1447165]>, "  expect-dataset-id = none      "..., 84) = 84 <0.000037>
+422443 1793313239.098631 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.098711 write(1<pipe:[1447165]>, "  clean-namespaces = false      "..., 84) = 84 <0.000037>
+422443 1793313239.098789 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.098869 write(1<pipe:[1447165]>, "  ignore-limits = false         "..., 84) = 84 <0.000037>
+422443 1793313239.098947 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.099027 write(1<pipe:[1447165]>, "  root = /tmp/pytest-of-user/p"..., 83) = 83 <0.000037>
+422443 1793313239.099105 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.099185 write(1<pipe:[1447165]>, "  endpoint = none               "..., 84) = 84 <0.000037>
+422443 1793313239.099264 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.099345 write(1<pipe:[1447165]>, "  threads = one per actor       "..., 84) = 84 <0.000037>
+422443 1793313239.099423 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.099504 write(1<pipe:[1447165]>, "  buffer-mib = 8                "..., 84) = 84 <0.000038>
+422443 1793313239.099582 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.099663 write(1<pipe:[1447165]>, "  write-compress = 1            "..., 84) = 84 <0.000037>
+422443 1793313239.099741 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.099821 write(1<pipe:[1447165]>, "  time-scale = 0                "..., 80) = 80 <0.000037>
+422443 1793313239.099900 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.099980 write(1<pipe:[1447165]>, "  iowq-max-workers = none       "..., 84) = 84 <0.000037>
+422443 1793313239.100058 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000060>
+422443 1793313239.100167 write(1<pipe:[1447165]>, "  sqpoll = none                 "..., 84) = 84 <0.000040>
+422443 1793313239.100249 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000038>
+422443 1793313239.100331 write(1<pipe:[1447165]>, "  sqpoll-shared = false         "..., 84) = 84 <0.000037>
+422443 1793313239.100410 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.100491 write(1<pipe:[1447165]>, "  defer-taskrun = false         "..., 84) = 84 <0.000037>
+422443 1793313239.100571 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000038>
+422443 1793313239.100652 write(1<pipe:[1447165]>, "  coop-taskrun = false          "..., 84) = 84 <0.000037>
+422443 1793313239.100731 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000049>
+422443 1793313239.100828 write(1<pipe:[1447165]>, "  aio-depth = none              "..., 84) = 84 <0.000040>
+422443 1793313239.100919 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.101001 write(1<pipe:[1447165]>, "  mmap-mode = none              "..., 84) = 84 <0.000038>
+422443 1793313239.101081 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000038>
+422443 1793313239.101162 write(1<pipe:[1447165]>, "  mmap-consume = none           "..., 84) = 84 <0.000037>
+422443 1793313239.101241 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.101322 write(1<pipe:[1447165]>, "  object-threads = none         "..., 84) = 84 <0.000037>
+422443 1793313239.101401 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.101481 write(1<pipe:[1447165]>, "  object-part-mib = none        "..., 84) = 84 <0.000037>
+422443 1793313239.101560 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000042>
+422443 1793313239.101666 write(1<pipe:[1447165]>, "  rank = 0                      "..., 84) = 84 <0.000039>
+422443 1793313239.101746 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.101828 write(1<pipe:[1447165]>, "  ranks = 1                     "..., 84) = 84 <0.000037>
+422443 1793313239.101909 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.101990 write(1<pipe:[1447165]>, "  coordinator = none            "..., 84) = 84 <0.000037>
+422443 1793313239.102069 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000038>
+422443 1793313239.102150 write(1<pipe:[1447165]>, "  rank-rotate = 0               "..., 84) = 84 <0.000037>
+422443 1793313239.102229 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.102309 write(1<pipe:[1447165]>, "  max-gap = none                "..., 84) = 84 <0.000038>
+422443 1793313239.102389 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000041>
+422443 1793313239.102481 write(1<pipe:[1447165]>, "  require-cold = false          "..., 84) = 84 <0.000039>
+422443 1793313239.102562 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.102643 write(1<pipe:[1447165]>, "  drop-caches = false           "..., 84) = 84 <0.000037>
+422443 1793313239.102722 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.102802 write(1<pipe:[1447165]>, "  report-json = none            "..., 84) = 84 <0.000037>
+422443 1793313239.102881 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.102962 write(1<pipe:[1447165]>, "  report-takes = false          "..., 84) = 84 <0.000037>
+422443 1793313239.103040 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.103120 write(1<pipe:[1447165]>, "  config = none                 "..., 84) = 84 <0.000037>
+422443 1793313239.103198 write(1<pipe:[1447165]>, "]\n", 2) = 2 <0.000037>
+422443 1793313239.103276 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000037>
+422443 1793313239.104175 write(1<pipe:[1447165]>, "seed 5  gpus 1  params: context="..., 773) = 773 <0.000041>
+422443 1793313239.104272 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000039>
+422443 1793313239.104366 write(1<pipe:[1447165]>, "posix sync  cache per-open  root"..., 101) = 101 <0.000038>
+422443 1793313239.104448 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000038>
+422443 1793313239.104539 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/sub/.aeiou-dataset.json", O_RDONLY|O_CLOEXEC) = 3</t/runner_match1/root/kv/sub/.aeiou-dataset.json> <0.000036>
+422443 1793313239.104628 statx(3</t/runner_match1/root/kv/sub/.aeiou-dataset.json>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_ALL|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=4766, ...}) = 0 <0.000028>
+422443 1793313239.104700 read(3</t/runner_match1/root/kv/sub/.aeiou-dataset.json>, "{\n  \"manifest_version\": 3,\n  \"st"..., 4766) = 4766 <0.000033>
+422443 1793313239.104771 read(3</t/runner_match1/root/kv/sub/.aeiou-dataset.json>, "", 32) = 0 <0.000027>
+422443 1793313239.104835 close(3</t/runner_match1/root/kv/sub/.aeiou-dataset.json>) = 0 <0.000028>
+422443 1793313239.104997 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/sys/.aeiou-dataset.json", O_RDONLY|O_CLOEXEC) = 3</t/runner_match1/root/kv/sys/.aeiou-dataset.json> <0.000031>
+422443 1793313239.105067 statx(3</t/runner_match1/root/kv/sys/.aeiou-dataset.json>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_ALL|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=4752, ...}) = 0 <0.000028>
+422443 1793313239.105137 read(3</t/runner_match1/root/kv/sys/.aeiou-dataset.json>, "{\n  \"manifest_version\": 3,\n  \"st"..., 4752) = 4752 <0.000032>
+422443 1793313239.105206 read(3</t/runner_match1/root/kv/sys/.aeiou-dataset.json>, "", 32) = 0 <0.000028>
+422443 1793313239.105274 close(3</t/runner_match1/root/kv/sys/.aeiou-dataset.json>) = 0 <0.000028>
+422443 1793313239.105414 write(1<pipe:[1447165]>, "dataset subp at kv/sub/: id 27d7"..., 142) = 142 <0.000052>
+422443 1793313239.105513 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000038>
+422443 1793313239.105604 write(1<pipe:[1447165]>, "dataset sysp at kv/sys/: id c1f7"..., 140) = 140 <0.000037>
+422443 1793313239.105685 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000037>
+422443 1793313239.105827 write(1<pipe:[1447165]>, "host DESKTOP-JS4EFLH  rank 0 of "..., 58) = 58 <0.000038>
+422443 1793313239.105906 write(1<pipe:[1447165]>, ")\n", 2) = 2 <0.000038>
+422443 1793313239.106801 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/fd", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</proc/422443/fd> <0.000040>
+422443 1793313239.106886 fstat(3</proc/422443/fd>, {st_mode=S_IFDIR|0500, st_size=4, ...}) = 0 <0.000032>
+422443 1793313239.106973 getdents64(3</proc/422443/fd>, 0x642c406e4040 /* 6 entries */, 32768) = 144 <0.000038>
+422443 1793313239.107071 getdents64(3</proc/422443/fd>, 0x642c406e4040 /* 0 entries */, 32768) = 0 <0.000029>
+422443 1793313239.107143 close(3</proc/422443/fd>) = 0 <0.000047>
+422443 1793313239.107239 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</proc/422443/task> <0.000036>
+422443 1793313239.107319 fstat(3</proc/422443/task>, {st_mode=S_IFDIR|0555, st_size=0, ...}) = 0 <0.000028>
+422443 1793313239.107386 getdents64(3</proc/422443/task>, 0x642c406e4040 /* 4 entries */, 32768) = 112 <0.000032>
+422443 1793313239.107457 getdents64(3</proc/422443/task>, 0x642c406e4040 /* 0 entries */, 32768) = 0 <0.000027>
+422443 1793313239.107522 close(3</proc/422443/task>) = 0 <0.000027>
+422443 1793313239.107813 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/maps", O_RDONLY|O_CLOEXEC) = 3</proc/422443/maps> <0.000029>
+422443 1793313239.107882 statx(3</proc/422443/maps>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.107950 read(3</proc/422443/maps>, "642c27498000-642c27845000 r--p 0", 32) = 32 <0.000032>
+422443 1793313239.108020 read(3</proc/422443/maps>, "0000000 08:30 400208            ", 32) = 32 <0.000027>
+422443 1793313239.108098 read(3</proc/422443/maps>, "         /home/user/MLPerfStor"..., 64) = 64 <0.000031>
+422443 1793313239.108176 read(3</proc/422443/maps>, "aeiou\n642c27845000-642c2824e000 "..., 128) = 128 <0.000032>
+422443 1793313239.108247 read(3</proc/422443/maps>, "lease/aeiou\n642c2824e000-642c282"..., 256) = 256 <0.000029>
+422443 1793313239.108313 read(3</proc/422443/maps>, "er/target/release/aeiou\n642c282a"..., 512) = 512 <0.000030>
+422443 1793313239.108380 read(3</proc/422443/maps>, "                   /usr/lib/x86_"..., 1024) = 1024 <0.000030>
+422443 1793313239.108448 read(3</proc/422443/maps>, "\n784095b09000-784095b0d000 r--p "..., 2048) = 1739 <0.000033>
+422443 1793313239.108518 read(3</proc/422443/maps>, "", 309) = 0 <0.000029>
+422443 1793313239.108583 close(3</proc/422443/maps>) = 0 <0.000029>
+422443 1793313239.108650 openat(AT_FDCWD</src/aeiou/builder>, "/proc/sys/kernel/threads-max", O_RDONLY|O_CLOEXEC) = 3</proc/sys/kernel/threads-max> <0.000033>
+422443 1793313239.108724 statx(3</proc/sys/kernel/threads-max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.108792 read(3</proc/sys/kernel/threads-max>, "255123\n", 32) = 7 <0.000030>
+422443 1793313239.108860 read(3</proc/sys/kernel/threads-max>, "", 32) = 0 <0.000027>
+422443 1793313239.108923 close(3</proc/sys/kernel/threads-max>) = 0 <0.000028>
+422443 1793313239.108987 openat(AT_FDCWD</src/aeiou/builder>, "/proc/sys/vm/max_map_count", O_RDONLY|O_CLOEXEC) = 3</proc/sys/vm/max_map_count> <0.000030>
+422443 1793313239.109060 statx(3</proc/sys/vm/max_map_count>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.109126 read(3</proc/sys/vm/max_map_count>, "1048576\n", 32) = 8 <0.000028>
+422443 1793313239.109191 read(3</proc/sys/vm/max_map_count>, "", 32) = 0 <0.000027>
+422443 1793313239.109254 close(3</proc/sys/vm/max_map_count>) = 0 <0.000027>
+422443 1793313239.109380 write(1<pipe:[1447165]>, "limits: open files ~7 (+21 of th"..., 83) = 83 <0.000045>
+422443 1793313239.109469 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000038>
+422443 1793313239.109561 write(1<pipe:[1447165]>, "limits: threads ~11; RLIMIT_NPRO"..., 124) = 124 <0.000037>
+422443 1793313239.109641 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000038>
+422443 1793313239.109841 openat(AT_FDCWD</src/aeiou/builder>, "/sys/devices/system/cpu/online", O_RDONLY|O_CLOEXEC) = 3</sys/devices/system/cpu/online> <0.000033>
+422443 1793313239.109918 read(3</sys/devices/system/cpu/online>, "0-19\n", 1024) = 5 <0.000031>
+422443 1793313239.109987 close(3</sys/devices/system/cpu/online>) = 0 <0.000029>
+422443 1793313239.110109 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/422443/cgroup> <0.000030>
+422443 1793313239.110178 statx(3</proc/422443/cgroup>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.110244 lseek(3</proc/422443/cgroup>, 0, SEEK_CUR) = 0 <0.000027>
+422443 1793313239.110308 read(3</proc/422443/cgroup>, "0::/non-systemd\n", 128) = 16 <0.000029>
+422443 1793313239.110374 read(3</proc/422443/cgroup>, "", 112) = 0 <0.000027>
+422443 1793313239.110437 close(3</proc/422443/cgroup>) = 0 <0.000027>
+422443 1793313239.110501 statx(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", AT_STATX_SYNC_AS_STAT, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000029>
+422443 1793313239.110569 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000029>
+422443 1793313239.110639 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.110711 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000028>
+422443 1793313239.110776 read(3</sys/fs/cgroup/non-systemd/cpu.max>, "max 100000\n", 32) = 11 <0.000028>
+422443 1793313239.110841 read(3</sys/fs/cgroup/non-systemd/cpu.max>, "", 32) = 0 <0.000027>
+422443 1793313239.110904 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000027>
+422443 1793313239.110969 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000034>
+422443 1793313239.111052 statx(3</sys/fs/cgroup/cpu.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000024>
+422443 1793313239.111125 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000027>
+422443 1793313239.111191 read(3</sys/fs/cgroup/cpu.max>, "max 100000\n", 32) = 11 <0.000028>
+422443 1793313239.111256 read(3</sys/fs/cgroup/cpu.max>, "", 32) = 0 <0.000027>
+422443 1793313239.111319 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000028>
+422443 1793313239.111440 openat(AT_FDCWD</src/aeiou/builder>, "/proc/meminfo", O_RDONLY|O_CLOEXEC) = 3</proc/meminfo> <0.000030>
+422443 1793313239.111510 statx(3</proc/meminfo>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.111579 read(3</proc/meminfo>, "MemTotal:       32665472 kB\nMemF", 32) = 32 <0.000037>
+422443 1793313239.111654 read(3</proc/meminfo>, "ree:        27851736 kB\nMemAvail", 32) = 32 <0.000027>
+422443 1793313239.111718 read(3</proc/meminfo>, "able:   31498920 kB\nBuffers:    "..., 64) = 64 <0.000027>
+422443 1793313239.111782 read(3</proc/meminfo>, " 3826252 kB\nSwapCached:         "..., 128) = 128 <0.000027>
+422443 1793313239.111845 read(3</proc/meminfo>, "tive(anon):   445036 kB\nActive(f"..., 256) = 256 <0.000027>
+422443 1793313239.111913 read(3</proc/meminfo>, "s:        444032 kB\nMapped:     "..., 512) = 512 <0.000035>
+422443 1793313239.111990 read(3</proc/meminfo>, "      10464 kB\nHardwareCorrupted"..., 1024) = 451 <0.000033>
+422443 1793313239.112068 read(3</proc/meminfo>, "", 573) = 0 <0.000065>
+422443 1793313239.112184 close(3</proc/meminfo>) = 0 <0.000033>
+422443 1793313239.112261 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/422443/cgroup> <0.000031>
+422443 1793313239.112334 statx(3</proc/422443/cgroup>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.112405 read(3</proc/422443/cgroup>, "0::/non-systemd\n", 32) = 16 <0.000029>
+422443 1793313239.112472 read(3</proc/422443/cgroup>, "", 32) = 0 <0.000051>
+422443 1793313239.112565 close(3</proc/422443/cgroup>) = 0 <0.000029>
+422443 1793313239.112636 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/memory.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/memory.max> <0.000032>
+422443 1793313239.112712 statx(3</sys/fs/cgroup/non-systemd/memory.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.112780 read(3</sys/fs/cgroup/non-systemd/memory.max>, "max\n", 32) = 4 <0.000028>
+422443 1793313239.112847 read(3</sys/fs/cgroup/non-systemd/memory.max>, "", 32) = 0 <0.000027>
+422443 1793313239.112912 close(3</sys/fs/cgroup/non-systemd/memory.max>) = 0 <0.000028>
+422443 1793313239.112977 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/memory.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/memory.max> <0.000030>
+422443 1793313239.113047 statx(3</sys/fs/cgroup/memory.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.113114 read(3</sys/fs/cgroup/memory.max>, "max\n", 32) = 4 <0.000028>
+422443 1793313239.113179 read(3</sys/fs/cgroup/memory.max>, "", 32) = 0 <0.000027>
+422443 1793313239.113244 close(3</sys/fs/cgroup/memory.max>) = 0 <0.000028>
+422443 1793313239.113451 mkdir("/t/runner_match1/root/kv", 0777) = -1 EEXIST (File exists) <0.000029>
+422443 1793313239.113519 statx(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv", AT_STATX_SYNC_AS_STAT, STATX_ALL, {stx_mask=STATX_ALL|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFDIR|0755, stx_size=4096, ...}) = 0 <0.000029>
+422443 1793313239.113587 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</t/runner_match1/root/kv> <0.000029>
+422443 1793313239.113656 fstat(3</t/runner_match1/root/kv>, {st_mode=S_IFDIR|0755, st_size=4096, ...}) = 0 <0.000028>
+422443 1793313239.113723 getdents64(3</t/runner_match1/root/kv>, 0x642c406e4040 /* 4 entries */, 32768) = 96 <0.000037>
+422443 1793313239.113800 getdents64(3</t/runner_match1/root/kv>, 0x642c406e4040 /* 0 entries */, 32768) = 0 <0.000028>
+422443 1793313239.113869 close(3</t/runner_match1/root/kv>) = 0 <0.000028>
+422443 1793313239.114169 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7840953fe000 <0.000031>
+422443 1793313239.114357 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840955fe990, parent_tid=0x7840955fe990, exit_signal=0, stack=0x7840953fe000, stack_size=0x1ffe00, tls=0x7840955fe6c0} => {parent_tid=[422445]}, 88) = 422445 <0.000097>
+422443 1793313239.114631 readlink("/tmp", 0x7fff49b83220, 1023) = -1 EINVAL (Invalid argument) <0.000033>
+422443 1793313239.114699 readlink("/tmp/pytest-of-user", 0x7fff49b83220, 1023) = -1 EINVAL (Invalid argument) <0.000037>
+422445 1793313239.114752 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422443 1793313239.114768 readlink("/tmp/pytest-of-user/pytest-60",  <unfinished ...>
+422445 1793313239.114782 <... mmap resumed>) = 0x784088000000 <0.000025>
+422443 1793313239.114796 <... readlink resumed>0x7fff49b83220, 1023) = -1 EINVAL (Invalid argument) <0.000023>
+422443 1793313239.114823 readlink("/tmp/pytest-of-user/pytest-60/test_trace_of_the_runner_match1", 0x7fff49b83220, 1023) = -1 EINVAL (Invalid argument) <0.000033>
+422443 1793313239.114897 readlink("/t/runner_match1/root", 0x7fff49b83220, 1023) = -1 EINVAL (Invalid argument) <0.000032>
+422443 1793313239.114971 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/mountstats", O_RDONLY|O_CLOEXEC) = 3</proc/422443/mountstats> <0.000038>
+422443 1793313239.115057 statx(3</proc/422443/mountstats>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0400, stx_size=0, ...}) = 0 <0.000022>
+422443 1793313239.115111 read(3</proc/422443/mountstats>, "device none mounted on /usr/lib/", 32) = 32 <0.000037>
+422445 1793313239.115166 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422443 1793313239.115180 read(3</proc/422443/mountstats>,  <unfinished ...>
+422445 1793313239.115196 <... mmap resumed>) = 0x784095b3a000 <0.000024>
+422443 1793313239.115213 <... read resumed>"modules/6.18.54.1-microsoft-stan", 32) = 32 <0.000026>
+422443 1793313239.115246 read(3</proc/422443/mountstats>, "dard-WSL2 with fstype overlay\nde"..., 64) = 64 <0.000034>
+422443 1793313239.115322 read(3</proc/422443/mountstats>, "c/linux-headers-6.18.54.1-micros"..., 128) = 128 <0.000033>
+422445 1793313239.115375 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/status", O_RDONLY|O_CLOEXEC <unfinished ...>
+422443 1793313239.115395 read(3</proc/422443/mountstats>,  <unfinished ...>
+422445 1793313239.115411 <... openat resumed>) = 4</proc/422443/status> <0.000025>
+422443 1793313239.115430 <... read resumed>"rosoft-standard-WSL2 with fstype"..., 256) = 256 <0.000028>
+422445 1793313239.115444 statx(4</proc/422443/status>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422443 1793313239.115460 read(3</proc/422443/mountstats>,  <unfinished ...>
+422445 1793313239.115480 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.115495 <... read resumed>"device rootfs mounted on /init w"..., 512) = 512 <0.000029>
+422445 1793313239.115510 read(4</proc/422443/status>,  <unfinished ...>
+422443 1793313239.115524 read(3</proc/422443/mountstats>,  <unfinished ...>
+422445 1793313239.115557 <... read resumed>"Name:\taeiou\nUmask:\t0022\nState:\tR", 32) = 32 <0.000041>
+422443 1793313239.115572 <... read resumed>"mounted on /proc/sys/fs/binfmt_m"..., 1024) = 1024 <0.000041>
+422445 1793313239.115586 read(4</proc/422443/status>,  <unfinished ...>
+422443 1793313239.115601 read(3</proc/422443/mountstats>,  <unfinished ...>
+422445 1793313239.115620 <... read resumed>" (running)\nTgid:\t422443\nNgid:\t0\n", 32) = 32 <0.000027>
+422443 1793313239.115638 <... read resumed>"ice snapfuse mounted on /snap/gt"..., 2048) = 466 <0.000027>
+422445 1793313239.115652 read(4</proc/422443/status>,  <unfinished ...>
+422443 1793313239.115667 read(3</proc/422443/mountstats>,  <unfinished ...>
+422445 1793313239.115682 <... read resumed>"Pid:\t422443\nPPid:\t422440\nTracerP"..., 64) = 64 <0.000023>
+422443 1793313239.115696 <... read resumed>"", 1582) = 0 <0.000023>
+422445 1793313239.115710 read(4</proc/422443/status>,  <unfinished ...>
+422443 1793313239.115725 close(3</proc/422443/mountstats> <unfinished ...>
+422445 1793313239.115740 <... read resumed>"000\nGid:\t106\t106\t106\t106\nFDSize:"..., 128) = 128 <0.000024>
+422443 1793313239.115754 <... close resumed>) = 0 <0.000023>
+422445 1793313239.115782 read(4</proc/422443/status>,  <unfinished ...>
+422443 1793313239.115798 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/mounts", O_RDONLY|O_CLOEXEC <unfinished ...>
+422445 1793313239.115813 <... read resumed>"219860 kB\nVmSize:\t  154336 kB\nVm"..., 256) = 256 <0.000025>
+422443 1793313239.115828 <... openat resumed>) = 3</proc/422443/mounts> <0.000023>
+422445 1793313239.115843 read(4</proc/422443/status>,  <unfinished ...>
+422443 1793313239.115858 statx(3</proc/422443/mounts>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422445 1793313239.115874 <... read resumed>"    96 kB\nVmSwap:\t       0 kB\nHu"..., 512) = 512 <0.000024>
+422443 1793313239.115888 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000023>
+422445 1793313239.115902 read(4</proc/422443/status>,  <unfinished ...>
+422443 1793313239.115917 read(3</proc/422443/mounts>,  <unfinished ...>
+422445 1793313239.115932 <... read resumed>"itional enabled\nCpus_allowed:\tff"..., 1024) = 442 <0.000023>
+422443 1793313239.115972 <... read resumed>"none /usr/lib/modules/6.18.54.1-", 32) = 32 <0.000049>
+422445 1793313239.115987 read(4</proc/422443/status>,  <unfinished ...>
+422443 1793313239.116001 read(3</proc/422443/mounts>,  <unfinished ...>
+422445 1793313239.116020 <... read resumed>"", 582) = 0 <0.000027>
+422443 1793313239.116033 <... read resumed>"microsoft-standard-WSL2 overlay ", 32) = 32 <0.000026>
+422445 1793313239.116048 close(4</proc/422443/status> <unfinished ...>
+422443 1793313239.116062 read(3</proc/422443/mounts>, "rw,nosuid,nodev,noatime,lowerdir"..., 64) = 64 <0.000059>
+422445 1793313239.116144 <... close resumed>) = 0 <0.000090>
+422443 1793313239.116160 read(3</proc/422443/mounts>,  <unfinished ...>
+422445 1793313239.116177 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY <unfinished ...>
+422443 1793313239.116196 <... read resumed>"andard-WSL2/modules,upperdir=/li"..., 128) = 128 <0.000028>
+422445 1793313239.116211 <... openat resumed>) = 4</proc/422443/task> <0.000024>
+422443 1793313239.116227 read(3</proc/422443/mounts>,  <unfinished ...>
+422445 1793313239.116243 fstat(4</proc/422443/task>,  <unfinished ...>
+422443 1793313239.116259 <... read resumed>"andard-WSL2/rw/work,uuid=on 0 0\n"..., 256) = 256 <0.000025>
+422445 1793313239.116274 <... fstat resumed>{st_mode=S_IFDIR|0555, st_size=0, ...}) = 0 <0.000025>
+422443 1793313239.116289 read(3</proc/422443/mounts>,  <unfinished ...>
+422445 1793313239.116305 getdents64(4</proc/422443/task>,  <unfinished ...>
+422443 1793313239.116321 <... read resumed>"/wsl/drivers 9p ro,nosuid,nodev,"..., 512) = 512 <0.000025>
+422445 1793313239.116336 <... getdents64 resumed>0x784088000cc0 /* 5 entries */, 32768) = 144 <0.000025>
+422443 1793313239.116352 read(3</proc/422443/mounts>,  <unfinished ...>
+422445 1793313239.116367 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422443/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422443 1793313239.116400 <... read resumed>"sfs /sys sysfs rw,nosuid,nodev,n"..., 1024) = 1024 <0.000042>
+422445 1793313239.116424 <... openat resumed>) = 5</proc/422443/task/422443/comm> <0.000050>
+422443 1793313239.116443 read(3</proc/422443/mounts>,  <unfinished ...>
+422445 1793313239.116459 statx(5</proc/422443/task/422443/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422443 1793313239.116498 <... read resumed>"gfs /sys/kernel/debug debugfs rw"..., 2048) = 1347 <0.000048>
+422445 1793313239.116512 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000045>
+422443 1793313239.116527 read(3</proc/422443/mounts>,  <unfinished ...>
+422445 1793313239.116543 read(5</proc/422443/task/422443/comm>,  <unfinished ...>
+422443 1793313239.116559 <... read resumed>"", 701) = 0 <0.000025>
+422445 1793313239.116572 <... read resumed>"aeiou\n", 32) = 6 <0.000023>
+422443 1793313239.116587 close(3</proc/422443/mounts> <unfinished ...>
+422445 1793313239.116603 read(5</proc/422443/task/422443/comm>,  <unfinished ...>
+422443 1793313239.116619 <... close resumed>) = 0 <0.000025>
+422445 1793313239.116637 <... read resumed>"", 32) = 0 <0.000027>
+422443 1793313239.116668 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422445 1793313239.116683 close(5</proc/422443/task/422443/comm> <unfinished ...>
+422443 1793313239.116699 <... mmap resumed>) = 0x7840951fd000 <0.000025>
+422445 1793313239.116712 <... close resumed>) = 0 <0.000023>
+422445 1793313239.116761 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422444/comm", O_RDONLY|O_CLOEXEC) = 3</proc/422443/task/422444/comm> <0.000046>
+422443 1793313239.116829 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840953fd990, parent_tid=0x7840953fd990, exit_signal=0, stack=0x7840951fd000, stack_size=0x1ffe00, tls=0x7840953fd6c0} <unfinished ...>
+422445 1793313239.116845 statx(3</proc/422443/task/422444/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000063>
+422443 1793313239.116943 <... clone3 resumed> => {parent_tid=[422446]}, 88) = 422446 <0.000106>
+422445 1793313239.116971 read(3</proc/422443/task/422444/comm>, "aeiou\n", 32) = 6 <0.000038>
+422445 1793313239.117059 read(3</proc/422443/task/422444/comm>, "", 32) = 0 <0.000043>
+422445 1793313239.117145 close(3</proc/422443/task/422444/comm>) = 0 <0.000033>
+422446 1793313239.117210 mmap(0x78408c000000, 67108864, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422445 1793313239.117224 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422445/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422446 1793313239.117258 <... mmap resumed>) = 0x78408c000000 <0.000042>
+422445 1793313239.117301 <... openat resumed>) = 3</proc/422443/task/422445/comm> <0.000053>
+422445 1793313239.117351 statx(3</proc/422443/task/422445/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000042>
+422445 1793313239.117448 read(3</proc/422443/task/422445/comm>,  <unfinished ...>
+422446 1793313239.117488 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422445 1793313239.117502 <... read resumed>"counters\n", 32) = 9 <0.000046>
+422446 1793313239.117532 <... mmap resumed>) = 0x784095b37000 <0.000039>
+422445 1793313239.117545 read(3</proc/422443/task/422445/comm>, "", 32) = 0 <0.000023>
+422445 1793313239.117619 close(3</proc/422443/task/422445/comm>) = 0 <0.000042>
+422445 1793313239.117701 getdents64(4</proc/422443/task>,  <unfinished ...>
+422446 1793313239.117734 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422445 1793313239.117747 <... getdents64 resumed>0x784088000cc0 /* 1 entries */, 32768) = 32 <0.000038>
+422446 1793313239.117762 <... mmap resumed>) = 0x784094ffc000 <0.000023>
+422445 1793313239.117778 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422446/comm", O_RDONLY|O_CLOEXEC) = 3</proc/422443/task/422446/comm> <0.000046>
+422445 1793313239.117871 statx(3</proc/422443/task/422446/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422446 1793313239.117911 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840951fc990, parent_tid=0x7840951fc990, exit_signal=0, stack=0x784094ffc000, stack_size=0x1ffe00, tls=0x7840951fc6c0} <unfinished ...>
+422445 1793313239.117928 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000049>
+422445 1793313239.117963 read(3</proc/422443/task/422446/comm>, "gpu#0\n", 32) = 6 <0.000056>
+422446 1793313239.118049 <... clone3 resumed> => {parent_tid=[422447]}, 88) = 422447 <0.000130>
+422445 1793313239.118075 read(3</proc/422443/task/422446/comm>, "", 32) = 0 <0.000037>
+422445 1793313239.118149 close(3</proc/422443/task/422446/comm> <unfinished ...>
+422446 1793313239.118174 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422445 1793313239.118187 <... close resumed>) = 0 <0.000031>
+422446 1793313239.118210 <... mmap resumed>) = 0x784094dfb000 <0.000032>
+422445 1793313239.118223 getdents64(4</proc/422443/task>, 0x784088000cc0 /* 1 entries */, 32768) = 32 <0.000029>
+422447 1793313239.118271 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422445 1793313239.118293 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422447/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422447 1793313239.118310 <... mmap resumed>) = 0x784080000000 <0.000034>
+422445 1793313239.118332 <... openat resumed>) = 3</proc/422443/task/422447/comm> <0.000032>
+422445 1793313239.118367 statx(3</proc/422443/task/422447/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422446 1793313239.118392 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x784094ffb990, parent_tid=0x784094ffb990, exit_signal=0, stack=0x784094dfb000, stack_size=0x1ffe00, tls=0x784094ffb6c0} <unfinished ...>
+422445 1793313239.118416 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000041>
+422445 1793313239.118495 read(3</proc/422443/task/422447/comm>,  <unfinished ...>
+422446 1793313239.118534 <... clone3 resumed> => {parent_tid=[422448]}, 88) = 422448 <0.000136>
+422445 1793313239.118570 <... read resumed>"gpu#0 sub 0\n", 32) = 12 <0.000065>
+422445 1793313239.118623 read(3</proc/422443/task/422447/comm>, "", 32) = 0 <0.000056>
+422447 1793313239.118708 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422445 1793313239.118722 close(3</proc/422443/task/422447/comm> <unfinished ...>
+422447 1793313239.118749 <... mmap resumed>) = 0x784095a1b000 <0.000036>
+422446 1793313239.118762 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/20d630e088dddc98-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422448 1793313239.118783 mmap(0x784084000000, 67108864, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422445 1793313239.118806 <... close resumed>) = 0 <0.000077>
+422448 1793313239.118820 <... mmap resumed>) = 0x784084000000 <0.000032>
+422446 1793313239.118833 <... openat resumed>) = 3</t/runner_match1/root/kv/20d630e088dddc98-0000.pt> <0.000059>
+422445 1793313239.118871 getdents64(4</proc/422443/task>,  <unfinished ...>
+422446 1793313239.118905 fstat(3</t/runner_match1/root/kv/20d630e088dddc98-0000.pt>,  <unfinished ...>
+422445 1793313239.118940 <... getdents64 resumed>0x784088000cc0 /* 1 entries */, 32768) = 32 <0.000062>
+422446 1793313239.118977 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000064>
+422445 1793313239.119011 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422448/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422446 1793313239.119036 ioctl(3</t/runner_match1/root/kv/20d630e088dddc98-0000.pt>, TCGETS <unfinished ...>
+422445 1793313239.119065 <... openat resumed>) = 5</proc/422443/task/422448/comm> <0.000046>
+422447 1793313239.119091 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422446 1793313239.119109 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000063>
+422448 1793313239.119124 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422445 1793313239.119138 statx(5</proc/422443/task/422448/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422448 1793313239.119184 <... mmap resumed>) = 0x784095a18000 <0.000054>
+422447 1793313239.119200 <... openat resumed>) = 6</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt> <0.000099>
+422446 1793313239.119220 lseek(3</t/runner_match1/root/kv/20d630e088dddc98-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.119248 fstat(6</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt>,  <unfinished ...>
+422445 1793313239.119263 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000092>
+422447 1793313239.119289 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000034>
+422446 1793313239.119303 <... lseek resumed>) = 0 <0.000076>
+422445 1793313239.119326 read(5</proc/422443/task/422448/comm>,  <unfinished ...>
+422447 1793313239.119352 ioctl(6</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt>, TCGETS <unfinished ...>
+422446 1793313239.119368 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422447 1793313239.119392 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000032>
+422445 1793313239.119405 <... read resumed>"gpu#0 sub 1\n", 32) = 12 <0.000071>
+422447 1793313239.119429 lseek(6</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422446 1793313239.119444 <... mmap resumed>) = 0x7840945f9000 <0.000071>
+422445 1793313239.119458 read(5</proc/422443/task/422448/comm>,  <unfinished ...>
+422447 1793313239.119474 <... lseek resumed>) = 0 <0.000037>
+422445 1793313239.119498 <... read resumed>"", 32) = 0 <0.000033>
+422448 1793313239.119532 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/73380a0e787c7759-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422447 1793313239.119551 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422445 1793313239.119564 close(5</proc/422443/task/422448/comm> <unfinished ...>
+422447 1793313239.119580 <... mmap resumed>) = 0x78407f7fe000 <0.000024>
+422448 1793313239.119594 <... openat resumed>) = 7</t/runner_match1/root/kv/73380a0e787c7759-0000.pt> <0.000051>
+422445 1793313239.119611 <... close resumed>) = 0 <0.000040>
+422448 1793313239.119644 fstat(7</t/runner_match1/root/kv/73380a0e787c7759-0000.pt>,  <unfinished ...>
+422445 1793313239.119659 getdents64(4</proc/422443/task>,  <unfinished ...>
+422448 1793313239.119675 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000024>
+422445 1793313239.119692 <... getdents64 resumed>0x784088000cc0 /* 0 entries */, 32768) = 0 <0.000026>
+422448 1793313239.119706 ioctl(7</t/runner_match1/root/kv/73380a0e787c7759-0000.pt>, TCGETS <unfinished ...>
+422445 1793313239.119722 close(4</proc/422443/task> <unfinished ...>
+422448 1793313239.119737 <... ioctl resumed>, 0x784094ff9720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000024>
+422445 1793313239.119751 <... close resumed>) = 0 <0.000023>
+422448 1793313239.119784 lseek(7</t/runner_match1/root/kv/73380a0e787c7759-0000.pt>, 0, SEEK_CUR) = 0 <0.000027>
+422448 1793313239.119853 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x78407effc000 <0.000071>
+422446 1793313239.122479 write(3</t/runner_match1/root/kv/20d630e088dddc98-0000.pt>, "UH\311\21\vH\330H\267I)\326sl\364\353\250\243#\331\262w^\223\\\302\376\2320~t\346"..., 262144 <unfinished ...>
+422448 1793313239.122623 write(7</t/runner_match1/root/kv/73380a0e787c7759-0000.pt>, "9\311\0026\2\37\235\355D\325?J1\312@!yC\203\257\345`\214\231`\203\350\304:7\245\23"..., 262144 <unfinished ...>
+422447 1793313239.122661 write(6</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt>, "\32\213\325\37S\261\217\257\262\26q\236\23\334@\246&T\234W\31{eO\356\25\336\np\227R\264"..., 262144 <unfinished ...>
+422446 1793313239.122682 <... write resumed>) = 262144 <0.000177>
+422446 1793313239.122739 close(3</t/runner_match1/root/kv/20d630e088dddc98-0000.pt>) = 0 <0.000032>
+422448 1793313239.122799 <... write resumed>) = 262144 <0.000151>
+422447 1793313239.122815 <... write resumed>) = 262144 <0.000143>
+422448 1793313239.122854 close(7</t/runner_match1/root/kv/73380a0e787c7759-0000.pt> <unfinished ...>
+422447 1793313239.122876 close(6</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt> <unfinished ...>
+422446 1793313239.122892 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/20d630e088dddc98-0001.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422448 1793313239.122913 <... close resumed>) = 0 <0.000049>
+422447 1793313239.122926 <... close resumed>) = 0 <0.000044>
+422447 1793313239.122963 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422446 1793313239.122985 <... openat resumed>) = 3</t/runner_match1/root/kv/20d630e088dddc98-0001.pt> <0.000082>
+422448 1793313239.123003 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422447 1793313239.123020 <... openat resumed>) = 4</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt> <0.000044>
+422448 1793313239.123040 <... openat resumed>) = 5</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt> <0.000029>
+422446 1793313239.123056 fstat(3</t/runner_match1/root/kv/20d630e088dddc98-0001.pt>,  <unfinished ...>
+422448 1793313239.123073 fstat(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>,  <unfinished ...>
+422447 1793313239.123087 fstat(4</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt>,  <unfinished ...>
+422448 1793313239.123103 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000024>
+422446 1793313239.123122 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000059>
+422448 1793313239.123137 ioctl(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, TCGETS <unfinished ...>
+422447 1793313239.123154 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000059>
+422448 1793313239.123169 <... ioctl resumed>, 0x784094ff9720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000023>
+422446 1793313239.123183 ioctl(3</t/runner_match1/root/kv/20d630e088dddc98-0001.pt>, TCGETS <unfinished ...>
+422448 1793313239.123199 lseek(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.123214 ioctl(4</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt>, TCGETS <unfinished ...>
+422448 1793313239.123229 <... lseek resumed>) = 0 <0.000024>
+422446 1793313239.123242 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000053>
+422447 1793313239.123256 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000035>
+422447 1793313239.123292 lseek(4</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422446 1793313239.123312 lseek(3</t/runner_match1/root/kv/20d630e088dddc98-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422448 1793313239.123329 write(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, "I\23\315J#\r\303\314\226j\17#\203:\366Z'\235\365\0051\203\324\224\222g^\277\344\321\301L"..., 262144 <unfinished ...>
+422447 1793313239.123346 <... lseek resumed>) = 0 <0.000047>
+422446 1793313239.123359 <... lseek resumed>) = 0 <0.000040>
+422447 1793313239.123430 write(4</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt>, "K\201\79\246\276Rs\322(\317\262\37n\271g>\314\253\232\277L\311\305`\33i\370\270\10\217\25"..., 262144 <unfinished ...>
+422446 1793313239.123460 write(3</t/runner_match1/root/kv/20d630e088dddc98-0001.pt>, "\341\36\305\226*\325x$\246\37??\2\207\317\27\244lMM4\321\211\316\314\272z\246Q\243\325["..., 262144 <unfinished ...>
+422448 1793313239.123479 <... write resumed>) = 262144 <0.000141>
+422448 1793313239.123524 close(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>) = 0 <0.000088>
+422447 1793313239.123639 <... write resumed>) = 262144 <0.000188>
+422446 1793313239.123669 <... write resumed>) = 262144 <0.000188>
+422447 1793313239.123687 close(4</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt> <unfinished ...>
+422446 1793313239.123705 close(3</t/runner_match1/root/kv/20d630e088dddc98-0001.pt> <unfinished ...>
+422447 1793313239.123721 <... close resumed>) = 0 <0.000025>
+422448 1793313239.123734 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422446 1793313239.123751 <... close resumed>) = 0 <0.000040>
+422447 1793313239.123764 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422448 1793313239.123781 <... openat resumed>) = 3</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt> <0.000038>
+422446 1793313239.123798 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/20d630e088dddc98-0002.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422448 1793313239.123815 fstat(3</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>,  <unfinished ...>
+422447 1793313239.123833 <... openat resumed>) = 4</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt> <0.000061>
+422448 1793313239.123849 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000025>
+422446 1793313239.123863 <... openat resumed>) = 5</t/runner_match1/root/kv/20d630e088dddc98-0002.pt> <0.000058>
+422448 1793313239.123882 ioctl(3</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, TCGETS <unfinished ...>
+422447 1793313239.123897 fstat(4</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt>,  <unfinished ...>
+422448 1793313239.123912 <... ioctl resumed>, 0x784094ff8320) = -1 ENOTTY (Inappropriate ioctl for device) <0.000023>
+422446 1793313239.123925 fstat(5</t/runner_match1/root/kv/20d630e088dddc98-0002.pt>,  <unfinished ...>
+422448 1793313239.123941 lseek(3</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.123956 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000053>
+422448 1793313239.123971 <... lseek resumed>) = 0 <0.000023>
+422446 1793313239.123983 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000052>
+422448 1793313239.123998 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422447 1793313239.124011 ioctl(4</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt>, TCGETS <unfinished ...>
+422448 1793313239.124027 <... mmap resumed>) = 0x78407e7fa000 <0.000024>
+422446 1793313239.124040 ioctl(5</t/runner_match1/root/kv/20d630e088dddc98-0002.pt>, TCGETS <unfinished ...>
+422447 1793313239.124055 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000037>
+422447 1793313239.124121 lseek(4</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt>, 0, SEEK_CUR <unfinished ...>
+422446 1793313239.124137 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000090>
+422447 1793313239.124156 <... lseek resumed>) = 0 <0.000028>
+422446 1793313239.124170 lseek(5</t/runner_match1/root/kv/20d630e088dddc98-0002.pt>, 0, SEEK_CUR) = 0 <0.000031>
+422447 1793313239.124234 write(4</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt>, "\344\271\16=\37w\314x_4\236\311\204\237\242w\260\316\362\302j\16\204F\342Q:\226h$\204,"..., 262144 <unfinished ...>
+422446 1793313239.124275 write(5</t/runner_match1/root/kv/20d630e088dddc98-0002.pt>, "\222k\333q\315\3554w\3328\24S/8\231\365#\rRbEM\25\262\305W\344p\344\343\372\331"..., 262144 <unfinished ...>
+422447 1793313239.124372 <... write resumed>) = 262144 <0.000129>
+422447 1793313239.124408 close(4</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt> <unfinished ...>
+422446 1793313239.124424 <... write resumed>) = 262144 <0.000139>
+422447 1793313239.124454 <... close resumed>) = 0 <0.000039>
+422446 1793313239.124467 close(5</t/runner_match1/root/kv/20d630e088dddc98-0002.pt>) = 0 <0.000029>
+422447 1793313239.124547 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/f9fee461caf400cf-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 4</t/runner_match1/root/kv/f9fee461caf400cf-0000.pt> <0.000041>
+422446 1793313239.124609 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/acd5c718347c9e31-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422447 1793313239.124627 fstat(4</t/runner_match1/root/kv/f9fee461caf400cf-0000.pt>,  <unfinished ...>
+422446 1793313239.124643 <... openat resumed>) = 5</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt> <0.000024>
+422447 1793313239.124659 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000025>
+422446 1793313239.124674 fstat(5</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt>,  <unfinished ...>
+422447 1793313239.124689 ioctl(4</t/runner_match1/root/kv/f9fee461caf400cf-0000.pt>, TCGETS <unfinished ...>
+422446 1793313239.124705 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000025>
+422447 1793313239.124719 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000023>
+422446 1793313239.124733 ioctl(5</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt>, TCGETS <unfinished ...>
+422447 1793313239.124749 lseek(4</t/runner_match1/root/kv/f9fee461caf400cf-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422446 1793313239.124764 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000024>
+422447 1793313239.124793 <... lseek resumed>) = 0 <0.000038>
+422446 1793313239.124806 lseek(5</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt>, 0, SEEK_CUR) = 0 <0.000028>
+422447 1793313239.124852 write(4</t/runner_match1/root/kv/f9fee461caf400cf-0000.pt>, "C\207\366\7\354\354aJ\276\270J\224/f\243\204\317\204\252\335t\214\210\201z\0E\78 \360#"..., 262144 <unfinished ...>
+422446 1793313239.124908 write(5</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt>, "\376\326\271\322\2008r\0037\267\272\321\251\250\24\312h\370\334\01008\303\27\350\24\372\341\370vZ\5"..., 262144 <unfinished ...>
+422447 1793313239.124998 <... write resumed>) = 262144 <0.000138>
+422447 1793313239.125034 close(4</t/runner_match1/root/kv/f9fee461caf400cf-0000.pt>) = 0 <0.000029>
+422446 1793313239.125080 <... write resumed>) = 262144 <0.000163>
+422446 1793313239.125118 close(5</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt> <unfinished ...>
+422447 1793313239.125153 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422446 1793313239.125166 <... close resumed>) = 0 <0.000042>
+422447 1793313239.125200 <... mmap resumed>) = 0x7840943f8000 <0.000042>
+422446 1793313239.125274 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/acd5c718347c9e31-0000.pt", O_RDONLY|O_CLOEXEC) = 4</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt> <0.000048>
+422447 1793313239.125345 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840945f8990, parent_tid=0x7840945f8990, exit_signal=0, stack=0x7840943f8000, stack_size=0x1ffe00, tls=0x7840945f86c0} <unfinished ...>
+422446 1793313239.125362 fstat(4</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt>, {st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000031>
+422446 1793313239.125447 ioctl(4</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt>, TCGETS <unfinished ...>
+422447 1793313239.125473 <... clone3 resumed> => {parent_tid=[422449]}, 88) = 422449 <0.000120>
+422446 1793313239.125489 <... ioctl resumed>, 0x7840953f9620) = -1 ENOTTY (Inappropriate ioctl for device) <0.000035>
+422446 1793313239.125524 lseek(4</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt>, 0, SEEK_CUR) = 0 <0.000029>
+422447 1793313239.125580 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422446 1793313239.125603 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422447 1793313239.125626 <... mmap resumed>) = 0x7840941f7000 <0.000041>
+422446 1793313239.125650 <... mmap resumed>) = 0x78407dff8000 <0.000042>
+422449 1793313239.125740 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x784075e00000 <0.000036>
+422447 1793313239.125815 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840943f7990, parent_tid=0x7840943f7990, exit_signal=0, stack=0x7840941f7000, stack_size=0x1ffe00, tls=0x7840943f76c0} => {parent_tid=[422450]}, 88) = 422450 <0.000118>
+422447 1793313239.126064 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt", O_RDONLY|O_CLOEXEC) = 5</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt> <0.000028>
+422447 1793313239.126133 fstat(5</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt>, {st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000028>
+422450 1793313239.126180 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422449 1793313239.126193 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422447 1793313239.126207 ioctl(5</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt>, TCGETS <unfinished ...>
+422450 1793313239.126223 <... mmap resumed>) = 0x784070000000 <0.000038>
+422449 1793313239.126235 <... mmap resumed>) = 0x784095a15000 <0.000037>
+422447 1793313239.126249 <... ioctl resumed>, 0x7840951f9320) = -1 ENOTTY (Inappropriate ioctl for device) <0.000035>
+422447 1793313239.126282 lseek(5</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt>, 0, SEEK_CUR) = 0 <0.000028>
+422447 1793313239.126346 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x78407d7f6000 <0.000028>
+422449 1793313239.126471 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt", O_RDONLY|O_CLOEXEC) = 6</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt> <0.000046>
+422450 1793313239.126572 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422449 1793313239.126586 fstat(6</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt>,  <unfinished ...>
+422448 1793313239.126601 read(3</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>,  <unfinished ...>
+422450 1793313239.126617 <... mmap resumed>) = 0x7840941f4000 <0.000040>
+422449 1793313239.126630 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000037>
+422449 1793313239.126681 ioctl(6</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt>, TCGETS <unfinished ...>
+422448 1793313239.126696 <... read resumed>"I\23\315J#\r\303\314\226j\17#\203:\366Z'\235\365\0051\203\324\224\222g^\277\344\321\301L"..., 262144) = 262144 <0.000088>
+422449 1793313239.126721 <... ioctl resumed>, 0x7840945f6720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000033>
+422448 1793313239.126735 close(3</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt> <unfinished ...>
+422449 1793313239.126759 lseek(6</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422448 1793313239.126786 <... close resumed>) = 0 <0.000044>
+422449 1793313239.126799 <... lseek resumed>) = 0 <0.000031>
+422449 1793313239.126838 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422450 1793313239.126852 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422449 1793313239.127108 <... mmap resumed>) = 0x78407cff4000 <0.000265>
+422448 1793313239.127120 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422450 1793313239.127136 <... openat resumed>) = 3</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt> <0.000038>
+422448 1793313239.127156 <... openat resumed>) = 7</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt> <0.000028>
+422450 1793313239.127173 fstat(3</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt>, {st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000033>
+422448 1793313239.127233 fstat(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>,  <unfinished ...>
+422450 1793313239.127256 ioctl(3</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt>, TCGETS <unfinished ...>
+422448 1793313239.127273 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000025>
+422450 1793313239.127288 <... ioctl resumed>, 0x7840943f5720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000024>
+422448 1793313239.127303 ioctl(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, TCGETS <unfinished ...>
+422450 1793313239.127319 lseek(3</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt>, 0, SEEK_CUR <unfinished ...>
+422448 1793313239.127335 <... ioctl resumed>, 0x784094ff8320) = -1 ENOTTY (Inappropriate ioctl for device) <0.000025>
+422450 1793313239.127348 <... lseek resumed>) = 0 <0.000022>
+422450 1793313239.127380 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422448 1793313239.127394 lseek(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, 0, SEEK_CUR) = 0 <0.000031>
+422450 1793313239.127458 <... mmap resumed>) = 0x78407c7f2000 <0.000073>
+422448 1793313239.127472 read(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, "I\23\315J#\r\303\314\226j\17#\203:\366Z'\235\365\0051\203\324\224\222g^\277\344\321\301L"..., 262144) = 262144 <0.000065>
+422448 1793313239.127583 close(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>) = 0 <0.000033>
+422448 1793313239.127672 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt> <0.000053>
+422448 1793313239.127774 fstat(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000028>
+422448 1793313239.127842 ioctl(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>, TCGETS, 0x784094ff9720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000028>
+422448 1793313239.127909 lseek(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>, 0, SEEK_CUR) = 0 <0.000027>
+422448 1793313239.128012 write(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>, "\223\202\332\247\202\377\t\356\371]\325\214.\364\26\207\257\325\275\222\r\"}O\3759\372\366\240\242J\347"..., 262144) = 262144 <0.000202>
+422448 1793313239.128265 close(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>) = 0 <0.000029>
+422448 1793313239.128340 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 7</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt> <0.000041>
+422448 1793313239.128425 fstat(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000028>
+422448 1793313239.128496 ioctl(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>, TCGETS, 0x784094ff9720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000028>
+422448 1793313239.128564 lseek(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>, 0, SEEK_CUR) = 0 <0.000028>
+422448 1793313239.128667 write(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>, "<\226\30\363&\243;\347\0\320l8\20N\315\236\205\305\237\356\361\201I\24<\355C\305?t\242m"..., 262144) = 262144 <0.000140>
+422448 1793313239.128850 close(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>) = 0 <0.000028>
+422446 1793313239.128919 read(4</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt>,  <unfinished ...>
+422448 1793313239.128981 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422446 1793313239.128997 <... read resumed>"\376\326\271\322\2008r\0037\267\272\321\251\250\24\312h\370\334\01008\303\27\350\24\372\341\370vZ\5"..., 262144) = 262144 <0.000070>
+422448 1793313239.129038 <... openat resumed>) = 7</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt> <0.000050>
+422446 1793313239.129054 close(4</t/runner_match1/root/kv/acd5c718347c9e31-0000.pt> <unfinished ...>
+422448 1793313239.129070 fstat(7</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt>,  <unfinished ...>
+422446 1793313239.129085 <... close resumed>) = 0 <0.000025>
+422448 1793313239.129098 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000022>
+422448 1793313239.129136 ioctl(7</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt>, TCGETS <unfinished ...>
+422446 1793313239.129152 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/fed091f3827ba32b-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422448 1793313239.129168 <... ioctl resumed>, 0x784094ff9720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000026>
+422448 1793313239.129206 lseek(7</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422446 1793313239.129221 <... openat resumed>) = 4</t/runner_match1/root/kv/fed091f3827ba32b-0000.pt> <0.000062>
+422448 1793313239.129237 <... lseek resumed>) = 0 <0.000024>
+422446 1793313239.129251 fstat(4</t/runner_match1/root/kv/fed091f3827ba32b-0000.pt>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000036>
+422448 1793313239.129321 write(7</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt>, "\212(\rr\270\247i\223\221\25\27\270\3156\37\215\2224\243\31\224\263\33:L\343F\253HA\36\245"..., 262144 <unfinished ...>
+422446 1793313239.129341 ioctl(4</t/runner_match1/root/kv/fed091f3827ba32b-0000.pt>, TCGETS, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000029>
+422447 1793313239.129391 read(5</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt>,  <unfinished ...>
+422446 1793313239.129408 lseek(4</t/runner_match1/root/kv/fed091f3827ba32b-0000.pt>, 0, SEEK_CUR) = 0 <0.000028>
+422447 1793313239.129454 <... read resumed>"\32\213\325\37S\261\217\257\262\26q\236\23\334@\246&T\234W\31{eO\356\25\336\np\227R\264"..., 262144) = 262144 <0.000055>
+422447 1793313239.129502 close(5</t/runner_match1/root/kv/4c15b729f46e80a9-0000.pt> <unfinished ...>
+422446 1793313239.129518 write(4</t/runner_match1/root/kv/fed091f3827ba32b-0000.pt>, "\224A\210\213|X)\2258\241\200\226\331\10\346V\343L\27\363 \203\234/\36O\236\253\327\24\365\6"..., 262144 <unfinished ...>
+422447 1793313239.129536 <... close resumed>) = 0 <0.000026>
+422448 1793313239.129550 <... write resumed>) = 262144 <0.000218>
+422448 1793313239.129585 close(7</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt>) = 0 <0.000038>
+422446 1793313239.129669 <... write resumed>) = 262144 <0.000142>
+422446 1793313239.129704 close(4</t/runner_match1/root/kv/fed091f3827ba32b-0000.pt> <unfinished ...>
+422448 1793313239.129720 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422446 1793313239.129735 <... close resumed>) = 0 <0.000024>
+422448 1793313239.129769 <... mmap resumed>) = 0x78407c5f1000 <0.000043>
+422446 1793313239.129782 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/fed091f3827ba32b-0001.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 4</t/runner_match1/root/kv/fed091f3827ba32b-0001.pt> <0.000052>
+422446 1793313239.129892 fstat(4</t/runner_match1/root/kv/fed091f3827ba32b-0001.pt>,  <unfinished ...>
+422448 1793313239.129907 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407c7f1990, parent_tid=0x78407c7f1990, exit_signal=0, stack=0x78407c5f1000, stack_size=0x1ffe00, tls=0x78407c7f16c0} <unfinished ...>
+422446 1793313239.129932 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000033>
+422446 1793313239.130035 ioctl(4</t/runner_match1/root/kv/fed091f3827ba32b-0001.pt>, TCGETS <unfinished ...>
+422445 1793313239.130058 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/status", O_RDONLY|O_CLOEXEC <unfinished ...>
+422449 1793313239.130088 read(6</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt>,  <unfinished ...>
+422448 1793313239.130105 <... clone3 resumed> => {parent_tid=[422451]}, 88) = 422451 <0.000190>
+422446 1793313239.130121 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000072>
+422445 1793313239.130145 <... openat resumed>) = 5</proc/422443/status> <0.000077>
+422449 1793313239.130182 <... read resumed>"K\201\79\246\276Rs\322(\317\262\37n\271g>\314\253\232\277L\311\305`\33i\370\270\10\217\25"..., 262144) = 262144 <0.000086>
+422446 1793313239.130196 lseek(4</t/runner_match1/root/kv/fed091f3827ba32b-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422445 1793313239.130211 statx(5</proc/422443/status>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422449 1793313239.130239 close(6</t/runner_match1/root/kv/4c15b729f46e80a9-0001.pt> <unfinished ...>
+422446 1793313239.130263 <... lseek resumed>) = 0 <0.000060>
+422449 1793313239.130289 <... close resumed>) = 0 <0.000043>
+422448 1793313239.130303 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422445 1793313239.130316 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000095>
+422448 1793313239.130352 <... mmap resumed>) = 0x78407c3f0000 <0.000045>
+422446 1793313239.130365 write(4</t/runner_match1/root/kv/fed091f3827ba32b-0001.pt>, "I\247\0\264\307n\211Go\307\322\323uk7\300\256\231jp\331h\351\216\263\206\227\311V\301\251\240"..., 262144 <unfinished ...>
+422450 1793313239.130392 read(3</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt>,  <unfinished ...>
+422445 1793313239.130419 read(5</proc/422443/status>,  <unfinished ...>
+422451 1793313239.130472 mmap(0x784074000000, 67108864, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422450 1793313239.130485 <... read resumed>"\344\271\16=\37w\314x_4\236\311\204\237\242w\260\316\362\302j\16\204F\342Q:\226h$\204,"..., 262144) = 262144 <0.000085>
+422445 1793313239.130509 <... read resumed>"Name:\taeiou\nUmask:\t0022\nState:\tS", 32) = 32 <0.000084>
+422451 1793313239.130525 <... mmap resumed>) = 0x784074000000 <0.000048>
+422450 1793313239.130538 close(3</t/runner_match1/root/kv/4c15b729f46e80a9-0002.pt> <unfinished ...>
+422446 1793313239.130561 <... write resumed>) = 262144 <0.000187>
+422450 1793313239.130584 <... close resumed>) = 0 <0.000040>
+422448 1793313239.130596 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407c5f0990, parent_tid=0x78407c5f0990, exit_signal=0, stack=0x78407c3f0000, stack_size=0x1ffe00, tls=0x78407c5f06c0} <unfinished ...>
+422445 1793313239.130639 read(5</proc/422443/status>,  <unfinished ...>
+422446 1793313239.130683 close(4</t/runner_match1/root/kv/fed091f3827ba32b-0001.pt> <unfinished ...>
+422445 1793313239.130740 <... read resumed>" (sleeping)\nTgid:\t422443\nNgid:\t0", 32) = 32 <0.000087>
+422448 1793313239.130785 <... clone3 resumed> => {parent_tid=[422452]}, 88) = 422452 <0.000160>
+422446 1793313239.130809 <... close resumed>) = 0 <0.000118>
+422445 1793313239.130850 read(5</proc/422443/status>,  <unfinished ...>
+422447 1793313239.130893 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/4c15b729f46e80a9-0003.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422446 1793313239.130911 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/fed091f3827ba32b-0002.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422448 1793313239.130946 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422445 1793313239.130961 <... read resumed>"\nPid:\t422443\nPPid:\t422440\nTracer"..., 64) = 64 <0.000104>
+422448 1793313239.130993 <... openat resumed>) = 6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt> <0.000041>
+422447 1793313239.131012 <... openat resumed>) = 3</t/runner_match1/root/kv/4c15b729f46e80a9-0003.pt> <0.000109>
+422446 1793313239.131029 <... openat resumed>) = 4</t/runner_match1/root/kv/fed091f3827ba32b-0002.pt> <0.000111>
+422451 1793313239.131055 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422448 1793313239.131069 fstat(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>,  <unfinished ...>
+422447 1793313239.131084 fstat(3</t/runner_match1/root/kv/4c15b729f46e80a9-0003.pt>,  <unfinished ...>
+422445 1793313239.131101 read(5</proc/422443/status>,  <unfinished ...>
+422451 1793313239.131127 <... mmap resumed>) = 0x7840941f1000 <0.000066>
+422448 1793313239.131140 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000064>
+422447 1793313239.131155 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000061>
+422446 1793313239.131169 fstat(4</t/runner_match1/root/kv/fed091f3827ba32b-0002.pt>,  <unfinished ...>
+422448 1793313239.131203 ioctl(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, TCGETS <unfinished ...>
+422447 1793313239.131219 ioctl(3</t/runner_match1/root/kv/4c15b729f46e80a9-0003.pt>, TCGETS <unfinished ...>
+422445 1793313239.131234 <... read resumed>"1000\nGid:\t106\t106\t106\t106\nFDSize"..., 128) = 128 <0.000126>
+422452 1793313239.131249 openat(AT_FDCWD</src/aeiou/builder>, "/sys/devices/system/cpu/online", O_RDONLY|O_CLOEXEC <unfinished ...>
+422448 1793313239.131277 <... ioctl resumed>, 0x784094ff8320) = -1 ENOTTY (Inappropriate ioctl for device) <0.000066>
+422447 1793313239.131291 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000065>
+422446 1793313239.131304 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000128>
+422452 1793313239.131319 <... openat resumed>) = 7</sys/devices/system/cpu/online> <0.000060>
+422448 1793313239.131351 lseek(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.131367 lseek(3</t/runner_match1/root/kv/4c15b729f46e80a9-0003.pt>, 0, SEEK_CUR <unfinished ...>
+422445 1793313239.131381 read(5</proc/422443/status>,  <unfinished ...>
+422452 1793313239.131398 read(7</sys/devices/system/cpu/online>,  <unfinished ...>
+422448 1793313239.131421 <... lseek resumed>) = 0 <0.000063>
+422447 1793313239.131433 <... lseek resumed>) = 0 <0.000060>
+422446 1793313239.131446 ioctl(4</t/runner_match1/root/kv/fed091f3827ba32b-0002.pt>, TCGETS <unfinished ...>
+422452 1793313239.131462 <... read resumed>"0-19\n", 1024) = 5 <0.000058>
+422448 1793313239.131485 read(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>,  <unfinished ...>
+422445 1793313239.131500 <... read resumed>" 598860 kB\nVmSize:\t  562040 kB\nV"..., 256) = 256 <0.000112>
+422452 1793313239.131515 close(7</sys/devices/system/cpu/online> <unfinished ...>
+422447 1793313239.131538 write(3</t/runner_match1/root/kv/4c15b729f46e80a9-0003.pt>, "d\242\3255\211\356\270\202\241\6\245\37\241Z\223\277\1\34\f\320\20#\272_\342\272\305\204\330H\376\33"..., 262144 <unfinished ...>
+422446 1793313239.131555 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000102>
+422452 1793313239.131569 <... close resumed>) = 0 <0.000048>
+422451 1793313239.131583 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422448 1793313239.131601 <... read resumed>"I\23\315J#\r\303\314\226j\17#\203:\366Z'\235\365\0051\203\324\224\222g^\277\344\321\301L"..., 262144) = 262144 <0.000109>
+422445 1793313239.131615 read(5</proc/422443/status>,  <unfinished ...>
+422452 1793313239.131632 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422451 1793313239.131645 <... openat resumed>) = 7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt> <0.000052>
+422448 1793313239.131661 close(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt> <unfinished ...>
+422446 1793313239.131678 lseek(4</t/runner_match1/root/kv/fed091f3827ba32b-0002.pt>, 0, SEEK_CUR <unfinished ...>
+422452 1793313239.131695 <... mmap resumed>) = 0x784068000000 <0.000059>
+422451 1793313239.131708 fstat(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>,  <unfinished ...>
+422448 1793313239.131722 <... close resumed>) = 0 <0.000053>
+422447 1793313239.131735 <... write resumed>) = 262144 <0.000188>
+422445 1793313239.131747 <... read resumed>"    272 kB\nVmSwap:\t       0 kB\nH"..., 512) = 512 <0.000126>
+422451 1793313239.131772 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000057>
+422447 1793313239.131795 close(3</t/runner_match1/root/kv/4c15b729f46e80a9-0003.pt> <unfinished ...>
+422446 1793313239.131809 <... lseek resumed>) = 0 <0.000125>
+422451 1793313239.131831 ioctl(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>, TCGETS <unfinished ...>
+422445 1793313239.131846 read(5</proc/422443/status>,  <unfinished ...>
+422447 1793313239.131873 <... close resumed>) = 0 <0.000072>
+422446 1793313239.131888 write(4</t/runner_match1/root/kv/fed091f3827ba32b-0002.pt>, "\342\362\226u\313\302\10\364S\352'\353\375g\233\321\357O\357QNs@Y/\255:F7\271\274\253"..., 262144 <unfinished ...>
+422451 1793313239.131905 <... ioctl resumed>, 0x78407c7ef720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000067>
+422445 1793313239.131918 <... read resumed>"ditional enabled\nCpus_allowed:\tf"..., 1024) = 443 <0.000066>
+422451 1793313239.131951 lseek(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422445 1793313239.131967 read(5</proc/422443/status>,  <unfinished ...>
+422451 1793313239.131990 <... lseek resumed>) = 0 <0.000032>
+422447 1793313239.132003 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422451 1793313239.132039 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422446 1793313239.132052 <... write resumed>) = 262144 <0.000155>
+422445 1793313239.132064 <... read resumed>"", 581) = 0 <0.000092>
+422451 1793313239.132096 <... mmap resumed>) = 0x78406f7fe000 <0.000053>
+422447 1793313239.132109 <... openat resumed>) = 3</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt> <0.000099>
+422445 1793313239.132125 close(5</proc/422443/status> <unfinished ...>
+422447 1793313239.132149 fstat(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt>,  <unfinished ...>
+422446 1793313239.132164 close(4</t/runner_match1/root/kv/fed091f3827ba32b-0002.pt> <unfinished ...>
+422447 1793313239.132189 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000033>
+422445 1793313239.132203 <... close resumed>) = 0 <0.000072>
+422446 1793313239.132225 <... close resumed>) = 0 <0.000054>
+422447 1793313239.132238 ioctl(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt>, TCGETS <unfinished ...>
+422445 1793313239.132253 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY <unfinished ...>
+422452 1793313239.132270 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422447 1793313239.132283 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000038>
+422452 1793313239.132297 <... mmap resumed>) = 0x7840941ee000 <0.000022>
+422445 1793313239.132310 <... openat resumed>) = 4</proc/422443/task> <0.000049>
+422447 1793313239.132335 lseek(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422446 1793313239.132352 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/45b6f94f4a6a59e0-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422447 1793313239.132377 <... lseek resumed>) = 0 <0.000034>
+422445 1793313239.132390 fstat(4</proc/422443/task>,  <unfinished ...>
+422446 1793313239.132414 <... openat resumed>) = 5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0000.pt> <0.000055>
+422445 1793313239.132439 <... fstat resumed>{st_mode=S_IFDIR|0555, st_size=0, ...}) = 0 <0.000043>
+422447 1793313239.132469 write(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt>, "I\342k\0314\16\24\236\237O\26\370s\314\242\\\221i\264\351\223n\343\246\6\353\276\30\331\21\2\272"..., 262144 <unfinished ...>
+422446 1793313239.132486 fstat(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0000.pt>,  <unfinished ...>
+422445 1793313239.132511 getdents64(4</proc/422443/task>,  <unfinished ...>
+422446 1793313239.132527 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000033>
+422452 1793313239.132541 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422446 1793313239.132558 ioctl(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0000.pt>, TCGETS <unfinished ...>
+422445 1793313239.132573 <... getdents64 resumed>0x784088000cc0 /* 12 entries */, 32768) = 368 <0.000055>
+422452 1793313239.132588 <... openat resumed>) = 6</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt> <0.000039>
+422446 1793313239.132604 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000040>
+422447 1793313239.132618 <... write resumed>) = 262144 <0.000141>
+422445 1793313239.132631 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422443/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422452 1793313239.132647 fstat(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>,  <unfinished ...>
+422447 1793313239.132662 close(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt> <unfinished ...>
+422446 1793313239.132677 lseek(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422452 1793313239.132693 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000039>
+422447 1793313239.132707 <... close resumed>) = 0 <0.000038>
+422445 1793313239.132719 <... openat resumed>) = 8</proc/422443/task/422443/comm> <0.000082>
+422452 1793313239.132737 ioctl(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>, TCGETS <unfinished ...>
+422447 1793313239.132752 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422446 1793313239.132767 <... lseek resumed>) = 0 <0.000084>
+422452 1793313239.132781 <... ioctl resumed>, 0x78407c5ee720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000037>
+422445 1793313239.132794 statx(8</proc/422443/task/422443/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422452 1793313239.132812 lseek(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.132827 <... openat resumed>) = 3</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt> <0.000068>
+422452 1793313239.132843 <... lseek resumed>) = 0 <0.000025>
+422446 1793313239.132857 write(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0000.pt>, "\327\3501\340$\303\312s\200l+\234\254\241\333A\370b\372\266w\263\257Vg\372F\373\245\1\263\363"..., 262144 <unfinished ...>
+422445 1793313239.132873 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000070>
+422452 1793313239.132889 mmap(NULL, 8396800, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+422447 1793313239.132902 fstat(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt>,  <unfinished ...>
+422452 1793313239.132917 <... mmap resumed>) = 0x78406effc000 <0.000024>
+422445 1793313239.132930 read(8</proc/422443/task/422443/comm>,  <unfinished ...>
+422447 1793313239.132945 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000037>
+422445 1793313239.132961 <... read resumed>"aeiou\n", 32) = 6 <0.000024>
+422447 1793313239.132982 ioctl(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt>, TCGETS <unfinished ...>
+422446 1793313239.132998 <... write resumed>) = 262144 <0.000133>
+422445 1793313239.133011 read(8</proc/422443/task/422443/comm>,  <unfinished ...>
+422447 1793313239.133026 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000038>
+422446 1793313239.133039 close(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0000.pt> <unfinished ...>
+422447 1793313239.133054 lseek(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422445 1793313239.133069 <... read resumed>"", 32) = 0 <0.000052>
+422447 1793313239.133083 <... lseek resumed>) = 0 <0.000022>
+422446 1793313239.133095 <... close resumed>) = 0 <0.000050>
+422445 1793313239.133108 close(8</proc/422443/task/422443/comm> <unfinished ...>
+422446 1793313239.133124 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/45b6f94f4a6a59e0-0001.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422447 1793313239.133141 write(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt>, "\2612\6\20\3450\306@5=\340\317c\200\224\24\327H\314F\270\79\243\377\36\217\303\325&~\210"..., 262144 <unfinished ...>
+422445 1793313239.133157 <... close resumed>) = 0 <0.000042>
+422446 1793313239.133170 <... openat resumed>) = 5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0001.pt> <0.000040>
+422445 1793313239.133187 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422444/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422446 1793313239.133203 fstat(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0001.pt>,  <unfinished ...>
+422445 1793313239.133218 <... openat resumed>) = 8</proc/422443/task/422444/comm> <0.000025>
+422446 1793313239.133235 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000026>
+422445 1793313239.133249 statx(8</proc/422443/task/422444/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422446 1793313239.133266 ioctl(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0001.pt>, TCGETS <unfinished ...>
+422445 1793313239.133281 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000024>
+422447 1793313239.133296 <... write resumed>) = 262144 <0.000147>
+422446 1793313239.133308 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000036>
+422447 1793313239.133322 close(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt> <unfinished ...>
+422445 1793313239.133337 read(8</proc/422443/task/422444/comm>,  <unfinished ...>
+422447 1793313239.133355 <... close resumed>) = 0 <0.000026>
+422446 1793313239.133367 lseek(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.133383 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422445 1793313239.133398 <... read resumed>"aeiou\n", 32) = 6 <0.000053>
+422446 1793313239.133412 <... lseek resumed>) = 0 <0.000039>
+422447 1793313239.133426 <... openat resumed>) = 3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt> <0.000036>
+422445 1793313239.133441 read(8</proc/422443/task/422444/comm>,  <unfinished ...>
+422447 1793313239.133457 fstat(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt>,  <unfinished ...>
+422446 1793313239.133473 write(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0001.pt>, "\1\v\326\337\232\361\341xD\343 \272H\355\304j\335&\377\314B\22%\273\314u\375\312\326\322PG"..., 262144 <unfinished ...>
+422445 1793313239.133489 <... read resumed>"", 32) = 0 <0.000041>
+422447 1793313239.133502 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000039>
+422445 1793313239.133517 close(8</proc/422443/task/422444/comm> <unfinished ...>
+422447 1793313239.133532 ioctl(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt>, TCGETS <unfinished ...>
+422445 1793313239.133548 <... close resumed>) = 0 <0.000025>
+422447 1793313239.133565 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000027>
+422445 1793313239.133579 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422445/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422447 1793313239.133595 lseek(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt>, 0, SEEK_CUR <unfinished ...>
+422445 1793313239.133611 <... openat resumed>) = 8</proc/422443/task/422445/comm> <0.000025>
+422447 1793313239.133627 <... lseek resumed>) = 0 <0.000026>
+422446 1793313239.133640 <... write resumed>) = 262144 <0.000159>
+422445 1793313239.133653 statx(8</proc/422443/task/422445/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422446 1793313239.133669 close(5</t/runner_match1/root/kv/45b6f94f4a6a59e0-0001.pt> <unfinished ...>
+422445 1793313239.133685 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000024>
+422447 1793313239.133700 write(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt>, "x7\314J\255sH\rS)\fO\227\246\0\371j\236\254\353\303\257qj\24j\212\237Z\247V\332"..., 262144 <unfinished ...>
+422446 1793313239.133716 <... close resumed>) = 0 <0.000040>
+422445 1793313239.133729 read(8</proc/422443/task/422445/comm>, "counters\n", 32) = 9 <0.000034>
+422446 1793313239.133783 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/fb60d556979d1eef-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422445 1793313239.133799 read(8</proc/422443/task/422445/comm>,  <unfinished ...>
+422446 1793313239.133815 <... openat resumed>) = 5</t/runner_match1/root/kv/fb60d556979d1eef-0000.pt> <0.000024>
+422445 1793313239.133831 <... read resumed>"", 32) = 0 <0.000025>
+422447 1793313239.133844 <... write resumed>) = 262144 <0.000136>
+422446 1793313239.133858 fstat(5</t/runner_match1/root/kv/fb60d556979d1eef-0000.pt>,  <unfinished ...>
+422445 1793313239.133873 close(8</proc/422443/task/422445/comm> <unfinished ...>
+422447 1793313239.133888 close(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt> <unfinished ...>
+422446 1793313239.133904 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000040>
+422447 1793313239.133919 <... close resumed>) = 0 <0.000023>
+422445 1793313239.133931 <... close resumed>) = 0 <0.000052>
+422446 1793313239.133944 ioctl(5</t/runner_match1/root/kv/fb60d556979d1eef-0000.pt>, TCGETS <unfinished ...>
+422445 1793313239.133960 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422446/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422446 1793313239.133975 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000024>
+422447 1793313239.133989 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/787de711cd0c0aad-0000.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422445 1793313239.134005 <... openat resumed>) = 3</proc/422443/task/422446/comm> <0.000038>
+422446 1793313239.134020 lseek(5</t/runner_match1/root/kv/fb60d556979d1eef-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.134036 <... openat resumed>) = 8</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt> <0.000040>
+422445 1793313239.134052 statx(3</proc/422443/task/422446/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422447 1793313239.134069 fstat(8</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt>,  <unfinished ...>
+422446 1793313239.134084 <... lseek resumed>) = 0 <0.000056>
+422447 1793313239.134097 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000022>
+422445 1793313239.134111 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000051>
+422447 1793313239.134126 ioctl(8</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt>, TCGETS <unfinished ...>
+422446 1793313239.134142 write(5</t/runner_match1/root/kv/fb60d556979d1eef-0000.pt>, "t\215n\362\v\205\326D\330=\240\321\21y\235\204j:\27\21j\304t\376\275\353\343ut\272\204N"..., 262144 <unfinished ...>
+422445 1793313239.134158 read(3</proc/422443/task/422446/comm>,  <unfinished ...>
+422447 1793313239.134173 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000041>
+422445 1793313239.134187 <... read resumed>"gpu#0\n", 32) = 6 <0.000023>
+422447 1793313239.134202 lseek(8</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422445 1793313239.134218 read(3</proc/422443/task/422446/comm>,  <unfinished ...>
+422447 1793313239.134233 <... lseek resumed>) = 0 <0.000024>
+422445 1793313239.134246 <... read resumed>"", 32) = 0 <0.000022>
+422446 1793313239.134281 <... write resumed>) = 262144 <0.000131>
+422445 1793313239.134294 close(3</proc/422443/task/422446/comm> <unfinished ...>
+422447 1793313239.134310 write(8</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt>, "\235\363\205\217m\\\323\301\264\35\276\365\332\372\f\r\276H\2\274\0\267Wh\nd\347l\261\3059\243"..., 262144 <unfinished ...>
+422446 1793313239.134326 close(5</t/runner_match1/root/kv/fb60d556979d1eef-0000.pt> <unfinished ...>
+422445 1793313239.134341 <... close resumed>) = 0 <0.000040>
+422446 1793313239.134354 <... close resumed>) = 0 <0.000022>
+422446 1793313239.134383 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/fb60d556979d1eef-0001.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422445 1793313239.134399 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422447/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422446 1793313239.134416 <... openat resumed>) = 3</t/runner_match1/root/kv/fb60d556979d1eef-0001.pt> <0.000025>
+422445 1793313239.134432 <... openat resumed>) = 5</proc/422443/task/422447/comm> <0.000025>
+422446 1793313239.134448 fstat(3</t/runner_match1/root/kv/fb60d556979d1eef-0001.pt>,  <unfinished ...>
+422445 1793313239.134463 statx(5</proc/422443/task/422447/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422446 1793313239.134479 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000025>
+422445 1793313239.134494 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000024>
+422446 1793313239.134509 ioctl(3</t/runner_match1/root/kv/fb60d556979d1eef-0001.pt>, TCGETS <unfinished ...>
+422445 1793313239.134525 read(5</proc/422443/task/422447/comm>,  <unfinished ...>
+422446 1793313239.134540 <... ioctl resumed>, 0x7840953faa20) = -1 ENOTTY (Inappropriate ioctl for device) <0.000024>
+422445 1793313239.134554 <... read resumed>"gpu#0 sub 0\n", 32) = 12 <0.000023>
+422446 1793313239.134568 lseek(3</t/runner_match1/root/kv/fb60d556979d1eef-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.134584 <... write resumed>) = 262144 <0.000266>
+422445 1793313239.134596 read(5</proc/422443/task/422447/comm>,  <unfinished ...>
+422447 1793313239.134612 close(8</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt> <unfinished ...>
+422445 1793313239.134627 <... read resumed>"", 32) = 0 <0.000024>
+422447 1793313239.134649 <... close resumed>) = 0 <0.000030>
+422446 1793313239.134661 <... lseek resumed>) = 0 <0.000086>
+422445 1793313239.134674 close(5</proc/422443/task/422447/comm> <unfinished ...>
+422447 1793313239.134689 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/787de711cd0c0aad-0001.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422445 1793313239.134704 <... close resumed>) = 0 <0.000024>
+422447 1793313239.134735 <... openat resumed>) = 5</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt> <0.000039>
+422446 1793313239.134751 write(3</t/runner_match1/root/kv/fb60d556979d1eef-0001.pt>, "\312\273CaX\220\230\375\305\1\245\220\342\347\4-)X!8\216\233\10\200\273~\326\246\211\351q\300"..., 262144 <unfinished ...>
+422445 1793313239.134768 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422448/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422447 1793313239.134783 fstat(5</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt>,  <unfinished ...>
+422445 1793313239.134799 <... openat resumed>) = 8</proc/422443/task/422448/comm> <0.000025>
+422447 1793313239.134815 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000025>
+422445 1793313239.134830 statx(8</proc/422443/task/422448/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422447 1793313239.134846 ioctl(5</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt>, TCGETS <unfinished ...>
+422445 1793313239.134862 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000025>
+422447 1793313239.134876 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000024>
+422451 1793313239.134893 read(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>,  <unfinished ...>
+422446 1793313239.134909 <... write resumed>) = 262144 <0.000149>
+422445 1793313239.134922 read(8</proc/422443/task/422448/comm>,  <unfinished ...>
+422447 1793313239.134937 lseek(5</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422445 1793313239.134954 <... read resumed>"gpu#0 sub 1\n", 32) = 12 <0.000026>
+422451 1793313239.134968 <... read resumed>"\223\202\332\247\202\377\t\356\371]\325\214.\364\26\207\257\325\275\222\r\"}O\3759\372\366\240\242J\347"..., 262144) = 262144 <0.000068>
+422447 1793313239.134983 <... lseek resumed>) = 0 <0.000038>
+422446 1793313239.134995 close(3</t/runner_match1/root/kv/fb60d556979d1eef-0001.pt> <unfinished ...>
+422451 1793313239.135011 close(7</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt> <unfinished ...>
+422445 1793313239.135026 read(8</proc/422443/task/422448/comm>,  <unfinished ...>
+422451 1793313239.135042 <... close resumed>) = 0 <0.000024>
+422446 1793313239.135056 <... close resumed>) = 0 <0.000054>
+422447 1793313239.135078 write(5</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt>, "u\37\201\5\315\337E\177\275\245\332,\204\316\334\321\260\247\265(\26\v\312\367s\364\321\301\373\352\375D"..., 262144 <unfinished ...>
+422445 1793313239.135094 <... read resumed>"", 32) = 0 <0.000061>
+422445 1793313239.135122 close(8</proc/422443/task/422448/comm>) = 0 <0.000029>
+422445 1793313239.135188 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422449/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422447 1793313239.135232 <... write resumed>) = 262144 <0.000145>
+422445 1793313239.135247 <... openat resumed>) = 3</proc/422443/task/422449/comm> <0.000052>
+422447 1793313239.135264 close(5</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt> <unfinished ...>
+422445 1793313239.135280 statx(3</proc/422443/task/422449/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422447 1793313239.135296 <... close resumed>) = 0 <0.000025>
+422445 1793313239.135325 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000038>
+422445 1793313239.135360 read(3</proc/422443/task/422449/comm>, "gpu#0 sub 0\n", 32) = 12 <0.000034>
+422445 1793313239.135433 read(3</proc/422443/task/422449/comm>,  <unfinished ...>
+422449 1793313239.135459 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422445 1793313239.135486 <... read resumed>"", 32) = 0 <0.000046>
+422449 1793313239.135509 <... openat resumed>) = 5</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt> <0.000043>
+422447 1793313239.135527 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422445 1793313239.135543 close(3</proc/422443/task/422449/comm> <unfinished ...>
+422450 1793313239.135559 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422449 1793313239.135574 fstat(5</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt>,  <unfinished ...>
+422447 1793313239.135590 <... openat resumed>) = 7</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt> <0.000055>
+422450 1793313239.135607 <... openat resumed>) = 3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt> <0.000041>
+422449 1793313239.135622 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000041>
+422445 1793313239.135637 <... close resumed>) = 0 <0.000087>
+422450 1793313239.135650 fstat(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt>,  <unfinished ...>
+422447 1793313239.135667 fstat(7</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt>,  <unfinished ...>
+422450 1793313239.135682 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000024>
+422449 1793313239.135697 ioctl(5</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt>, TCGETS <unfinished ...>
+422445 1793313239.135712 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422450/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422450 1793313239.135727 ioctl(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt>, TCGETS <unfinished ...>
+422449 1793313239.135743 <... ioctl resumed>, 0x7840945f6720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000039>
+422447 1793313239.135756 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000082>
+422450 1793313239.135771 <... ioctl resumed>, 0x7840943f5720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000037>
+422449 1793313239.135784 lseek(5</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422445 1793313239.135799 <... openat resumed>) = 8</proc/422443/task/422450/comm> <0.000080>
+422450 1793313239.135815 lseek(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt>, 0, SEEK_CUR <unfinished ...>
+422449 1793313239.135830 <... lseek resumed>) = 0 <0.000039>
+422447 1793313239.135842 ioctl(7</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt>, TCGETS <unfinished ...>
+422450 1793313239.135858 <... lseek resumed>) = 0 <0.000036>
+422449 1793313239.135870 read(5</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt>,  <unfinished ...>
+422445 1793313239.135885 statx(8</proc/422443/task/422450/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422450 1793313239.135902 read(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt>,  <unfinished ...>
+422447 1793313239.135916 <... ioctl resumed>, 0x7840951f9320) = -1 ENOTTY (Inappropriate ioctl for device) <0.000068>
+422449 1793313239.135930 <... read resumed>"\2612\6\20\3450\306@5=\340\317c\200\224\24\327H\314F\270\79\243\377\36\217\303\325&~\210"..., 262144) = 262144 <0.000053>
+422445 1793313239.135945 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000052>
+422450 1793313239.135960 <... read resumed>"x7\314J\255sH\rS)\fO\227\246\0\371j\236\254\353\303\257qj\24j\212\237Z\247V\332"..., 262144) = 262144 <0.000052>
+422449 1793313239.135974 close(5</t/runner_match1/root/kv/5fbf67cfccd1659f-0001.pt> <unfinished ...>
+422447 1793313239.135989 lseek(7</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422450 1793313239.136005 close(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0002.pt> <unfinished ...>
+422449 1793313239.136019 <... close resumed>) = 0 <0.000039>
+422445 1793313239.136032 read(8</proc/422443/task/422450/comm>,  <unfinished ...>
+422450 1793313239.136048 <... close resumed>) = 0 <0.000036>
+422447 1793313239.136070 <... lseek resumed>) = 0 <0.000074>
+422452 1793313239.136093 read(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>,  <unfinished ...>
+422445 1793313239.136103 <... read resumed>"gpu#0 sub 1\n", 32) = 12 <0.000065>
+422447 1793313239.136143 read(7</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt>,  <unfinished ...>
+422445 1793313239.136169 read(8</proc/422443/task/422450/comm>,  <unfinished ...>
+422452 1793313239.136187 <... read resumed>"<\226\30\363&\243;\347\0\320l8\20N\315\236\205\305\237\356\361\201I\24<\355C\305?t\242m"..., 262144) = 262144 <0.000087>
+422447 1793313239.136208 <... read resumed>"I\342k\0314\16\24\236\237O\26\370s\314\242\\\221i\264\351\223n\343\246\6\353\276\30\331\21\2\272"..., 262144) = 262144 <0.000049>
+422445 1793313239.136223 <... read resumed>"", 32) = 0 <0.000047>
+422452 1793313239.136237 close(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt> <unfinished ...>
+422447 1793313239.136254 close(7</t/runner_match1/root/kv/5fbf67cfccd1659f-0000.pt> <unfinished ...>
+422445 1793313239.136268 close(8</proc/422443/task/422450/comm> <unfinished ...>
+422452 1793313239.136284 <... close resumed>) = 0 <0.000040>
+422447 1793313239.136297 <... close resumed>) = 0 <0.000037>
+422445 1793313239.136310 <... close resumed>) = 0 <0.000035>
+422445 1793313239.136344 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422451/comm", O_RDONLY|O_CLOEXEC) = 3</proc/422443/task/422451/comm> <0.000030>
+422445 1793313239.136452 statx(3</proc/422443/task/422451/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422448 1793313239.136489 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422445 1793313239.136517 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000046>
+422448 1793313239.136533 <... openat resumed>) = 5</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt> <0.000035>
+422445 1793313239.136558 read(3</proc/422443/task/422451/comm>,  <unfinished ...>
+422448 1793313239.136575 fstat(5</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt>,  <unfinished ...>
+422447 1793313239.136590 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/5fbf67cfccd1659f-0003.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422448 1793313239.136607 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000025>
+422445 1793313239.136621 <... read resumed>"gpu#0 sub 0\n", 32) = 12 <0.000056>
+422448 1793313239.136636 ioctl(5</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt>, TCGETS <unfinished ...>
+422447 1793313239.136651 <... openat resumed>) = 6</t/runner_match1/root/kv/5fbf67cfccd1659f-0003.pt> <0.000054>
+422448 1793313239.136667 <... ioctl resumed>, 0x784094ff8320) = -1 ENOTTY (Inappropriate ioctl for device) <0.000025>
+422445 1793313239.136681 read(3</proc/422443/task/422451/comm>,  <unfinished ...>
+422448 1793313239.136697 lseek(5</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.136715 fstat(6</t/runner_match1/root/kv/5fbf67cfccd1659f-0003.pt>,  <unfinished ...>
+422448 1793313239.136731 <... lseek resumed>) = 0 <0.000027>
+422445 1793313239.136743 <... read resumed>"", 32) = 0 <0.000056>
+422447 1793313239.136756 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000034>
+422448 1793313239.136771 read(5</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt>,  <unfinished ...>
+422445 1793313239.136785 close(3</proc/422443/task/422451/comm> <unfinished ...>
+422447 1793313239.136800 ioctl(6</t/runner_match1/root/kv/5fbf67cfccd1659f-0003.pt>, TCGETS <unfinished ...>
+422445 1793313239.136816 <... close resumed>) = 0 <0.000024>
+422448 1793313239.136829 <... read resumed>"\212(\rr\270\247i\223\221\25\27\270\3156\37\215\2224\243\31\224\263\33:L\343F\253HA\36\245"..., 262144) = 262144 <0.000052>
+422447 1793313239.136844 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000037>
+422448 1793313239.136862 close(5</t/runner_match1/root/kv/a4d29131bc25e1de-0000.pt> <unfinished ...>
+422445 1793313239.136877 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422452/comm", O_RDONLY|O_CLOEXEC <unfinished ...>
+422448 1793313239.136893 <... close resumed>) = 0 <0.000024>
+422447 1793313239.136905 lseek(6</t/runner_match1/root/kv/5fbf67cfccd1659f-0003.pt>, 0, SEEK_CUR <unfinished ...>
+422448 1793313239.136922 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a4d29131bc25e1de-0001.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422445 1793313239.136938 <... openat resumed>) = 3</proc/422443/task/422452/comm> <0.000054>
+422447 1793313239.136954 <... lseek resumed>) = 0 <0.000042>
+422448 1793313239.136973 <... openat resumed>) = 5</t/runner_match1/root/kv/a4d29131bc25e1de-0001.pt> <0.000044>
+422445 1793313239.136989 statx(3</proc/422443/task/422452/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL,  <unfinished ...>
+422448 1793313239.137005 fstat(5</t/runner_match1/root/kv/a4d29131bc25e1de-0001.pt>,  <unfinished ...>
+422447 1793313239.137021 write(6</t/runner_match1/root/kv/5fbf67cfccd1659f-0003.pt>, "IE\5\312\310\231BntB\333\0\5/\\_\323T\2\f\352\315\214\270T\335\256\254a\n\337|"..., 262144 <unfinished ...>
+422445 1793313239.137038 <... statx resumed>{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000042>
+422448 1793313239.137052 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000041>
+422445 1793313239.137068 read(3</proc/422443/task/422452/comm>,  <unfinished ...>
+422448 1793313239.137084 ioctl(5</t/runner_match1/root/kv/a4d29131bc25e1de-0001.pt>, TCGETS <unfinished ...>
+422445 1793313239.137099 <... read resumed>"gpu#0 sub 1\n", 32) = 12 <0.000024>
+422448 1793313239.137113 <... ioctl resumed>, 0x784094ff9720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000023>
+422445 1793313239.137128 read(3</proc/422443/task/422452/comm>,  <unfinished ...>
+422448 1793313239.137162 lseek(5</t/runner_match1/root/kv/a4d29131bc25e1de-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.137178 <... write resumed>) = 262144 <0.000148>
+422445 1793313239.137190 <... read resumed>"", 32) = 0 <0.000056>
+422448 1793313239.137203 <... lseek resumed>) = 0 <0.000034>
+422447 1793313239.137216 close(6</t/runner_match1/root/kv/5fbf67cfccd1659f-0003.pt> <unfinished ...>
+422445 1793313239.137231 close(3</proc/422443/task/422452/comm> <unfinished ...>
+422447 1793313239.137247 <... close resumed>) = 0 <0.000024>
+422448 1793313239.137278 write(5</t/runner_match1/root/kv/a4d29131bc25e1de-0001.pt>, "[\256\fn\211P;h;\367\270g\321n\270\25\254\3^_NdC\303\373$f\376Rk\354\201"..., 262144 <unfinished ...>
+422447 1793313239.137295 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/5fbf67cfccd1659f-0004.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422445 1793313239.137310 <... close resumed>) = 0 <0.000072>
+422447 1793313239.137344 <... openat resumed>) = 3</t/runner_match1/root/kv/5fbf67cfccd1659f-0004.pt> <0.000042>
+422445 1793313239.137359 getdents64(4</proc/422443/task>,  <unfinished ...>
+422447 1793313239.137376 fstat(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0004.pt>,  <unfinished ...>
+422445 1793313239.137391 <... getdents64 resumed>0x784088000cc0 /* 0 entries */, 32768) = 0 <0.000025>
+422447 1793313239.137407 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000025>
+422448 1793313239.137423 <... write resumed>) = 262144 <0.000136>
+422447 1793313239.137436 ioctl(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0004.pt>, TCGETS <unfinished ...>
+422445 1793313239.137451 close(4</proc/422443/task> <unfinished ...>
+422448 1793313239.137467 close(5</t/runner_match1/root/kv/a4d29131bc25e1de-0001.pt> <unfinished ...>
+422447 1793313239.137481 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000038>
+422445 1793313239.137495 <... close resumed>) = 0 <0.000037>
+422448 1793313239.137508 <... close resumed>) = 0 <0.000035>
+422447 1793313239.137521 lseek(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0004.pt>, 0, SEEK_CUR <unfinished ...>
+422448 1793313239.137537 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a4d29131bc25e1de-0002.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422447 1793313239.137561 <... lseek resumed>) = 0 <0.000033>
+422448 1793313239.137574 <... openat resumed>) = 4</t/runner_match1/root/kv/a4d29131bc25e1de-0002.pt> <0.000031>
+422448 1793313239.137618 fstat(4</t/runner_match1/root/kv/a4d29131bc25e1de-0002.pt>,  <unfinished ...>
+422447 1793313239.137639 write(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0004.pt>, "q\4\246\371\323z^oXp\232<\322\235\256\334\263\21\\GLa\3\7\31\224i\255\177\177\260\217"..., 262144 <unfinished ...>
+422448 1793313239.137658 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000028>
+422448 1793313239.137695 ioctl(4</t/runner_match1/root/kv/a4d29131bc25e1de-0002.pt>, TCGETS, 0x784094ff9720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000028>
+422448 1793313239.137764 lseek(4</t/runner_match1/root/kv/a4d29131bc25e1de-0002.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.137779 <... write resumed>) = 262144 <0.000131>
+422448 1793313239.137808 <... lseek resumed>) = 0 <0.000037>
+422447 1793313239.137820 close(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0004.pt>) = 0 <0.000030>
+422448 1793313239.137868 write(4</t/runner_match1/root/kv/a4d29131bc25e1de-0002.pt>, "\342|\211\32#\363\311;\213\253N\302\234\333\233\7\340\253\316\263\35\321\323\215\253\262\246\"\274V\313\262"..., 262144 <unfinished ...>
+422447 1793313239.137885 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/5fbf67cfccd1659f-0005.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 3</t/runner_match1/root/kv/5fbf67cfccd1659f-0005.pt> <0.000038>
+422447 1793313239.137966 fstat(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0005.pt>,  <unfinished ...>
+422448 1793313239.138000 <... write resumed>) = 262144 <0.000124>
+422447 1793313239.138013 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000041>
+422448 1793313239.138028 close(4</t/runner_match1/root/kv/a4d29131bc25e1de-0002.pt> <unfinished ...>
+422447 1793313239.138043 ioctl(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0005.pt>, TCGETS <unfinished ...>
+422448 1793313239.138059 <... close resumed>) = 0 <0.000024>
+422447 1793313239.138086 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000036>
+422447 1793313239.138120 lseek(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0005.pt>, 0, SEEK_CUR) = 0 <0.000019>
+422447 1793313239.138218 write(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0005.pt>, "\340xQ\360\357\243y\10\222\311\246\f\330(\324\6\301\314:I\267\367-\375x\17\6+\360\333\320\317"..., 262144 <unfinished ...>
+422451 1793313239.138245 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt", O_RDONLY|O_CLOEXEC) = 4</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt> <0.000040>
+422451 1793313239.138334 fstat(4</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>,  <unfinished ...>
+422452 1793313239.138352 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422448 1793313239.138368 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422447 1793313239.138384 <... write resumed>) = 262144 <0.000148>
+422452 1793313239.138397 <... openat resumed>) = 5</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt> <0.000037>
+422451 1793313239.138413 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000072>
+422452 1793313239.138429 fstat(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>,  <unfinished ...>
+422448 1793313239.138444 <... openat resumed>) = 6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt> <0.000069>
+422447 1793313239.138459 close(3</t/runner_match1/root/kv/5fbf67cfccd1659f-0005.pt> <unfinished ...>
+422452 1793313239.138476 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000040>
+422451 1793313239.138490 ioctl(4</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>, TCGETS <unfinished ...>
+422448 1793313239.138505 fstat(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>,  <unfinished ...>
+422452 1793313239.138521 ioctl(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>, TCGETS <unfinished ...>
+422451 1793313239.138536 <... ioctl resumed>, 0x78407c7ef720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000039>
+422447 1793313239.138549 <... close resumed>) = 0 <0.000083>
+422452 1793313239.138562 <... ioctl resumed>, 0x78407c5ee720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000035>
+422448 1793313239.138575 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000064>
+422452 1793313239.138590 lseek(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>, 0, SEEK_CUR <unfinished ...>
+422451 1793313239.138606 lseek(4</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422452 1793313239.138621 <... lseek resumed>) = 0 <0.000024>
+422448 1793313239.138634 ioctl(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, TCGETS <unfinished ...>
+422452 1793313239.138650 read(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt>,  <unfinished ...>
+422451 1793313239.138665 <... lseek resumed>) = 0 <0.000052>
+422448 1793313239.138687 <... ioctl resumed>, 0x784094ff8320) = -1 ENOTTY (Inappropriate ioctl for device) <0.000047>
+422451 1793313239.138701 read(4</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt>,  <unfinished ...>
+422448 1793313239.138717 lseek(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422452 1793313239.138735 <... read resumed>"<\226\30\363&\243;\347\0\320l8\20N\315\236\205\305\237\356\361\201I\24<\355C\305?t\242m"..., 262144) = 262144 <0.000078>
+422448 1793313239.138768 <... lseek resumed>) = 0 <0.000042>
+422452 1793313239.138782 close(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0002.pt> <unfinished ...>
+422451 1793313239.138798 <... read resumed>"\223\202\332\247\202\377\t\356\371]\325\214.\364\26\207\257\325\275\222\r\"}O\3759\372\366\240\242J\347"..., 262144) = 262144 <0.000090>
+422447 1793313239.138812 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/787de711cd0c0aad-0000.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422452 1793313239.138829 <... close resumed>) = 0 <0.000040>
+422451 1793313239.138841 close(4</t/runner_match1/root/kv/a55ab0efc7dde09f-0001.pt> <unfinished ...>
+422449 1793313239.138856 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/787de711cd0c0aad-0001.pt", O_RDONLY|O_CLOEXEC <unfinished ...>
+422448 1793313239.138872 read(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt>,  <unfinished ...>
+422451 1793313239.138897 <... close resumed>) = 0 <0.000050>
+422449 1793313239.138910 <... openat resumed>) = 4</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt> <0.000046>
+422447 1793313239.138927 <... openat resumed>) = 3</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt> <0.000108>
+422449 1793313239.138952 fstat(4</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt>,  <unfinished ...>
+422448 1793313239.138967 <... read resumed>"I\23\315J#\r\303\314\226j\17#\203:\366Z'\235\365\0051\203\324\224\222g^\277\344\321\301L"..., 262144) = 262144 <0.000088>
+422449 1793313239.138981 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000023>
+422447 1793313239.138996 fstat(3</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt>,  <unfinished ...>
+422449 1793313239.139011 ioctl(4</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt>, TCGETS <unfinished ...>
+422448 1793313239.139026 close(6</t/runner_match1/root/kv/a55ab0efc7dde09f-0000.pt> <unfinished ...>
+422449 1793313239.139042 <... ioctl resumed>, 0x7840945f6720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000024>
+422447 1793313239.139055 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=262144, ...}) = 0 <0.000052>
+422449 1793313239.139070 lseek(4</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt>, 0, SEEK_CUR <unfinished ...>
+422448 1793313239.139085 <... close resumed>) = 0 <0.000052>
+422449 1793313239.139098 <... lseek resumed>) = 0 <0.000022>
+422447 1793313239.139111 ioctl(3</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt>, TCGETS <unfinished ...>
+422449 1793313239.139127 read(4</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt>,  <unfinished ...>
+422448 1793313239.139141 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/a55ab0efc7dde09f-0003.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644 <unfinished ...>
+422447 1793313239.139157 <... ioctl resumed>, 0x7840951f9320) = -1 ENOTTY (Inappropriate ioctl for device) <0.000039>
+422449 1793313239.139189 <... read resumed>"u\37\201\5\315\337E\177\275\245\332,\204\316\334\321\260\247\265(\26\v\312\367s\364\321\301\373\352\375D"..., 262144) = 262144 <0.000056>
+422448 1793313239.139203 <... openat resumed>) = 5</t/runner_match1/root/kv/a55ab0efc7dde09f-0003.pt> <0.000055>
+422447 1793313239.139222 lseek(3</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt>, 0, SEEK_CUR <unfinished ...>
+422449 1793313239.139238 close(4</t/runner_match1/root/kv/787de711cd0c0aad-0001.pt> <unfinished ...>
+422448 1793313239.139253 fstat(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0003.pt>,  <unfinished ...>
+422449 1793313239.139268 <... close resumed>) = 0 <0.000024>
+422447 1793313239.139281 <... lseek resumed>) = 0 <0.000052>
+422448 1793313239.139294 <... fstat resumed>{st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000035>
+422447 1793313239.139318 read(3</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt>,  <unfinished ...>
+422448 1793313239.139333 ioctl(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0003.pt>, TCGETS, 0x784094ff9720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000030>
+422447 1793313239.139382 <... read resumed>"\235\363\205\217m\\\323\301\264\35\276\365\332\372\f\r\276H\2\274\0\267Wh\nd\347l\261\3059\243"..., 262144) = 262144 <0.000057>
+422448 1793313239.139397 lseek(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0003.pt>, 0, SEEK_CUR <unfinished ...>
+422447 1793313239.139412 close(3</t/runner_match1/root/kv/787de711cd0c0aad-0000.pt> <unfinished ...>
+422448 1793313239.139428 <... lseek resumed>) = 0 <0.000024>
+422447 1793313239.139457 <... close resumed>) = 0 <0.000038>
+422448 1793313239.139497 write(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0003.pt>, "#j{\362\370D\323S\370\361\273\256\253,Z\225\260\277#\250[g\341\265\204\273.9\264\370\347\350"..., 262144 <unfinished ...>
+422447 1793313239.139514 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/787de711cd0c0aad-0002.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 3</t/runner_match1/root/kv/787de711cd0c0aad-0002.pt> <0.000038>
+422447 1793313239.139594 fstat(3</t/runner_match1/root/kv/787de711cd0c0aad-0002.pt>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000027>
+422448 1793313239.139641 <... write resumed>) = 262144 <0.000135>
+422448 1793313239.139669 close(5</t/runner_match1/root/kv/a55ab0efc7dde09f-0003.pt> <unfinished ...>
+422447 1793313239.139684 ioctl(3</t/runner_match1/root/kv/787de711cd0c0aad-0002.pt>, TCGETS <unfinished ...>
+422448 1793313239.139699 <... close resumed>) = 0 <0.000024>
+422447 1793313239.139736 <... ioctl resumed>, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000045>
+422447 1793313239.139776 lseek(3</t/runner_match1/root/kv/787de711cd0c0aad-0002.pt>, 0, SEEK_CUR) = 0 <0.000030>
+422447 1793313239.139887 write(3</t/runner_match1/root/kv/787de711cd0c0aad-0002.pt>, "\16E\302\7k/\217\36\354Y\n\357\35\236\356\361\361\217Xs\350\254JjW\354\235\26\7%\314\321"..., 262144) = 262144 <0.000131>
+422447 1793313239.140062 close(3</t/runner_match1/root/kv/787de711cd0c0aad-0002.pt>) = 0 <0.000049>
+422447 1793313239.140174 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/787de711cd0c0aad-0003.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 3</t/runner_match1/root/kv/787de711cd0c0aad-0003.pt> <0.000042>
+422447 1793313239.140274 fstat(3</t/runner_match1/root/kv/787de711cd0c0aad-0003.pt>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000028>
+422447 1793313239.140345 ioctl(3</t/runner_match1/root/kv/787de711cd0c0aad-0003.pt>, TCGETS, 0x7840951fa720) = -1 ENOTTY (Inappropriate ioctl for device) <0.000027>
+422447 1793313239.140413 lseek(3</t/runner_match1/root/kv/787de711cd0c0aad-0003.pt>, 0, SEEK_CUR) = 0 <0.000027>
+422447 1793313239.140514 write(3</t/runner_match1/root/kv/787de711cd0c0aad-0003.pt>, "\300T~\243\16\321\247\362\324\36\4\225H\20\253m\377\201\262\250;\360C\250\305\263-'\266\242\33\24"..., 262144) = 262144 <0.000165>
+422447 1793313239.140732 close(3</t/runner_match1/root/kv/787de711cd0c0aad-0003.pt>) = 0 <0.000035>
+422449 1793313239.141848 exit(0)        = ?
+422449 1793313239.141942 +++ exited with 0 +++
+422450 1793313239.142650 exit(0)        = ?
+422450 1793313239.142738 +++ exited with 0 +++
+422447 1793313239.143722 exit(0)        = ?
+422447 1793313239.143803 +++ exited with 0 +++
+422451 1793313239.144643 exit(0)        = ?
+422451 1793313239.144736 +++ exited with 0 +++
+422452 1793313239.145426 exit(0)        = ?
+422452 1793313239.145512 +++ exited with 0 +++
+422448 1793313239.146499 exit(0)        = ?
+422448 1793313239.146587 +++ exited with 0 +++
+422446 1793313239.147595 exit(0)        = ?
+422446 1793313239.147682 +++ exited with 0 +++
+422445 1793313239.148178 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/status", O_RDONLY|O_CLOEXEC) = 3</proc/422443/status> <0.000038>
+422445 1793313239.148271 statx(3</proc/422443/status>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000028>
+422445 1793313239.148341 read(3</proc/422443/status>, "Name:\taeiou\nUmask:\t0022\nState:\tS", 32) = 32 <0.000038>
+422445 1793313239.148418 read(3</proc/422443/status>, " (sleeping)\nTgid:\t422443\nNgid:\t0", 32) = 32 <0.000028>
+422445 1793313239.148484 read(3</proc/422443/status>, "\nPid:\t422443\nPPid:\t422440\nTracer"..., 64) = 64 <0.000027>
+422445 1793313239.148548 read(3</proc/422443/status>, "1000\nGid:\t106\t106\t106\t106\nFDSize"..., 128) = 128 <0.000027>
+422445 1793313239.148612 read(3</proc/422443/status>, " 758660 kB\nVmSize:\t  627452 kB\nV"..., 256) = 256 <0.000027>
+422445 1793313239.148676 read(3</proc/422443/status>, "    160 kB\nVmSwap:\t       0 kB\nH"..., 512) = 512 <0.000027>
+422445 1793313239.148740 read(3</proc/422443/status>, "ditional enabled\nCpus_allowed:\tf"..., 1024) = 443 <0.000027>
+422445 1793313239.148804 read(3</proc/422443/status>, "", 581) = 0 <0.000027>
+422445 1793313239.148867 close(3</proc/422443/status>) = 0 <0.000028>
+422445 1793313239.148934 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</proc/422443/task> <0.000030>
+422445 1793313239.149002 fstat(3</proc/422443/task>, {st_mode=S_IFDIR|0555, st_size=0, ...}) = 0 <0.000028>
+422445 1793313239.149069 getdents64(3</proc/422443/task>, 0x784088000cc0 /* 5 entries */, 32768) = 144 <0.000030>
+422445 1793313239.149139 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422443/comm", O_RDONLY|O_CLOEXEC) = 4</proc/422443/task/422443/comm> <0.000029>
+422445 1793313239.149208 statx(4</proc/422443/task/422443/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000028>
+422445 1793313239.149275 read(4</proc/422443/task/422443/comm>, "aeiou\n", 32) = 6 <0.000028>
+422445 1793313239.149341 read(4</proc/422443/task/422443/comm>, "", 32) = 0 <0.000029>
+422445 1793313239.149406 close(4</proc/422443/task/422443/comm>) = 0 <0.000028>
+422445 1793313239.149471 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422444/comm", O_RDONLY|O_CLOEXEC) = 4</proc/422443/task/422444/comm> <0.000029>
+422445 1793313239.149542 statx(4</proc/422443/task/422444/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000028>
+422445 1793313239.149614 read(4</proc/422443/task/422444/comm>, "aeiou\n", 32) = 6 <0.000028>
+422445 1793313239.149679 read(4</proc/422443/task/422444/comm>, "", 32) = 0 <0.000027>
+422445 1793313239.149743 close(4</proc/422443/task/422444/comm>) = 0 <0.000028>
+422445 1793313239.149807 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422445/comm", O_RDONLY|O_CLOEXEC) = 4</proc/422443/task/422445/comm> <0.000029>
+422445 1793313239.149875 statx(4</proc/422443/task/422445/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000033>
+422445 1793313239.149947 read(4</proc/422443/task/422445/comm>, "counters\n", 32) = 9 <0.000028>
+422445 1793313239.150013 read(4</proc/422443/task/422445/comm>, "", 32) = 0 <0.000027>
+422445 1793313239.150076 close(4</proc/422443/task/422445/comm>) = 0 <0.000029>
+422445 1793313239.150141 getdents64(3</proc/422443/task>, 0x784088000cc0 /* 0 entries */, 32768) = 0 <0.000028>
+422445 1793313239.150206 close(3</proc/422443/task>) = 0 <0.000028>
+422445 1793313239.150270 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/status", O_RDONLY|O_CLOEXEC) = 3</proc/422443/status> <0.000028>
+422445 1793313239.150336 statx(3</proc/422443/status>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000027>
+422445 1793313239.150402 read(3</proc/422443/status>, "Name:\taeiou\nUmask:\t0022\nState:\tS", 32) = 32 <0.000033>
+422445 1793313239.150472 read(3</proc/422443/status>, " (sleeping)\nTgid:\t422443\nNgid:\t0", 32) = 32 <0.000027>
+422445 1793313239.150537 read(3</proc/422443/status>, "\nPid:\t422443\nPPid:\t422440\nTracer"..., 64) = 64 <0.000027>
+422445 1793313239.150600 read(3</proc/422443/status>, "1000\nGid:\t106\t106\t106\t106\nFDSize"..., 128) = 128 <0.000027>
+422445 1793313239.150665 read(3</proc/422443/status>, " 758660 kB\nVmSize:\t  627452 kB\nV"..., 256) = 256 <0.000027>
+422445 1793313239.150728 read(3</proc/422443/status>, "    160 kB\nVmSwap:\t       0 kB\nH"..., 512) = 512 <0.000027>
+422445 1793313239.150792 read(3</proc/422443/status>, "ditional enabled\nCpus_allowed:\tf"..., 1024) = 443 <0.000027>
+422445 1793313239.150856 read(3</proc/422443/status>, "", 581) = 0 <0.000027>
+422445 1793313239.150919 close(3</proc/422443/status>) = 0 <0.000027>
+422445 1793313239.150983 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</proc/422443/task> <0.000028>
+422445 1793313239.151050 fstat(3</proc/422443/task>, {st_mode=S_IFDIR|0555, st_size=0, ...}) = 0 <0.000027>
+422445 1793313239.151115 getdents64(3</proc/422443/task>, 0x784088000cc0 /* 5 entries */, 32768) = 144 <0.000028>
+422445 1793313239.151182 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422443/comm", O_RDONLY|O_CLOEXEC) = 4</proc/422443/task/422443/comm> <0.000031>
+422445 1793313239.151262 statx(4</proc/422443/task/422443/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422445 1793313239.151331 read(4</proc/422443/task/422443/comm>, "aeiou\n", 32) = 6 <0.000027>
+422445 1793313239.151396 read(4</proc/422443/task/422443/comm>, "", 32) = 0 <0.000027>
+422445 1793313239.151459 close(4</proc/422443/task/422443/comm>) = 0 <0.000027>
+422445 1793313239.151522 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422444/comm", O_RDONLY|O_CLOEXEC) = 4</proc/422443/task/422444/comm> <0.000028>
+422445 1793313239.151589 statx(4</proc/422443/task/422444/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422445 1793313239.151657 read(4</proc/422443/task/422444/comm>, "aeiou\n", 32) = 6 <0.000027>
+422445 1793313239.151722 read(4</proc/422443/task/422444/comm>, "", 32) = 0 <0.000027>
+422445 1793313239.151785 close(4</proc/422443/task/422444/comm>) = 0 <0.000027>
+422445 1793313239.151848 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/task/422445/comm", O_RDONLY|O_CLOEXEC) = 4</proc/422443/task/422445/comm> <0.000028>
+422445 1793313239.151924 statx(4</proc/422443/task/422445/comm>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422445 1793313239.151989 read(4</proc/422443/task/422445/comm>, "counters\n", 32) = 9 <0.000027>
+422445 1793313239.152052 read(4</proc/422443/task/422445/comm>, "", 32) = 0 <0.000047>
+422445 1793313239.152134 close(4</proc/422443/task/422445/comm>) = 0 <0.000040>
+422445 1793313239.152214 getdents64(3</proc/422443/task>, 0x784088000cc0 /* 0 entries */, 32768) = 0 <0.000027>
+422445 1793313239.152279 close(3</proc/422443/task>) = 0 <0.000028>
+422445 1793313239.152571 exit(0)        = ?
+422445 1793313239.152672 +++ exited with 0 +++
+422443 1793313239.152755 statx(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root", AT_STATX_SYNC_AS_STAT, STATX_ALL, {stx_mask=STATX_ALL|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFDIR|0755, stx_size=4096, ...}) = 0 <0.000030>
+422443 1793313239.152829 openat(AT_FDCWD</src/aeiou/builder>, "/sys/class/bdi/8:48/read_ahead_kb", O_RDONLY|O_CLOEXEC) = 3</sys/devices/virtual/bdi/8:48/read_ahead_kb> <0.000038>
+422443 1793313239.152910 statx(3</sys/devices/virtual/bdi/8:48/read_ahead_kb>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=4096, ...}) = 0 <0.000027>
+422443 1793313239.152980 read(3</sys/devices/virtual/bdi/8:48/read_ahead_kb>, "8192\n", 4096) = 5 <0.000030>
+422443 1793313239.153048 read(3</sys/devices/virtual/bdi/8:48/read_ahead_kb>, "", 4091) = 0 <0.000027>
+422443 1793313239.153112 close(3</sys/devices/virtual/bdi/8:48/read_ahead_kb>) = 0 <0.000029>
+422443 1793313239.153179 readlink("/tmp", 0x7fff49b82db0, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.153244 readlink("/tmp/pytest-of-user", 0x7fff49b82db0, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.153306 readlink("/tmp/pytest-of-user/pytest-60", 0x7fff49b82db0, 1023) = -1 EINVAL (Invalid argument) <0.000027>
+422443 1793313239.153369 readlink("/tmp/pytest-of-user/pytest-60/test_trace_of_the_runner_match1", 0x7fff49b82db0, 1023) = -1 EINVAL (Invalid argument) <0.000028>
+422443 1793313239.153431 readlink("/t/runner_match1/root", 0x7fff49b82db0, 1023) = -1 EINVAL (Invalid argument) <0.000027>
+422443 1793313239.153494 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/mountstats", O_RDONLY|O_CLOEXEC) = 3</proc/422443/mountstats> <0.000031>
+422443 1793313239.153564 statx(3</proc/422443/mountstats>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0400, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.153630 read(3</proc/422443/mountstats>, "device none mounted on /usr/lib/", 32) = 32 <0.000035>
+422443 1793313239.153703 read(3</proc/422443/mountstats>, "modules/6.18.54.1-microsoft-stan", 32) = 32 <0.000027>
+422443 1793313239.153768 read(3</proc/422443/mountstats>, "dard-WSL2 with fstype overlay\nde"..., 64) = 64 <0.000028>
+422443 1793313239.153834 read(3</proc/422443/mountstats>, "c/linux-headers-6.18.54.1-micros"..., 128) = 128 <0.000028>
+422443 1793313239.153901 read(3</proc/422443/mountstats>, "rosoft-standard-WSL2 with fstype"..., 256) = 256 <0.000039>
+422443 1793313239.153978 read(3</proc/422443/mountstats>, "device rootfs mounted on /init w"..., 512) = 512 <0.000033>
+422443 1793313239.154056 read(3</proc/422443/mountstats>, "mounted on /proc/sys/fs/binfmt_m"..., 1024) = 1024 <0.000043>
+422443 1793313239.154136 read(3</proc/422443/mountstats>, "ice snapfuse mounted on /snap/gt"..., 2048) = 466 <0.000034>
+422443 1793313239.154208 read(3</proc/422443/mountstats>, "", 1582) = 0 <0.000027>
+422443 1793313239.154271 close(3</proc/422443/mountstats>) = 0 <0.000028>
+422443 1793313239.154360 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/mounts", O_RDONLY|O_CLOEXEC) = 3</proc/422443/mounts> <0.000030>
+422443 1793313239.154429 statx(3</proc/422443/mounts>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.154494 read(3</proc/422443/mounts>, "none /usr/lib/modules/6.18.54.1-", 32) = 32 <0.000033>
+422443 1793313239.154565 read(3</proc/422443/mounts>, "microsoft-standard-WSL2 overlay ", 32) = 32 <0.000027>
+422443 1793313239.154630 read(3</proc/422443/mounts>, "rw,nosuid,nodev,noatime,lowerdir"..., 64) = 64 <0.000027>
+422443 1793313239.154695 read(3</proc/422443/mounts>, "andard-WSL2/modules,upperdir=/li"..., 128) = 128 <0.000027>
+422443 1793313239.154759 read(3</proc/422443/mounts>, "andard-WSL2/rw/work,uuid=on 0 0\n"..., 256) = 256 <0.000033>
+422443 1793313239.154830 read(3</proc/422443/mounts>, "/wsl/drivers 9p ro,nosuid,nodev,"..., 512) = 512 <0.000033>
+422443 1793313239.154900 read(3</proc/422443/mounts>, "sfs /sys sysfs rw,nosuid,nodev,n"..., 1024) = 1024 <0.000038>
+422443 1793313239.154976 read(3</proc/422443/mounts>, "gfs /sys/kernel/debug debugfs rw"..., 2048) = 1347 <0.000038>
+422443 1793313239.155051 read(3</proc/422443/mounts>, "", 701) = 0 <0.000027>
+422443 1793313239.155115 close(3</proc/422443/mounts>) = 0 <0.000028>
+422443 1793313239.155265 write(1<pipe:[1447165]>, "elapsed 0.031 s  threads 7", 26) = 26 <0.000049>
+422443 1793313239.155363 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000040>
+422443 1793313239.155457 write(1<pipe:[1447165]>, "cold start DESKTOP-JS4EFLH: cach"..., 122) = 122 <0.000037>
+422443 1793313239.155541 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000039>
+422443 1793313239.155631 write(1<pipe:[1447165]>, "ops 312  read 4.50 MiB  written "..., 85) = 85 <0.000037>
+422443 1793313239.155710 write(1<pipe:[1447165]>, "/s written)\n", 12) = 12 <0.000038>
+422443 1793313239.155795 write(1<pipe:[1447165]>, "by kind: open=52 close=52 read=1"..., 69) = 69 <0.000036>
+422443 1793313239.155873 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000037>
+422443 1793313239.155958 write(1<pipe:[1447165]>, "latency (mean/p50/p99/max):\n", 28) = 28 <0.000037>
+422443 1793313239.156041 write(1<pipe:[1447165]>, "  open           115\302\265s      98\302"..., 63) = 63 <0.000052>
+422443 1793313239.156150 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000039>
+422443 1793313239.156245 write(1<pipe:[1447165]>, "  close           90\302\265s      66\302"..., 63) = 63 <0.000037>
+422443 1793313239.156325 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000037>
+422443 1793313239.156406 write(1<pipe:[1447165]>, "  read           129\302\265s      98\302"..., 63) = 63 <0.000037>
+422443 1793313239.156484 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000037>
+422443 1793313239.156564 write(1<pipe:[1447165]>, "  write          247\302\265s     229\302"..., 63) = 63 <0.000036>
+422443 1793313239.156642 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000037>
+422443 1793313239.156723 write(1<pipe:[1447165]>, "  lseek           90\302\265s      66\302"..., 63) = 63 <0.000036>
+422443 1793313239.156800 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000036>
+422443 1793313239.156880 write(1<pipe:[1447165]>, "  ioctl           92\302\265s      66\302"..., 63) = 63 <0.000037>
+422443 1793313239.156959 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000037>
+422443 1793313239.157039 write(1<pipe:[1447165]>, "  fstat           92\302\265s      66\302"..., 63) = 63 <0.000042>
+422443 1793313239.157122 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000038>
+422443 1793313239.157212 write(1<pipe:[1447165]>, "phase serve            ops=234  "..., 92) = 92 <0.000039>
+422443 1793313239.157302 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000038>
+422443 1793313239.157386 write(1<pipe:[1447165]>, "phase warm             ops=78   "..., 92) = 92 <0.000037>
+422443 1793313239.157465 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000038>
+422443 1793313239.157547 write(1<pipe:[1447165]>, "compute 2.28 min  io-time 0.036 "..., 99) = 99 <0.000047>
+422443 1793313239.157638 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000053>
+422443 1793313239.157767 write(1<pipe:[1447165]>, "host: tasks peak 9  open files p"..., 135) = 135 <0.000045>
+422443 1793313239.157858 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000044>
+422443 1793313239.157959 write(1<pipe:[1447165]>, "mount / (ext4, /dev/sdd)", 24) = 24 <0.000037>
+422443 1793313239.158042 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000037>
+422443 1793313239.158121 write(1<pipe:[1447165]>, "mount opts rw,relatime,discard,e"..., 87) = 87 <0.000043>
+422443 1793313239.158207 write(1<pipe:[1447165]>, "fingerprint 5e0b10c2a16a3e77", 28) = 28 <0.000037>
+422443 1793313239.158286 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000038>
+422443 1793313239.158423 openat(AT_FDCWD</src/aeiou/builder>, "/sys/devices/system/cpu/online", O_RDONLY|O_CLOEXEC) = 3</sys/devices/system/cpu/online> <0.000034>
+422443 1793313239.158502 read(3</sys/devices/system/cpu/online>, "0-19\n", 1024) = 5 <0.000030>
+422443 1793313239.158571 close(3</sys/devices/system/cpu/online>) = 0 <0.000029>
+422443 1793313239.158694 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/422443/cgroup> <0.000030>
+422443 1793313239.158765 statx(3</proc/422443/cgroup>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000034>
+422443 1793313239.158849 lseek(3</proc/422443/cgroup>, 0, SEEK_CUR) = 0 <0.000030>
+422443 1793313239.158922 read(3</proc/422443/cgroup>, "0::/non-systemd\n", 128) = 16 <0.000031>
+422443 1793313239.158990 read(3</proc/422443/cgroup>, "", 112) = 0 <0.000041>
+422443 1793313239.159071 close(3</proc/422443/cgroup>) = 0 <0.000028>
+422443 1793313239.159137 statx(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", AT_STATX_SYNC_AS_STAT, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000037>
+422443 1793313239.159219 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000031>
+422443 1793313239.159295 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.159361 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000027>
+422443 1793313239.159425 read(3</sys/fs/cgroup/non-systemd/cpu.max>, "max 100000\n", 32) = 11 <0.000029>
+422443 1793313239.159491 read(3</sys/fs/cgroup/non-systemd/cpu.max>, "", 32) = 0 <0.000027>
+422443 1793313239.159554 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000028>
+422443 1793313239.159618 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000029>
+422443 1793313239.159687 statx(3</sys/fs/cgroup/cpu.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.159752 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000027>
+422443 1793313239.159815 read(3</sys/fs/cgroup/cpu.max>, "max 100000\n", 32) = 11 <0.000027>
+422443 1793313239.159879 read(3</sys/fs/cgroup/cpu.max>, "", 32) = 0 <0.000033>
+422443 1793313239.159950 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000027>
+422443 1793313239.160069 openat(AT_FDCWD</src/aeiou/builder>, "/proc/meminfo", O_RDONLY|O_CLOEXEC) = 3</proc/meminfo> <0.000041>
+422443 1793313239.160189 statx(3</proc/meminfo>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000030>
+422443 1793313239.160261 read(3</proc/meminfo>, "MemTotal:       32665472 kB\nMemF", 32) = 32 <0.000038>
+422443 1793313239.160336 read(3</proc/meminfo>, "ree:        27775744 kB\nMemAvail", 32) = 32 <0.000027>
+422443 1793313239.160402 read(3</proc/meminfo>, "able:   31432240 kB\nBuffers:    "..., 64) = 64 <0.000027>
+422443 1793313239.160466 read(3</proc/meminfo>, " 3835276 kB\nSwapCached:         "..., 128) = 128 <0.000027>
+422443 1793313239.160531 read(3</proc/meminfo>, "tive(anon):   445072 kB\nActive(f"..., 256) = 256 <0.000027>
+422443 1793313239.160595 read(3</proc/meminfo>, "s:        443640 kB\nMapped:     "..., 512) = 512 <0.000027>
+422443 1793313239.160660 read(3</proc/meminfo>, "      10464 kB\nHardwareCorrupted"..., 1024) = 451 <0.000027>
+422443 1793313239.160723 read(3</proc/meminfo>, "", 573) = 0 <0.000027>
+422443 1793313239.160787 close(3</proc/meminfo>) = 0 <0.000028>
+422443 1793313239.160853 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/422443/cgroup> <0.000030>
+422443 1793313239.160922 statx(3</proc/422443/cgroup>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.160987 read(3</proc/422443/cgroup>, "0::/non-systemd\n", 32) = 16 <0.000031>
+422443 1793313239.161055 read(3</proc/422443/cgroup>, "", 32) = 0 <0.000027>
+422443 1793313239.161117 close(3</proc/422443/cgroup>) = 0 <0.000027>
+422443 1793313239.161180 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/memory.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/memory.max> <0.000030>
+422443 1793313239.161249 statx(3</sys/fs/cgroup/non-systemd/memory.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.161315 read(3</sys/fs/cgroup/non-systemd/memory.max>, "max\n", 32) = 4 <0.000028>
+422443 1793313239.161379 read(3</sys/fs/cgroup/non-systemd/memory.max>, "", 32) = 0 <0.000027>
+422443 1793313239.161442 close(3</sys/fs/cgroup/non-systemd/memory.max>) = 0 <0.000028>
+422443 1793313239.161507 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/memory.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/memory.max> <0.000030>
+422443 1793313239.161576 statx(3</sys/fs/cgroup/memory.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.161642 read(3</sys/fs/cgroup/memory.max>, "max\n", 32) = 4 <0.000028>
+422443 1793313239.161707 read(3</sys/fs/cgroup/memory.max>, "", 32) = 0 <0.000027>
+422443 1793313239.161771 close(3</sys/fs/cgroup/memory.max>) = 0 <0.000027>
+422443 1793313239.161835 openat(AT_FDCWD</src/aeiou/builder>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/422443/cgroup> <0.000028>
+422443 1793313239.161901 statx(3</proc/422443/cgroup>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.161966 lseek(3</proc/422443/cgroup>, 0, SEEK_CUR) = 0 <0.000027>
+422443 1793313239.162029 read(3</proc/422443/cgroup>, "0::/non-systemd\n", 128) = 16 <0.000028>
+422443 1793313239.162093 read(3</proc/422443/cgroup>, "", 112) = 0 <0.000027>
+422443 1793313239.162156 close(3</proc/422443/cgroup>) = 0 <0.000027>
+422443 1793313239.162219 statx(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", AT_STATX_SYNC_AS_STAT, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0444, stx_size=0, ...}) = 0 <0.000028>
+422443 1793313239.162287 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000028>
+422443 1793313239.162355 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.162421 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000027>
+422443 1793313239.162485 read(3</sys/fs/cgroup/non-systemd/cpu.max>, "max 100000\n", 32) = 11 <0.000027>
+422443 1793313239.162549 read(3</sys/fs/cgroup/non-systemd/cpu.max>, "", 32) = 0 <0.000027>
+422443 1793313239.162613 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000027>
+422443 1793313239.162676 openat(AT_FDCWD</src/aeiou/builder>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000028>
+422443 1793313239.162744 statx(3</sys/fs/cgroup/cpu.max>, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0644, stx_size=0, ...}) = 0 <0.000027>
+422443 1793313239.162809 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000027>
+422443 1793313239.162872 read(3</sys/fs/cgroup/cpu.max>, "max 100000\n", 32) = 11 <0.000027>
+422443 1793313239.162935 read(3</sys/fs/cgroup/cpu.max>, "", 32) = 0 <0.000026>
+422443 1793313239.162998 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000027>
+422443 1793313239.163174 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840955fe990, parent_tid=0x7840955fe990, exit_signal=0, stack=0x7840953fe000, stack_size=0x1ffe00, tls=0x7840955fe6c0} => {parent_tid=[422453]}, 88) = 422453 <0.000088>
+422443 1793313239.163410 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840953fd990, parent_tid=0x7840953fd990, exit_signal=0, stack=0x7840951fd000, stack_size=0x1ffe00, tls=0x7840953fd6c0} => {parent_tid=[422454]}, 88) = 422454 <0.000102>
+422443 1793313239.163662 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x784094ffb990, parent_tid=0x784094ffb990, exit_signal=0, stack=0x784094dfb000, stack_size=0x1ffe00, tls=0x784094ffb6c0} <unfinished ...>
+422453 1793313239.163753 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422443 1793313239.163771 <... clone3 resumed> => {parent_tid=[422455]}, 88) = 422455 <0.000097>
+422453 1793313239.163839 <... mmap resumed>) = 0x784095b3a000 <0.000077>
+422443 1793313239.163956 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407c5f0990, parent_tid=0x78407c5f0990, exit_signal=0, stack=0x78407c3f0000, stack_size=0x1ffe00, tls=0x78407c5f06c0} <unfinished ...>
+422454 1793313239.164030 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422443 1793313239.164064 <... clone3 resumed> => {parent_tid=[422456]}, 88) = 422456 <0.000101>
+422454 1793313239.164117 <... mmap resumed>) = 0x784095b37000 <0.000080>
+422443 1793313239.164272 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407c7f1990, parent_tid=0x78407c7f1990, exit_signal=0, stack=0x78407c5f1000, stack_size=0x1ffe00, tls=0x78407c7f16c0} => {parent_tid=[422457]}, 88) = 422457 <0.000129>
+422455 1793313239.164490 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784095b3a000 <0.000084>
+422443 1793313239.164650 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840951fc990, parent_tid=0x7840951fc990, exit_signal=0, stack=0x784094ffc000, stack_size=0x1ffe00, tls=0x7840951fc6c0} <unfinished ...>
+422456 1793313239.164678 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784095b37000 <0.000227>
+422443 1793313239.164943 <... clone3 resumed> => {parent_tid=[422458]}, 88) = 422458 <0.000282>
+422453 1793313239.165041 exit(0)        = ?
+422457 1793313239.165184 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422443 1793313239.165228 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840943f7990, parent_tid=0x7840943f7990, exit_signal=0, stack=0x7840941f7000, stack_size=0x1ffe00, tls=0x7840943f76c0} <unfinished ...>
+422457 1793313239.165251 <... mmap resumed>) = 0x784095a1b000 <0.000062>
+422453 1793313239.165287 +++ exited with 0 +++
+422443 1793313239.165386 <... clone3 resumed> => {parent_tid=[422459]}, 88) = 422459 <0.000152>
+422454 1793313239.165436 exit(0)        = ?
+422458 1793313239.165637 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422454 1793313239.165659 +++ exited with 0 +++
+422443 1793313239.165672 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840945f8990, parent_tid=0x7840945f8990, exit_signal=0, stack=0x7840943f8000, stack_size=0x1ffe00, tls=0x7840945f86c0} <unfinished ...>
+422458 1793313239.165695 <... mmap resumed>) = 0x784095b3a000 <0.000053>
+422456 1793313239.165759 exit(0 <unfinished ...>
+422455 1793313239.165772 exit(0 <unfinished ...>
+422456 1793313239.165830 <... exit resumed>) = ?
+422443 1793313239.165844 <... clone3 resumed> => {parent_tid=[422460]}, 88) = 422460 <0.000166>
+422455 1793313239.165894 <... exit resumed>) = ?
+422456 1793313239.165954 +++ exited with 0 +++
+422455 1793313239.165995 +++ exited with 0 +++
+422443 1793313239.166000 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784094bfa000 <0.000036>
+422459 1793313239.166060 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422457 1793313239.166100 exit(0 <unfinished ...>
+422459 1793313239.166123 <... mmap resumed>) = 0x784095b37000 <0.000058>
+422457 1793313239.166163 <... exit resumed>) = ?
+422457 1793313239.166223 +++ exited with 0 +++
+422443 1793313239.166237 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x784094dfa990, parent_tid=0x784094dfa990, exit_signal=0, stack=0x784094bfa000, stack_size=0x1ffe00, tls=0x784094dfa6c0} => {parent_tid=[422461]}, 88) = 422461 <0.000085>
+422460 1793313239.166415 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422443 1793313239.166477 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422460 1793313239.166506 <... mmap resumed>) = 0x784095b3a000 <0.000085>
+422443 1793313239.166531 <... mmap resumed>) = 0x7840949f9000 <0.000044>
+422458 1793313239.166564 exit(0)        = ?
+422458 1793313239.166711 +++ exited with 0 +++
+422443 1793313239.166716 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x784094bf9990, parent_tid=0x784094bf9990, exit_signal=0, stack=0x7840949f9000, stack_size=0x1ffe00, tls=0x784094bf96c0} <unfinished ...>
+422459 1793313239.166886 exit(0 <unfinished ...>
+422443 1793313239.166904 <... clone3 resumed> => {parent_tid=[422462]}, 88) = 422462 <0.000180>
+422461 1793313239.166929 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422459 1793313239.166972 <... exit resumed>) = ?
+422461 1793313239.167006 <... mmap resumed>) = 0x784095b3a000 <0.000072>
+422443 1793313239.167032 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422459 1793313239.167063 +++ exited with 0 +++
+422443 1793313239.167067 <... mmap resumed>) = 0x7840947f8000 <0.000031>
+422460 1793313239.167213 exit(0 <unfinished ...>
+422443 1793313239.167235 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7840949f8990, parent_tid=0x7840949f8990, exit_signal=0, stack=0x7840947f8000, stack_size=0x1ffe00, tls=0x7840949f86c0} <unfinished ...>
+422460 1793313239.167269 <... exit resumed>) = ?
+422462 1793313239.167325 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422460 1793313239.167339 +++ exited with 0 +++
+422443 1793313239.167343 <... clone3 resumed> => {parent_tid=[422463]}, 88) = 422463 <0.000102>
+422462 1793313239.167395 <... mmap resumed>) = 0x784095b37000 <0.000065>
+422443 1793313239.167498 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x78407fdff000 <0.000028>
+422461 1793313239.167672 exit(0 <unfinished ...>
+422443 1793313239.167685 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407ffff990, parent_tid=0x78407ffff990, exit_signal=0, stack=0x78407fdff000, stack_size=0x1ffe00, tls=0x78407ffff6c0} <unfinished ...>
+422461 1793313239.167728 <... exit resumed>) = ?
+422443 1793313239.167772 <... clone3 resumed> => {parent_tid=[422464]}, 88) = 422464 <0.000080>
+422461 1793313239.167804 +++ exited with 0 +++
+422463 1793313239.167846 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422443 1793313239.167860 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422463 1793313239.167891 <... mmap resumed>) = 0x784095b3a000 <0.000040>
+422443 1793313239.167905 <... mmap resumed>) = 0x78407fbfe000 <0.000041>
+422462 1793313239.168033 exit(0 <unfinished ...>
+422443 1793313239.168065 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407fdfe990, parent_tid=0x78407fdfe990, exit_signal=0, stack=0x78407fbfe000, stack_size=0x1ffe00, tls=0x78407fdfe6c0} <unfinished ...>
+422462 1793313239.168142 <... exit resumed>) = ?
+422443 1793313239.168194 <... clone3 resumed> => {parent_tid=[422465]}, 88) = 422465 <0.000123>
+422462 1793313239.168231 +++ exited with 0 +++
+422443 1793313239.168296 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x78407f9fd000 <0.000028>
+422464 1793313239.168390 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784095b3a000 <0.000048>
+422443 1793313239.168493 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407fbfd990, parent_tid=0x78407fbfd990, exit_signal=0, stack=0x78407f9fd000, stack_size=0x1ffe00, tls=0x78407fbfd6c0} <unfinished ...>
+422463 1793313239.168684 exit(0 <unfinished ...>
+422443 1793313239.168702 <... clone3 resumed> => {parent_tid=[422466]}, 88) = 422466 <0.000201>
+422465 1793313239.168764 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422463 1793313239.168778 <... exit resumed>) = ?
+422443 1793313239.168821 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422465 1793313239.168842 <... mmap resumed>) = 0x784095b37000 <0.000072>
+422463 1793313239.168854 +++ exited with 0 +++
+422443 1793313239.168858 <... mmap resumed>) = 0x78407f7fc000 <0.000034>
+422443 1793313239.169021 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407f9fc990, parent_tid=0x78407f9fc990, exit_signal=0, stack=0x78407f7fc000, stack_size=0x1ffe00, tls=0x78407f9fc6c0} => {parent_tid=[422467]}, 88) = 422467 <0.000104>
+422466 1793313239.169157 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784095b3a000 <0.000064>
+422464 1793313239.169236 exit(0 <unfinished ...>
+422443 1793313239.169250 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x78407f5fb000 <0.000036>
+422464 1793313239.169310 <... exit resumed>) = ?
+422464 1793313239.169388 +++ exited with 0 +++
+422443 1793313239.169457 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407f7fb990, parent_tid=0x78407f7fb990, exit_signal=0, stack=0x78407f5fb000, stack_size=0x1ffe00, tls=0x78407f7fb6c0} <unfinished ...>
+422465 1793313239.169546 exit(0 <unfinished ...>
+422443 1793313239.169560 <... clone3 resumed> => {parent_tid=[422468]}, 88) = 422468 <0.000097>
+422467 1793313239.169584 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422465 1793313239.169624 <... exit resumed>) = ?
+422467 1793313239.169655 <... mmap resumed>) = 0x784095b37000 <0.000067>
+422443 1793313239.169679 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422465 1793313239.169709 +++ exited with 0 +++
+422443 1793313239.169714 <... mmap resumed>) = 0x78407f3fa000 <0.000030>
+422443 1793313239.169867 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407f5fa990, parent_tid=0x78407f5fa990, exit_signal=0, stack=0x78407f3fa000, stack_size=0x1ffe00, tls=0x78407f5fa6c0} <unfinished ...>
+422466 1793313239.169910 exit(0)        = ?
+422443 1793313239.169972 <... clone3 resumed> => {parent_tid=[422469]}, 88) = 422469 <0.000099>
+422466 1793313239.170035 +++ exited with 0 +++
+422468 1793313239.170039 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422443 1793313239.170079 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422468 1793313239.170101 <... mmap resumed>) = 0x784095b3a000 <0.000058>
+422443 1793313239.170115 <... mmap resumed>) = 0x78407f1f9000 <0.000031>
+422443 1793313239.170276 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407f3f9990, parent_tid=0x78407f3f9990, exit_signal=0, stack=0x78407f1f9000, stack_size=0x1ffe00, tls=0x78407f3f96c0} <unfinished ...>
+422467 1793313239.170310 exit(0)        = ?
+422443 1793313239.170387 <... clone3 resumed> => {parent_tid=[422470]}, 88) = 422470 <0.000104>
+422469 1793313239.170449 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422467 1793313239.170461 +++ exited with 0 +++
+422443 1793313239.170494 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422469 1793313239.170516 <... mmap resumed>) = 0x784095b37000 <0.000062>
+422443 1793313239.170530 <... mmap resumed>) = 0x78407eff8000 <0.000031>
+422443 1793313239.170683 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407f1f8990, parent_tid=0x78407f1f8990, exit_signal=0, stack=0x78407eff8000, stack_size=0x1ffe00, tls=0x78407f1f86c0} => {parent_tid=[422471]}, 88) = 422471 <0.000076>
+422468 1793313239.170795 exit(0 <unfinished ...>
+422470 1793313239.170864 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422468 1793313239.170877 <... exit resumed>) = ?
+422443 1793313239.170891 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x78407edf7000 <0.000028>
+422470 1793313239.170943 <... mmap resumed>) = 0x784095b3a000 <0.000074>
+422468 1793313239.170955 +++ exited with 0 +++
+422443 1793313239.171092 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407eff7990, parent_tid=0x78407eff7990, exit_signal=0, stack=0x78407edf7000, stack_size=0x1ffe00, tls=0x78407eff76c0} <unfinished ...>
+422469 1793313239.171155 exit(0 <unfinished ...>
+422443 1793313239.171206 <... clone3 resumed> => {parent_tid=[422472]}, 88) = 422472 <0.000107>
+422469 1793313239.171238 <... exit resumed>) = ?
+422471 1793313239.171269 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422469 1793313239.171311 +++ exited with 0 +++
+422471 1793313239.171315 <... mmap resumed>) = 0x784095b37000 <0.000041>
+422470 1793313239.171488 exit(0)        = ?
+422470 1793313239.171570 +++ exited with 0 +++
+422472 1793313239.171574 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784095b3a000 <0.000027>
+422471 1793313239.171727 exit(0)        = ?
+422471 1793313239.171815 +++ exited with 0 +++
+422472 1793313239.171979 exit(0)        = ?
+422472 1793313239.172064 +++ exited with 0 +++
+422443 1793313239.172236 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407eff7990, parent_tid=0x78407eff7990, exit_signal=0, stack=0x78407edf7000, stack_size=0x1ffe00, tls=0x78407eff76c0} => {parent_tid=[422473]}, 88) = 422473 <0.000095>
+422443 1793313239.172486 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407f1f8990, parent_tid=0x78407f1f8990, exit_signal=0, stack=0x78407eff8000, stack_size=0x1ffe00, tls=0x78407f1f86c0} => {parent_tid=[422474]}, 88) = 422474 <0.000102>
+422443 1793313239.172722 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x78407f3f9990, parent_tid=0x78407f3f9990, exit_signal=0, stack=0x78407f1f9000, stack_size=0x1ffe00, tls=0x78407f3f96c0} <unfinished ...>
+422473 1793313239.172791 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+422443 1793313239.172805 <... clone3 resumed> => {parent_tid=[422475]}, 88) = 422475 <0.000073>
+422473 1793313239.172849 <... mmap resumed>) = 0x784095b3a000 <0.000053>
+422474 1793313239.173027 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784095b37000 <0.000028>
+422475 1793313239.173195 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x784095b3a000 <0.000029>
+422473 1793313239.173297 exit(0)        = ?
+422473 1793313239.173412 +++ exited with 0 +++
+422474 1793313239.173499 exit(0)        = ?
+422474 1793313239.173560 +++ exited with 0 +++
+422475 1793313239.173643 exit(0)        = ?
+422475 1793313239.173726 +++ exited with 0 +++
+422443 1793313239.173771 write(1<pipe:[1447165]>, "datasets 78.60 MiB against 1 hos"..., 63) = 63 <0.000038>
+422443 1793313239.173860 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000038>
+422443 1793313239.174995 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv/.aeiou-namespace.json.tmp.422443", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 3</t/runner_match1/root/kv/.aeiou-namespace.json.tmp.422443> <0.000061>
+422443 1793313239.175120 write(3</t/runner_match1/root/kv/.aeiou-namespace.json.tmp.422443>, "{\n  \"manifest_version\": 1,\n  \"na"..., 5307) = 5307 <0.000045>
+422443 1793313239.175211 fsync(3</t/runner_match1/root/kv/.aeiou-namespace.json.tmp.422443>) = 0 <0.005530>
+422443 1793313239.180798 close(3</t/runner_match1/root/kv/.aeiou-namespace.json.tmp.422443>) = 0 <0.000032>
+422443 1793313239.180886 rename("/t/runner_match1/root/kv/.aeiou-namespace.json.tmp.422443", "/t/runner_match1/root/kv/.aeiou-namespace.json") = 0 <0.000046>
+422443 1793313239.180980 openat(AT_FDCWD</src/aeiou/builder>, "/t/runner_match1/root/kv", O_RDONLY|O_CLOEXEC) = 3</t/runner_match1/root/kv> <0.000031>
+422443 1793313239.181055 fsync(3</t/runner_match1/root/kv>) = 0 <0.001016>
+422443 1793313239.182118 close(3</t/runner_match1/root/kv>) = 0 <0.000031>
+422443 1793313239.182223 write(1<pipe:[1447165]>, "namespace manifest /tmp/pytest-o"..., 112) = 112 <0.000046>
+422443 1793313239.182324 write(1<pipe:[1447165]>, "\n", 1) = 1 <0.000044>
+422443 1793313239.182530 exit_group(0)  = ?
+422444 1793313239.183095 +++ exited with 0 +++
+422443 1793313239.183102 +++ exited with 0 +++

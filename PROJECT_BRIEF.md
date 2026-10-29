@@ -1002,9 +1002,20 @@ numbers; the order is this note's.
     ops log, S3 server access logs or CloudTrail data events, a logging proxy in a lab) in a
     format `aeiou-trace` reads, one line per request as issued, on a wall clock the strace's
     timestamps merge with; a gap the note states until the reader exists. *Built the same day
-    (`aeiou/objectlog.py`):* MinIO's audit log and S3's server access log read by `metrics`,
+    (`aeiou/objectlog.py`; Rust since the port of §3.89 the same day, `runner/aeiou/src/objectlog.rs`):* MinIO's audit log and S3's server access log read by `metrics`,
     `export`, and `digest`; not yet Ceph RGW's ops log, a proxy's log, or the merge of an
     object log with an strace on the clock.
+
+50. **The catalog's speed (raised by the user 2026-10-29, queued, not started).** `aeiou-catalog
+    write` takes about 36 minutes, and porting the trace tools to Rust made them 13 to 15 times
+    faster (`DESIGN_REVIEW.md` §3.89), so the user asked whether a Rust catalog would take three.
+    It would not: the catalog's time is the runner's `aeiou dry-run --metrics-json`, already
+    Rust, one run per case and scanned length (one LMCache case held a core at 94 % for over six
+    minutes while `aeiou-catalog` itself sat at 0.4 %). The levers to measure, when the user
+    takes this up: a profile of the metrics walk on the slowest case (one thread per case, the
+    reuse bookkeeping per byte range); how many dry runs a case needs (the LMCache length scans
+    took the catalog from about 15 to 36 minutes, 2026-10-23); and the tail once one long run is
+    left (metrics sampling, shorter check lengths for the heaviest cases).
 
 ## 7. Environment
 
@@ -1060,7 +1071,9 @@ line says:
   `dry-run` exist since 2026-09-30; `runner/REFERENCE.md`.)
 - The Python authoring tools are dash-suffixed helpers in the same family, one per job:
   `aeiou-build` (the builder; renamed from `abstract-build`), `aeiou-params` (parameter files,
-  2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01),
+  2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01; a
+  binary of the runner's crate since 2026-10-29, `DESIGN_REVIEW.md` §3.89, its name kept, its
+  `compare` and `digest` the Python package's until ported),
   `aeiou-catalog` (the workload catalog's records, shapes, and `CATALOG.md`, 2026-10-10),
   `aeiou-header` (a container header from the format's own library, run by `aeiou datagen`
   from beside its binary, 2026-10-12), and later

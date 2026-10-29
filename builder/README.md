@@ -2,8 +2,9 @@
 
 The Python half of aeiou: the package `aeiou`, with which a workload is *authored*, and its
 six tools: `aeiou-build` (scripts to abstracts), `aeiou-params` (parameter files),
-`aeiou-trace` (the metrics of a real application's trace, their comparison with an
-abstract's, and the trace file of the runner's `trace` node), `aeiou-catalog` (the
+`aeiou-trace` (the comparison of two metrics documents and the digest a fit is made from;
+the tool itself is the runner's binary since 2026-10-29, which runs these two from here until
+they are ported, `DESIGN_REVIEW.md` §3.89), `aeiou-catalog` (the
 workload catalog under `../workloads/`), `aeiou-header` (an HDF5 file's header from
 libhdf5, which `aeiou datagen` runs), and `aeiou-datagen` (container datasets; deprecated,
 since `aeiou datagen` writes every format class). Nothing here runs on a client node
@@ -72,7 +73,8 @@ reference the tests compare it with until it is retired, and gets no new feature
 HDF5, whose header only libhdf5 can lay out, `aeiou datagen` runs `aeiou-header`
 (`header.py`) for the header bytes and writes the rows itself.
 
-**Calibration.** `aeiou-trace` (`trace.py`, standard library only) resolves an `strace`
+**Calibration.** `aeiou-trace` (~~`trace.py`, standard library only~~ the runner's binary since
+2026-10-29, `runner/aeiou/src/strace.rs`; `trace.py` keeps `compare` and `digest.py` the digest) resolves an `strace`
 of the real application, descriptor tables through `clone`, `fork`, and `dup`, positions
 through `lseek` and the bytes moved, paths under the storage root, and computes the same
 locality metrics the runner's dry run computes for the abstract, in the same document

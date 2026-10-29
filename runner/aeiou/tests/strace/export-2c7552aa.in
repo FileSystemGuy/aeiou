@@ -1,0 +1,12 @@
+100 1700000000.000000 openat(AT_FDCWD</d>, "/d/files/insert_log/1/2/3/100/3", O_RDONLY|O_CLOEXEC) = 3</d/files/insert_log/1/2/3/100/3> <0.000010>
+100 1700000000.001000 fstat(3</d/files/insert_log/1/2/3/100/3>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.002000 read(3</d/files/insert_log/1/2/3/100/3>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.003000 close(3</d/files/insert_log/1/2/3/100/3>) = 0 <0.000005>
+100 1700000000.013000 openat(AT_FDCWD</d>, "/d/files/insert_log/1/2/4/100/4", O_RDONLY|O_CLOEXEC) = 3</d/files/insert_log/1/2/4/100/4> <0.000010>
+100 1700000000.014000 fstat(3</d/files/insert_log/1/2/4/100/4>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.015000 read(3</d/files/insert_log/1/2/4/100/4>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.016000 close(3</d/files/insert_log/1/2/4/100/4>) = 0 <0.000005>
+100 1700000000.026000 openat(AT_FDCWD</d>, "/d/files/insert_log/1/2/5/100/5", O_RDONLY|O_CLOEXEC) = 3</d/files/insert_log/1/2/5/100/5> <0.000010>
+100 1700000000.026999 fstat(3</d/files/insert_log/1/2/5/100/5>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.027999 read(3</d/files/insert_log/1/2/5/100/5>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.028999 close(3</d/files/insert_log/1/2/5/100/5>) = 0 <0.000005>

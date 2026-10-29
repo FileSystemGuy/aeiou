@@ -1,0 +1,1 @@
+{"kind":"objectlog","args":{"root":"/","format":"minio-audit"},"export":{"error":"an object log needs --root BUCKET[/PREFIX]"}}

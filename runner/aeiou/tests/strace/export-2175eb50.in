@@ -1,0 +1,9 @@
+1 1700000000.000000 openat(AT_FDCWD</d>, "/d/spill/7.bin", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 3</d/spill/7.bin> <0.000010>
+1 1700000000.001000 write(3</d/spill/7.bin>, "x"..., 100) = 100 <0.000100>
+1 1700000000.002000 close(3</d/spill/7.bin>) = 0 <0.000005>
+1 1700000000.012000 openat(AT_FDCWD</d>, "/d/spill/8.bin", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 4</d/spill/8.bin> <0.000010>
+1 1700000000.013000 write(4</d/spill/8.bin>, "x"..., 100) = 100 <0.000100>
+1 1700000000.014000 close(4</d/spill/8.bin>) = 0 <0.000005>
+1 1700000000.024000 openat(AT_FDCWD</d>, "/d/spill/7.bin", O_RDONLY|O_CLOEXEC, 0644) = 5</d/spill/7.bin> <0.000010>
+1 1700000000.025000 read(5</d/spill/7.bin>, "x"..., 100) = 100 <0.000100>
+1 1700000000.026000 close(5</d/spill/7.bin>) = 0 <0.000005>

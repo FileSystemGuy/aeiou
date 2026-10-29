@@ -1,0 +1,16 @@
+100 1700000000.000000 openat(AT_FDCWD</d>, "/d/ckpt/step_000001/__0_0.distcp", O_RDONLY|O_CLOEXEC) = 3</d/ckpt/step_000001/__0_0.distcp> <0.000010>
+100 1700000000.001000 fstat(3</d/ckpt/step_000001/__0_0.distcp>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.002000 read(3</d/ckpt/step_000001/__0_0.distcp>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.003000 close(3</d/ckpt/step_000001/__0_0.distcp>) = 0 <0.000005>
+100 1700000000.013000 openat(AT_FDCWD</d>, "/d/ckpt/step_000001/__1_0.distcp", O_RDONLY|O_CLOEXEC) = 3</d/ckpt/step_000001/__1_0.distcp> <0.000010>
+100 1700000000.014000 fstat(3</d/ckpt/step_000001/__1_0.distcp>, {st_mode=S_IFREG|0644, st_size=8192, ...}) = 0 <0.000005>
+100 1700000000.015000 read(3</d/ckpt/step_000001/__1_0.distcp>, "x"..., 8192) = 8192 <0.000100>
+100 1700000000.016000 close(3</d/ckpt/step_000001/__1_0.distcp>) = 0 <0.000005>
+100 1700000000.026000 openat(AT_FDCWD</d>, "/d/ckpt/step_000002/__0_0.distcp", O_RDONLY|O_CLOEXEC) = 3</d/ckpt/step_000002/__0_0.distcp> <0.000010>
+100 1700000000.026999 fstat(3</d/ckpt/step_000002/__0_0.distcp>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.027999 read(3</d/ckpt/step_000002/__0_0.distcp>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.028999 close(3</d/ckpt/step_000002/__0_0.distcp>) = 0 <0.000005>
+100 1700000000.038999 openat(AT_FDCWD</d>, "/d/ckpt/step_000002/__1_0.distcp", O_RDONLY|O_CLOEXEC) = 3</d/ckpt/step_000002/__1_0.distcp> <0.000010>
+100 1700000000.039999 fstat(3</d/ckpt/step_000002/__1_0.distcp>, {st_mode=S_IFREG|0644, st_size=8192, ...}) = 0 <0.000005>
+100 1700000000.040999 read(3</d/ckpt/step_000002/__1_0.distcp>, "x"..., 8192) = 8192 <0.000100>
+100 1700000000.041999 close(3</d/ckpt/step_000002/__1_0.distcp>) = 0 <0.000005>

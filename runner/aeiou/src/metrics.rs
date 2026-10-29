@@ -192,6 +192,10 @@ pub struct Metrics {
     /// The groups of the last data op, for its run.
     hits: Vec<Hit>,
     next_run: u64,
+    /// The instance `inst` and `ext` hold, and the others' histories, parked: a trace's
+    /// instances interleave in time (`aeiou-trace --instance-root`), the dry run's never do.
+    cur: i64,
+    parked: HashMap<i64, (Instance, Extents)>,
 }
 
 impl std::fmt::Debug for Instance {
@@ -573,6 +577,29 @@ impl Metrics {
         }
     }
 
+    /// Make `i` the instance the next data ops touch, parking the current one's history.
+    fn use_instance(&mut self, i: i64) {
+        if i == self.cur {
+            return;
+        }
+        let (inst, ext) = self.parked.remove(&i).unwrap_or_default();
+        let old = (std::mem::replace(&mut self.inst, inst), std::mem::replace(&mut self.ext, ext));
+        self.parked.insert(self.cur, old);
+        self.cur = i;
+    }
+
+    /// Every instance has ended, the parked ones too.
+    fn end_all_instances(&mut self) -> Result<()> {
+        self.end_instance()?;
+        let mut ids: Vec<i64> = self.parked.keys().copied().collect();
+        ids.sort_unstable();
+        for i in ids {
+            self.use_instance(i);
+            self.end_instance()?;
+        }
+        Ok(())
+    }
+
     /// The instance has ended: its counts join the popularity maps, its history goes.
     fn end_instance(&mut self) -> Result<()> {
         for (k, s) in self.inst.last.drain() {
@@ -699,7 +726,7 @@ enum Role {
     Worker { b: i64, workers: i64, batches: i64 },
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Run {
     id: u64,
     end: i64,
@@ -961,6 +988,124 @@ pub fn walk<'m, 'a: 'm>(model: &'m Model<'a>, template: &'a str, actor: i64, cou
     Ok(sink)
 }
 
+// ---------------------------------------------------------------- a trace's calls
+
+/// The metrics of a trace's calls (`aeiou-trace`, `DESIGN_REVIEW.md` §3.42, §3.89): an strace's,
+/// a context per thread and an instance per `--instance-root`, or an exported trace file's, a
+/// context per lane and one instance. The calls come in the order they returned; the
+/// definitions are the dry run's (`runner/REFERENCE.md` §10), so `aeiou dry-run --metrics` of a
+/// `trace` node equals these numbers for the file it was exported to.
+#[derive(Debug, Default)]
+pub struct TraceMetrics {
+    pub m: Metrics,
+    /// Ops by kind, data ops included.
+    pub counts: BTreeMap<String, u64>,
+    /// Bytes moved, `[read, write]`.
+    pub bytes: [u64; 2],
+    /// Open runs per context, by `(path, kind)`, with the instance of the context.
+    runs: HashMap<i64, HashMap<(u64, usize), (Run, i64)>>,
+    /// The instances whose data ops moved bytes at an offset.
+    pub instances: std::collections::BTreeSet<i64>,
+}
+
+impl TraceMetrics {
+    pub fn new(o: Opts) -> Self {
+        TraceMetrics { m: Metrics::new(o), ..Default::default() }
+    }
+
+    pub fn op(&mut self, kind: &str) {
+        match self.counts.get_mut(kind) {
+            Some(n) => *n += 1,
+            None => {
+                self.counts.insert(kind.to_string(), 1);
+            }
+        }
+    }
+
+    /// One `read` or `write`: `length` requested at `offset`, `nbytes` moved, by `context` of
+    /// `instance`. A run ends before the op that does not continue it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn data(&mut self, kind: usize, instance: i64, context: i64, path: &str, offset: i64, length: i64, nbytes: i64) -> Result<()> {
+        self.op(if kind == R { "read" } else { "write" });
+        self.bytes[kind] += nbytes.max(0) as u64;
+        let pid = xxh3_64(path.as_bytes());
+        if nbytes <= 0 || offset < 0 {
+            return self.m.data(kind, pid, offset, length, nbytes, 0);
+        }
+        let runs = self.runs.entry(context).or_default();
+        if runs.get(&(pid, kind)).is_some_and(|(r, _)| r.end != offset) {
+            let (r, inst) = runs.remove(&(pid, kind)).unwrap();
+            self.m.use_instance(inst);
+            self.m.run_done(kind, &r);
+        }
+        let runs = self.runs.get_mut(&context).unwrap();
+        if !runs.contains_key(&(pid, kind)) {
+            let id = self.m.new_run();
+            runs.insert((pid, kind), (Run { id, end: offset, ..Default::default() }, instance));
+        }
+        let id = runs[&(pid, kind)].0.id;
+        self.m.use_instance(instance);
+        self.instances.insert(instance);
+        self.m.data(kind, pid, offset, length, nbytes, id)?;
+        let (r, _) = self.runs.get_mut(&context).unwrap().get_mut(&(pid, kind)).unwrap();
+        if kind == R {
+            for h in &self.m.hits {
+                match r.again.iter_mut().find(|(x, _)| *x == h.run) {
+                    Some(e) => e.1 += h.bytes,
+                    None => r.again.push((h.run, h.bytes)),
+                }
+            }
+        }
+        r.end = offset + nbytes;
+        r.bytes += nbytes as u64;
+        r.ops += 1;
+        Ok(())
+    }
+
+    fn done(&mut self, kind: usize, run: Run, inst: i64) {
+        self.m.use_instance(inst);
+        self.m.run_done(kind, &run);
+    }
+
+    /// A `close` of `path` by `context` ends that context's runs on it.
+    pub fn close(&mut self, context: i64, path: &str) {
+        let pid = xxh3_64(path.as_bytes());
+        let Some(runs) = self.runs.get_mut(&context) else { return };
+        let ended: Vec<(usize, (Run, i64))> = [R, W].into_iter().filter_map(|k| runs.remove(&(pid, k)).map(|r| (k, r))).collect();
+        for (k, (r, inst)) in ended {
+            self.done(k, r, inst);
+        }
+    }
+
+    /// The context has ended (its thread exited): its runs end.
+    pub fn end_context(&mut self, context: i64) {
+        let Some(runs) = self.runs.remove(&context) else { return };
+        for ((_, k), (r, inst)) in runs {
+            self.done(k, r, inst);
+        }
+    }
+
+    /// The trace has ended: every run, then every instance.
+    pub fn finish(&mut self) -> Result<()> {
+        let mut contexts: Vec<i64> = self.runs.keys().copied().collect();
+        contexts.sort_unstable();
+        for c in contexts {
+            self.end_context(c);
+        }
+        self.m.end_all_instances()
+    }
+
+    /// The `total` of an `aeiou_metrics: 2` document; `depth` empty unless `depth`.
+    pub fn total(&self, depth: bool) -> MetricsOut {
+        let ops = self.counts.values().sum();
+        let mut out = out_of(&self.m, ops, self.counts.clone(), self.bytes[R], self.bytes[W]);
+        if !depth {
+            out.depth.clear();
+        }
+        out
+    }
+}
+
 // ---------------------------------------------------------------- reports
 
 fn pct(a: u64, b: u64) -> f64 {
@@ -1135,7 +1280,7 @@ struct ExtentsOut {
 #[derive(Serialize)]
 pub struct MetricsOut {
     ops: u64,
-    counts: BTreeMap<&'static str, u64>,
+    counts: BTreeMap<String, u64>,
     bytes_read: u64,
     bytes_written: u64,
     request_size: KindPair<HistOut>,
@@ -1154,12 +1299,16 @@ pub struct MetricsOut {
 
 pub fn to_json(d: &DryRun) -> Option<MetricsOut> {
     let m = d.metrics.as_ref()?;
+    Some(out_of(m, d.total.ops, d.total.counts.iter().map(|(k, v)| (k.name().to_string(), *v)).collect(), d.total.bytes_read, d.total.bytes_written))
+}
+
+fn out_of(m: &Metrics, ops: u64, counts: BTreeMap<String, u64>, bytes_read: u64, bytes_written: u64) -> MetricsOut {
     let runs = |k: usize| RunsOut { bytes: HistOut::of(&m.runs[k].bytes), ops: HistOut::of(&m.runs[k].ops), multi_op_bytes: m.runs[k].multi_op_bytes };
-    Some(MetricsOut {
-        ops: d.total.ops,
-        counts: d.total.counts.iter().map(|(k, v)| (k.name(), *v)).collect(),
-        bytes_read: d.total.bytes_read,
-        bytes_written: d.total.bytes_written,
+    MetricsOut {
+        ops,
+        counts,
+        bytes_read,
+        bytes_written,
         request_size: KindPair { read: HistOut::of(&m.request[R]), write: HistOut::of(&m.request[W]) },
         run_length: KindPair { read: runs(R), write: runs(W) },
         reuse_extents: ExtentsOut {
@@ -1183,7 +1332,7 @@ pub fn to_json(d: &DryRun) -> Option<MetricsOut> {
         popularity_objects: m.popularity_objects(),
         fan_out: m.fan_out.clone(),
         depth: m.depth.clone(),
-    })
+    }
 }
 
 #[cfg(test)]

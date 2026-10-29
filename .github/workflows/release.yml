@@ -67,7 +67,7 @@ jobs:
         working-directory: runner
         # the default features: the container writers (DESIGN_REVIEW.md §3.70) and the object engine (§3.65,
         # runner/REFERENCE.md §16), so one binary serves every format and S3 stores alike (2026-10-16)
-        run: cargo build --release --bin aeiou
+        run: cargo build --release --bin aeiou --bin aeiou-trace
 
       - name: Build the builder's wheel
         working-directory: builder
@@ -97,7 +97,7 @@ jobs:
           d="$DIST"
           mkdir -p "$d/bin" "$d/share/man/man1" "$d/share/man/man5" "$d/share/man/man7" \
                    "$d/man" "$d/wheel"
-          cp runner/target/release/aeiou header-dist/aeiou-header runner/aeiou-launch "$d/bin/"
+          cp runner/target/release/aeiou runner/target/release/aeiou-trace header-dist/aeiou-header runner/aeiou-launch "$d/bin/"
           for p in man/*.[157].md; do
             page=$(basename "${p%.md}")        # aeiou.1
             sec=${page##*.}                     # 1
@@ -117,8 +117,9 @@ jobs:
         run: |
           mkdir smoke && tar xzf "$DIST.tar.gz" -C smoke && cd "smoke/$DIST"
           bin/aeiou --version
-          # both built for this architecture (file(1) says x86-64 for x86_64)
-          file bin/aeiou bin/aeiou-header | tee /dev/stderr | grep -c "$(echo ${{ matrix.arch }} | tr _ -)" | grep -qx 2
+          bin/aeiou-trace --version
+          # all three built for this architecture (file(1) says x86-64 for x86_64)
+          file bin/aeiou bin/aeiou-trace bin/aeiou-header | tee /dev/stderr | grep -c "$(echo ${{ matrix.arch }} | tr _ -)" | grep -qx 3
           # the object engine is in (a build without it carries this refusal)
           ! grep -aq 'built without the object engine' bin/aeiou
           bin/aeiou-header --version

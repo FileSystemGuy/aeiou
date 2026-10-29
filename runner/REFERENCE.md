@@ -81,6 +81,12 @@ aeiou/src/
   endpoint.rs  `--endpoint`: where each dataset and namespace lives (§4, §16)
   object.rs    the object engine, `object_store` behind the cargo feature `object` (§16)
   trace.rs     the `trace` node (§13)
+  strace.rs    `aeiou-trace`: an strace read as its calls, descriptor tables through `clone` and `dup`,
+               positions, instances, the metrics document of a trace (`builder/REFERENCE.md` §7)
+  export.rs    `aeiou-trace export`: the trace file in two passes, and the metrics of an exported file
+  objectlog.rs a MinIO audit or S3 server access log read as the object engine's calls
+  bin/aeiou_trace.rs  the `aeiou-trace` binary; `compare` and `digest` run the Python package's
+               until ported (`DESIGN_REVIEW.md` §3.89)
   options.rs   the option layers (§14)
   usage.rs     the usage-error frame (§15)
   main.rs      the CLI
@@ -1812,7 +1818,7 @@ aeiou dry-run app.ast.json --gpus 1 --metrics-json node.json     # equals `aeiou
 aeiou run app.ast.json --gpus 1 --root /mnt/data --time-scale 0 [--[no-]clean-namespaces]
 ```
 
-**The file** (`trace.rs`; written by `aeiou-trace export`, `builder/REFERENCE.md` §7). JSON
+**The file** (`trace.rs`; written by `aeiou-trace export`, `export.rs` since 2026-10-29, `builder/REFERENCE.md` §7). JSON
 Lines: a header, then one op per line in the order the calls returned.
 
 ```

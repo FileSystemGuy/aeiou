@@ -1,0 +1,7 @@
+100 1700000006.000000 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f5c3a1fe9d0, parent_tid=0x7f5c3a1fe9d0, exit_signal=0, stack=0x7f5c399fd000, stack_size=0x7fff00, tls=0x7f5c3a1fe6c0} => {parent_tid=[101]}, 88) <unfinished ...>
+101 1700000006.000100 openat(AT_FDCWD</d>, "/d/x", O_RDONLY) = 3</d/x> <0.000010>
+100 1700000006.000150 <... clone3 resumed>) = 101 <0.000200>
+101 1700000006.000200 read(3</d/x>, "..."..., 4096) = 4096 <0.000010>
+100 1700000006.000300 close(3</d/x>) = 0 <0.000010>
+100 1700000006.000400 openat(AT_FDCWD</d>, "/d/x", O_RDONLY) = 3</d/x> <0.000010>
+101 1700000006.000500 read(3</d/x>, "..."..., 4096) = 4096 <0.000010>

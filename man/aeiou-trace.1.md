@@ -20,10 +20,17 @@ An abstract's fingerprint proves which operation stream ran; the locality metric
 proving it is the *right* stream, by comparison with the same numbers taken from a trace of
 the real application the abstract models. `aeiou dry-run --metrics-json` (**aeiou**(1))
 gives the abstract's numbers; **aeiou-trace** gives the same numbers, by the same
-definitions and in the same document (`aeiou_metrics: 1`, with `"source": "strace"`),
+definitions and in the same document (`aeiou_metrics: 2`, with `"source": "strace"`),
 from an `strace` of the application, and compares two such documents. It also exports an
 strace as the file the runner's `trace` node executes literally, and digests one into the
-structural summary an abstract is fitted from. Standard library only.
+structural summary an abstract is fitted from.
+
+**aeiou-trace** is a binary of the runner's crate, built and shipped beside **aeiou**(1).
+`metrics` and `export` are its own (Rust, since 2026-10-29); `compare` and `digest` are still
+the Python package's, which the binary runs as `python3 -m aeiou.trace` (or with the
+interpreter `AEIOU_PYTHON` names) until they are ported (`DESIGN_REVIEW.md` §3.89). The
+trace is read in a stream, and the state kept is per open, per thread, and per path under the
+root, never per call, so a trace of several gigabytes is read in the time it takes to read it.
 
 The trace is taken with
 
@@ -78,7 +85,10 @@ written positioned at the offset the trace shows it used, as is every read and w
 open whose `O_APPEND` write went to a known end of the file; an `mmap` of a file range is one
 positioned `read` of the range; a call the schema has no op for is dropped and counted by
 name in the header's `notes`. The file's sha256 is printed, for the abstract's
-`w.trace("app.jsonl", sha256)`; the runner refuses the file when it differs.
+`w.trace("app.jsonl", sha256)`; the runner refuses the file when it differs. The trace is read
+twice (the first pass learns which opens several lanes shared, the earliest start, and what each
+AIO request returned; the second writes), so standard input is first copied to a temporary
+file; the trace file is written beside *FILE* and renamed into place, so a failure leaves none.
 
 ### compare
 
@@ -256,7 +266,7 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
 - *A*
 
-  A metrics document (`aeiou_metrics: 1`), the trace's.
+  A metrics document (`aeiou_metrics: 2`, or 1 from before 2026-10-22), the trace's.
 - *B*
 
   The metrics document *A* is compared with, the abstract's.
@@ -368,11 +378,23 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
   Print the version.
 
+## ENVIRONMENT
+
+- **AEIOU_PYTHON**
+
+  The interpreter that runs `compare` and `digest`, which must be able to import the `aeiou`
+  package (the wheel's); default `python3`.
+- **AEIOU_TRACE**
+
+  Read by the Python package, which asks the binary for a trace's exported lines when it
+  digests one: the path of **aeiou-trace**. Default: the one beside `AEIOU_RUNNER`, else the
+  one on the `PATH`, else the checkout's release build.
+
 ## FILES
 
 - `*.metrics.json`
 
-  A metrics document, `aeiou_metrics: 1`, from this tool or from `aeiou dry-run
+  A metrics document, `aeiou_metrics: 2` (or 1, a capture's from before 2026-10-22), from this tool or from `aeiou dry-run
   --metrics-json`. The histograms are in full, per actor template and in total.
 - `*.digest.json`
 

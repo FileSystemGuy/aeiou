@@ -11,6 +11,10 @@ repository.workspace = true
 name = "aeiou"
 path = "src/main.rs"
 
+[[bin]]
+name = "aeiou-trace"
+path = "src/bin/aeiou_trace.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: a float literal is read to the nearest f64, as Python's json reads it (the AST hash, RC1 review)

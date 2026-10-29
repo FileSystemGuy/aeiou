@@ -1,0 +1,8 @@
+300 1700000003.000000 openat(AT_FDCWD</d>, "/d/a", O_RDONLY|O_CLOEXEC) = 3</d/a> <0.000010>
+300 1700000003.000100 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD, child_tid=0x7f, stack=0x7f, stack_size=0x1000}, 88) = 301 <0.000050>
+300 1700000003.000200 read(3</d/a>, "a"..., 4096) = 4096 <0.000010>
+300 1700000003.000300 close(3</d/a> <unfinished ...>
+301 1700000003.000400 openat(AT_FDCWD</d>, "/d/b", O_RDONLY|O_CLOEXEC) = 3</d/b> <0.000010>
+300 1700000003.000500 <... close resumed>) = 0 <0.000200>
+301 1700000003.000600 read(3</d/b>, "b"..., 4096) = 4096 <0.000010>
+301 1700000003.000700 close(3</d/b>) = 0 <0.000010>

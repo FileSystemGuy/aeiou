@@ -1,0 +1,1 @@
+{"kind":"objectlog","args":{"root":"b","format":"minio-audit"},"export":{"error":"line 1: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"}}

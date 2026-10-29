@@ -1,6 +1,8 @@
 """Object-store request logs read as traces (`DESIGN_REVIEW.md` §3.88 step 5): MinIO's audit log
 and Amazon S3's server access log become the exporter's event stream, so metrics, digest, export,
-and the trace node read them unchanged."""
+and the trace node read them unchanged. The reader is the runner's `aeiou-trace` since 2026-10-29
+(`runner/aeiou/src/objectlog.rs`, §3.89); these are its acceptance tests, through the binary."""
+import os
 import json
 import pathlib
 import subprocess
@@ -12,8 +14,17 @@ HERE = pathlib.Path(__file__).resolve().parent
 BUILDER = HERE.parent
 sys.path.insert(0, str(BUILDER))
 
-from aeiou import digest, objectlog, trace  # noqa: E402
+from aeiou import digest, trace  # noqa: E402
 from aeiou.nodes import BuildError  # noqa: E402
+
+RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", BUILDER.parent / "runner" / "target" / "release" / "aeiou"))
+TRACE_BIN = pathlib.Path(os.environ.get("AEIOU_TRACE") or RUNNER.with_name("aeiou-trace"))
+pytestmark = pytest.mark.skipif(not TRACE_BIN.exists(), reason="needs the runner binary aeiou-trace")
+
+
+def export_of(lines, root):
+    """The exported header and lines of a log given as lines, from the binary."""
+    return trace.export_of(lines, root)
 
 
 def minio(name, bucket, obj, status=200, rx=0, tx=0, t="2026-10-29T12:00:00.000000000Z", ns=2_000_000, host="10.0.0.5:4321", rng=None, query=None):
@@ -55,15 +66,8 @@ MINIO = "\n".join([
 ]) + "\n"
 
 
-def test_source_detection():
-    assert objectlog.source_of(MINIO.splitlines()[0]) == "minio-audit"
-    assert objectlog.source_of('{"aeiou_trace": 1}') is None and objectlog.source_of('{"api": "x"}') is None and objectlog.source_of("{not json") is None and objectlog.source_of('{"api": x') is None
-    assert objectlog.source_of(S3.splitlines()[0]) == "s3-access"
-    assert objectlog.source_of('100 1700000000.000000 openat(AT_FDCWD, "/d/x", O_RDONLY) = 3') is None
-
-
 def test_minio_audit_requests_become_the_engines_calls():
-    header, events = objectlog.export_of(MINIO.splitlines(True), "a-bucket/files", "minio-audit")
+    header, events = export_of(MINIO.splitlines(True), "a-bucket/files")
     assert header["aeiou_trace"] == 1 and header["source"] == "minio-audit" and header["root"] == "a-bucket/files" and header["lanes"] == 4
     ops = [(e["lane"], e["op"], e.get("path"), e.get("fd"), e.get("offset"), e.get("len"), e.get("ret")) for e in events]
     assert ops[:3] == [(0, "open", "insert_log/1/2/3/100/7", 0, None, None, None), (0, "write", None, 0, None, 4096, 4096), (0, "close", None, 0, None, None, None)]
@@ -107,7 +111,7 @@ S3 = "\n".join([
 
 
 def test_s3_access_log_records_become_the_engines_calls():
-    header, events = objectlog.export_of(S3.splitlines(True), "amzn-bucket", "s3-access")
+    header, events = export_of(S3.splitlines(True), "amzn-bucket")
     assert header["source"] == "s3-access" and header["lanes"] == 2
     ops = [(e["op"], e.get("path"), e.get("offset"), e.get("len"), e.get("ret")) for e in events]
     assert ops[0] == ("open", "data/img_000000001.jpg", None, None, None) and ops[1] == ("write", None, None, 110000, 110000)
@@ -126,32 +130,30 @@ def test_s3_access_log_records_become_the_engines_calls():
 
 
 def test_refusals_and_edge_cases():
-    with pytest.raises(BuildError, match="not an object log format"):
-        objectlog.export_of([], "b", "ceph")
-    with pytest.raises(BuildError, match="needs --root"):
-        objectlog.export_of([], "/", "minio-audit")
-    with pytest.raises(BuildError, match="line 1: Expecting"):
-        objectlog.export_of(["{bad\n"], "b", "minio-audit")
-    with pytest.raises(BuildError, match="line 1: not a JSON object"):
-        objectlog.export_of(["[]\n"], "b", "minio-audit")
-    with pytest.raises(BuildError, match="line 1: no api.name"):
-        objectlog.export_of(['{"api": {}}\n'], "b", "minio-audit")
-    with pytest.raises(BuildError, match="line 1: not an S3 server access log record"):
-        objectlog.export_of(["nonsense\n"], "b", "s3-access")
+    # the format is the first line's; a later line that is not one is refused with its number
+    first = minio("GetObject", "b", "k", tx=1)
+    with pytest.raises(BuildError, match=r"an object log needs --root BUCKET\[/PREFIX\]"):
+        export_of([first], "/")
+    with pytest.raises(BuildError, match="line 2: "):
+        export_of([first, "{bad"], "b")
+    with pytest.raises(BuildError, match="line 2: not a JSON object"):
+        export_of([first, "[]"], "b")
+    with pytest.raises(BuildError, match="line 2: no api.name"):
+        export_of([first, '{"api": {}}'], "b")
+    with pytest.raises(BuildError, match="line 2: not an S3 server access log record"):
+        export_of([S3.splitlines()[0], "nonsense"], "b")
     # a request without a time is counted, an abort closes and unlinks, a HEAD outside the root is counted
     lines = [minio("NewMultipartUpload", "b", "k", t="soon"), "", minio("AbortMultipartUpload", "b", "k", t="2026-10-29T12:00:01Z"),
              minio("HeadObject", "c", "k"), minio("ListObjectsV2", "c", "", query={"prefix": "p"}), minio("GetObject", "b", "k", status=500),
              minio("CompleteMultipartUpload", "c", "z"), minio("PutObjectPart", "c", "z", rx=1)]
-    header, events = objectlog.export_of([line + "\n" for line in lines], "b", "minio-audit")
+    header, events = export_of([line + "\n" for line in lines], "b")
     assert [e["op"] for e in events] == ["open", "close", "unlink", "open"] and events[-1]["ret"] == "EIO"
     assert header["notes"]["requests_without_time"] == 1 and header["notes"]["requests_outside_root"] == 4 and header["requests"] == 7
-    assert objectlog.iso_seconds("2026-10-29T12:00:00+02:00") == objectlog.iso_seconds("2026-10-29T10:00:00Z") and objectlog.iso_seconds("later") is None
-    assert objectlog.access_seconds("29/Oct/2026:12:00:00 -0100") == objectlog.access_seconds("29/Oct/2026:13:00:00 +0000") and objectlog.access_seconds("29/Xyz/2026:12:00:00 +0000") is None
-    assert objectlog._int("x", 7) == 7
 
 
 def run(*args, stdin=None):
-    return subprocess.run([sys.executable, "-m", "aeiou.trace", *args], capture_output=True, text=True, cwd=BUILDER, input=stdin or "")
+    env = {**os.environ, "AEIOU_PYTHON": sys.executable, "PYTHONPATH": str(BUILDER)}
+    return subprocess.run([str(TRACE_BIN), *args], capture_output=True, text=True, cwd=BUILDER, input=stdin or "", env=env)
 
 
 def test_the_commands_read_an_object_log(tmp_path):
@@ -194,9 +196,10 @@ def test_an_object_log_digests_in_process():
     assert an.source == "minio-audit" and an.root == "a-bucket/files"
     doc = digest.document(an)
     assert doc["source"] == "minio-audit" and len(doc["templates"]) >= 2
-    with pytest.raises(BuildError, match=r"needs --root BUCKET\[/PREFIX\]"):
+    with pytest.raises(BuildError, match="needs --root"):
         digest.analyze(MINIO.splitlines(True), None)
     with pytest.raises(BuildError, match="no request under --root"):
         digest.analyze(MINIO.splitlines(True), "nowhere")
-    m = trace.metrics_of_events(*objectlog.export_of(S3.splitlines(True), "amzn-bucket", "s3-access"))
+    r = run("metrics", "-", "--root", "amzn-bucket", stdin=S3)
+    m = json.loads(r.stdout)
     assert m["source"] == "s3-access" and m["total"]["counts"]["read"] == 2

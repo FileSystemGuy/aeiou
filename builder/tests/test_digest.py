@@ -4,6 +4,7 @@ structural summary a fit is made from, with a verdict per site on what the trace
 (§3.88): facts first, then the open items, every answer checked against the trace and recorded
 under `asserted` with provenance, never as a measurement."""
 import json
+import os
 import math
 import pathlib
 import shutil
@@ -18,6 +19,18 @@ sys.path.insert(0, str(BUILDER))
 
 from aeiou import digest, trace  # noqa: E402
 from aeiou.nodes import BuildError  # noqa: E402
+
+RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", BUILDER.parent / "runner" / "target" / "release" / "aeiou"))
+TRACE_BIN = pathlib.Path(os.environ.get("AEIOU_TRACE") or RUNNER.with_name("aeiou-trace"))
+# the digest reads a trace's calls as the lines the runner's aeiou-trace exports (DESIGN_REVIEW.md §3.89)
+pytestmark = pytest.mark.skipif(not TRACE_BIN.exists(), reason="needs the runner binary aeiou-trace")
+
+
+def write_export(path, header, events):
+    """An exported trace written as `aeiou-trace export` writes it."""
+    with open(path, "w", encoding="utf-8") as out:
+        for doc in (header, *events):
+            out.write(json.dumps(doc, separators=(",", ":")) + "\n")
 
 
 def strace_of(opens, root="/d", tid=100, t0=1700000000.0, size=4096, reads=None, per_open=None):
@@ -286,7 +299,7 @@ def test_an_exported_trace_file_digests_as_its_strace(tmp_path):
     text = strace_of([f"s/{i:03}.npz" for i in permutation(12, 1)], reads=3)
     header, events = trace.export_of(text.splitlines(True), "/d")
     path = tmp_path / "app.jsonl"
-    trace.write_export(str(path), header, events)
+    write_export(str(path), header, events)
     with open(path) as f:
         from_file = digest.digest_of(f, None)
     from_strace = digest_of(text)
@@ -366,7 +379,7 @@ def test_cli_refusals(tmp_path):
     # an exported file carries its root, and refuses a second
     header, events = trace.export_of(strace_of(["a.bin"]).splitlines(True), "/d")
     ex = tmp_path / "e.jsonl"
-    trace.write_export(str(ex), header, events)
+    write_export(str(ex), header, events)
     r = run(str(ex))
     assert r.returncode == 0 and json.loads(r.stdout)["root"] == "/d"
     r = run(str(ex), "--root", "/d")

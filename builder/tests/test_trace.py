@@ -23,10 +23,66 @@ sys.path.insert(0, str(BUILDER))
 
 from aeiou import catalog, trace  # noqa: E402
 from aeiou.nodes import BuildError  # noqa: E402
-from aeiou.trace import Bytes, Extents, Instance, LogHist, compare, metrics_of, split_args  # noqa: E402
+from aeiou.trace import LogHist, compare  # noqa: E402
 
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
+TRACE_BIN = pathlib.Path(os.environ.get("AEIOU_TRACE") or RUNNER.with_name("aeiou-trace"))
 WORKLOADS = ROOT / "workloads"
+
+# every test here reads its traces through the runner's aeiou-trace, the Rust port of what was
+# this package's parser (DESIGN_REVIEW.md §3.89); these tests are its acceptance tests
+pytestmark = pytest.mark.skipif(not TRACE_BIN.exists(), reason="needs the runner binary aeiou-trace")
+
+
+def tool(args, stdin=None):
+    """`aeiou-trace` with `args`; `compare` and `digest` run this package through it."""
+    env = {**os.environ, "AEIOU_PYTHON": sys.executable, "PYTHONPATH": str(BUILDER)}
+    return subprocess.run([str(TRACE_BIN), *map(str, args)], input=stdin, capture_output=True, text=True, env=env)
+
+
+def cli(args):
+    """`aeiou-trace` with `args`, its output where `capsys` reads it; the exit status."""
+    r = tool(args)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    return r.returncode
+
+
+def _text(lines):
+    return "".join(line if line.endswith("\n") else line + "\n" for line in lines)
+
+
+def metrics_of(lines, roots, block=None, exclude=(), cwd=None, instance_roots=(), chain_gap_us=None):
+    """`aeiou-trace metrics` of a trace given as lines, its document without `trace`; a refusal
+    (nothing under the roots) as a `BuildError` in the binary's words."""
+    args = ["metrics", "-", *[x for r in roots for x in ("--root", r)], *[x for g in exclude for x in ("--exclude", g)]]
+    args += ["--cwd", cwd] if cwd else []
+    args += ["--metrics-block", block] if block else []
+    args += [x for p in instance_roots for x in ("--instance-root", p)]
+    args += ["--chain-gap-us", chain_gap_us] if chain_gap_us is not None else []
+    r = tool(args, stdin=_text(lines))
+    if r.returncode:
+        raise BuildError(r.stderr.strip())
+    d = json.loads(r.stdout)
+    d.pop("trace")
+    return d
+
+
+def metrics_of_export(lines):
+    """The metrics of an exported trace file given as lines."""
+    return metrics_of(lines, [])
+
+
+def write_export(path, header, events):
+    """An exported trace written as `aeiou-trace export` writes it; its sha256."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "wb") as out:
+        for doc in (header, *events):
+            line = (json.dumps(doc, separators=(",", ":")) + "\n").encode()
+            h.update(line)
+            out.write(line)
+    return h.hexdigest()
 
 
 def ast_path(name):
@@ -60,98 +116,6 @@ def test_loghist_is_the_runners():
     assert trace._quantile(h.out(), 0.5) == 48 * 4096 and h.max == 100 * 4096
 
 
-def test_stack_distance_matches_brute_force():
-    rnd = random.Random(1)
-    inst, history = Instance(), []
-    for i in range(6000):
-        x = rnd.random()
-        key = rnd.randrange(16) if x < 0.4 else 100 + rnd.randrange(600) if x < 0.9 else 10_000 + i
-        want = None
-        if key in history:
-            p = len(history) - 1 - history[::-1].index(key)
-            want = len(set(history[p:]))
-        got = inst.touch(key, 0)
-        assert (got[0] if got else None) == want, i
-        history.append(key)
-
-
-def _brute(last, t, path, start, end, kind):
-    """One op of the definition (DESIGN_REVIEW.md §3.79): the groups `(distance, bytes, previous
-    kind)` of the bytes it touches again, contiguous bytes last touched by one earlier op in
-    ascending order, each byte taking this op's time as it is passed; and its first touches."""
-    groups, first, at = [], 0, start
-    while at < end:
-        hit = last.get((path, at))
-        if hit is None:
-            first += 1
-            last[(path, at)] = (t, kind)
-            at += 1
-            continue
-        op, prev = hit
-        after = sum(1 for o, _ in last.values() if o > op)
-        n = 0
-        while at < end and last.get((path, at), (None,))[0] == op:
-            last[(path, at)] = (t, kind)
-            at += 1
-            n += 1
-        groups.append((after + n, n, prev))
-    return groups, first
-
-
-def test_extent_distance_matches_brute_force():
-    """As `metrics::tests::extent_distance_matches_brute_force` of the runner."""
-    rnd = random.Random(7)
-    ext, last, owner = Extents(), {}, {}
-    for t in range(1500):
-        path, start = rnd.randrange(3), rnd.randrange(800)
-        end, kind, run = start + 1 + rnd.randrange(200), int(rnd.random() < 0.3), rnd.randrange(30)
-        want = _brute(last, t, path, start, end, kind)
-        hits = []
-        first = ext.touch(path, start, end, kind, run, hits)
-        assert ([(h[0], h[1], h[2]) for h in hits], first) == want, (t, path, start, end)
-        for b in range(start, end):
-            owner[(path, b)] = run
-        if t % 53 == 0:
-            for r in range(30):
-                assert ext.live_of(r) == sum(1 for o in owner.values() if o == r), (t, r)
-    assert ext.compactions > 0
-
-
-def test_popularity_of_bytes():
-    b = Bytes()
-    b.add(1, 0, 100, 3)
-    b.add(1, 50, 150, 1)
-    b.add(2, 0, 10, 2)
-    other = Bytes()
-    other.add(1, 140, 160, 2)
-    b.merge(other)
-    p = b.popularity()
-    assert p["counts"] == [[4, 50], [3, 60], [2, 20], [1, 40]]
-    assert (p["distinct"], p["accesses"], p["max"]) == (170, 460, 4)
-    assert p["top_10_pct"] == pytest.approx(68 / 460)
-    # a gap between pieces and a piece's right part: [100, 140) splits at 120, [205, 300) is new,
-    # [300, 310) splits at 305
-    b.add(1, 120, 200, 1)
-    b.add(1, 300, 310, 1)
-    b.add(1, 205, 305, 2)
-    p = b.popularity()
-    assert p["counts"] == [[4, 60], [3, 65], [2, 125], [1, 65]] and (p["distinct"], p["accesses"]) == (315, 750)
-    assert p["top_10_pct"] == pytest.approx(126 / 750)
-
-
-def test_metrics_refusals(tmp_path, capsys):
-    """`--metrics-block 0` and a document that is no metrics document, each in the frame."""
-    f = tmp_path / "t.txt"
-    f.write_text(SEQUENTIAL)
-    assert trace.main(["metrics", str(f), "--root", "/d", "--metrics-block", "0"]) == 2
-    assert "--metrics-block must be at least 1" in capsys.readouterr().err
-    bad, good = tmp_path / "bad.json", tmp_path / "good.json"
-    bad.write_text('{"aeiou_metrics": 3}')
-    good.write_text(json.dumps(total(SEQUENTIAL)))
-    assert trace.main(["compare", str(bad), str(good)]) == 1
-    assert "not an aeiou_metrics: 2 document (or version 1, a capture's from before 2026-10-22)" in capsys.readouterr().err
-
-
 # DESIGN_REVIEW.md §3.79, as `tests/metrics.rs`'s `extents_by_hand`: a 1 MiB file read in four
 # fills, its first fill alone, then all of it again
 BY_HAND = "\n".join(
@@ -175,14 +139,6 @@ def test_extents_by_hand():
     b = total(BY_HAND, block=4096)
     assert b["block"] == 4096 and b["total"]["popularity_blocks"]["counts"] == [[3, 64], [2, 192]]
     assert b["total"]["reuse_extents"] == r
-
-
-def test_split_args():
-    assert split_args('3</d/a, b>, "x, \\"y\\"", 10') == ["3</d/a, b>", '"x, \\"y\\""', "10"]
-    assert split_args('AT_FDCWD</cwd>, "p", O_RDONLY|O_CLOEXEC') == ["AT_FDCWD</cwd>", '"p"', "O_RDONLY|O_CLOEXEC"]
-    assert split_args('5, [{iov_base="a,b", iov_len=3}, {iov_base="", iov_len=5}], 2') == ["5", '[{iov_base="a,b", iov_len=3}, {iov_base="", iov_len=5}]', "2"]
-    assert trace.fd_arg("0</dev/null<char 1:3>>") == (0, "/dev/null")
-    assert trace.c_string('"caf\\303\\251"') == "café"
 
 
 SEQUENTIAL = """
@@ -306,7 +262,8 @@ def test_an_aio_context_no_io_submit_names_is_noted():
     assert header["notes"]["aio_contexts_without_io_submit"] == 1
     # the context used: no note; one made outside every instance: none either
     assert "aio_contexts_without_io_submit" not in total(setup + AIO)["notes"]
-    assert "aio_contexts_without_io_submit" not in total(lost, instance_roots=[999])["notes"]
+    with pytest.raises(BuildError, match="no call under --root /d"):
+        total(lost, instance_roots=[999])
 
 
 FORKED = """
@@ -345,7 +302,8 @@ def test_exclude_and_other_roots():
     r = d["total"]["reuse_extents"]
     assert r["first_touch"]["read"] == 100 * 4096 and r["read_after_read"]["buckets"] == [[LogHist.lower(100 * 4096), 300 * 4096]]
     assert (r["whole"], r["partial"]) == (300 * 4096, 0)
-    assert metrics_of(lines, ["/elsewhere"])["total"]["ops"] == 0
+    with pytest.raises(BuildError, match="no call under --root /elsewhere"):
+        metrics_of(lines, ["/elsewhere"])
 
 
 def test_compare_distances(tmp_path, capsys):
@@ -443,7 +401,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     r = run("strace", "-f", "-ttt", "-T", "-yy", "-e", "trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy", "-o", st, RUNNER, "run", *common, "--seed", seed, "--root", root, "--time-scale", "0")
     assert r.returncode == 0, r.stdout + r.stderr
     out = tmp_path / "trace.json"
-    assert trace.main(["metrics", str(st), "--root", str(root), "--exclude", "*.aeiou-*", "-o", str(out)]) == 0
+    assert cli(["metrics", str(st), "--root", str(root), "--exclude", "*.aeiou-*", "-o", str(out)]) == 0
     t, d = json.loads(out.read_text())["total"], json.loads(dry.read_text())
     assert d["source"] == "dry-run"
     d = d["total"]
@@ -481,7 +439,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     # histograms of that pair differ by the reordering within a round, and so, now and then,
     # does a run (two adjacent sector reads); all else is equal.
     exported = tmp_path / "exported.jsonl"
-    r = subprocess.run([sys.executable, "-m", "aeiou.trace", "export", str(st), "--root", str(root), "--exclude", "*.aeiou-*", "-o", str(exported)], capture_output=True, text=True, cwd=ROOT / "builder")
+    r = tool(["export", st, "--root", root, "--exclude", "*.aeiou-*", "-o", exported])
     assert r.returncode == 0, r.stderr
     sha = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("sha256 "))
     node_ast = tmp_path / "node.ast.json"
@@ -491,7 +449,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     r = run(RUNNER, "dry-run", node_ast, "--gpus", "1", "--metrics-json", node_dry)
     assert r.returncode == 0, r.stderr
     nd = json.loads(node_dry.read_text())["total"]
-    assert trace.main(["metrics", str(exported), "-o", str(tmp_path / "ex.json")]) == 0
+    assert cli(["metrics", str(exported), "-o", str(tmp_path / "ex.json")]) == 0
     ex = json.loads((tmp_path / "ex.json").read_text())["total"]
     assert nd == ex, "the runner's walk of the file and the Python reader's disagree"
     strip = lambda m: {k: v for k, v in m.items() if k not in ("reuse_extents", "run_length")} if name == "diskann_search" else m
@@ -1031,7 +989,7 @@ def test_a_descriptor_reused_while_its_close_resumes_closes_the_first_file():
     closes = [e for e in ev if e["op"] == "close"]
     opens = {e["fd"]: e["path"] for e in ev if e["op"] == "open"}
     assert [opens[e["fd"]] for e in closes] == ["a", "b"]
-    assert trace.metrics_of(REUSED_FD.strip().splitlines(), ["/d"])["total"]["counts"]["close"] == 2
+    assert metrics_of(REUSED_FD.strip().splitlines(), ["/d"])["total"]["counts"]["close"] == 2
 
 
 # a thread's open starts first and returns last: its line is written after the other thread's
@@ -1058,7 +1016,7 @@ def test_export_time_is_from_the_earliest_start_of_an_exported_call():
 def test_the_runner_loads_an_export_whose_first_line_did_not_start_first(tmp_path):
     h, ev = _export(STARTED_FIRST)
     out = tmp_path / "app.jsonl"
-    sha = trace.write_export(str(out), h, ev)
+    sha = write_export(str(out), h, ev)
     node_ast = tmp_path / "node.ast.json"
     node_ast.write_text(json.dumps({"ast": "0.13", "name": "trace_started_first", "doc": "a call that returned last started first", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
@@ -1070,15 +1028,15 @@ def test_the_runner_loads_an_export_whose_first_line_did_not_start_first(tmp_pat
 def test_exported_file_measures_as_the_strace(tmp_path, text):
     h, ev = _export(text)
     out = tmp_path / "t.jsonl"
-    sha = trace.write_export(str(out), h, ev)
+    sha = write_export(str(out), h, ev)
     assert len(sha) == 64
-    a = trace.metrics_of(text.strip().splitlines(), ["/d"])
-    b = trace.metrics_of_export(out.read_text().splitlines())
+    a = metrics_of(text.strip().splitlines(), ["/d"])
+    b = metrics_of_export(out.read_text().splitlines())
     assert b["source"] == "trace" and b["contexts"] == h["lanes"]
     assert a["total"] == b["total"]
     # and through the command line, which sniffs the header
     m = tmp_path / "m.json"
-    assert trace.main(["metrics", str(out), "-o", str(m)]) == 0
+    assert cli(["metrics", str(out), "-o", str(m)]) == 0
     assert json.loads(m.read_text())["total"] == a["total"]
 
 
@@ -1107,16 +1065,6 @@ ESCAPED = r'''
 500 1700000005.001800 read(3</r/\303\251t\303\251/caf\303\251>, "x"..., 4096) = 4096 <0.000010>
 500 1700000005.001900 close(3</r/\303\251t\303\251/caf\303\251>) = 0 <0.000010>
 '''
-
-
-def test_a_descriptors_escaped_path_is_unescaped():
-    assert trace.fd_arg(r"3</r/caf\303\251>") == (3, "/r/café")
-    assert trace.fd_arg(r"3</r/c\74d\76e>") == (3, "/r/c<d>e")
-    assert trace.fd_arg(r"3</r/x\\y>") == (3, "/r/x\\y")
-    assert trace.fd_arg(r"AT_FDCWD</r/a b>") == (None, "/r/a b")
-    assert trace.fd_arg(r"4</r/caf\303\251 (deleted)>") == (4, "/r/café")
-    assert trace.fd_arg(r"1</dev/n\74ll\76<char 1:3>>") == (1, "/dev/n<ll>")
-    assert split_args(r'3</r/c\74d,e\76>, "x"..., 4096') == [r"3</r/c\74d,e\76>", '"x"...', "4096"]
 
 
 def test_metrics_and_export_give_an_escaped_file_one_name():
@@ -1172,14 +1120,6 @@ def test_a_legacy_clone_shares_the_descriptor_table_as_clone3_does(unfinished):
     assert [(e["lane"], e["op"], e["fd"]) for e in evf][-1] == (0, "read", 0)
 
 
-def test_shares_files_reads_the_flags_argument_only():
-    assert trace.shares_files("clone", LEGACY_CLONE[6:-1])
-    assert trace.shares_files("clone3", CLONE3[7:-1])
-    assert not trace.shares_files("clone", "child_stack=NULL, flags=CLONE_CHILD_CLEARTID|SIGCHLD, child_tidptr=0x7f")
-    assert not trace.shares_files("clone", "child_stack=NULL, flags=CLONE_FILESYSTEM_X")   # whole flag names only
-    assert not trace.shares_files("fork", "flags=CLONE_FILES")
-
-
 # four opens of one log with O_APPEND, the first truncating it, 4 KiB written through each:
 # the file the trace made is 16 KiB, so each write starts where the last one ended
 APPENDS = "\n".join(
@@ -1200,7 +1140,7 @@ def test_an_append_to_a_file_the_trace_made_starts_at_its_end():
     assert [e["offset"] for e in events if e["op"] == "write"] == [0, 4096, 8192, 12288]
     assert header["notes"] == {"append_positions_resolved": 4}
     # the exported file measures as the strace does
-    assert trace.metrics_of_export([json.dumps(header)] + [json.dumps(e) for e in events])["total"] == t
+    assert metrics_of_export([json.dumps(header)] + [json.dumps(e) for e in events])["total"] == t
 
 
 def test_an_append_whose_base_the_trace_cannot_know_is_noted():
@@ -1268,7 +1208,8 @@ def test_a_cut_iovec_list_takes_the_bytes_the_call_moved():
 # exit 1, never a traceback; two rules for `compare` are a usage error, exit 2, before any
 # work; `-` is UTF-8 whatever the locale, and a message the console cannot spell is escaped
 def _trace_tool(*args, env=None, stdin=None):
-    return subprocess.run([sys.executable, "-m", "aeiou.trace", *map(str, args)], capture_output=True, cwd=BUILDER, env=env, input=stdin)
+    env = {**(os.environ if env is None else env), "AEIOU_PYTHON": sys.executable, "PYTHONPATH": str(BUILDER)}
+    return subprocess.run([str(TRACE_BIN), *map(str, args)], capture_output=True, cwd=BUILDER, env=env, input=stdin)
 
 
 UNICODE_TRACE = """
@@ -1313,8 +1254,10 @@ def test_stdin_is_utf8_and_the_console_escapes_what_it_cannot_spell(tmp_path):
     assert [e.get("path") for e in map(json.loads, out["C"].splitlines())][1] == "\u00e9"
     st, o = tmp_path / "st.txt", tmp_path / "\u00e9.jsonl"
     st.write_bytes(UNICODE_TRACE)
+    # the binary writes its messages in UTF-8 whatever the console's encoding (the Python tool
+    # escaped what an ASCII console could not spell)
     r = _trace_tool("export", st, "--root", "/d", "-o", o, env={**base, "PYTHONIOENCODING": "ascii"})
-    assert r.returncode == 0 and b"\\xe9.jsonl\n" in r.stdout, r.stderr
+    assert r.returncode == 0 and "\u00e9.jsonl\n".encode() in r.stdout, r.stderr
 
 
 # the exporter's paths (RC1 review): every path is what the runner accepts (`trace.rs`,
@@ -1365,22 +1308,14 @@ def test_the_root_slash_is_every_path_and_double_slash_is_slash():
         h, ev = _export('100 1700000001.000000 stat("//", {st_mode=S_IFDIR}) = 0 <0.000010>\n'
                         '100 1700000001.000100 stat("/x", {st_mode=S_IFREG}) = 0 <0.000010>\n', root)
         assert h["root"] == "/" and [e["path"] for e in ev] == [".", "x"], (root, ev)
-    assert trace.metrics_of(['100 1700000001.000000 stat("/x", {st_mode=S_IFREG}) = 0 <0.000010>'], ["/"])["total"]["ops"] == 1
-
-
-def test_a_path_not_under_the_exporters_root_is_an_internal_error():
-    ex = trace.Exporter("/d")
-    assert (ex.rel("/d"), ex.rel("/d/x")) == (".", "x")
-    for bad in ("/e/x", "/dx", "/d//x", "/d/../x", "x"):
-        with pytest.raises(AssertionError, match="internal error"):
-            ex.rel(bad)
+    assert metrics_of(['100 1700000001.000000 stat("/x", {st_mode=S_IFREG}) = 0 <0.000010>'], ["/"])["total"]["ops"] == 1
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_the_runner_loads_an_export_that_mkdirs_its_root(tmp_path):
     h, ev = _export(ROOT_PATHS.format(r="/d", b="d"))
     out = tmp_path / "app.jsonl"
-    sha = trace.write_export(str(out), h, ev)
+    sha = write_export(str(out), h, ev)
     node_ast = tmp_path / "node.ast.json"
     node_ast.write_text(json.dumps({"ast": "0.13", "name": "trace_root", "doc": "calls on the root itself", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
@@ -1407,7 +1342,7 @@ SHORT_WRITE = """
 def _short_write_export(tmp_path):
     h, ev = _export(SHORT_WRITE)
     out = tmp_path / "app.jsonl"
-    sha = trace.write_export(str(out), h, ev)
+    sha = write_export(str(out), h, ev)
     return h, ev, out, sha
 
 
@@ -1415,11 +1350,11 @@ def test_a_short_or_failed_write_moves_what_it_returned(tmp_path):
     h, ev, out, _ = _short_write_export(tmp_path)
     writes = [(e.get("offset"), e["len"], e.get("ret")) for e in ev if e["op"] == "write"]
     assert writes == [(None, 8192, 5000), (None, 3192, "ENOSPC"), (None, 3192, 3192)]
-    a = trace.metrics_of(SHORT_WRITE.strip().splitlines(), ["/d"])["total"]
+    a = metrics_of(SHORT_WRITE.strip().splitlines(), ["/d"])["total"]
     assert a["bytes_written"] == 8192 and a["bytes_read"] == 8192
     # one run of the two writes that moved bytes, 0..5000 and 5000..8192
     assert a["run_length"]["write"]["bytes"]["max"] == 8192 and a["run_length"]["write"]["ops"]["max"] == 2
-    assert trace.metrics_of_export(out.read_text().splitlines())["total"] == a
+    assert metrics_of_export(out.read_text().splitlines())["total"] == a
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
@@ -1432,7 +1367,7 @@ def test_the_trace_nodes_dry_run_moves_what_a_short_write_returned(tmp_path):
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1", "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     nd = json.loads(dry.read_text())["total"]
-    assert nd == trace.metrics_of_export(out.read_text().splitlines())["total"]
+    assert nd == metrics_of_export(out.read_text().splitlines())["total"]
     assert nd["bytes_written"] == 8192
 
 
@@ -1456,13 +1391,14 @@ def test_the_trace_nodes_run_leaves_the_file_a_short_write_left(tmp_path):
 def test_an_exported_trace_is_read_as_the_runner_reads_it(tmp_path):
     """`aeiou-trace metrics` read an exported trace file, which the runner's `trace` node reads
     too, with plain `json.loads` (RC1 review, R21): a line with a lone surrogate (`\\ud800`)
-    or a repeated key passed, and a line that is not JSON ended in a traceback. It reads with
-    `emit.loads` and names the file and the line, as the runner names them."""
+    or a repeated key passed, and a line that is not JSON ended in a traceback. Since the port
+    (DESIGN_REVIEW.md §3.89) it reads each line with the runner's own parser (`trace::Line`), so
+    it refuses what the runner refuses in the runner's words, naming the file and the line."""
     head = '{"aeiou_trace": 1, "root": "/x", "lanes": 1, "lines": 1}\n'
     for i, (line, said) in enumerate([
-        ('{"lane": 0, "op": "stat", "path": "a\\ud800"}', "line 2: lone surrogate in hex escape (\\ud800)"),
-        ('{"lane": 0, "op": "stat", "path": "a", "path": "b"}', "line 2: duplicate field `path`"),
-        ('{"lane": 0, "op"', "line 2: Expecting ':' delimiter: line 1 column 17 (char 16)"),
+        ('{"lane": 0, "op": "stat", "path": "a\\ud800"}', "line 2: unexpected end of hex escape at line 1 column 43"),
+        ('{"lane": 0, "op": "stat", "path": "a", "path": "b"}', "line 2: duplicate field `path` at line 1 column 51"),
+        ('{"lane": 0, "op"', "line 2: EOF while parsing an object at line 1 column 16"),
         ('[1]', "line 2: not a JSON object"),
     ]):
         f = tmp_path / f"t{i}.jsonl"
@@ -1478,23 +1414,23 @@ def test_a_trace_with_no_counted_call_fails_and_exports_nothing(tmp_path, capsys
     st, junk = tmp_path / "t.st", tmp_path / "junk.txt"
     st.write_text(SEQUENTIAL.strip() + "\n")
     junk.write_text("hello\nworld\n")
-    assert trace.main(["metrics", str(st), "--root", "/elsewhere"]) == 1
+    assert cli(["metrics", str(st), "--root", "/elsewhere"]) == 1
     err = capsys.readouterr().err
     assert err == (f"aeiou-trace metrics: {st}: no call under --root /elsewhere (15 line(s) read, 13 parsed as strace calls): "
                    "check --root against the paths the trace shows\n"), err
-    assert trace.main(["metrics", str(junk), "--root", "/d"]) == 1
+    assert cli(["metrics", str(junk), "--root", "/d"]) == 1
     err = capsys.readouterr().err
     assert f"{junk}: no call under --root /d (2 line(s) read, 0 parsed as strace calls): not an strace" in err, err
     out = tmp_path / "x.jsonl"
-    assert trace.main(["export", str(st), "--root", "/elsewhere", "-o", str(out)]) == 1
+    assert cli(["export", str(st), "--root", "/elsewhere", "-o", str(out)]) == 1
     assert f"{out} not written" in capsys.readouterr().err and not out.exists()
     # a trace file with no call in it (an export made before this rule) is refused as well
     empty = tmp_path / "empty.jsonl"
     empty.write_text(json.dumps({"aeiou_trace": 1, "source": "strace", "root": "/d", "lanes": 0, "lines": 0, "opens": 0, "creates": [], "notes": {}}) + "\n")
-    assert trace.main(["metrics", str(empty)]) == 1
+    assert cli(["metrics", str(empty)]) == 1
     assert capsys.readouterr().err == f"aeiou-trace metrics: {empty}: a trace file with no call in it\n"
     # and a root that matches is still status 0
-    assert trace.main(["metrics", str(st), "--root", "/d", "-o", str(tmp_path / "m.json")]) == 0
+    assert cli(["metrics", str(st), "--root", "/d", "-o", str(tmp_path / "m.json")]) == 0
 
 
 def test_compare_describes_the_metrics_of_an_exported_trace(tmp_path, capsys):
@@ -1502,8 +1438,8 @@ def test_compare_describes_the_metrics_of_an_exported_trace(tmp_path, capsys):
     None seed None gpus None`."""
     st, exported, m = tmp_path / "t.st", tmp_path / "t.jsonl", tmp_path / "m.json"
     st.write_text(SEQUENTIAL.strip() + "\n")
-    assert trace.main(["export", str(st), "--root", "/d", "-o", str(exported)]) == 0
-    assert trace.main(["metrics", str(exported), "-o", str(m)]) == 0
+    assert cli(["export", str(st), "--root", "/d", "-o", str(exported)]) == 0
+    assert cli(["metrics", str(exported), "-o", str(m)]) == 0
     capsys.readouterr()
     assert trace.main(["compare", str(m), str(m)]) == 0
     out = capsys.readouterr().out
@@ -1519,9 +1455,15 @@ def test_a_bound_that_is_not_a_finite_non_negative_number_is_a_usage_error(tmp_p
     st.write_text(SEQUENTIAL.strip() + "\n")
     cmd = "compare" if flag == "--max-distance" else "metrics"
     args = [str(st), str(st)] if cmd == "compare" else [str(st), "--root", "/d"]
-    assert trace.main([cmd, *args, f"{flag}={value}"]) == 2
-    err = capsys.readouterr().err
-    assert err.startswith(f"aeiou-trace {cmd}: argument {flag}: invalid non-negative number value: '{value}'\n\nUsage: aeiou-trace {cmd} "), err
+    if cmd == "compare":
+        assert trace.main([cmd, *args, f"{flag}={value}"]) == 2
+        err = capsys.readouterr().err
+        assert err.startswith(f"aeiou-trace {cmd}: argument {flag}: invalid non-negative number value: '{value}'\n\nUsage: aeiou-trace {cmd} "), err
+    else:
+        # the binary's parser, in its own words (runner/REFERENCE.md §15)
+        assert cli([cmd, *args, f"{flag}={value}"]) == 2
+        err = capsys.readouterr().err
+        assert err.startswith(f"aeiou-trace {cmd}: invalid value '{value}' for '{flag} <US>': not a finite number at least 0\n\nUsage: aeiou-trace {cmd} "), err
     assert trace.main(["compare", str(st), str(st), "--max-distance=0"]) == 1   # 0 is a bound (the strace is no metrics document)
     assert capsys.readouterr().err.startswith(f"aeiou-trace compare: {st}: ")
 

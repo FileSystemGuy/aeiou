@@ -1,0 +1,15 @@
+{"aeiou_trace":1,"source":"strace","root":"/d","lanes":2,"lines":14,"opens":3,"creates":["out/new","out/final"],"notes":{"shared_positions_resolved":2}}
+{"lane":0,"t":0,"dur":10014,"op":"open","fd":0,"path":"shared","flags":["RDONLY","CLOEXEC"]}
+{"lane":0,"t":200033,"dur":10014,"op":"read","fd":0,"len":4096,"ret":4096,"offset":0}
+{"lane":1,"t":299931,"dur":10014,"op":"read","fd":0,"len":4096,"ret":4096,"offset":4096}
+{"lane":1,"t":400066,"dur":10014,"op":"open","fd":1,"path":"own","flags":["RDONLY"]}
+{"lane":1,"t":499964,"dur":10014,"op":"read","fd":1,"len":100,"ret":100}
+{"lane":1,"t":600100,"dur":10014,"op":"read","fd":1,"len":100,"ret":100}
+{"lane":1,"t":699997,"dur":10014,"op":"close","fd":1}
+{"lane":1,"t":799894,"dur":10014,"op":"close","fd":0}
+{"lane":0,"t":999928,"dur":10014,"op":"read","fd":0,"len":50,"ret":50,"offset":8192}
+{"lane":0,"t":1100063,"dur":10014,"op":"open","fd":2,"path":"out/new","flags":["WRONLY","CREAT","TRUNC"],"mode":420}
+{"lane":0,"t":1199961,"dur":10014,"op":"write","fd":2,"len":1000,"ret":1000}
+{"lane":0,"t":1300097,"dur":10014,"op":"rename","path":"out/new","to":"out/final"}
+{"lane":0,"t":1399994,"dur":10014,"op":"close","fd":2}
+{"lane":0,"t":1499891,"dur":10014,"op":"close","fd":0}

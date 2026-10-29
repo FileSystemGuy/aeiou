@@ -232,7 +232,7 @@ An abstract goes through five stages, each a tool of the suite.
 | `aeiou-build` | Python | builder scripts to abstracts, hermetically | [aeiou-build(1)](man/aeiou-build.1.md) |
 | `aeiou-params` | Python | parameter files: defaults, check, from real shards and archives | [aeiou-params(1)](man/aeiou-params.1.md) |
 | `aeiou-datagen` | Python | container datasets through their format classes; deprecated, since `aeiou datagen` writes every format | [aeiou-datagen(1)](man/aeiou-datagen.1.md) |
-| `aeiou-trace` | Python | metrics of an strace, comparison, the `trace` node's file | [aeiou-trace(1)](man/aeiou-trace.1.md) |
+| `aeiou-trace` | Rust (its `compare` and `digest` still Python) | metrics of an strace or an object-store log, comparison, the `trace` node's file, the digest a fit is made from | [aeiou-trace(1)](man/aeiou-trace.1.md) |
 | `aeiou-catalog` | Python | the workload catalog: records against their dictionary, each case's shape, `CATALOG.md`, each case's description in prose, and `describe` for any abstract | [aeiou-catalog(1)](man/aeiou-catalog.1.md) |
 | `aeiou-header` | Python | the header bytes of an HDF5 file from libhdf5, run by `aeiou datagen` beside it | [aeiou-header(1)](man/aeiou-header.1.md) |
 | `aeiou-launch` | sh | one `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh | [aeiou-launch(1)](man/aeiou-launch.1.md) |
@@ -280,7 +280,7 @@ builds it and `uv` locks it. The `formats` extra brings the libraries of the for
 classes, `pyarrow`, `h5py`, `numpy` (whose `SFC64` makes the payload, the Rust writer's
 bytes), `crc32c`, and `xxhash`; the `s3` extra brings `obstore`, Python's binding of
 Apache `object_store`, for `aeiou-datagen` into a bucket. PEP 578 audit hooks make the
-hermetic build. `aeiou-trace` and `aeiou-catalog` are standard library only; `aeiou-header`
+hermetic build. `aeiou-catalog` and the Python half of `aeiou-trace` are standard library only; `aeiou-header`
 needs h5py, and the release ships it as one PyInstaller file carrying Python, numpy, and h5py.
 
 **Contract.** JSON Schema draft 2020-12 for the AST and the parameter file; canonical JSON
@@ -505,7 +505,16 @@ Not built, in rough order of interest:
   in memory and the reads depend on each other, which no trace decides), each with its own
   facts and questions; and object-store request logs, MinIO's audit log and Amazon S3's server
   access log, read by `metrics`, `export`, and `digest` in place of an strace, each request
-  turned into the calls the object engine issues for it. To build next:
+  turned into the calls the object engine issues for it. Decided the same day (§3.89, with the
+  user): one observation document carrying a trace's structure and its metrics, a comparison of
+  two of them (structure by equality, numbers by the tolerance classes) whose run side comes
+  from `aeiou dry-run --emit-trace` or an strace of `aeiou run`, and the trace-side tools in
+  Rust, since a real trace runs to several gigabytes. Built the same day (stage 1): `aeiou-trace`
+  is a binary of the runner's crate, its strace reader, exporter, and object-log reader ported
+  from the Python and held to a golden corpus of every trace the Python tests used, 13 to 15
+  times faster and in a tenth to a twentieth of the memory; `compare` and `digest` still run the
+  Python's until their stages. To build next: the digest's analysis and the version-2 document
+  in Rust (after the user reviews the step-4 verdicts of §3.88), then the comparison;
   `aeiou-catalog disclose`, every string
   and number a contribution would publish (item 47); a fitting skill in the open skill format
   over those tools and `aeiou-fit`, evaluated against the committed captures, beside a written

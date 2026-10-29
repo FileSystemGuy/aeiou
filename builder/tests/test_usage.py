@@ -25,13 +25,21 @@ def ast_path(name):
 _BUILDS = [p for p in (ROOT / "runner" / "target" / "release" / "aeiou", ROOT / "runner" / "target" / "debug" / "aeiou") if p.exists()]
 RUNNER = pathlib.Path(os.environ["AEIOU_RUNNER"]) if "AEIOU_RUNNER" in os.environ else max(_BUILDS, key=lambda p: p.stat().st_mtime, default=ROOT / "runner" / "target" / "release" / "aeiou")
 
+TRACE_BIN = pathlib.Path(os.environ.get("AEIOU_TRACE") or RUNNER.with_name("aeiou-trace"))
 FOOTER = "For more information, try '{prog} --help'.\n"
 MISSING = "the following required arguments were not provided:"
 
 
 def tool(module, *args, env=None, stdin=None):
+    """A Python tool by its module; `trace` is the runner's `aeiou-trace` binary, which runs this
+    package's `compare` and `digest` (DESIGN_REVIEW.md §3.89)."""
     full = {k: v for k, v in os.environ.items() if not k.startswith("AEIOU_")}
     full.update({"PYTHONPATH": str(BUILDER), **(env or {})})
+    if module == "trace":
+        if not TRACE_BIN.exists():
+            pytest.skip("needs the runner binary aeiou-trace")
+        full["AEIOU_PYTHON"] = sys.executable
+        return subprocess.run([str(TRACE_BIN), *map(str, args)], input=stdin, capture_output=True, text=True, cwd=str(BUILDER), env=full)
     return subprocess.run([sys.executable, "-m", f"aeiou.{module}", *map(str, args)], input=stdin, capture_output=True, text=True, cwd=str(BUILDER), env=full)
 
 

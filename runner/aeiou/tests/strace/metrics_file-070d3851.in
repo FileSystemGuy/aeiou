@@ -1,0 +1,13 @@
+{"aeiou_trace": 1, "source": "strace", "root": "/d", "lanes": 1, "lines": 12, "opens": 4, "creates": ["log"], "notes": {"append_positions_resolved": 4}}
+{"lane": 0, "t": 0, "dur": 10014, "op": "open", "fd": 0, "path": "log", "flags": ["WRONLY", "CREAT", "APPEND", "TRUNC", "CLOEXEC"], "mode": 420}
+{"lane": 0, "t": 99897, "dur": 10014, "op": "write", "fd": 0, "len": 4096, "ret": 4096, "offset": 0}
+{"lane": 0, "t": 200033, "dur": 10014, "op": "close", "fd": 0}
+{"lane": 0, "t": 400066, "dur": 10014, "op": "open", "fd": 1, "path": "log", "flags": ["WRONLY", "CREAT", "APPEND", "CLOEXEC"], "mode": 420}
+{"lane": 0, "t": 499964, "dur": 10014, "op": "write", "fd": 1, "len": 4096, "ret": 4096, "offset": 4096}
+{"lane": 0, "t": 600100, "dur": 10014, "op": "close", "fd": 1}
+{"lane": 0, "t": 799894, "dur": 10014, "op": "open", "fd": 2, "path": "log", "flags": ["WRONLY", "CREAT", "APPEND", "CLOEXEC"], "mode": 420}
+{"lane": 0, "t": 900030, "dur": 10014, "op": "write", "fd": 2, "len": 4096, "ret": 4096, "offset": 8192}
+{"lane": 0, "t": 999928, "dur": 10014, "op": "close", "fd": 2}
+{"lane": 0, "t": 1199961, "dur": 10014, "op": "open", "fd": 3, "path": "log", "flags": ["WRONLY", "CREAT", "APPEND", "CLOEXEC"], "mode": 420}
+{"lane": 0, "t": 1300097, "dur": 10014, "op": "write", "fd": 3, "len": 4096, "ret": 4096, "offset": 12288}
+{"lane": 0, "t": 1399994, "dur": 10014, "op": "close", "fd": 3}

@@ -1,0 +1,48 @@
+100 1700000000.000000 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000000.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000000.npz> <0.000010>
+100 1700000000.001000 fstat(3</d/train/00000/sample_000000000.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.002000 read(3</d/train/00000/sample_000000000.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.003000 close(3</d/train/00000/sample_000000000.npz>) = 0 <0.000005>
+100 1700000000.013000 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000001.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000001.npz> <0.000010>
+100 1700000000.014000 fstat(3</d/train/00000/sample_000000001.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.015000 read(3</d/train/00000/sample_000000001.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.016000 close(3</d/train/00000/sample_000000001.npz>) = 0 <0.000005>
+100 1700000000.026000 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000002.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000002.npz> <0.000010>
+100 1700000000.026999 fstat(3</d/train/00000/sample_000000002.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.027999 read(3</d/train/00000/sample_000000002.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.028999 close(3</d/train/00000/sample_000000002.npz>) = 0 <0.000005>
+100 1700000000.038999 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000003.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000003.npz> <0.000010>
+100 1700000000.039999 fstat(3</d/train/00000/sample_000000003.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.040999 read(3</d/train/00000/sample_000000003.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.041999 close(3</d/train/00000/sample_000000003.npz>) = 0 <0.000005>
+100 1700000000.051999 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000004.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000004.npz> <0.000010>
+100 1700000000.052999 fstat(3</d/train/00000/sample_000000004.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.053999 read(3</d/train/00000/sample_000000004.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.054999 close(3</d/train/00000/sample_000000004.npz>) = 0 <0.000005>
+100 1700000000.064999 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000005.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000005.npz> <0.000010>
+100 1700000000.065999 fstat(3</d/train/00000/sample_000000005.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.066999 read(3</d/train/00000/sample_000000005.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.067999 close(3</d/train/00000/sample_000000005.npz>) = 0 <0.000005>
+100 1700000000.077999 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000006.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000006.npz> <0.000010>
+100 1700000000.078999 fstat(3</d/train/00000/sample_000000006.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.079998 read(3</d/train/00000/sample_000000006.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.080998 close(3</d/train/00000/sample_000000006.npz>) = 0 <0.000005>
+100 1700000000.090998 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000007.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000007.npz> <0.000010>
+100 1700000000.091998 fstat(3</d/train/00000/sample_000000007.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.092998 read(3</d/train/00000/sample_000000007.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.093998 close(3</d/train/00000/sample_000000007.npz>) = 0 <0.000005>
+100 1700000000.103998 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000008.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000008.npz> <0.000010>
+100 1700000000.104998 fstat(3</d/train/00000/sample_000000008.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.105998 read(3</d/train/00000/sample_000000008.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.106998 close(3</d/train/00000/sample_000000008.npz>) = 0 <0.000005>
+100 1700000000.116998 openat(AT_FDCWD</d>, "/d/train/00000/sample_000000009.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00000/sample_000000009.npz> <0.000010>
+100 1700000000.117998 fstat(3</d/train/00000/sample_000000009.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.118998 read(3</d/train/00000/sample_000000009.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.119998 close(3</d/train/00000/sample_000000009.npz>) = 0 <0.000005>
+100 1700000000.129998 openat(AT_FDCWD</d>, "/d/train/00001/sample_000000010.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00001/sample_000000010.npz> <0.000010>
+100 1700000000.130998 fstat(3</d/train/00001/sample_000000010.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.131998 read(3</d/train/00001/sample_000000010.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.132998 close(3</d/train/00001/sample_000000010.npz>) = 0 <0.000005>
+100 1700000000.142998 openat(AT_FDCWD</d>, "/d/train/00001/sample_000000011.npz", O_RDONLY|O_CLOEXEC) = 3</d/train/00001/sample_000000011.npz> <0.000010>
+100 1700000000.143997 fstat(3</d/train/00001/sample_000000011.npz>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.144997 read(3</d/train/00001/sample_000000011.npz>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.145997 close(3</d/train/00001/sample_000000011.npz>) = 0 <0.000005>

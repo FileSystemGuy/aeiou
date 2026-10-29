@@ -5,6 +5,7 @@ have; `aeiou-launch` likewise; every `--flag` any page names, in prose included,
 of some tool of the suite (the runner's from the definitions of `man/aeiou.1.md`, which
 `runner/aeiou/tests/man.rs` holds to the binary); every page has the sections of a man page
 and `man/README.md` lists it."""
+import os
 import pathlib
 import re
 import subprocess
@@ -16,6 +17,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 BUILDER = HERE.parent
 ROOT = BUILDER.parent
 MAN = ROOT / "man"
+RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
+TRACE_BIN = pathlib.Path(os.environ.get("AEIOU_TRACE") or RUNNER.with_name("aeiou-trace"))
 
 # tool -> (module, subcommands); a flat tool has the one section `### <tool>`
 TOOLS = {
@@ -35,8 +38,16 @@ MENTION = re.compile(r"(?<!-)--(\[no-\])?([a-z][a-z0-9-]*)")
 
 
 def help_text(module, *sub):
-    r = subprocess.run([sys.executable, "-m", f"aeiou.{module}", *sub, "--help"], capture_output=True, text=True, cwd=str(BUILDER),
-                       env={"PYTHONPATH": str(BUILDER), "PATH": "/usr/bin:/bin"})
+    """A Python tool's help by its module; `trace` is the runner's `aeiou-trace` binary, which runs
+    this package's `compare` and `digest` (DESIGN_REVIEW.md §3.89)."""
+    env = {"PYTHONPATH": str(BUILDER), "PATH": "/usr/bin:/bin"}
+    if module == "trace":
+        if not TRACE_BIN.exists():
+            pytest.skip("needs the runner binary aeiou-trace")
+        r = subprocess.run([str(TRACE_BIN), *sub, "--help"], capture_output=True, text=True, cwd=str(BUILDER), env={**env, "AEIOU_PYTHON": sys.executable})
+        assert r.returncode == 0, r.stderr
+        return r.stdout
+    r = subprocess.run([sys.executable, "-m", f"aeiou.{module}", *sub, "--help"], capture_output=True, text=True, cwd=str(BUILDER), env=env)
     assert r.returncode == 0, r.stderr
     return r.stdout
 

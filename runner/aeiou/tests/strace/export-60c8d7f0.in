@@ -1,0 +1,14 @@
+100 1700000000.000000 openat(AT_FDCWD</d>, "/d/ckpt/step_000001/__0_0.distcp", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 3</d/ckpt/step_000001/__0_0.distcp> <0.000010>
+100 1700000000.001000 write(3</d/ckpt/step_000001/__0_0.distcp>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.002000 fsync(3</d/ckpt/step_000001/__0_0.distcp>) = 0 <0.000500>
+100 1700000000.003000 close(3</d/ckpt/step_000001/__0_0.distcp>) = 0 <0.000005>
+101 1700000000.013000 openat(AT_FDCWD</d>, "/d/ckpt/step_000001/__1_0.distcp", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 4</d/ckpt/step_000001/__1_0.distcp> <0.000010>
+101 1700000000.014000 write(4</d/ckpt/step_000001/__1_0.distcp>, "x"..., 8192) = 8192 <0.000100>
+101 1700000000.015000 fsync(4</d/ckpt/step_000001/__1_0.distcp>) = 0 <0.000500>
+101 1700000000.016000 close(4</d/ckpt/step_000001/__1_0.distcp>) = 0 <0.000005>
+100 1700000000.026000 openat(AT_FDCWD</d>, "/d/ckpt/step_000001/.metadata", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 5</d/ckpt/step_000001/.metadata> <0.000010>
+100 1700000000.026999 write(5</d/ckpt/step_000001/.metadata>, "x"..., 512) = 512 <0.000100>
+100 1700000000.027999 close(5</d/ckpt/step_000001/.metadata>) = 0 <0.000005>
+100 1700000000.037999 openat(AT_FDCWD</d>, "/d/ckpt/step_000001/__0_0.distcp", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 6</d/ckpt/step_000001/__0_0.distcp> <0.000010>
+100 1700000000.038999 write(6</d/ckpt/step_000001/__0_0.distcp>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.039999 close(6</d/ckpt/step_000001/__0_0.distcp>) = 0 <0.000005>

@@ -8265,6 +8265,28 @@ the application records, and the answers file; (4) the two-sided `compare` and `
 regenerated and the 18 committed capture metrics rewrapped as numbers-only documents (their
 traces were not retained, item 34), each saying so.
 
+**Stage 1 built (2026-10-29).** `aeiou-trace` is a binary of the runner's crate
+(`src/bin/aeiou_trace.rs`), its `metrics` and `export` Rust: `strace.rs` (the line grammar, the
+descriptor tables through `clone`, `dup`, and an unfinished `close`, positions and `O_APPEND`
+ends, instances, AIO rounds), `export.rs` (the trace file in two passes, the first learning the
+shared opens, the pinned ones, the earliest start, the creates, and every AIO member's result,
+so the second writes in order with the header first; and the metrics of an exported file),
+`objectlog.rs`, and `metrics.rs`'s `TraceMetrics` (a context per thread or lane, instances
+parked and swapped in as their calls interleave, which the dry run never needs). The Python
+parser, metrics, exporter, and object-log reader were deleted; before that, every input their
+tests fed them was recorded with what they made of it (`runner/aeiou/tests/strace/`, 144 cases
+with five written to reach the rare calls), and the port reproduces every one exactly
+(`tests/strace_corpus.rs`), the documents compared whole. The Python tests drive the binary
+now; the seven that tested the Python's internals (stack and extent distances, byte
+popularity, argument splitting, escaped descriptor paths, `CLONE_FILES`, the exporter's root)
+gave their assertions to the Rust unit tests that cover the same code. `compare` and `digest`
+stay in the Python package, which the binary runs (`python3 -m aeiou.trace`, or
+`$AEIOU_PYTHON`), and the digest takes a trace's calls from `aeiou-trace export`. On the
+synthetic strace of 211 MB, the metrics take 2.8 s and 0.15 GB (the Python 36 s and 0.61 GB)
+and the export 3.2 s and 0.06 GB for both passes (the Python 50 s and 1.46 GB), the outputs
+equal. The binary ships in the release tarball beside `aeiou`. Next, stage 2, waits on the
+user's review of the step-4 verdicts of §3.88.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

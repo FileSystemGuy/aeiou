@@ -1,0 +1,5 @@
+400 1700000004.000000 openat(AT_FDCWD</d>, "/elsewhere/x", O_RDONLY) = 5</elsewhere/x> <0.000010>
+401 1700000004.000050 openat(AT_FDCWD</d>, "/d/b", O_RDONLY <unfinished ...>
+400 1700000004.000100 openat(AT_FDCWD</d>, "/d/a", O_RDONLY) = 3</d/a> <0.000010>
+400 1700000004.000300 read(3</d/a>, "a"..., 4096) = 4096 <0.000050>
+401 1700000004.000400 <... openat resumed>) = 4</d/b> <0.000350>
