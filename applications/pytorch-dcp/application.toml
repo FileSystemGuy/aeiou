@@ -1,0 +1,8 @@
+name = "pytorch-dcp"
+display = "PyTorch Distributed Checkpoint"
+kind = "library"
+summary = "torch.distributed.checkpoint: every rank writes its shard of the model and optimizer state per checkpoint; rank 0 writes the plan as .metadata; a load reads each rank's items from the shards"
+home = "https://docs.pytorch.org/docs/stable/distributed.checkpoint.html"
+source = "https://github.com/pytorch/pytorch/tree/main/torch/distributed/checkpoint"
+signatures = ["__*_*.distcp", ".metadata"]
+mechanisms = ["checkpointing/dcp-save", "checkpointing/dcp-load"]

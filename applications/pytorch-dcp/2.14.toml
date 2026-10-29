@@ -1,0 +1,31 @@
+from = "2.14"
+read = "2026-10-29"
+sources = [
+  "https://docs.pytorch.org/docs/stable/distributed.checkpoint.html",
+  "workloads/checkpointing/dcp-save/kit/save.py and its README (torch 2.14.1 traced 2026-10)",
+  "workloads/checkpointing/dcp-load/kit/load.py and its README (torch 2.14.1 traced 2026-10)",
+]
+
+[[option]]
+name = "single_file_per_rank"
+question = "Does each rank write one shard file per checkpoint (FileSystemWriter's single_file_per_rank), or one file per item?"
+choices = ["one file per rank", "one file per item"]
+default = "one file per rank"
+source = "https://docs.pytorch.org/docs/stable/distributed.checkpoint.html"
+confidence = "high"
+
+[[option]]
+name = "sync_files"
+question = "Does the writer fsync each shard before the checkpoint is declared complete (FileSystemWriter's sync_files)?"
+choices = ["fsync on", "fsync off"]
+default = "fsync on"
+source = "https://docs.pytorch.org/docs/stable/distributed.checkpoint.html"
+confidence = "high"
+
+[[assert]]
+template = "__*_*.distcp"
+question = "size"
+answer = "per-path"
+note = "a rank's shard holds the bytes of its plan's items; the bytes are a property of the file, the same at every load"
+source = "workloads/checkpointing/dcp-load/kit/params.py (the plan read from .metadata)"
+confidence = "high"

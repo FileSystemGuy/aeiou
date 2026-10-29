@@ -1,0 +1,22 @@
+from = "0.5"
+read = "2026-10-29"
+sources = [
+  "https://github.com/LMCache/LMCache/blob/v0.5.5/lmcache/v1/storage_backend/local_disk_backend.py (_key_to_path, write_file, read_file)",
+  "https://github.com/LMCache/LMCache/blob/v0.5.5/lmcache/utils.py (CacheEngineKey.to_string: model@world_size@worker_id@chunk_hash_hex@dtype, '/' in the model name written '-')",
+  "workloads/kvcache/lmcache-local-disk/kit (LMCache 0.5.5 under vLLM 0.30, traced 2026-10)",
+]
+
+[[option]]
+name = "use_odirect"
+question = "Does the local-disk backend open its files with O_DIRECT (LMCache's use_odirect)?"
+choices = ["buffered", "O_DIRECT"]
+default = "buffered"
+source = "https://github.com/LMCache/LMCache/blob/v0.5.5/lmcache/v1/storage_backend/local_disk_backend.py"
+confidence = "high"
+
+[[option]]
+name = "local_cpu"
+question = "Is a CPU memory tier in front of the disk (LMCache's local_cpu), so that a hit in it never reaches the disk?"
+choices = ["no CPU tier", "CPU tier on"]
+source = "https://github.com/LMCache/LMCache/blob/v0.5.5/lmcache/v1/storage_manager.py"
+confidence = "high"

@@ -1,0 +1,11 @@
+from = "1.15"
+read = "2026-10-29"
+sources = [
+  "workloads/vector-search/faiss-ivf-ondisk/kit (faiss-cpu 1.15.1, traced 2026-10-01)",
+]
+
+[[blind_spot]]
+kind = "mmap"
+note = "OnDiskInvertedLists maps the lists file and never calls read on it; the probed lists reach memory through page faults the trace does not show (the mechanism's abstract declares posix mmap)"
+source = "workloads/vector-search/faiss-ivf-ondisk/faiss_ivf_ondisk.py"
+confidence = "high"

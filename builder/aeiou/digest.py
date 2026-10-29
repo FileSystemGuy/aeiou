@@ -709,15 +709,19 @@ def analyze(lines, root: str | None, *, exclude=(), cwd=None) -> Analysis:
     return Analysis(header, source, root, d)
 
 
-def document(an: Analysis, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, answers=(), by: str | None = None, at: str | None = None) -> dict:
+def document(an: Analysis, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, answers=(), by: str | None = None, at: str | None = None, application: dict | None = None) -> dict:
     """The digest document, with `answers` (facts and answers to open questions, §3.88) checked
-    against the trace and recorded under `asserted` with `by` and `at`, or under `rejected`
-    with why; the verdicts stay the trace's."""
+    against the trace and recorded under `asserted` with `by` and `at` (an answer carrying its
+    own `by`, a record's, keeps it), or under `rejected` with why; the verdicts stay the trace's.
+    `application` is what the owner or a record said the traced application is, with the blind
+    spots that follow, each also a note."""
     notes = Counter()
     for k, v in an.header.get("notes", {}).items():
         notes[k] = v
     for k, v in an.d.notes.items():
         notes[k] = v
+    for b in (application or {}).get("blind_spots", []):
+        notes[f"blind_spot_{b['kind']}"] = b["note"]
     asserted: list[dict] = []
     rejected: list[tuple[int, dict]] = []     # (the answer's index, so rejections keep the answers' order)
     facts: dict[int, dict] = {}
@@ -731,7 +735,9 @@ def document(an: Analysis, *, epochs: int = 1, candidates: int | None = None, pa
         e = {"site": tpl.id, "template": tpl.name(), kind: a[kind], ("value" if kind == "fact" else "answer"): value}
         if a.get("note"):
             e["note"] = a["note"]
-        e["by"], e["at"] = by, at
+        e["by"], e["at"] = a.get("by") or by, a.get("at") or at
+        if a.get("source"):
+            e["source"] = a["source"]
         asserted.append(e)
         return e
 
@@ -810,12 +816,13 @@ def document(an: Analysis, *, epochs: int = 1, candidates: int | None = None, pa
         "open": ranked(open_items),
         "asserted": asserted,
         "rejected": rejected,
+        "application": application,
     }
 
 
-def digest_of(lines, root: str | None, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, exclude=(), cwd=None, answers=(), by=None, at=None) -> dict:
+def digest_of(lines, root: str | None, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, exclude=(), cwd=None, answers=(), by=None, at=None, application=None) -> dict:
     """`analyze` then `document`, in one call."""
-    return document(analyze(lines, root, exclude=exclude, cwd=cwd), epochs=epochs, candidates=candidates, paths=paths, answers=answers, by=by, at=at)
+    return document(analyze(lines, root, exclude=exclude, cwd=cwd), epochs=epochs, candidates=candidates, paths=paths, answers=answers, by=by, at=at, application=application)
 
 
 # ---------------------------------------------------------------- the questions (§3.88)
@@ -879,18 +886,122 @@ class Console:
         return None if line == "" else line.rstrip("\n")
 
 
-def interview(an: Analysis, io, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, by: str, at: str) -> tuple[dict, list[dict]]:
-    """Ask the facts of every site with an open question, remake the document, then ask the
-    open items in rank order, each checked against the trace and re-asked when it contradicts
-    it; end of input stops the asking. Returns the document and the answers given, the list
-    `write_answers` keeps and `document` replays."""
+def interview(an: Analysis, io, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, by: str, at: str, apps: dict | None = None, application: dict | None = None) -> tuple[dict, list[dict]]:
+    """Ask what the trace cannot decide, in this order: with `apps` (the application records),
+    which application the trace is of, confirmed from its path signatures or chosen from the
+    list, its version, and the record's options, whose assertions then answer what they can
+    (as suggestions the person confirms when no record claims the version); then the facts of
+    every site with an open question; then the open items in rank order. Every answer is
+    checked against the trace and re-asked when it contradicts it; end of input stops the
+    asking. `application` given skips the identification (`--application NAME@VERSION`).
+    Returns the document and the answers given, the list `write_answers` keeps and `document`
+    replays, with the record's assertions among them carrying their own `by`."""
     kw = dict(epochs=epochs, candidates=candidates, paths=paths, by=by, at=at)
     answers: list[dict] = []
+    state = {"application": application}
 
     def finish():
-        return document(an, answers=answers, **kw), answers
+        return document(an, answers=answers, application=state["application"], **kw), answers
 
-    doc = document(an, **kw)
+    def choose(prompt: str, n: int) -> int | None:
+        """A number from 1 to n, or None at end of input."""
+        while True:
+            line = io.ask(prompt)
+            if line is None:
+                return None
+            line = line.strip()
+            if line.isdigit() and 1 <= int(line) <= n:
+                return int(line)
+            io.say(f"  a number from 1 to {n}")
+
+    if apps is not None:
+        from . import applications as ap
+        templates = [(t.name(), sorted(t.paths)) for t in an.templates]
+        app = None
+        if application is not None:
+            app = apps.get(application["name"])
+            version = application.get("version")
+        else:
+            found = ap.identify(apps, (p for _, ps in templates for p in ps))
+            io.say("")
+            if found:
+                a0, sig = found[0]
+                io.say(f"This trace looks like {a0.display} (a path matched {sig}).")
+                io.say("    1. yes")
+                io.say("    2. another application")
+                io.say("    3. none of these, or don't know")
+                n = choose("answer [1-3]: ", 3)
+                if n is None:
+                    return finish()
+                app = a0 if n == 1 else None
+                listed = n == 2
+            else:
+                io.say("No path in the trace identifies the application.")
+                listed = True
+            if listed:
+                names = sorted(apps)
+                io.say("Which application produced this trace?")
+                for i, name in enumerate(names, 1):
+                    io.say(f"    {i}. {apps[name].display}: {apps[name].summary}")
+                io.say(f"    {len(names) + 1}. none of these, or don't know")
+                n = choose(f"answer [1-{len(names) + 1}]: ", len(names) + 1)
+                if n is None:
+                    return finish()
+                app = apps[names[n - 1]] if n <= len(names) else None
+            version = None
+            if app is not None:
+                version = io.ask(f"which version of {app.display}? (Enter for don't know): ")
+                if version is None:
+                    return finish()
+                version = version.strip() or None
+        if app is not None:
+            record, exact = ap.resolve(app, version)
+            chosen = {"name": app.name, "display": app.display, "version": version, "record": None, "exact": False, "options": {}, "blind_spots": []}
+            state["application"] = chosen
+            if record is None:
+                io.say(f"  no record of {app.display} at {version} or below; nothing is assumed about it")
+            else:
+                chosen["record"], chosen["exact"] = record.version, exact
+                if not exact:
+                    io.say(f"  no record claims {app.display} {version or 'of unknown version'}; the nearest is {record.version}, read {record.read}: its answers are suggestions you confirm")
+                options = chosen["options"]
+                if application is not None:
+                    options.update(application.get("options", {}))
+                for o in record.options:
+                    if o["name"] in options:
+                        continue
+                    io.say("")
+                    io.say(f"  {o['question']}")
+                    for i, c in enumerate(o["choices"], 1):
+                        io.say(f"    {i}. {c}" + (" (the default)" if o.get("default") == c else ""))
+                    io.say(f"    {len(o['choices']) + 1}. don't know")
+                    n = choose(f"answer [1-{len(o['choices']) + 1}]: ", len(o["choices"]) + 1)
+                    if n is None:
+                        return finish()
+                    if n <= len(o["choices"]):
+                        options[o["name"]] = o["choices"][n - 1]
+                chosen["blind_spots"] = ap.blind_spots(record, options)
+                for b in chosen["blind_spots"]:
+                    io.say(f"  blind spot ({b['kind']}): {b['note']}")
+                for a in ap.assertions(record, options, templates):
+                    if exact:
+                        answers.append(a)
+                        continue
+                    what = f"{a['fact']} {a['value']}" if "fact" in a else f"{a['question']} {a['answer']}"
+                    io.say("")
+                    io.say(f"  the {record.app.display} {record.version} record says, for {a['template']}: {what}" + (f" ({a['note']})" if a.get("note") else ""))
+                    io.say("    1. yes, that holds here")
+                    io.say("    2. no")
+                    io.say("    3. don't know")
+                    n = choose("answer [1-3]: ", 3)
+                    if n is None:
+                        return finish()
+                    if n == 1:
+                        mine = {k: v for k, v in a.items() if k not in ("by", "source")}
+                        mine["note"] = f"confirmed from the {record.app.display} {record.version} record" + (f": {a['note']}" if a.get("note") else "")
+                        answers.append(mine)
+
+    doc = document(an, answers=answers, application=state["application"], **kw)
     open_sites = {it["site"] for it in doc["open"]}
     for s in doc["sites"]:
         if s["template"] not in open_sites:
@@ -916,7 +1027,7 @@ def interview(an: Analysis, io, *, epochs: int = 1, candidates: int | None = Non
                     continue
                 answers.append({"template": tpl.name(), "fact": fact, "value": int(line)})
                 break
-    doc = document(an, answers=answers, **kw)
+    doc = document(an, answers=answers, application=state["application"], **kw)
     for it in doc["open"]:
         s = next(x for x in doc["sites"] if x["template"] == it["site"])
         tpl = an.templates[it["site"]]
@@ -953,8 +1064,8 @@ def interview(an: Analysis, io, *, epochs: int = 1, candidates: int | None = Non
     return finish()
 
 
-def write_answers(path: str, answers: list[dict], *, trace: str, trace_sha256: str, by: str, at: str) -> None:
-    doc = {"aeiou_answers": ANSWERS_FORMAT, "trace": trace, "trace_sha256": trace_sha256, "by": by, "at": at, "answers": list(answers)}
+def write_answers(path: str, answers: list[dict], *, trace: str, trace_sha256: str, by: str, at: str, application: dict | None = None) -> None:
+    doc = {"aeiou_answers": ANSWERS_FORMAT, "trace": trace, "trace_sha256": trace_sha256, "by": by, "at": at, "application": application, "answers": list(answers)}
     with open(path, "w", encoding="utf-8") as f:
         f.write(json.dumps(doc, indent=2) + "\n")
 
@@ -1097,14 +1208,26 @@ def render(doc: dict) -> str:
                        f"re-reads {sc['choose']['repeat_share']:.3f} and {sc['consume']['repeat_share']:.3f} of the touches")
         elif "note" in sc:
             out.append(f"     at scale: {sc['note']}")
+    app = doc.get("application")
+    if app:
+        line = f"application: {app['display']}" + (f" {app['version']}" if app.get("version") else " (version unknown)")
+        if app.get("record"):
+            line += f"; record {app['record']}" + ("" if app.get("exact") else ", suggestions only")
+        else:
+            line += "; no record"
+        out.append(line)
+        for k, v in app.get("options", {}).items():
+            out.append(f"  {k}: {v}")
+        for b in app.get("blind_spots", []):
+            out.append(f"  blind spot ({b['kind']}): {b['note']}")
     if asserted:
-        out.append(f"asserted (by {asserted[0]['by']}, {asserted[0]['at']}):")
+        out.append("asserted:")
         for a in asserted:
             kind = "fact" if "fact" in a else "question"
             line = f"  site {a['site']} {a[kind]}: {a['value'] if kind == 'fact' else a['answer']}"
             if a.get("note"):
                 line += f" ({a['note']})"
-            out.append(line)
+            out.append(line + f"; by {a['by']}, {a['at']}")
     if rejected:
         out.append("rejected:")
         for r in rejected:

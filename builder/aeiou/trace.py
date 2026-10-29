@@ -1878,6 +1878,8 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     dp.add_argument("--answers", metavar="FILE", help="The answers file (aeiou_answers: 1): replayed when it exists, so the questions are not asked; written there after an interactive run. Default after an interactive run with -o: the document's name with .answers.json")
     dp.add_argument("--no-questions", action="store_true", help="Ask nothing even on a terminal: every undecided verdict stays open")
     dp.add_argument("--answered-by", metavar="NAME", help="Record NAME as the one who answered (default: user@host)")
+    dp.add_argument("--applications", metavar="DIR", help="The application records (default: the ones shipped with the tool, or the checkout's applications/)")
+    dp.add_argument("--application", metavar="NAME[@VERSION]", help="State the traced application instead of being asked: its record's defaults and assertions apply, with the record as their provenance")
     ap.version(f"aeiou-trace {__version__}")
     return ap, {"metrics": mp, "export": ep, "compare": cp, "digest": dp}
 
@@ -2013,6 +2015,8 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
 
 
 def _digest(args, dp: usage.Parser) -> int:
+    import pathlib
+    from . import applications as ap
     from . import digest as dg
     if args.epochs < 1:
         dp.error("--epochs must be at least 1")
@@ -2037,23 +2041,38 @@ def _digest(args, dp: usage.Parser) -> int:
     at = _now()
     kw = dict(epochs=args.epochs, candidates=args.candidates, paths=args.paths)
     said = []
+    apps = ap.load(pathlib.Path(args.applications) if args.applications else ap.default_dir())
+    stated = _stated_application(apps, args.application, dp) if args.application else None
     if args.answers and os.path.exists(args.answers):
         header, answers = dg.read_answers(args.answers)
         by, at = header.get("by") or by, header.get("at") or at
-        doc = dg.document(an, answers=answers, by=by, at=at, **kw)
+        doc = dg.document(an, answers=answers, by=by, at=at, application=header.get("application"), **kw)
         if header.get("trace_sha256") != sha:
             doc["notes"]["answers_trace"] = f"{args.answers} was answered on another trace ({header.get('trace')}); its answers were checked against this one"
     elif args.no_questions or not sys.stdin.isatty():
         if args.answers:
             raise BuildError(f"{args.answers}: no such answers file, and no terminal to ask on")
-        doc = dg.document(an, by=by, at=at, **kw)
+        answers = []
+        if stated:
+            record, exact = ap.resolve(stated["app"], stated["version"])
+            if record is not None:
+                stated["record"], stated["exact"] = record.version, exact
+                stated["options"] = {o["name"]: o["default"] for o in record.options if "default" in o}
+                stated["blind_spots"] = ap.blind_spots(record, stated["options"])
+                if exact:
+                    answers = ap.assertions(record, stated["options"], [(t.name(), sorted(t.paths)) for t in an.templates])
+            del stated["app"]
+        doc = dg.document(an, answers=answers, by=by, at=at, application=stated, **kw)
     else:
-        doc, answers = dg.interview(an, dg.Console(), by=by, at=at, **kw)
-        if answers:
+        preset = None
+        if stated:
+            preset = {k: v for k, v in stated.items() if k != "app"}
+        doc, answers = dg.interview(an, dg.Console(), by=by, at=at, apps=apps, application=preset, **kw)
+        if answers or doc.get("application"):
             path = args.answers or (_answers_beside(args.out) if args.out else None)
             if path:
                 try:
-                    dg.write_answers(path, answers, trace=args.trace, trace_sha256=sha, by=by, at=at)
+                    dg.write_answers(path, answers, trace=args.trace, trace_sha256=sha, by=by, at=at, application=doc.get("application"))
                 except OSError as e:
                     raise BuildError(f"{path}: {_cause(e)}")
                 replay = ["aeiou-trace", "digest", args.trace] + (["--root", args.root] if args.root else []) + ["--answers", path] + (["-o", args.out] if args.out else [])
@@ -2081,6 +2100,15 @@ def _digest(args, dp: usage.Parser) -> int:
     for line in said:
         print(line, file=sys.stderr)
     return 0
+
+
+def _stated_application(apps: dict, stated: str, dp: usage.Parser) -> dict:
+    """`--application NAME[@VERSION]` checked against the records."""
+    name, _, version = stated.partition("@")
+    if name not in apps:
+        dp.error(f"--application {name}: no such application record; one of {', '.join(sorted(apps))}")
+    app = apps[name]
+    return {"app": app, "name": app.name, "display": app.display, "version": version or None, "record": None, "exact": False, "options": {}, "blind_spots": []}
 
 
 def _answers_beside(out: str) -> str:

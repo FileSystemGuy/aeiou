@@ -1,0 +1,41 @@
+from = "1.19"
+read = "2026-10-29"
+sources = [
+  "https://qdrant.tech/documentation/concepts/storage/ (segments; vectors always in a memory-mapped file, memory tier cached or cold; payload in Gridstore, cached or cold; the WAL)",
+  "https://github.com/qdrant/qdrant/releases (1.19.0 of 2026-08-05: single-file mmap vector storage on by default for immutable segments, payload storage through io_uring; 1.20.0 of 2026-10-22: hnsw_config.inline_storage, madvise(WILLNEED) prefetch on on-disk search; RocksDB removed in 1.18)",
+]
+
+[[blind_spot]]
+kind = "mmap"
+note = "vectors are always kept in a memory-mapped file and scored through the mapping; the trace shows the mmap and madvise calls and none of the reads"
+source = "https://qdrant.tech/documentation/concepts/storage/"
+confidence = "high"
+
+[[blind_spot]]
+kind = "io_uring"
+note = "payload storage reads go through io_uring since 1.19; the trace shows io_uring_enter, not the requests"
+source = "https://github.com/qdrant/qdrant/releases (1.19.0)"
+confidence = "medium"
+
+[[option]]
+name = "vectors_memory"
+question = "Which memory tier holds the vectors: cached (the file preloaded into the page cache at start) or cold (paged in on access)?"
+choices = ["cached", "cold"]
+default = "cached"
+source = "https://qdrant.tech/documentation/concepts/storage/ (vectors.memory; memmap_threshold sets the default)"
+confidence = "high"
+
+[[option]]
+name = "payload_memory"
+question = "Which memory tier holds the payload: cached or cold?"
+choices = ["cached", "cold"]
+default = "cold"
+source = "https://qdrant.tech/documentation/concepts/storage/ (payload.memory)"
+confidence = "high"
+
+[[option]]
+name = "hnsw_memory"
+question = "Which memory tier holds the HNSW graph: cached or cold?"
+choices = ["cached", "cold"]
+source = "https://qdrant.tech/documentation/concepts/storage/ (hnsw_config.memory)"
+confidence = "medium"

@@ -1,0 +1,8 @@
+name = "lmcache"
+display = "LMCache"
+kind = "library"
+summary = "the KV-cache layer of vLLM: a prefix's KV chunks stored once under a hashed key and loaded on a prefix hit, to a local disk or a shared file system"
+home = "https://lmcache.ai"
+source = "https://github.com/LMCache/LMCache"
+signatures = ["*@*@*@*@*.pt"]
+mechanisms = ["kvcache/lmcache-local-disk", "kvcache/lmcache-shared-fs"]

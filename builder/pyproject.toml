@@ -38,6 +38,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["aeiou"]
 
+# The application records (../applications, DESIGN_REVIEW.md §3.88) ship in the wheel as
+# aeiou/applications, where aeiou.applications.default_dir finds them; a checkout reads ../applications.
+[tool.hatch.build.targets.wheel.force-include]
+"../applications" = "aeiou/applications"
+
 # The interpreter is builder/.python-version, exactly, and always one uv downloads, never the system's
 # (DESIGN_REVIEW.md §3.82); uv itself is this version, which setup-uv in CI reads from here.
 [tool.uv]

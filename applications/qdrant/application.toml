@@ -1,0 +1,8 @@
+name = "qdrant"
+display = "Qdrant"
+kind = "service"
+summary = "a vector database service: collections in segments, each with its vector storage (always a memory-mapped file), its payload storage (Gridstore), and its HNSW index, written through a write-ahead log"
+home = "https://qdrant.tech"
+source = "https://github.com/qdrant/qdrant"
+signatures = ["collections/*/segments/*/vector_storage/*", "collections/*/segments/*/payload_storage/*", "collections/*/wal/*"]
+mechanisms = []

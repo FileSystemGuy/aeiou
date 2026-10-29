@@ -8105,6 +8105,27 @@ scale and the passes the benchmark runs, the two `--candidates` and `--epochs` s
 field-level facts (ranks, steps, keys) come with the site kinds of step (4), whose questions
 need them. Seventeen tests, the module at 100 % line coverage; man page and REFERENCE §7.
 
+*Built 2026-10-29, step (3):* `applications/` as decided, with `attributes.toml` (kinds,
+confidence, blind spots), the README, and seven records: `pytorch-dcp/2.14` (from the kits and
+the DCP documentation; options `single_file_per_rank`, `sync_files`; asserts size per path for
+the shards), `lmcache/0.5` (from the 0.5.5 source: files named `model@world_size@worker_id@
+chunk_hash_hex@dtype.pt`; options `use_odirect`, `local_cpu`), `safetensors/0.8` (blind spot
+mmap), `diskann/0.7` (option `num_nodes_to_cache`), `faiss/1.15` (no signature; blind spot
+mmap), `milvus/3.0` (docs v3.0.x and the master `milvus.yaml`, read today: blind spot object;
+options index, mmap of the vector field, whose default the configuration file gives as on and
+the mmap page as off, taken as on at medium confidence, mmap of the index, tiered-storage
+eviction), `qdrant/1.19` (the storage concepts page and the 1.19 and 1.20 release notes:
+vectors always memory-mapped, payload through io_uring, as blind spots; options the three
+memory tiers). `aeiou/applications.py` loads, validates, identifies, resolves, and turns a
+record into the digest's answers with the record as `by`; the interview asks the application
+first, then the version, then the options, says the blind spots, applies an exact record's
+assertions or offers a lower record's for confirmation; `--application NAME[@VERSION]`,
+`--applications DIR`; the document carries `application`, the answers file too, so a replay
+needs no records; the wheel ships the directory. Thirty-four tests of the records and nine of
+the interview with them; both modules at 98–100 % line coverage. Milvus's layout signatures
+(`insert_log/`, `index_files/`) and Qdrant's directory signatures are at medium confidence
+until a trace of each confirms them, which item 45(d) will.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

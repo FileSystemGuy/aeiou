@@ -1,0 +1,28 @@
+# The vocabulary of the application records (DESIGN_REVIEW.md §3.88): what `aeiou-trace digest`
+# knows about the applications whose traces it reads, so that a person who uses a product and
+# does not know its storage design can answer from a list. One directory per application,
+# `application.toml` for what does not change across versions and `<version>.toml` per version
+# range the facts were read for; `builder/aeiou/applications.py` refuses a record that uses a
+# word not defined here. The three rules: the trace always wins (a record fills what a short
+# trace cannot show and never overrides what it does); a record's facts are assertions weaker
+# than the owner's, with their own provenance; a record never claims a version it was not read
+# for. Adding a product or a version is a new file.
+
+applications_version = 1
+
+# kind: what runs where the trace is taken
+[kind]
+library = "a library in the application's own process; the trace is the application's and the library's calls are in it"
+service = "a self-hosted service; the trace is of the service's processes, and the application that queries it is traced separately"
+managed = "a managed (hosted) service; its storage is the vendor's and never under test here, so only what the client does on its own storage is traceable"
+
+# confidence: how a fact in a record was read
+[confidence]
+high = "read in the application's source, or in its documentation for the version the record names"
+medium = "read in documentation that does not name the version, in a configuration file of another version, or inferred from the application's design"
+
+# blind_spot: I/O the application does that an strace does not show as reads and writes
+[blind_spot]
+mmap = "the application maps its files and reads them through page faults; the trace shows the mmap and none of the reads, so the digest undercounts"
+io_uring = "the application reads through io_uring; the trace shows io_uring_enter and not the requests, so the digest undercounts"
+object = "the application keeps data on an object store; the strace shows only its local cache, and the request log (PROJECT_BRIEF.md item 49) is needed for the rest"

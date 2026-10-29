@@ -1,0 +1,14 @@
+from = "0.7"
+read = "2026-10-29"
+sources = [
+  "workloads/vector-search/diskann-build/kit (diskannpy 0.7.0, traced 2026-10-02)",
+  "workloads/vector-search/diskann-search/kit (diskannpy 0.7.0, traced 2026-10-02)",
+]
+
+[[option]]
+name = "num_nodes_to_cache"
+question = "Does the search cache graph nodes in memory (num_nodes_to_cache above zero), so the hottest sectors are never read?"
+choices = ["no cache", "cached nodes"]
+default = "no cache"
+source = "https://github.com/microsoft/DiskANN (StaticDiskIndex.search's num_nodes_to_cache)"
+confidence = "medium"

@@ -1,0 +1,8 @@
+name = "faiss"
+display = "FAISS"
+kind = "library"
+summary = "Meta's vector-search library; its on-disk inverted lists (OnDiskInvertedLists) are a file the index maps, under names the application chooses, so no path identifies it"
+home = "https://github.com/facebookresearch/faiss"
+source = "https://github.com/facebookresearch/faiss"
+signatures = []
+mechanisms = ["vector-search/faiss-ivf-ondisk"]

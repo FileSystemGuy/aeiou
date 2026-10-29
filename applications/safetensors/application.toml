@@ -1,0 +1,8 @@
+name = "safetensors"
+display = "safetensors"
+kind = "library"
+summary = "the tensor file format of Hugging Face model loading: a loader maps each shard and copies tensors out of the mapping"
+home = "https://huggingface.co/docs/safetensors"
+source = "https://github.com/huggingface/safetensors"
+signatures = ["*.safetensors", "model.safetensors.index.json"]
+mechanisms = ["model-loading/safetensors-load"]

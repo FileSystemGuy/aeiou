@@ -1,0 +1,8 @@
+name = "milvus"
+display = "Milvus"
+kind = "service"
+summary = "a vector database service: segments of vectors, scalar fields, and indexes persisted on an object store (MinIO, S3, Azure Blob), loaded by query nodes into memory, memory-mapped files, or a local disk index (DISKANN) under its local storage path"
+home = "https://milvus.io"
+source = "https://github.com/milvus-io/milvus"
+signatures = ["index_files/*", "index_v1/*", "insert_log/*", "delta_log/*", "stats_log/*"]
+mechanisms = []

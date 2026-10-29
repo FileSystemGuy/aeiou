@@ -701,6 +701,30 @@ exists, and `--no-questions` is absent, and it refuses `-` as the trace. `tests/
 holds the verdicts to constructed sequences, the answers to their checks, the interview to a
 scripted console, and the command to its refusals.
 
+**The application records (`applications/`, `aeiou/applications.py`, built 2026-10-29, §3.88):**
+what the digest knows about the applications whose traces it reads, as data a person extends by
+adding a file: one directory per application with `application.toml` (name, display, kind,
+summary, path signatures, catalog mechanisms) and `<version>.toml` per version range read
+(`from`, `until`, `read`, `sources`, the `[[option]]`s that change the storage workload with the
+blind spots a choice causes, unconditional `[[blind_spot]]`s, and `[[assert]]`s in the digest's
+own vocabulary of facts and questions, matched to templates by a path glob, each with `source`
+and `confidence`); `applications/attributes.toml` is the vocabulary and `load` refuses a record
+outside it with every problem listed. `identify` finds the application from the paths (a
+signature matches a path or its part after any `/`), `resolve` the record for a version (the
+one whose range holds it, exact; else the nearest lower, not exact; none below the lowest; the
+newest for an unknown version, not exact), `assertions` the record's answers for the templates
+the trace has, each carrying the record as its `by` ("Milvus 3.0 record, read 2026-10-29 (high
+confidence)"), which `document` keeps in place of the person's, and `blind_spots` what the
+chosen options imply. The interview asks the application first, confirming a signature's guess
+or listing the records, then the version, then the options, and applies an exact record's
+assertions or, for a version no record claims, offers them one by one to confirm; the document
+carries `application` and the blind spots as notes, and the answers file carries the
+application and the record's assertions with their provenance, so a replay needs no records.
+`--application NAME[@VERSION]` states it for the non-interactive path, with the record's defaults.
+The directory ships in the wheel (`pyproject.toml`, force-include) and `default_dir` finds it
+there or in the checkout; `tests/test_applications.py` walks every committed record and holds
+the loader to its refusals.
+
 ## 8. `aeiou-catalog`: the workload catalog (2026-10-10)
 
 `workloads/` holds one directory per I/O mechanism and, under `cases/`, one per case: an AST

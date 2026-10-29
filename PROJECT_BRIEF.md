@@ -942,8 +942,9 @@ numbers; the order is this note's.
     product directory and version file (signatures, storage-relevant options, defaults as
     assertions weaker than the owner's, dated sources), so a user of a product answers from a
     list. *Built the same day:* the asking (`--answers`, `--no-questions`, `--answered-by`,
-    `asserted` and `rejected` in the document, the answers file). Not yet: the site kinds,
-    `applications/`, the object log, digest-to-digest comparison, `aeiou-catalog disclose`.
+    `asserted` and `rejected` in the document, the answers file) and `applications/` with seven
+    records (`--applications`, `--application`; `aeiou/applications.py`). Not yet: the site
+    kinds, the object log, digest-to-digest comparison, `aeiou-catalog disclose`.
 
 48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
     2026-10-28).** A skill in the open skill format (`skills/fit-abstract/SKILL.md` and its

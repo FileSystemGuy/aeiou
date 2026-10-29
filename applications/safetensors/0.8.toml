@@ -1,0 +1,11 @@
+from = "0.8"
+read = "2026-10-29"
+sources = [
+  "workloads/model-loading/safetensors-load/kit (safetensors 0.8.0 under transformers 5.18, traced 2026-10-01)",
+]
+
+[[blind_spot]]
+kind = "mmap"
+note = "safe_open maps every shard and never calls read; the shard's bytes reach memory through page faults the trace does not show (the mechanism's abstract declares posix mmap)"
+source = "workloads/model-loading/safetensors-load/safetensors_load.py"
+confidence = "high"

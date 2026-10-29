@@ -123,7 +123,14 @@ question in the application's terms, its candidate constructs, what evidence set
 and the candidates' divergence at `--epochs` passes (the share of the set a draw with
 replacement never reads, e^-N, against zero for a pass), ranked largest first. **Asking**:
 on a terminal, before it writes, the digest asks the trace's owner what the trace cannot
-decide, facts first and then the open questions in rank order: for every site with an open
+decide. First the application: when a path matches a record's signature (`applications/`,
+see FILES) it asks "this looks like X, is that right?", otherwise which application from
+the list, then the version, then the record's options, the few that change the storage
+workload, each a list with the default marked and "don't know" present; the record's
+assertions then answer what they can, with the record as their provenance, and the blind
+spots the choices cause (mmap, io_uring, an object store) are said and noted. A version no
+record claims gets the nearest lower record, its assertions offered one by one for the
+person to confirm. Then, facts first and the open questions in rank order: for every site with an open
 question, how many files of its kind exist at the scale the application runs and how many
 passes the benchmark will make (Enter for don't know; a fact decides what it can, so a
 corpus small enough refutes a draw and no behavioral question follows), then each open item
@@ -288,6 +295,16 @@ comparison after the fit and a re-run with answers read it again.
 - **--answered-by** *NAME*
 
   Record *NAME* as the one who answered. Default: `user@host`.
+- **--applications** *DIR*
+
+  The application records, `applications/` (see FILES). Default: the records shipped with
+  the tool, or a checkout's.
+- **--application** *NAME*[@*VERSION*]
+
+  State the traced application instead of being asked, by the name of its record directory
+  (`pytorch-dcp@2.14.1`). Without a terminal, the record's options take their defaults and
+  its assertions apply with the record as their provenance; on a terminal, the identification
+  is skipped and the options are still asked. A name no record has is a usage error.
 
 ### Common
 
@@ -313,9 +330,17 @@ comparison after the fit and a re-run with answers read it again.
   `site`, `template`, `by`, `at`, and its `note`, and `rejected`, every answer the trace
   contradicted, with `why`. Times are nanoseconds from the first exported call; histograms
   are the metrics' quarter-octave buckets.
+- `applications/`
+
+  The application records (`applications/README.md`): one directory per application,
+  `application.toml` with its kind, path signatures, and catalog mechanisms, and
+  `<version>.toml` per version range read, with the options that change its storage
+  workload, the blind spots, and the assertions it makes, each with its source and
+  confidence. Shipped in the wheel; `--applications DIR` points elsewhere.
 - `*.answers.json`
 
-  An answers file, `aeiou_answers: 1`: `trace`, `trace_sha256`, `by`, `at`, and `answers`,
+  An answers file, `aeiou_answers: 1`: `trace`, `trace_sha256`, `by`, `at`, `application`
+  (what the owner said the application is, its record, options, and blind spots), and `answers`,
   a list of facts (`{"template", "fact": "candidates" | "passes", "value", "note"}`) and
   answers (`{"template", "question": "selection" | "size" | "order", "answer", "note"}`,
   the answer one of the question's candidates or `unknown`). Written by an interactive

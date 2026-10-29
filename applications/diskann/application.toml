@@ -1,0 +1,8 @@
+name = "diskann"
+display = "DiskANN"
+kind = "library"
+summary = "Microsoft's disk-resident graph index (Vamana): a build writes the graph with the vectors inline in 4 KiB sectors plus the PQ tables; a search walks the graph with a beam of positioned reads"
+home = "https://github.com/microsoft/DiskANN"
+source = "https://github.com/microsoft/DiskANN"
+signatures = ["*_disk.index", "*_pq_pivots.bin", "*_pq_compressed.bin", "*_sample_data.bin"]
+mechanisms = ["vector-search/diskann-build", "vector-search/diskann-search"]

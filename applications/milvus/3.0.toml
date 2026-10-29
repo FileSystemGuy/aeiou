@@ -1,0 +1,51 @@
+from = "3.0"
+read = "2026-10-29"
+sources = [
+  "https://milvus.io/docs/architecture_overview.md (v3.0.x docs: object storage persists data and index files; query nodes cache what they serve; tiered storage from 2.6.4)",
+  "https://milvus.io/docs/mmap.md (v3.0.x docs: queryNode.mmap.vectorField/vectorIndex/scalarField/scalarIndex; mapped files under localStorage.path/mmap; DISKANN not mappable)",
+  "https://milvus.io/docs/disk_index.md (v3.0.x docs: DISKANN index files under /var/lib/milvus/data, NVMe recommended)",
+  "https://github.com/milvus-io/milvus/blob/master/configs/milvus.yaml (localStorage.path /var/lib/milvus/data/, minio.rootPath files, index.storePathVersion layouts, queryNode.mmap defaults, tieredStorage warmup and eviction)",
+  "https://milvus.io/docs/release_notes.md (3.0.3 of 2026-10-14; Storage V3 'Loon' off by default; Vortex and Lance formats)",
+]
+
+[[blind_spot]]
+kind = "object"
+note = "segments and index files persist on the object store (minio.rootPath 'files' in the bucket); an strace of a query node shows only what it pulls to local storage and memory, never the object requests"
+source = "https://milvus.io/docs/architecture_overview.md"
+confidence = "high"
+
+[[option]]
+name = "index"
+question = "Which index type serves the collection: an in-memory index (HNSW, IVF, AUTOINDEX) loaded whole, or DISKANN on the query node's local disk?"
+choices = ["in-memory index", "DISKANN on local disk"]
+default = "in-memory index"
+source = "https://milvus.io/docs/disk_index.md"
+confidence = "medium"
+
+[[option]]
+name = "mmap_vector_field"
+question = "Is memory-mapped loading on for the raw vector data (queryNode.mmap.vectorField, or mmap.enabled on the collection)?"
+choices = ["loaded into memory", "memory-mapped"]
+default = "memory-mapped"
+source = "https://github.com/milvus-io/milvus/blob/master/configs/milvus.yaml says vectorField: true; https://milvus.io/docs/mmap.md says the four keys default to false after 2.4.10; the configuration file is taken as the newer source"
+confidence = "medium"
+[option.blind_spots]
+"memory-mapped" = "mmap"
+
+[[option]]
+name = "mmap_vector_index"
+question = "Is memory-mapped loading on for the vector index (queryNode.mmap.vectorIndex, or mmap.enabled on the index)?"
+choices = ["loaded into memory", "memory-mapped"]
+default = "loaded into memory"
+source = "https://github.com/milvus-io/milvus/blob/master/configs/milvus.yaml (vectorIndex: false)"
+confidence = "high"
+[option.blind_spots]
+"memory-mapped" = "mmap"
+
+[[option]]
+name = "tiered_storage"
+question = "Is tiered storage eviction on (queryNode.segcore.tieredStorage.evictionEnabled), so that evicted field data and indexes are fetched again from the object store on demand?"
+choices = ["eviction off", "eviction on"]
+default = "eviction off"
+source = "https://github.com/milvus-io/milvus/blob/master/configs/milvus.yaml (evictionEnabled: false)"
+confidence = "high"
