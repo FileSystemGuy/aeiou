@@ -946,7 +946,14 @@ numbers; the order is this note's.
     records (`--applications`, `--application`; `aeiou/applications.py`), and the three site
     kinds beside the set, keyed, bulk write, and within one open, each with its facts (keys and
     requests; values per field, ranks and steps; size and queries) and questions, and the
-    object-log readers of item 49. Not yet: digest-to-digest comparison, `aeiou-catalog disclose`.
+    object-log readers of item 49. Not yet: digest-to-digest comparison, `aeiou-catalog disclose`. *2026-10-29, `DESIGN_REVIEW.md` §3.89 (designed with the user):* one
+    observation document, `aeiou_digest: 2`, the digest's structure and the metrics of the same
+    events, `aeiou-trace metrics` retired and `dry-run --metrics-json` writing the same document;
+    `aeiou-trace compare` over two of them, structure by equality and numbers by the tolerance
+    classes, templates paired by text, shape, or `--pair`, the runner's own I/O set aside; the run
+    side from `dry-run --emit-trace` (item 49) or an strace of `aeiou run`; and the trace-side tools
+    in Rust as the binary `aeiou-trace`, streaming, since a real trace runs to several GiB and the
+    Python parser holds every event. Build order in §3.89.
 
 48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
     2026-10-28).** A skill in the open skill format (`skills/fit-abstract/SKILL.md` and its

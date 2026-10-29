@@ -8170,6 +8170,101 @@ here), at medium confidence until a real audit log is read. Ceph RGW's ops log a
 log stay as item 49's gap, as does the merge of an object log with an strace on the clock. Six
 tests over constructed logs of both formats.
 
+### 3.89 One observation document, the digest-to-digest comparison, and `aeiou-trace` in Rust (designed with the user 2026-10-29)
+
+The comparison item 47 left open, designed in a conversation that widened it twice. Recorded
+before any of it is built; the build order is at the end.
+
+**The spike.** `aeiou run` of `npy_per_sample` under `strace`, at the shape of the npy kit's
+trace of §3.87 (24 files of 1 MiB, two workers, two passes), digested beside the kit's digest.
+The site verdicts agree (`consume`, `permuted`, `per-path` over passes [24, 24]). Two real
+differences show: the application lists `train` and then `train/00000`, the run only the leaf;
+and the read motif differs, the application's `(read lseek read)+` group absent from the run,
+684 reads against 268 (possibly the spike's `xfer` guess, below). Two differences are not
+workload: the application re-forks its workers each pass (four lanes of twelve units, two at a
+time) where the runner keeps two threads of 24, and the runner reads its `.aeiou-dataset.json`
+and stats the root. A bug on the way: `npy_per_sample` divides by zero on storage whose
+`st_blksize` is 4096, ext4's default, since `xfer` is the block size and the fill count is
+`xfer div np_chunk`; the spike ran with `--param xfer=1048576`. Not yet fixed.
+
+**Four documents, two sides (the user's question).** A trace yields a digest (structure) and a
+metrics document (numbers); a model is an abstract (structure) and a parameters file (numbers).
+The observation side describes one trace that happened, finite and with what it cannot decide
+left open, the owner's answers asserted with provenance; the model side generates traces at any
+scale and must commit to every choice. A metrics document fills no parameter: it is the
+measured effect a parameter is fitted to (`sample_mean` a cause, the request-size histogram one
+of its effects). The abstract and parameters split stays (several cases share an abstract). The
+digest and the abstract stay apart: their overlap is a path template against a dataset's
+pattern and a motif against a loop body, and removing it would need an abstract that carries
+uncertainty, which the runner cannot execute, or a digest that executes, which is the `trace`
+node and does not scale. The digest and metrics split goes, below. A fit is checked on the
+observation side, since the application has no abstract: both sides reduced to the same
+observation document and compared there.
+
+**One observation document.** `aeiou_digest: 2`: the structure of version 1 (templates, lanes
+and phases, sites and verdicts, open items, assertions) and a `metrics` section, the numbers of
+today's metrics document over the same events. `aeiou-trace metrics` is retired with no alias;
+`aeiou dry-run --metrics-json` writes the same document. This side first argued for keeping the
+metrics document for full-scale dry runs, on the ground that the digest was built for
+trace-sized inputs; the user pointed out that the SNIA AIWD TWG's real traces run 3.5 to 7 GiB,
+which removes the distinction, and the measurement agrees. Synthetic straces of npz-shaped
+reads (ten lines per open, four threads, two shuffled passes), under the Python tools of today:
+
+| trace | lines | digest | metrics |
+|---|---|---|---|
+| 53 MB | 0.5 M | 11 s, 0.37 GB | 9 s, 0.16 GB |
+| 211 MB | 2 M | 51 s, 1.5 GB | 36 s, 0.6 GB |
+| 7 GiB, extrapolated | ~71 M | ~30 min, ~52 GB | ~21 min, ~22 GB |
+
+Both linear in time and memory; on the 211 MB trace the strace parser takes 50 s and 1.5 GB of
+the digest's 51 s (the digest of the exported file takes 11 s), and holds every event. So both
+halves of the document must scale, and the work is the parser first. The analysis streams:
+an open is compressed to its motif at its close and its ops dropped; a site keeps one integer
+per open (the path's index) for its pass and order verdicts; fields and keyed sites keep state
+per distinct path, each path stored once; a within-one-open site's offsets go to a bounded
+histogram. Memory follows the opens and distinct paths, never the ops, and a test holds it.
+
+**The comparison.** `aeiou-trace compare A B` takes two observation documents and judges both
+halves: structure by equality, numbers by today's tolerance classes (`--judge`, `--tolerances`,
+`--self`); a side without structure (a version-1 metrics document converted, below) is judged
+on numbers alone. It works on documents, never traces, since the application's side is often a
+digest the owner released while keeping the trace. Templates pair by identical text, then by
+shape (the same fields with the same kinds and widths, the same site kind), then by `--pair
+A=B`; an unpaired application template is a difference, an unpaired run template is listed.
+Per pair: fields, site kind, each verdict (one side `undecided` is not compared; a decided
+verdict against the owner's asserted answer is compared and labelled an assertion), the set of
+op kinds, the set of motifs (a motif that depends on file size is structure the abstract must
+reproduce, so the run takes the trace's size distribution), and the peak of lanes concurrently
+on the template; lane counts and the process model are shown, not judged. The runner's own
+I/O is set aside on the run side and noted: names beginning `.aeiou` (V13 keeps them out of
+every workload) and the root's stat. Exit 0, 1 on any difference, 2 for usage.
+
+**Two sources for the run side.** `aeiou dry-run --emit-trace FILE` (item 49) writes the op
+stream as an `aeiou_trace` file, digested like any trace: no strace, none of the runner's own
+I/O, no dataset on disk; the default when fitting. The strace of a real `aeiou run` stays as
+the check that a backend issues exactly the abstract's calls (the interposition test).
+
+**Rust, keeping the name.** The trace-side tools move to Rust as the binary `aeiou-trace`, built
+from the runner's crate, which already reads trace files (`trace.rs`) and computes the metrics
+(`metrics.rs`). The reasons: the parser is where the time goes; bounded memory is easier to
+hold; the metrics get one implementation, the Python one and its row-for-row parity tests going;
+the trace's owner runs one binary from the release tarball, either architecture, where the
+trace lives, with no Python environment; and the user's rule of Rust for throughput-bound tools
+and Python only where a real library makes the bytes. The costs: about 1,100 lines of parser
+and exporter, 1,150 of analysis, 250 of object-log reader, slower iteration while the keyed,
+bulk-write, and within-one-open verdicts (§3.88, step 4) await the user's review, and a document
+shape still changing. What lowers the risk: the Python tests feed strace text and check JSON,
+so they drive the Rust binary and are the port's acceptance tests. The name `aeiou-trace`, its
+man page, and its subcommands stay (the user's choice over `aeiou trace`).
+
+**Build order.** (1) The strace parser and exporter in Rust, `aeiou-trace export` and the
+metrics over the exported events, held to the existing tests; (2) the analysis and the
+version-2 document, streaming, after the user reviews the step-4 verdicts; (3) the interview,
+the application records, and the answers file; (4) the two-sided `compare` and `dry-run
+--emit-trace`; (5) the Python versions retired with no aliases, the 28 catalog shapes
+regenerated and the 18 committed capture metrics rewrapped as numbers-only documents (their
+traces were not retained, item 34), each saying so.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
