@@ -911,7 +911,14 @@ numbers; the order is this note's.
     path literals to generic names and keeps the mapping locally (the fingerprint changes, the
     shape does not).
     *2026-10-28, `DESIGN_REVIEW.md` §3.86:* what the digest can and cannot decide without a model
-    of the application, recorded before its design; the next item to build.
+    of the application, recorded before its design; the next item to build. *2026-10-29,
+    §3.87:* `aeiou-trace digest` built: templates, lanes and phases, a verdict per site on
+    selection (`consume` or `choose`, by passes and the birthday bound under `--candidates`),
+    order, and size, each `undecided` with what settles it, and the `open` list ranked by the
+    candidates' divergence at `--epochs`. Decided the same day: the open questions are worth
+    asking the application's owner, with provenance, as behavior not constructs, and with the
+    capture that would settle each; the digest never asks. Not yet: the answers file (item 48),
+    digest-to-digest comparison, `aeiou-catalog disclose`.
 
 48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
     2026-10-28).** A skill in the open skill format (`skills/fit-abstract/SKILL.md` and its

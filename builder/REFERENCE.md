@@ -657,6 +657,36 @@ dry-run --metrics` gives for an abstract that is that one node. Under `io_submit
 members are placed at the submission (the runner issues them there) where `metrics` counts
 them at the reap, so the reuse-distance histogram of that pair differs within a round.
 
+**`aeiou-trace digest`: the structural summary a fit is made from (added 2026-10-29;
+`DESIGN_REVIEW.md` §3.87, `PROJECT_BRIEF.md` item 47).** The same calls `export` writes,
+through the same resolver, or an exported trace file, reduced to a document that can leave
+the trace's owner (`aeiou_digest: 1`; no raw path unless `--paths`, no data bytes ever):
+
+```
+aeiou-trace digest trace.txt --root /mnt/data [--exclude GLOB]… [--cwd DIR] [--epochs N] [--candidates N] [--paths] [--text] [-o trace.digest.json]
+aeiou-trace digest app.jsonl                     # an exported file carries its root
+```
+
+`templates`: every run of digits in a path a field (`train/{a:05}/sample_{b:09}.npz`; sixteen
+or more hex digits with a letter, `{a:x32}`), with each field's value count and range, the
+op mix, bytes, request sizes, and per open how it moved through its file (`whole`,
+`sequential`, `positioned`, `none`). `lanes`: per traced task its `phases`, runs of units
+(the calls on one open, or one path call, or one `io_submit`) of one motif on one template,
+the motif the op sequence with repeating cycles collapsed (`read+`, `(lseek read)+`), with
+repeat counts, bytes, and think time. `sites`: every template opened at least twice, with
+three verdicts, each either decided or `undecided` with `settles`, the evidence that would
+decide it: `selection` between `consume` (a permutation pass, each path once per pass) and
+`choose` (a draw with replacement), from the passes the path sequence shows (greedy: a pass
+ends at the first path it already holds) and, with no repeat, from the birthday bound at 5 %
+against `--candidates`, the corpus size; `order` within a pass, `sequential`, `permuted`, or
+`other`; `size` per open, `constant`, `per-path`, or `drawn`. `open`: every undecided verdict
+as a question in the application's terms, its candidates, what settles it, and the
+candidates' divergence at `--epochs` passes (the share of the set a draw never reads, e^-N,
+against zero for a pass), ranked. The digest never asks; a person or the fitting skill (item
+48) does, and records the answer with its provenance beside the capture, never as a
+measurement. `tests/test_digest.py` holds the verdicts to constructed sequences and the
+command to its refusals.
+
 ## 8. `aeiou-catalog`: the workload catalog (2026-10-10)
 
 `workloads/` holds one directory per I/O mechanism and, under `cases/`, one per case: an AST

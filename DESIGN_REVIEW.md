@@ -7766,6 +7766,114 @@ something a vendor can fit to. Neither is an abstract.
 **Next (the user, 2026-10-28):** design and build the digest, starting from this section and
 item 47's list.
 
+### 3.87 `aeiou-trace digest`: what a trace decides, what a person must, and asking them (designed and built 2026-10-29)
+
+Item 47's first half, built from §3.86. Two questions from the user set the design.
+
+**The first: can a workload be generated that matches the trace, with the digest calling out
+where the trace is non-specific?** The user accepts that many abstracts produce the same trace
+and wants fidelity to the trace in hand, with the places where two constructs both fit (a
+`consume`, each sample once per pass, against a `choose`, a draw with replacement) named rather
+than silently chosen. The answer is that most such questions are statistical with a computable
+answer, and the digest makes "indistinguishable here" a first-class verdict: for every site it
+reports the set of constructs the evidence allows, the number behind each verdict, and what
+evidence would separate the candidates it cannot.
+
+**The second: is it worth asking the application's owner the questions the trace leaves open?**
+The trace will be short, since a short trace is easier to take and to hand over, and the
+benchmark will run the workload wider and longer, where a draw and a permutation diverge. The
+answer recorded here: strongly positive, under three conditions. The undecided verdicts are
+exactly the questions whose answer changes the op stream at scale, so they are the most valuable
+thing a person can add, and the set is finite and small. The conditions: (1) answers carry
+provenance, who asserted them, and are never written as measurements; "don't know" is a legal
+answer that leaves the construct `unsettled`, as the catalog already allows; (2) questions are
+about observable behavior ("does the loader revisit a sample within one pass?"), never about
+constructs, so a third truth is not foreclosed by an A-or-B framing; (3) every open item states
+what capture would settle it, because a slightly longer trace is sometimes cheaper than an
+answer. The representativeness of the fitted abstract at scale is then conditional on the
+asserted answers, and the disclosure report (item 47's second half) must list them beside the
+measured facts. In the WG setting these are app-side facts fixed once per workload by whoever
+fits it (the rule of §3.64 applies: app-side facts are the WG's, never a submitter's choice). **The
+digest itself asks nothing**; the asking is a person's or the fitting skill's (item 48), and an
+answers file the digest reads to move an item from `open` to `asserted` is that item's work,
+not built today.
+
+**What was built** (`builder/aeiou/digest.py`, standard library; `aeiou-trace digest`,
+`man/aeiou-trace.1.md`; 30 tests, the module at 100 % line coverage):
+
+- *Input.* The exporter's event stream (`export_of`), so the descriptor tables, `clone`,
+  `dup`, `cwd`, and positions are the one resolver's and the digest can never disagree with
+  `export` about which calls there were; or an exported trace file, which carries its root.
+  Positions of unpositioned reads and writes are tracked per open id as `TraceReader` tracks
+  them (a `pread` leaves the position where it was).
+- *Path templates.* Every run of decimal digits in a path under the root is a field; a run
+  of 16 or more hex digits with a letter in it is a hex field (KV-cache keys, content hashes).
+  Rendering: a fixed width when every value had the same width above one (`{a:05}`,
+  `{a:x32}`), else `{a}`. Per field the count of distinct values and, for integers, the range;
+  per template the op mix, bytes, request-size histograms, and per open how it moved through
+  the file: `whole` (one sequential run from offset 0), `sequential` (one run from elsewhere),
+  `positioned` (more than one run), `none`. No raw path unless `--paths`. A `rename` counts
+  under its source's template and `renamed_to` under its destination's, so the final names
+  are a template too.
+- *Units, motifs, phases.* A lane is a traced task. A unit is the calls on one open from
+  `open` to `close`; a path call, or an `io_submit` with its members, is a unit of one op. A
+  unit's motif is its op sequence with the shortest repeating cycle of up to four ops collapsed
+  at each position (`read+`, `(lseek read)+`), the counts kept as histograms. A phase is a run
+  of consecutive units on one lane with the same motif once the repeat marks are dropped, on
+  one template, so a file read in one call and a file read in seven are one phase; the phase
+  records units, ops, bytes, repeat counts, and the think time between its units.
+- *Sites and verdicts.* A site is a template opened at least twice; its opens in time order
+  are a sequence of paths. Passes are greedy: a pass ends at the first path it already holds;
+  the last pass is partial unless it is as long as the first. **Selection**: with two or more
+  full passes of equal length *L* and fewer than 1.5 *L* distinct paths, `consume` over *L*
+  (paths seen but not in every pass reported, the signature of `drop_last`), `choose` refuted
+  because a draw repeats after about √(πN/2) touches and its passes are unequal; with passes of
+  unequal length, `choose`, `consume` refuted, with the corpus the mean first-repeat distance
+  implies (2·mean²/π), the touches per path, and the top-decile share; with one full pass and a
+  partial second, undecided between both, settled by the second pass; with no repeat at all,
+  undecided, settled by a second pass or by the corpus size: `--candidates N` refutes the draw
+  when no repeat in *k* touches has probability exp(−k(k−1)/2N) below 5 %, and otherwise the
+  digest reports the touches after which a draw would have repeated at 95 %. Without
+  `--candidates`, the smallest corpus a draw needs, k(k−1)/(2 ln 20), is reported instead. For
+  the 28 touches of the npy capture that is 126 files. **Order** within a pass: the share of
+  adjacent pairs ascending in the sorted order and the share with a step of exactly one;
+  `sequential` at 90 % steps of one, `permuted` when the ascending share is within three
+  standard errors of one half, `other` otherwise (interleaved scans, a sort the trace does not
+  show), undecided under eight pairs. **Size**: bytes per open `constant`, `per-path` (a
+  repeated path always moves the same bytes), `drawn` (it does not), undecided with no repeat.
+- *The open list.* Every undecided verdict as an item: the behavioral question, the candidate
+  constructs, what settles it, and the candidates' divergence at `--epochs E` passes: for
+  selection the share of the set a draw never reads, e^−E (0.37 at one pass, 0.14 at two,
+  0.007 at five), against zero for a pass, and the share of touches that re-read a path under
+  each; for order and size the divergence is zero in the op multiset, and the item says what
+  does differ (the order read-ahead sees; which file gets which bytes). Ranked largest first.
+  Because the ranking is a formula per dimension, it needs no model and stays in the standard
+  library.
+
+**First run on a real trace** (the npy kit's `train.py`, 24 archives of 1 MiB, batch 2, two
+workers, two epochs, local ext4): 1,610 ops on five lanes; three templates, `train`,
+`train/{a:05}`, and `train/{a:05}/sample_{b:09}.npz` with 24 paths and 48 opens; one site, passes
+[24, 24], **selection `consume`**, choose refuted by two full passes of equal length; **order
+`permuted`** (0.46 of 46 pairs ascending, 0.07 steps of one); **size `per-path`**; no open
+question. Each worker lane is one phase of twelve units whose motif is np.load's zip reading
+(`open fstat ioctl lseek+ read lseek+ (read lseek)+ …`), with the think time between units at
+131 µs. The same loader at one epoch would have left selection undecided with 126 files named
+as the corpus below which a draw is refuted, which is the case the user described: the digest
+cannot decide it, a second epoch or the owner can.
+
+**Not decided by any trace length, stated in the digest's terms as in §3.86:** a
+data-dependent `x @ i` against a fitted distribution (item 49), the loop nesting when two
+nestings give the same sequence, and a Feistel pass against any other permutation (identical by
+construction, so no fidelity question). For the trace in hand, indistinguishable candidates are
+equally good; the open list exists for the scale the trace was not taken at.
+
+**Not built, in order:** an answers file with provenance that moves open items to `asserted`
+(item 48, where the questions are asked); digest-to-digest comparison, the fidelity loop made
+literal by digesting an `strace` of `aeiou run` under the abstract's declared backend beside the
+application's and comparing verdict by verdict, since the runner has no op-stream dump and the
+interposition test says it should not need one; `aeiou-catalog disclose` (item 47's second
+half); a uniform-against-skewed verdict for `choose` (the numbers are reported, no verdict yet).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

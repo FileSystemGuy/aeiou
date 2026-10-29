@@ -13,7 +13,7 @@ until its page follows, and a flag named in any page must exist in some tool.
 | [aeiou-build(1)](aeiou-build.1.md) | 1 | The builder: a Python script to an abstract, hermetically, twice |
 | [aeiou-params(1)](aeiou-params.1.md) | 1 | Parameter files: defaults, check, from safetensors shards, from `.npz` archives |
 | [aeiou-datagen(1)](aeiou-datagen.1.md) | 1 | Container datasets through their format classes (deprecated: `aeiou datagen` writes every format) |
-| [aeiou-trace(1)](aeiou-trace.1.md) | 1 | The metrics of an strace, their comparison with an abstract's, the `trace` node's file |
+| [aeiou-trace(1)](aeiou-trace.1.md) | 1 | The metrics of an strace, their comparison with an abstract's, the `trace` node's file, the digest a fit is made from |
 | [aeiou-catalog(1)](aeiou-catalog.1.md) | 1 | The workload catalog: records against their dictionary, each case's shape, `CATALOG.md`, each case's description in prose, `describe` for any abstract |
 | [aeiou-header(1)](aeiou-header.1.md) | 1 | The header bytes of a container file from the format's own library (HDF5), for `aeiou datagen` |
 | [aeiou-launch(1)](aeiou-launch.1.md) | 1 | One `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh |

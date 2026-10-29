@@ -103,7 +103,7 @@ def test_every_tool_and_subcommand_lists_what_it_lacks():
     message, _ = frame(tool("params", "check", ast_path("file_per_sample")), "aeiou-params check")
     assert message == f"{MISSING}\n  <FILES>...  the parameter files (`.params.json`) to validate against the abstract"
     message, _ = frame(tool("trace"), "aeiou-trace")
-    assert message == f"{MISSING}\n  <COMMAND>  one of metrics, export, compare"
+    assert message == f"{MISSING}\n  <COMMAND>  one of metrics, export, compare, digest"
     message, usage = frame(tool("trace", "export"), "aeiou-trace export")
     assert message == (
         f"{MISSING}\n"

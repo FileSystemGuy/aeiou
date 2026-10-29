@@ -22,7 +22,7 @@ TOOLS = {
     "aeiou-build": ("cli", []),
     "aeiou-params": ("params", ["defaults", "check", "safetensors", "npz", "lock"]),
     "aeiou-datagen": ("datagen", []),
-    "aeiou-trace": ("trace", ["metrics", "export", "compare"]),
+    "aeiou-trace": ("trace", ["metrics", "export", "compare", "digest"]),
     "aeiou-catalog": ("catalog", ["check", "write", "describe"]),
     "aeiou-header": ("header", []),
 }

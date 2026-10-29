@@ -347,7 +347,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-28)
+## Status (2026-10-29)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -486,10 +486,15 @@ Not built, in rough order of interest:
   never its op stream, and results across a transition to aeiou will not be comparable with
   the ones before it.
 - Fitting an abstract to a trace without the trace leaving its owner (raised by the user
-  2026-10-28, §3.85): `aeiou-trace digest`, the structural summary a fit is made from, with
-  every path literal a field, and `aeiou-catalog disclose`, every string and number a
+  2026-10-28, §3.85): ~~`aeiou-trace digest`, the structural summary a fit is made from, with
+  every path literal a field,~~ `aeiou-trace digest` built 2026-10-29 (`DESIGN_REVIEW.md`
+  §3.87): path templates, lanes and phases, a verdict per site on what the trace decides
+  between a permutation pass and a draw with replacement, on order, and on size, and the open
+  questions ranked by their divergence at the scale the benchmark will run; still to build,
+  `aeiou-catalog disclose`, every string and number a
   contribution would publish (item 47); a fitting skill in the open skill format over those
-  tools and `aeiou-fit`, evaluated against the committed captures (item 48).
+  tools and `aeiou-fit`, evaluated against the committed captures, with the answers file the
+  digest's open questions are answered into (item 48).
 - The case for calling aeiou a "scalable trace" (raised by the user 2026-10-28, §3.85): the
   definition, the measured comparison of the `trace` node replicated against the abstract at
   scale, a scale-invariance check in the catalog, `dry-run --emit-trace`, and the gaps stated

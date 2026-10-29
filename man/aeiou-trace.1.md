@@ -2,7 +2,7 @@
 
 ## NAME
 
-aeiou-trace - locality metrics of a real application from an strace of it, their comparison with an abstract's, and the trace file of the runner's `trace` node
+aeiou-trace - locality metrics of a real application from an strace of it, their comparison with an abstract's, the trace file of the runner's `trace` node, and the structural digest a fit is made from
 
 ## SYNOPSIS
 
@@ -10,6 +10,7 @@ aeiou-trace - locality metrics of a real application from an strace of it, their
 aeiou-trace metrics [OPTIONS] [--root DIR]... [-o FILE] TRACE
 aeiou-trace export [OPTIONS] --root DIR -o FILE TRACE
 aeiou-trace compare [OPTIONS] A B
+aeiou-trace digest [OPTIONS] --root DIR [-o FILE] TRACE
 aeiou-trace --help | --version
 ```
 
@@ -21,7 +22,8 @@ the real application the abstract models. `aeiou dry-run --metrics-json` (**aeio
 gives the abstract's numbers; **aeiou-trace** gives the same numbers, by the same
 definitions and in the same document (`aeiou_metrics: 1`, with `"source": "strace"`),
 from an `strace` of the application, and compares two such documents. It also exports an
-strace as the file the runner's `trace` node executes literally. Standard library only.
+strace as the file the runner's `trace` node executes literally, and digests one into the
+structural summary an abstract is fitted from. Standard library only.
 
 The trace is taken with
 
@@ -93,6 +95,35 @@ rows over fewer than 10 units, and `depth` without `--chain-gap-us` are not judg
 class tolerances built in are the repository's defaults: 0.05 for `mix`, `ops`,
 `request size`, and `popularity`; 0.10 for `run length`, `reuse`, `reuse distance`,
 `fan-out`, and `depth`. A tolerance file replaces them.
+
+### digest
+
+Writes the digest document (`aeiou_digest: 1`) of a trace, the structural summary a fit is
+made from, without the trace leaving its owner: no raw path unless `--paths` asks, no data
+bytes ever. It reads the same calls `export` writes, through the same resolver, or an
+exported trace file. **Path templates**: every run of digits in a path under the root is a
+field (`train/{a:05}/sample_{b:09}.npz`; a run of 16 or more hex digits with a letter in it a
+hex field, `{a:x32}`), with how many values each field took and their range, and per
+template the op mix, bytes, request sizes, and how each open moved through its file
+(`whole`, one sequential run from offset 0; `sequential`, one run from elsewhere;
+`positioned`, more than one run). **Lanes and phases**: a lane is a traced task; a unit is
+the calls on one open from `open` to `close` (a path call or an `io_submit` is a unit of
+one op); a unit's motif is its op sequence with repeats collapsed (`read+`, `(lseek
+read)+`); a phase is a run of units of one motif on one template, with the repeat counts
+and the think time between units. **Sites**: a template opened at least twice. Its
+*selection* verdict says what the sequence of paths decides between a permutation pass
+over the set (`consume`, each path once per pass) and a draw with replacement (`choose`): a
+repeat before the set is exhausted refutes the pass; two or more passes of equal length
+refute the draw; no repeat at all decides nothing unless the corpus (`--candidates`) is
+small enough that a draw would have repeated (the birthday bound, at 5 %), and then the
+verdict says how many touches would decide it. *Order* within a pass (`sequential`,
+`permuted`, `other`) and the bytes per open (`constant`, `per-path`, `drawn`) are judged
+the same way, each `undecided` with what settles it. **Open**: every undecided verdict as a
+question in the application's terms, its candidate constructs, what evidence settles it,
+and the candidates' divergence at `--epochs` passes (the share of the set a draw with
+replacement never reads, e^-N, against zero for a pass), ranked largest first. The digest
+asks nothing; a person or the fitting skill asks, and an answer is recorded beside the
+capture with who gave it, never as a measurement.
 
 ## OPTIONS
 
@@ -185,6 +216,45 @@ class tolerances built in are the repository's defaults: 0.05 for `mix`, `ops`,
 
   Only the rows whose metric name starts with *PREFIX*. Repeatable.
 
+### aeiou-trace digest
+
+- *TRACE*
+
+  The strace output file, or an exported trace file, or `-` for stdin.
+- **--root** *DIR*
+
+  Digest only calls on paths under *DIR*, written relative to it. Required for an strace;
+  an exported trace file carries its root, and a `--root` that is not it is refused.
+- **--exclude** *GLOB*
+
+  Leave out paths whose part below the root matches *GLOB*. Repeatable; `*` crosses `/`.
+- **--cwd** *DIR*
+
+  Resolve relative paths against *DIR* when the trace does not say (no `-y`).
+- **--epochs** *N*
+
+  Project the open questions over *N* passes over the set (default 1): a draw with
+  replacement never reads a share e^-N of the set, a permutation pass reads all of it; the
+  open list is ranked by that divergence. At least 1.
+- **--candidates** *N*
+
+  The files the application could have chosen among, the corpus. Default: the distinct
+  paths the trace touched. With no repeat in the trace, a corpus of fewer than
+  *k*(*k*-1)/(2 ln 20) files, *k* the touches, refutes a draw with replacement (no repeat
+  would have had under 5 % probability); a larger one leaves the verdict undecided and the
+  digest counts the touches that would decide it. Fewer than the paths seen is noted and
+  the seen count used. At least 1.
+- **--paths**
+
+  Include every raw path under each template. Without it the document carries templates
+  and counts only, which is what leaves the trace's owner.
+- **--text**
+
+  Print the text report instead of the JSON document.
+- **-o**, **--out** *FILE*
+
+  Write the JSON document to *FILE* and print the text report.
+
 ### Common
 
 - **-h**, **--help**
@@ -200,6 +270,12 @@ class tolerances built in are the repository's defaults: 0.05 for `mix`, `ops`,
 
   A metrics document, `aeiou_metrics: 1`, from this tool or from `aeiou dry-run
   --metrics-json`. The histograms are in full, per actor template and in total.
+- `*.digest.json`
+
+  A digest document, `aeiou_digest: 1`: `templates`, `lanes` with their `phases`, `sites`
+  with the `selection`, `order`, and `size` verdicts, and `open`, the ranked questions.
+  Times are nanoseconds from the first exported call; histograms are the metrics' quarter-
+  octave buckets.
 - `*.tolerances.json`
 
   A tolerance file, `aeiou_tolerances: 1`, kept beside a capture kit's trace document.
@@ -253,6 +329,13 @@ measures as the strace did:
 aeiou-trace export trace.txt --root /mnt/data -o app.jsonl       # prints the sha256
 aeiou-trace metrics app.jsonl -o app.metrics.json
 aeiou-trace compare trace.metrics.json app.metrics.json --max-distance 0
+```
+
+Digest a trace for a fit, projecting its open questions over the four passes the benchmark
+will run, and send the document rather than the trace:
+
+```
+aeiou-trace digest trace.txt --root /mnt/data --epochs 4 --candidates 168 -o trace.digest.json
 ```
 
 ## SEE ALSO

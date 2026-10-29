@@ -49,6 +49,10 @@ mapping. Standard library only; the trace is read once, in a stream.
 returned, each on a lane (a traced task) and naming its open by id, so that
 `aeiou dry-run --metrics` of an abstract that is one `trace` node computes these same
 numbers. `aeiou-trace metrics` reads an exported file too (`TraceReader`).
+
+`aeiou-trace digest` (`digest.py`) reduces the same calls to the structural summary a fit is
+made from: path templates, lanes and phases, a verdict per site on what the trace decides
+(a permutation pass or a draw, order, size), and the open questions ranked by divergence.
 """
 
 from __future__ import annotations
@@ -1833,7 +1837,7 @@ def _describe(doc: dict) -> str:
 
 def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     """The parser and its subcommands' parsers by name (the usage a `Missing` list shows)."""
-    ap = usage.Parser(prog="aeiou-trace", description="Locality metrics of a real application from an strace of it, and their comparison with an abstract's (aeiou dry-run --metrics-json)",
+    ap = usage.Parser(prog="aeiou-trace", description="Locality metrics of a real application from an strace of it, their comparison with an abstract's (aeiou dry-run --metrics-json), the runner's trace file, and the structural digest a fit is made from",
                       usage="aeiou-trace <COMMAND> [ARGS]...")
     sub = ap.add_subparsers(dest="cmd")
     mp = sub.add_parser("metrics", help="Compute the metrics of a trace (strace -f -ttt -T -yy -v -e trace=%%file,%%desc,%%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o FILE)", usage="aeiou-trace metrics [OPTIONS] <TRACE>")
@@ -1861,8 +1865,18 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     cp.add_argument("--tolerances", metavar="FILE", help="A tolerance file (aeiou_tolerances: 1): class tolerances that replace the defaults, the rows the trace cannot show, the rows recorded as outside; implies --judge")
     cp.add_argument("--self", dest="selfs", action="append", default=[], metavar="FILE", help="A metrics document of B's abstract at the same parameters and another seed (repeatable): a row's tolerance is raised by its largest distance between B and these; implies --judge")
     cp.add_argument("--only", action="append", default=[], metavar="PREFIX", help="Only the rows whose metric starts with PREFIX (repeatable)")
+    dp = sub.add_parser("digest", help="Write the structural digest of a trace: path templates, lanes and their phases, a verdict per site on what the trace decides (permutation or draw, order, size), and the open questions ranked by their divergence at scale", usage="aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>")
+    dp.add_argument("trace", nargs="?", help="The strace output file, or an exported trace file, or - for stdin")
+    dp.add_argument("--root", metavar="DIR", help="Digest only calls on paths under DIR, written relative to it (required for an strace, not for an exported trace file)")
+    dp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
+    dp.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
+    dp.add_argument("--epochs", type=int, default=1, metavar="N", help="Project the open questions over N passes over the set (default 1): the share a draw with replacement never reads is e^-N")
+    dp.add_argument("--candidates", type=int, metavar="N", help="The files the application could have chosen among (the corpus); default: the distinct paths the trace touched. Decides a pass from a draw when no path repeats")
+    dp.add_argument("--paths", action="store_true", help="Include every raw path under each template (the digest otherwise carries templates and counts only)")
+    dp.add_argument("--text", action="store_true", help="Print the text report instead of the JSON document (with -o, the report is printed beside the file anyway)")
+    dp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_digest: 1) to FILE and print the text report")
     ap.version(f"aeiou-trace {__version__}")
-    return ap, {"metrics": mp, "export": ep, "compare": cp}
+    return ap, {"metrics": mp, "export": ep, "compare": cp, "digest": dp}
 
 
 @usage.tool
@@ -1873,11 +1887,11 @@ def main(argv=None) -> int:
     try:
         args = ap.parse_args(argv)
         missing = usage.Missing(ap)
-        missing.want(args.cmd, "<COMMAND>", "one of metrics, export, compare")
+        missing.want(args.cmd, "<COMMAND>", "one of metrics, export, compare, digest")
         missing.check()
         sp = subs[args.cmd]
         missing = usage.Missing(sp)
-        if args.cmd in ("metrics", "export"):
+        if args.cmd in ("metrics", "export", "digest"):
             missing.want(args.trace, "<TRACE>", "the strace output file, or - for stdin")
         if args.cmd == "export":
             missing.want(args.root, "--root <DIR>", "the directory the traced application's paths are under; the export is relative to it")
@@ -1938,6 +1952,9 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
             sys.stdout.write(text)
         return 0
 
+    if args.cmd == "digest":
+        return _digest(args, subs["digest"])
+
     if args.cmd == "export":
         f = _open_trace(args.trace)
         seen = {}
@@ -1987,6 +2004,43 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
     if args.max_distance is not None and worst > args.max_distance:
         print(f"aeiou-trace compare: exceeds --max-distance {args.max_distance}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _digest(args, dp: usage.Parser) -> int:
+    from . import digest as dg
+    if args.epochs < 1:
+        dp.error("--epochs must be at least 1")
+    if args.candidates is not None and args.candidates < 1:
+        dp.error("--candidates must be at least 1")
+    f = _open_trace(args.trace)
+    with f:
+        first = f.readline()
+        lines = itertools.chain([first], f)
+        if not first.startswith('{"aeiou_trace"') and not args.root:
+            missing = usage.Missing(dp)
+            missing.need(False, "--root <DIR>", "digest only calls on paths under DIR", "needed for an strace; an exported trace file carries its root")
+            missing.check()
+        try:
+            doc = dg.digest_of(lines, args.root, epochs=args.epochs, candidates=args.candidates, paths=args.paths, exclude=args.exclude, cwd=args.cwd)
+        except BuildError as e:
+            raise BuildError(f"{args.trace}: {e}") from None
+    doc["trace"] = args.trace
+    report = dg.render(doc)
+    if args.out:
+        try:
+            with open(args.out, "w", encoding="utf-8") as out:
+                out.write(json.dumps(doc, indent=2) + "\n")
+        except OSError as e:
+            raise BuildError(f"{args.out}: {_cause(e)}")
+        sys.stdout.write(report)
+        print(f"written: {args.out}")
+        for k, v in doc["notes"].items():
+            print(f"note: {k}: {v}")
+    elif args.text:
+        sys.stdout.write(report)
+    else:
+        sys.stdout.write(json.dumps(doc, indent=2) + "\n")
     return 0
 
 
