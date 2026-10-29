@@ -1547,6 +1547,50 @@ def metrics_of_export(lines, block=None) -> dict:
     }
 
 
+def metrics_of_events(header: dict, events: list[dict], block=None) -> dict:
+    """The metrics of an exporter's header and events already in memory (an object log's,
+    `objectlog.export_of`), as `metrics_of_export` gives them for the file."""
+    m = Metrics(block)
+    r = TraceReader(m)
+    r.header = header
+    for e in events:
+        r.line(e)
+    r.finish()
+    total = m.out()
+    total["depth"] = {}
+    return {
+        "aeiou_metrics": FORMAT,
+        "source": header.get("source", "trace"),
+        "roots": [header.get("root", "")],
+        "block": m.block,
+        "order": "completion",
+        "instances": 1,
+        "contexts": len(r.lanes),
+        "chain_gap_us": None,
+        "notes": dict(header.get("notes", {})),
+        "total": total,
+    }
+
+
+def object_log_events(first: str, lines, roots: list[str] | None, trace: str, parser) -> tuple[dict, list[dict]] | None:
+    """When the trace is an object-store request log (`objectlog.source_of`), its exporter's
+    header and events under the one `--root BUCKET[/PREFIX]`; None when it is not one."""
+    from . import objectlog
+    kind = objectlog.source_of(first)
+    if kind is None:
+        return None
+    if not roots:
+        missing = usage.Missing(parser)
+        missing.need(False, "--root <BUCKET[/PREFIX]>", "the bucket, and the prefix under it, whose requests count", f"needed for an object log ({kind})")
+        missing.check()
+    if len(roots) > 1:
+        raise BuildError(f"{trace}: an object log takes one --root BUCKET[/PREFIX], not {len(roots)}")
+    header, events = objectlog.export_of(lines, roots[0], kind)
+    if not events:
+        raise BuildError(f"{trace}: no request under --root {roots[0].strip('/')} ({header['requests']} request(s) read)")
+    return header, events
+
+
 def metrics_of(lines, roots, block=None, seen: dict | None = None, **kw) -> dict:
     """The `aeiou_metrics: 2` document of a trace given as an iterable of lines; `seen`, when
     given, gets the lines read and those parsed as calls (`nothing_counted`)."""
@@ -1841,7 +1885,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
                       usage="aeiou-trace <COMMAND> [ARGS]...")
     sub = ap.add_subparsers(dest="cmd")
     mp = sub.add_parser("metrics", help="Compute the metrics of a trace (strace -f -ttt -T -yy -v -e trace=%%file,%%desc,%%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o FILE)", usage="aeiou-trace metrics [OPTIONS] <TRACE>")
-    mp.add_argument("trace", nargs="?", help="The strace output file, or - for stdin")
+    mp.add_argument("trace", nargs="?", help="The strace output file, an exported trace file, an object-store request log (MinIO audit, S3 server access), or - for stdin")
     mp.add_argument("--root", action="append", default=[], metavar="DIR", help="Count only calls on paths under DIR (repeatable; required for an strace, not for an exported trace file)")
     mp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
     mp.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
@@ -1850,7 +1894,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     mp.add_argument("--chain-gap-us", type=usage.non_negative, metavar="US", help="Report depth: consecutive io_submit rounds of a thread form a chain until more than US microseconds pass between a round's end and the next submit")
     mp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_metrics: 2) to FILE instead of stdout")
     ep = sub.add_parser("export", help="Write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root", usage="aeiou-trace export [OPTIONS] --root <DIR> -o <FILE> <TRACE>")
-    ep.add_argument("trace", nargs="?", help="The strace output file, or - for stdin")
+    ep.add_argument("trace", nargs="?", help="The strace output file, an object-store request log (MinIO audit, S3 server access), or - for stdin")
     ep.add_argument("--root", metavar="DIR", help="Required: export only calls on paths under DIR, written relative to it")
     ep.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
     ep.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
@@ -1866,7 +1910,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     cp.add_argument("--self", dest="selfs", action="append", default=[], metavar="FILE", help="A metrics document of B's abstract at the same parameters and another seed (repeatable): a row's tolerance is raised by its largest distance between B and these; implies --judge")
     cp.add_argument("--only", action="append", default=[], metavar="PREFIX", help="Only the rows whose metric starts with PREFIX (repeatable)")
     dp = sub.add_parser("digest", help="Write the structural digest of a trace: path templates, lanes and their phases, a verdict per site on what the trace decides (permutation or draw, order, size), and the open questions ranked by their divergence at scale", usage="aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>")
-    dp.add_argument("trace", nargs="?", help="The strace output file, or an exported trace file (a file, never stdin: the comparison after the fit and a re-run with answers read it again)")
+    dp.add_argument("trace", nargs="?", help="The strace output file, an exported trace file, or an object-store request log (MinIO audit, S3 server access); a file, never stdin: the comparison after the fit and a re-run with answers read it again")
     dp.add_argument("--root", metavar="DIR", help="Digest only calls on paths under DIR, written relative to it (required for an strace, not for an exported trace file)")
     dp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
     dp.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
@@ -1933,6 +1977,8 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
                     raise BuildError(f"{args.trace}: {e}") from None
                 if not doc["total"]["ops"]:
                     raise BuildError(f"{args.trace}: a trace file with no call in it")
+            elif (obj := object_log_events(first, lines, args.root, args.trace, mp)) is not None:
+                doc = metrics_of_events(obj[0], obj[1], args.metrics_block)
             elif not args.root:
                 missing = usage.Missing(mp)
                 missing.need(False, "--root <DIR>", "count only calls on paths under DIR (repeatable)", "needed for an strace; an exported trace file carries its root")
@@ -1966,7 +2012,13 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
         f = _open_trace(args.trace)
         seen = {}
         with f:
-            header, events = export_of(f, os.path.abspath(args.root), seen=seen, exclude=args.exclude, cwd=args.cwd)
+            first = f.readline()
+            lines = itertools.chain([first], f)
+            obj = object_log_events(first, lines, [args.root], args.trace, subs["export"])
+            if obj is not None:
+                header, events = obj
+            else:
+                header, events = export_of(lines, os.path.abspath(args.root), seen=seen, exclude=args.exclude, cwd=args.cwd)
         if not events:   # never an empty trace file: a `trace` node of it would run nothing
             raise BuildError(f"{args.trace}: {nothing_counted([header['root']], seen)}; {args.out} not written")
         try:

@@ -8126,6 +8126,50 @@ the interview with them; both modules at 98–100 % line coverage. Milvus's layo
 (`insert_log/`, `index_files/`) and Qdrant's directory signatures are at medium confidence
 until a trace of each confirms them, which item 45(d) will.
 
+*Built 2026-10-29, step (4), the three site kinds, with the verdicts chosen here and open to
+the user's review:* `kind_of` sorts every template: a *set* (opened twice or more, read; the
+verdicts of §3.87), *keyed* (opened twice or more with a hex field or a path both written and
+read; the KV cache and the leaf fetch), *bulk write* (opened twice or more, only written; the
+checkpoint and the index build), *within* (one open read at eight or more offsets in more than
+one run; the index traversal). Keyed: keys, writes, reads after a write and before any, re-reads
+and the top tenth's share, the lag from write to read in time and in touches; `origin`
+(`traced` when every key read was written in the trace, else undecided between a warm cache
+from an earlier run and another writer the trace does not cover, settled by a trace from the
+start or of every writer), `reuse` (`repeated` when a key is read again, else undecided, settled
+by a longer trace), `size`. Bulk write: every int field of the name `varies`, or `constant` once
+a path is written again, or undecided between a new value per write and a rewrite, settled by a
+second write (this is where ranks and steps become the field-level facts: `values:<field>` at
+scale for a varying field, and the question `field:<field>` for a constant one); `rewrite`,
+`sync` (the share of opens with an fsync), `size`. Within: reads, distinct offsets, the share
+revisiting one, the span, sequential runs; `skew` judged against a uniform spread's top-tenth
+share, 0.1 (1 + 1.75 / sqrt(reads per offset)) from the Poisson counts a uniform draw gives,
+`skewed` above 1.5 of it, `uniform` below 1.2, undecided between or under fifty reads; and
+`memory` and `dependency`, which no trace decides, asked always with what would settle them (the
+file's size against the hosts' memory; the application's source, or the same query traced
+twice, since a dependent walk repeats its offsets exactly). Each kind's facts: keys and
+requests; values per field and the writes the benchmark makes; the file's size and the queries.
+Divergence at scale is a formula only for a set's selection; the other items rank by order with
+what differs at scale said in words. The records' vocabulary follows (`values:<field>`,
+`field:<field>`). Thirteen tests over constructed traces (`calls_strace`), the module at 100 %.
+Not done here: the leaf fetch as a keyed site is read from an strace of the application that
+reads the leaves, which exists for no vector-search kit yet; the keyed verdicts were checked
+against the LMCache source's behavior (write once, read on a hit, never rewritten), not a trace.
+
+*Built 2026-10-29, step (5):* `aeiou/objectlog.py`. Rather than a format of its own, an object
+log is read into the exporter's event stream: each request becomes the calls the runner's object
+engine issues for it (§16: a GET an open, a read at the Range's offset, a close; a PUT an open
+that creates, a write, a close; HEAD a stat, DELETE an unlink, a listing a readdir of the prefix,
+a multipart upload an open at its start, a write per part, a close at completion), on a lane per
+client host, under `--root BUCKET[/PREFIX]`, so `metrics`, `export`, `digest`, and the `trace`
+node take it unchanged and the digest's site kinds apply to it. MinIO's audit log (the `api`
+object and the `Range` header; its `time` taken as the response's end, the request starting
+`timeToResponse` earlier, noted) and S3's server access log (to the second, no Range, so a
+partial GET is read from 0 and counted). Read from AWS's log-format page today; MinIO's entry
+format from its documentation's example and field list (its source could not be fetched from
+here), at medium confidence until a real audit log is read. Ceph RGW's ops log and a proxy's
+log stay as item 49's gap, as does the merge of an object log with an strace on the clock. Six
+tests over constructed logs of both formats.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

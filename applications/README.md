@@ -24,8 +24,11 @@ hyphenated. Inside:
   to the blind spot it causes (`attributes.toml`); `[[blind_spot]]` entries that hold whatever
   the options; and `[[assert]]` entries, what the record answers for the digest: a `template`
   glob (matched against the paths of a template), either `fact` and `value` or `question` and
-  `answer` in the digest's own vocabulary, a `note`, the `source` and `confidence`, and an
-  optional `when = { option = "...", choice = "..." }`.
+  `answer` in the digest's own vocabulary (facts `candidates`, `passes`, `keys`, `requests`,
+  `size`, `values:<field>`; questions `selection`, `size`, `order`, `origin`, `reuse`, `skew`,
+  `memory`, `dependency`, `field:<field>`, each with its two candidates, see
+  `aeiou-trace(1)`), a `note`, the `source` and `confidence`, and an optional
+  `when = { option = "...", choice = "..." }`.
 
 The digest picks the record whose range contains the version the person names; with none, it
 takes the nearest lower record and every one of its assertions becomes a suggestion the person

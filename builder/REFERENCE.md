@@ -701,6 +701,39 @@ exists, and `--no-questions` is absent, and it refuses `-` as the trace. `tests/
 holds the verdicts to constructed sequences, the answers to their checks, the interview to a
 scripted console, and the command to its refusals.
 
+**The site kinds (built 2026-10-29, §3.88):** `kind_of` sorts a template into a `set` (opened
+twice or more, read: the verdicts above), `keyed` (opened twice or more with a hex field or a
+path both written and read: `keyed_of` counts keys, writes, reads after a write and before any,
+re-reads and the top tenth's share, the lag from write to read as histograms of nanoseconds and
+of touches; verdicts `lag`, `origin`, `reuse`, `size`), `bulk_write` (opened twice or more and
+only written: `bulk_of` gives every int field a verdict, `varies`, `constant` once a path is
+written again, else undecided; `rewrite`, `sync`, `size`), or `within` (one open read at eight
+or more offsets in more than one run: `within_of` gives reuse, span, sequential runs, `skew`
+against a uniform spread's top-tenth share, 0.1 (1 + 1.75 / sqrt(reads per offset)), and the
+two verdicts no trace decides, `memory` and `dependency`). `facts_of` names each kind's facts
+(`candidates` and `passes`; `keys` and `requests`; `values:<field>` per varying field and
+`passes`; `size` and `requests`), `questions_of` its questions (`field:<field>` per int field of
+a bulk write, then the kind's), `verdict_of` the verdict a question is about, `candidates_of`
+a question's candidates, and `site_line` the one line of evidence the interview and the report
+show per kind. A site's `projection` holds its kind's facts, given or None, and which were
+asserted. `tests/test_digest.py` holds each kind to constructed traces (`calls_strace`).
+
+**Object-store request logs (`aeiou/objectlog.py`, built 2026-10-29, §3.88):** a MinIO audit log
+or an Amazon S3 server access log read in place of an strace by `metrics`, `export`, and
+`digest`. `source_of(first_line)` tells the format; `export_of(lines, "BUCKET[/PREFIX]", kind)`
+turns each request (`Request`, from `minio_request` or `s3_request`) into the calls the runner's
+object engine issues for it through the strace `Exporter`, so the header and events are the
+exported trace file's, with `source` the log's format: GET open/read/close with the Range's
+offset when the log has it, PUT open-create/write/close, HEAD stat, DELETE unlink, listing
+open-directory/readdir/close of the prefix, multipart open at the start, a write per part
+(their positions resolved across lanes by the exporter), close at completion, unlink on abort;
+a lane per client host; errors by status (404 `ENOENT`, 403 `EACCES`, else `EIO`) as the
+open's or the stat's `ret`; requests outside the root, without an engine call behind them,
+without a time, or parts without a start are counted under `notes`, as is `ranges_unknown`
+for an access log's partial GET. `trace.metrics_of_events` gives the metrics of events in memory,
+`trace.object_log_events` is the commands' hook, and `digest.analyze` detects the log itself.
+`tests/test_objectlog.py` holds both formats to constructed logs and the commands to them.
+
 **The application records (`applications/`, `aeiou/applications.py`, built 2026-10-29, §3.88):**
 what the digest knows about the applications whose traces it reads, as data a person extends by
 adding a file: one directory per application with `application.toml` (name, display, kind,

@@ -20,9 +20,20 @@ from .nodes import BuildError
 FORMAT = 1
 KINDS = ("library", "service", "managed")
 CONFIDENCE = ("high", "medium")
-# the digest's own vocabulary for what a record may assert (kept here so the loader does not import the digest)
-FACTS = ("candidates", "passes")
-QUESTIONS = {"selection": ("consume", "choose"), "size": ("per-path", "drawn"), "order": ("sequential", "permuted")}
+# the digest's own vocabulary for what a record may assert (kept here so the loader does not import
+# the digest; `tests/test_digest.py` holds the two equal): facts, plus `values:<field>`; questions,
+# plus `field:<field>` with the candidates `new_values` and `constant`
+FACTS = ("candidates", "passes", "keys", "requests", "size")
+QUESTIONS = {"selection": ("consume", "choose"), "size": ("per-path", "drawn"), "order": ("sequential", "permuted"),
+             "origin": ("earlier_run", "other_writer"), "reuse": ("once", "repeated"),
+             "skew": ("uniform", "skewed"), "memory": ("fits", "exceeds"), "dependency": ("dependent", "independent")}
+FIELD_CANDIDATES = ("new_values", "constant")
+
+
+def question_candidates(q: str) -> tuple | None:
+    if q in QUESTIONS:
+        return QUESTIONS[q]
+    return FIELD_CANDIDATES if q.startswith("field:") else None
 
 
 class Record:
@@ -226,19 +237,20 @@ def _record(app: Application, path: pathlib.Path, r: dict, spots: dict, conf: di
             problems.add(path, f"assert {i}: template is required")
             ok = False
         if "fact" in a:
-            if a["fact"] not in FACTS:
-                problems.add(path, f"assert {i}: fact must be one of {', '.join(FACTS)}")
+            if a["fact"] not in FACTS and not (isinstance(a["fact"], str) and a["fact"].startswith("values:")):
+                problems.add(path, f"assert {i}: fact must be one of {', '.join(FACTS)}, or values:<field>")
                 ok = False
             v = a.get("value")
             if not isinstance(v, int) or isinstance(v, bool) or v < 1:
                 problems.add(path, f"assert {i}: value must be a whole number of at least 1")
                 ok = False
         elif "question" in a:
-            if a["question"] not in QUESTIONS:
-                problems.add(path, f"assert {i}: question must be one of {', '.join(QUESTIONS)}")
+            cands = question_candidates(a["question"]) if isinstance(a["question"], str) else None
+            if cands is None:
+                problems.add(path, f"assert {i}: question must be one of {', '.join(QUESTIONS)}, or field:<field>")
                 ok = False
-            elif a.get("answer") not in QUESTIONS[a["question"]]:
-                problems.add(path, f"assert {i}: answer must be one of {', '.join(QUESTIONS[a['question']])}")
+            elif a.get("answer") not in cands:
+                problems.add(path, f"assert {i}: answer must be one of {', '.join(cands)}")
                 ok = False
         else:
             problems.add(path, f"assert {i}: either fact and value or question and answer")

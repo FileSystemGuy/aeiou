@@ -529,7 +529,7 @@ def test_a_fact_the_trace_contradicts_is_rejected_with_the_evidence():
     (r,) = d["rejected"]
     assert r["fact"] == "passes" and "2 full passes" in r["why"]
     d = answered(one_pass(), [{"template": "s/{a:03}.npz", "fact": "candidates", "value": "many"}, {"template": "s/{a:03}.npz", "fact": "sizes", "value": 3}])
-    assert [r["why"] for r in d["rejected"]] == ["not a whole number of at least 1", "no such fact: candidates, passes"]
+    assert [r["why"] for r in d["rejected"]] == ["not a whole number of at least 1", "no such fact for a set site: candidates, passes"]
     assert d["notes"]["rejected_answers"] == 2
 
 
@@ -569,7 +569,7 @@ def test_answers_that_name_nothing_in_the_trace_are_rejected():
     ])
     assert [r["why"] for r in d["rejected"]] == [
         "no such template in the trace",
-        "no such question: selection, size, order",
+        "no such question for a set site: selection, size, order",
         "not one of consume, choose, unknown",
         "neither a fact nor a question",
     ]
@@ -754,7 +754,7 @@ def test_cli_answers_file_refusals(tmp_path, monkeypatch):
 def test_the_rest_of_the_answer_branches(tmp_path):
     # a question about a template opened once: not a site
     d = answered(one_pass() + strace_of(["solo.bin"], tid=101), [{"template": "solo.bin", "question": "size", "answer": "drawn"}])
-    assert d["rejected"][0]["why"] == "not a site: the template was opened once"
+    assert d["rejected"][0]["why"].startswith("not a site: the template was opened once")
     # the evidence named against an answer the trace decided otherwise, per verdict kind
     d = answered(one_pass(), [{"template": "s/{a:03}.npz", "question": "order", "answer": "sequential"}, {"template": "s/{a:03}.npz", "question": "size", "answer": "drawn"}])
     assert d["rejected"][0]["why"].startswith("the trace decided permuted: ascending 0.48 of 27 adjacent pairs")
@@ -938,3 +938,254 @@ def test_cli_states_the_application_and_replays_it(tmp_path, monkeypatch):
     assert trace.main(["digest", str(tr), "--root", "/d", "-o", str(tmp_path / "again.json"), "--answers", str(tmp_path / "t.answers.json")]) == 0
     again = json.loads((tmp_path / "again.json").read_text())
     assert again["application"] == doc["application"] and again["asserted"] == doc["asserted"]
+
+
+# ---------------------------------------------------------------- the site kinds (§3.88 step 4)
+
+
+def calls_strace(seq, root="/d", t0=1700000000.0, gap=0.001):
+    """An strace of arbitrary opens: `seq` is (tid, path, ops), ops a list of ("read", n) |
+    ("write", n) | ("pread", n, offset) | ("pwrite", n, offset) | ("fsync",), each open one line per
+    call, `gap` seconds apart, closed at the end."""
+    lines, t, fd = [], t0, 3
+    for tid, path, ops in seq:
+        flags = "O_RDONLY" if all(o[0] in ("read", "pread") for o in ops) else "O_WRONLY|O_CREAT"
+        lines.append(f'{tid} {t:.6f} openat(AT_FDCWD</d>, "{root}/{path}", {flags}|O_CLOEXEC, 0644) = {fd}<{root}/{path}> <0.000010>')
+        t += gap
+        for o in ops:
+            if o[0] == "read":
+                lines.append(f'{tid} {t:.6f} read({fd}<{root}/{path}>, "x"..., {o[1]}) = {o[1]} <0.000100>')
+            elif o[0] == "write":
+                lines.append(f'{tid} {t:.6f} write({fd}<{root}/{path}>, "x"..., {o[1]}) = {o[1]} <0.000100>')
+            elif o[0] == "pread":
+                lines.append(f'{tid} {t:.6f} pread64({fd}<{root}/{path}>, "x"..., {o[1]}, {o[2]}) = {o[1]} <0.000100>')
+            elif o[0] == "pwrite":
+                lines.append(f'{tid} {t:.6f} pwrite64({fd}<{root}/{path}>, "x"..., {o[1]}, {o[2]}) = {o[1]} <0.000100>')
+            else:
+                lines.append(f"{tid} {t:.6f} fsync({fd}<{root}/{path}>) = 0 <0.000500>")
+            t += gap
+        lines.append(f"{tid} {t:.6f} close({fd}<{root}/{path}>) = 0 <0.000005>")
+        t += gap * 10
+        fd += 1
+    return "\n".join(lines) + "\n"
+
+
+KEYS = ["3f2a9c0e1b7d4e6f8a9b0c1d2e3f4a5b", "0000111122223333444455556666777a", "deadbeefdeadbeefdeadbeefdeadbeef", "cafebabecafebabecafebabecafebabe"]
+
+
+def kv_trace():
+    """A KV cache: four keys written once, three read after their write (one of them twice), and one key read that the trace never saw written."""
+    k = [f"kv/{h}.pt" for h in KEYS]
+    seq = [(100, k[0], [("write", 8192)]), (100, k[1], [("write", 8192)]), (100, k[2], [("write", 8192)]), (100, k[3], [("write", 8192)]),
+           (101, k[0], [("read", 8192)]), (101, k[1], [("read", 8192)]), (101, "kv/9999888877776666555544443333222a.pt", [("read", 8192)]),
+           (101, k[0], [("read", 8192)]), (101, k[2], [("read", 8192)])]
+    return calls_strace(seq)
+
+
+def test_a_keyed_site_counts_keys_hits_and_the_lag_from_write_to_read():
+    d = digest_of(kv_trace())
+    (s,) = d["sites"]
+    assert s["kind"] == "keyed" and s["template"] == 0 and s["touches"] == 9 and s["distinct"] == 5
+    a = s["access"]
+    assert a == {"keys": 5, "written": 4, "read": 4, "reads": 5, "writes": 4, "written_once_share": 1.0, "read_after_write": 4, "read_before_write": 1,
+                 "rereads": 1, "reread_share": 0.2, "top_10pct_share": 0.4, "reads_per_key": a["reads_per_key"]}
+    assert a["reads_per_key"]["n"] == 4 and a["reads_per_key"]["max"] == 2
+    assert s["lag"]["verdict"] == "write_then_read" and s["lag"]["ns"]["n"] == 4 and s["lag"]["touches"]["n"] == 4 and s["lag"]["touches"]["max"] == 7
+    assert s["origin"]["verdict"] == "undecided" and s["origin"]["settles"].startswith("a trace from the application's start")
+    assert s["reuse"]["verdict"] == "repeated" and s["reuse"]["keys_reread"] == 1
+    assert s["size"]["verdict"] == "constant"
+    assert "selection" not in s and "order" not in s
+    assert [(it["question"], it["candidates"]) for it in d["open"]] == [("origin", ["earlier_run", "other_writer"])]
+    assert "never wrote" in d["open"][0]["ask"] and d["open"][0]["divergence"] == 0.0
+    assert s["projection"] == {"keys": None, "requests": None, "asserted": []}
+
+
+def test_a_keyed_site_with_every_key_traced_and_no_reread_leaves_reuse_open():
+    k = [f"kv/{h}.pt" for h in KEYS[:2]]
+    d = digest_of(calls_strace([(1, k[0], [("write", 100)]), (1, k[1], [("write", 200)]), (2, k[0], [("read", 100)]), (2, k[1], [("read", 200)])]))
+    (s,) = d["sites"]
+    assert s["origin"]["verdict"] == "traced" and s["reuse"]["verdict"] == "undecided" and s["lag"]["verdict"] == "write_then_read"
+    assert [it["question"] for it in d["open"]] == ["reuse"] and d["open"][0]["candidates"] == ["once", "repeated"]
+    assert s["size"]["verdict"] == "per-path"
+    # a hex key alone makes the site keyed, reads only: read_only, origin undecided
+    d = digest_of(calls_strace([(2, k[0], [("read", 100)]), (2, k[1], [("read", 200)])]))
+    (s,) = d["sites"]
+    assert s["kind"] == "keyed" and s["lag"]["verdict"] == "read_only" and s["access"]["written"] == 0 and s["origin"]["verdict"] == "undecided"
+    # written and never read: write_only, nothing open about origin or reuse
+    d = digest_of(calls_strace([(1, k[0], [("write", 100)]), (1, k[1], [("write", 200)])]))
+    (s,) = d["sites"]
+    assert s["lag"]["verdict"] == "write_only" and s["origin"]["verdict"] == "traced" and s["reuse"]["verdict"] == "undecided"
+    # a path written then read without a hex key is keyed too
+    d = digest_of(calls_strace([(1, "spill/7.bin", [("write", 100)]), (1, "spill/8.bin", [("write", 100)]), (1, "spill/7.bin", [("read", 100)])]))
+    assert d["sites"][0]["kind"] == "keyed"
+
+
+def test_keyed_facts_and_answers():
+    d = answered(kv_trace(), [{"template": "kv/{a:x32}.pt", "fact": "keys", "value": 1000}, {"template": "kv/{a:x32}.pt", "fact": "requests", "value": 50000},
+                              {"template": "kv/{a:x32}.pt", "question": "origin", "answer": "earlier_run", "note": "the cache was warm"},
+                              {"template": "kv/{a:x32}.pt", "question": "reuse", "answer": "once"},
+                              {"template": "kv/{a:x32}.pt", "fact": "keys", "value": 3},
+                              {"template": "kv/{a:x32}.pt", "fact": "candidates", "value": 3},
+                              {"template": "kv/{a:x32}.pt", "question": "selection", "answer": "consume"}])
+    s = d["sites"][0]
+    assert s["projection"] == {"keys": 1000, "requests": 50000, "asserted": ["keys", "requests"]}
+    assert s["origin"]["asserted"]["answer"] == "earlier_run" and d["open"] == []
+    assert [r["why"] for r in d["rejected"]] == [
+        "the trace decided repeated: 1 key(s) read more than once",
+        "the trace touched 5 distinct keys of this template; 3 is fewer",
+        "no such fact for a keyed site: keys, requests",
+        "no such question for a keyed site: origin, reuse, size",
+    ]
+    doc, answers, io = interview(kv_trace(), "1000", "", "1", "warm")
+    said = "\n".join(io.said)
+    assert "How many distinct keys does the application hold at the scale it runs" in said and "How many requests will the benchmark serve" in said
+    assert "keyed: 5 keys, 4 written, 5 reads" in said
+    assert [(a.get("fact") or a["question"]) for a in answers] == ["keys", "origin"]
+
+
+def dcp_save(steps=1, rewrite=False):
+    seq = []
+    for step in range(1, steps + 1):
+        for rank in range(2):
+            seq.append((100 + rank, f"ckpt/step_{step:06}/__{rank}_0.distcp", [("write", 4096 * (rank + 1)), ("fsync",)]))
+        seq.append((100, f"ckpt/step_{step:06}/.metadata", [("write", 512)]))
+    if rewrite:
+        seq.append((100, "ckpt/step_000001/__0_0.distcp", [("write", 4096)]))
+    return calls_strace(seq)
+
+
+def test_a_bulk_write_site_judges_its_fields_the_rewrite_and_the_syncs():
+    d = digest_of(dcp_save())
+    (s,) = d["sites"]   # the shard template; .metadata is written once, one open, no site
+    assert s["kind"] == "bulk_write" and s["touches"] == 2 and s["distinct"] == 2
+    assert s["rewrite"] == {"verdict": "new_names", "rewritten_paths": 0}
+    assert [(f["name"], f["values"], f["verdict"]) for f in s["fields"]] == [("a", 1, "undecided"), ("b", 2, "varies"), ("c", 1, "undecided")]
+    assert s["fields"][0]["settles"] == "a second write of this kind of file: a new value is a name per write, the same value a rewrite"
+    assert s["sync"] == {"fsync_share": 1.0, "opens": 2}
+    assert s["size"]["verdict"] == "undecided"
+    assert [(it["question"], it["candidates"]) for it in d["open"]] == [("field:a", ["new_values", "constant"]), ("field:c", ["new_values", "constant"]), ("size", ["per-path", "drawn"])]
+    assert "field a, 1 in the trace" in d["open"][0]["ask"]
+    assert s["projection"] == {"values:b": None, "passes": None, "asserted": []}
+    # two steps: the step field varies, no question about it; the rank field's values at scale is a fact
+    d = digest_of(dcp_save(steps=2))
+    s = d["sites"][0]
+    assert [(f["name"], f["verdict"]) for f in s["fields"]] == [("a", "varies"), ("b", "varies"), ("c", "undecided")] and s["size"]["verdict"] == "undecided"
+    assert s["projection"] == {"values:a": None, "values:b": None, "passes": None, "asserted": []}
+    # a rewrite decides every constant field: the same names come again
+    d = digest_of(dcp_save(rewrite=True))
+    s = d["sites"][0]
+    assert s["rewrite"] == {"verdict": "overwrite", "rewritten_paths": 1} and [f["verdict"] for f in s["fields"]] == ["constant", "varies", "constant"]
+    assert s["size"]["verdict"] == "per-path" and d["open"] == []
+
+
+def test_bulk_write_facts_and_answers():
+    t = "ckpt/step_{a:06}/__{b}_{c}.distcp"
+    d = answered(dcp_save(), [{"template": t, "fact": "values:b", "value": 512, "note": "512 ranks"}, {"template": t, "fact": "passes", "value": 20},
+                              {"template": t, "question": "field:a", "answer": "new_values", "note": "a directory per step"},
+                              {"template": t, "fact": "values:b", "value": 1}, {"template": t, "fact": "values:a", "value": 9},
+                              {"template": t, "question": "field:zz", "answer": "constant"}])
+    s = d["sites"][0]
+    assert s["projection"] == {"values:b": 512, "passes": 20, "asserted": ["passes", "values:b"]}
+    assert s["fields"][0]["asserted"]["answer"] == "new_values" and [it["question"] for it in d["open"]] == ["field:c", "size"]
+    assert [r["why"] for r in d["rejected"]] == [
+        "field b took 2 values in the trace; 1 is fewer",
+        "no such fact for a bulk_write site: values:b, passes",
+        "no such question for a bulk_write site: field:a, field:b, field:c, size",
+    ]
+    d = answered(dcp_save(rewrite=True), [{"template": t, "question": "field:a", "answer": "new_values"}])
+    assert d["rejected"][0]["why"] == "the trace decided constant: 1 path(s) written again under the same name"
+    doc, answers, io = interview(dcp_save(), "512", "", "1", "", "3", "", "3", "")
+    said = "\n".join(io.said)
+    assert "How many values does field b (0..1 in the trace) take at the scale the application runs?" in said
+    assert "How many times will the benchmark write this kind of file" in said
+    assert "bulk write: 2 files, 0 rewritten, fsync on 100%" in said
+    assert "Does field a, 1 in the trace, take a new value each time the application writes this kind of file" in said
+
+
+def index_trace(reads, seed=1, hot=0):
+    """One index file read at `reads` offsets: 4 KiB sectors drawn uniformly from 200, or with `hot` sectors taking half the reads."""
+    import random
+    r = random.Random(seed)
+    ops = []
+    for _ in range(reads):
+        sector = r.randrange(hot) if hot and r.random() < 0.5 else r.randrange(200)
+        ops.append(("pread", 4096, sector * 4096))
+    return calls_strace([(7, "sift_disk.index", ops)])
+
+
+def test_a_within_site_measures_reuse_and_skew_of_the_offsets_in_one_open():
+    d = digest_of(index_trace(400))
+    (s,) = d["sites"]
+    assert s["kind"] == "within" and s["touches"] == 1 and s["reads"] == 400 and 150 < s["distinct_offsets"] <= 200
+    assert s["reuse_share"] == pytest.approx(1 - s["distinct_offsets"] / 400) and s["span"] == 200 * 4096
+    assert s["skew"]["verdict"] == "uniform" and s["skew"]["top_10pct_share"] <= 1.2 * s["skew"]["uniform_share"] and 0.2 < s["skew"]["uniform_share"] < 0.25
+    assert 380 < s["runs"]["n"] <= 400 and s["runs"]["max"] >= 1 and s["memory"]["verdict"] == "undecided"   # a sequential pair by chance joins a run and s["dependency"]["verdict"] == "undecided"
+    assert [(it["question"], it["candidates"]) for it in d["open"]] == [("memory", ["fits", "exceeds"]), ("dependency", ["dependent", "independent"])]
+    assert d["open"][1]["settles"].startswith("not from a trace")
+    assert s["projection"] == {"size": None, "requests": None, "asserted": []}
+    d = digest_of(index_trace(400, hot=4))
+    s = d["sites"][0]
+    assert s["skew"]["verdict"] == "skewed" and s["skew"]["top_10pct_share"] > 0.4
+    d = digest_of(index_trace(30))
+    s = d["sites"][0]
+    assert s["skew"]["verdict"] == "undecided" and [it["question"] for it in d["open"]] == ["skew", "memory", "dependency"]
+    # a single open read in one sequential run is no site; nor is one with fewer than eight reads
+    assert digest_of(calls_strace([(7, "big.bin", [("read", 4096)] * 20)]))["sites"] == []
+    assert digest_of(calls_strace([(7, "idx", [("pread", 4096, 4096 * i) for i in (5, 1, 9, 2)])]))["sites"] == []
+
+
+def test_within_facts_and_answers():
+    d = answered(index_trace(400), [{"template": "sift_disk.index", "fact": "size", "value": 1 << 40}, {"template": "sift_disk.index", "fact": "requests", "value": 10000},
+                                    {"template": "sift_disk.index", "question": "memory", "answer": "exceeds", "note": "1 TiB index, 256 GiB hosts"},
+                                    {"template": "sift_disk.index", "question": "dependency", "answer": "dependent"},
+                                    {"template": "sift_disk.index", "fact": "size", "value": 4096},
+                                    {"template": "sift_disk.index", "question": "skew", "answer": "skewed"}])
+    s = d["sites"][0]
+    assert s["projection"] == {"size": 1 << 40, "requests": 10000, "asserted": ["requests", "size"]} and d["open"] == []
+    sk = s["skew"]
+    assert [r["why"] for r in d["rejected"]] == [
+        f"the trace read up to byte {200 * 4096} of this file; 4096 is smaller",
+        f"the trace decided uniform: the top tenth of the offsets took {sk['top_10pct_share']:.2f} of the reads, about {sk['uniform_share']:.2f} under a uniform spread, uniform within noise",
+    ]
+    doc, answers, io = interview(index_trace(400), "", "", "2", "", "1", "the graph walk")
+    said = "\n".join(io.said)
+    assert "How large is this file at the scale the application runs" in said and "How many queries will the benchmark run" in said
+    assert "within one open: 400 reads at" in said
+    assert [(a["question"], a["answer"]) for a in answers] == [("memory", "exceeds"), ("dependency", "dependent")]
+
+
+def test_render_shows_every_kind():
+    text = digest.render(digest_of(kv_trace()))
+    assert "keyed: 5 keys, 4 written, 5 reads" in text and "lag: write_then_read" in text and "origin: undecided" in text and "reuse: repeated" in text
+    text = digest.render(digest_of(dcp_save()))
+    assert "bulk write: 2 files, 0 rewritten, fsync on 100%" in text and "field a: undecided (1 value" in text and "field b: varies (2 values 0..1)" in text
+    text = digest.render(digest_of(index_trace(400)))
+    assert "within one open: 400 reads at" in text and "skew: uniform" in text and "dependency: undecided" in text
+
+
+def test_the_last_branches_of_the_kinds():
+    # a template that is no site has no facts
+    an = digest.analyze(calls_strace([(7, "once.bin", [("read", 10)])]).splitlines(True), "/d")
+    assert digest.facts_of(an.templates[0]) == [] and digest.kind_of(an.templates[0]) is None
+    d = answered(calls_strace([(7, "once.bin", [("read", 10)])]), [{"template": "once.bin", "fact": "size", "value": 5}])
+    assert d["rejected"][0]["why"] == "not a site"
+    # an answer against a traced origin
+    k = [f"kv/{h}.pt" for h in KEYS[:2]]
+    d = answered(calls_strace([(1, k[0], [("write", 100)]), (2, k[0], [("read", 100)]), (2, k[1], [("read", 100)]), (1, k[1], [("write", 100)])]),
+                 [{"template": "kv/{a:x32}.pt", "question": "origin", "answer": "other_writer"}])
+    assert d["sites"][0]["origin"]["verdict"] == "undecided"   # k[1] was read before its write
+    d = answered(calls_strace([(1, k[0], [("write", 100)]), (1, k[1], [("write", 100)]), (2, k[0], [("read", 100)])]),
+                 [{"template": "kv/{a:x32}.pt", "question": "origin", "answer": "other_writer"}])
+    assert d["rejected"][0]["why"] == "the trace decided traced: every key read was written earlier in the trace"
+    # a skew between 1.2x and 1.5x of a uniform spread's top-tenth share stays undecided
+    import random
+    r = random.Random(3)
+    ops = [("pread", 4096, (r.randrange(20) if r.random() < 0.22 else r.randrange(200)) * 4096) for _ in range(400)]
+    s = digest_of(calls_strace([(7, "idx", ops)]))["sites"][0]
+    assert s["skew"]["verdict"] == "undecided" and 1.2 < s["skew"]["top_10pct_share"] / s["skew"]["uniform_share"] < 1.5, s["skew"]
+    assert "within 1.2x" in s["skew"]["settles"]
+
+
+def test_the_record_vocabulary_matches_the_digest():
+    assert ap.FACTS == tuple(digest.FACT_NAMES) and ap.QUESTIONS == {q: tuple(c) for q, c in digest.CANDIDATES.items()}
+    assert digest.candidates_of("field:step") == ["new_values", "constant"] and digest.candidates_of("nothing") is None

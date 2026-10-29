@@ -497,9 +497,15 @@ Not built, in rough order of interest:
   product directory and version file (PyTorch DCP, LMCache, safetensors, DiskANN, FAISS,
   Milvus, Qdrant), from which the digest recognizes the application by its paths, asks its
   version and the few options that change its storage workload, names the blind spots, and
-  takes the record's assertions as answers with the record as provenance. To build next: three
-  more site kinds (keyed lookup for KV caches and RAG leaf fetches, within one open for index
-  traversal, bulk write); an object-store request log the trace tools read; then
+  takes the record's assertions as answers with the record as provenance; and three more site
+  kinds beside the sample set, keyed lookup (KV caches, RAG leaf fetches: keys, hits, the lag
+  from write to read, where the keys came from), bulk write (checkpoints, index builds: every
+  field of the name a rank or a step that varies or stays, rewrites, syncs), and within one
+  open (index traversal: reuse, skew against a uniform spread, runs, and whether the file fits
+  in memory and the reads depend on each other, which no trace decides), each with its own
+  facts and questions; and object-store request logs, MinIO's audit log and Amazon S3's server
+  access log, read by `metrics`, `export`, and `digest` in place of an strace, each request
+  turned into the calls the object engine issues for it. To build next:
   `aeiou-catalog disclose`, every string
   and number a contribution would publish (item 47); a fitting skill in the open skill format
   over those tools and `aeiou-fit`, evaluated against the committed captures, beside a written

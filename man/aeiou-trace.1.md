@@ -110,7 +110,24 @@ template the op mix, bytes, request sizes, and how each open moved through its f
 the calls on one open from `open` to `close` (a path call or an `io_submit` is a unit of
 one op); a unit's motif is its op sequence with repeats collapsed (`read+`, `(lseek
 read)+`); a phase is a run of units of one motif on one template, with the repeat counts
-and the think time between units. **Sites**: a template opened at least twice. Its
+and the think time between units. **Sites**: the templates the digest judges, of four
+kinds. A *set*, a template opened at least twice and read (a sample set), has the three
+verdicts below. A *keyed* site, opened at least twice with a hex field in its name or a
+path both written and read (a KV cache, a RAG leaf store), counts its keys, the reads
+after a write and before any, the re-reads and the share of reads the top tenth of the
+keys take, and the lag from a key's write to each later read, in time and in touches; its
+verdicts are *origin* (`traced` when every key read was written in the trace, else
+undecided between an earlier run's warm cache and another writer), *reuse* (`repeated`
+when a key is read again, else undecided), and *size*. A *bulk write* site, opened at
+least twice and only written (a checkpoint, an index build), judges every field of its
+name, `varies` or undecided between a new value per write and a rewrite, which a path
+written again decides as `constant`; its *rewrite* verdict, the share of opens with an
+`fsync`, and *size*. A *within* site is one open read at eight or more offsets in more
+than one run (an index traversal): the reads, the distinct offsets and the share that
+revisit one, the span read, the sequential runs, *skew* (the top tenth of the offsets'
+share of the reads against a uniform spread's, undecided under fifty reads), and two
+verdicts no trace decides, *memory* (does the file fit at scale) and *dependency* (does
+each offset depend on the last read). For a set, its
 *selection* verdict says what the sequence of paths decides between a permutation pass
 over the set (`consume`, each path once per pass) and a draw with replacement (`choose`): a
 repeat before the set is exhausted refutes the pass; two or more passes of equal length
@@ -131,9 +148,13 @@ assertions then answer what they can, with the record as their provenance, and t
 spots the choices cause (mmap, io_uring, an object store) are said and noted. A version no
 record claims gets the nearest lower record, its assertions offered one by one for the
 person to confirm. Then, facts first and the open questions in rank order: for every site with an open
-question, how many files of its kind exist at the scale the application runs and how many
-passes the benchmark will make (Enter for don't know; a fact decides what it can, so a
-corpus small enough refutes a draw and no behavioral question follows), then each open item
+question, the facts of its kind (a set: how many files of its kind exist at the scale the
+application runs and how many passes the benchmark will make; a keyed site: the keys it
+holds at scale and the requests the benchmark serves; a bulk write: every varying field's
+count of values at scale, ranks or steps, and how many times the benchmark writes this
+kind of file; a within site: the file's size at scale and the queries the benchmark runs;
+Enter for don't know; a fact decides what it can, so a corpus small enough refutes a draw
+and no behavioral question follows), then each open item
 on one screen, the evidence, the question in the application's terms, numbered choices with
 "don't know" always among them, and what the choice changes at scale; an answer the trace
 contradicts is shown the evidence and asked again, never recorded. Every answer is recorded
@@ -147,6 +168,36 @@ asked and every undecided verdict stays open. An answer a replayed file carries 
 verdict the trace decides is rejected with the evidence and listed under `rejected`; one
 agreeing with it is redundant and noted. The trace is read as a file, never from stdin: the
 comparison after the fit and a re-run with answers read it again.
+
+## OBJECT LOGS
+
+An strace never shows an application's object requests (TLS, or another process), but the
+store's own log does, one line per request. `metrics`, `export`, and `digest` read two such
+logs in place of an strace, told apart by the first line, and turn each request into the
+calls the runner's object engine issues for it (`runner/REFERENCE.md` §16): a GET is an
+open, one read (at the Range header's start when the log has it, else from 0), and a
+close; a PUT an open that creates, one write, and a close; a HEAD a stat; a DELETE an
+unlink; a listing an open of the prefix, a readdir, and a close; a multipart upload an open
+at its start, a write per part, and a close at its completion. A lane is a client host,
+since the log knows no thread; `--root` is `BUCKET[/PREFIX]`, one, and requests outside it
+are counted and left out, as are the requests with no call of the engine behind them
+(bucket operations, copies), by name under `notes`. The exported trace file of an object
+log is an ordinary trace file: the `trace` node runs it against the declared endpoint.
+
+- **MinIO audit log** (JSON lines with an `api` object: `name`, `bucket`, `object`,
+  `statusCode`, `rx`, `tx`, `timeToResponseInNS`; the `Range` request header; the
+  `prefix` and `uploadId` query parameters). An entry's `time` is taken as when the
+  response completed, the request starting `timeToResponse` earlier (noted as
+  `time_is_response_end`). Enabled as MinIO's audit webhook or Kafka target, or its audit
+  event queue, in MinIO's own documentation.
+- **Amazon S3 server access log** (space-delimited records: bucket owner, bucket, `[time]`
+  to the second, remote IP, requester, request id, `REST.<METHOD>.<RESOURCE>`, key,
+  "request URI", status, error, bytes sent, object size, total time in milliseconds, ...).
+  It carries no Range, so a GET that sent fewer bytes than the object holds is read from
+  offset 0 and counted under `ranges_unknown`; its times are to the second. AWS delivers
+  these logs best-effort and late; CloudTrail data events are the complete source.
+
+Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49).
 
 ## OPTIONS
 
@@ -243,13 +294,15 @@ comparison after the fit and a re-run with answers read it again.
 
 - *TRACE*
 
-  The strace output file, or an exported trace file. A file, never stdin (`-` is refused):
-  the comparison after the fit and a re-run with answers read it again. Its SHA-256 is
-  recorded in the document and in the answers file.
+  The strace output file, an exported trace file, or an object-store request log (see
+  OBJECT LOGS). A file, never stdin (`-` is refused): the comparison after the fit and a
+  re-run with answers read it again. Its SHA-256 is recorded in the document and in the
+  answers file.
 - **--root** *DIR*
 
   Digest only calls on paths under *DIR*, written relative to it. Required for an strace;
-  an exported trace file carries its root, and a `--root` that is not it is refused.
+  an exported trace file carries its root, and a `--root` that is not it is refused. For an
+  object log, `BUCKET[/PREFIX]`.
 - **--exclude** *GLOB*
 
   Leave out paths whose part below the root matches *GLOB*. Repeatable; `*` crosses `/`.
