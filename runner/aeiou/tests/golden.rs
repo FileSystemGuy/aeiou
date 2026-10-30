@@ -62,8 +62,10 @@ fn hashes_match_check_py() {
         // five-tensors), DESIGN_REVIEW §3.78
         ("safetensors_load", "3cfab3b2572475f1ee9949af25d58a40de618fcaa050259dbdd0f91c89bee1a7"),
         // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13); 2026-10-22: the job's and the
-        // GPU's values required (the use case unet3d-h100), the read sizes st_blksize, DESIGN_REVIEW §3.78
-        ("npy_per_sample", "54aacfd3477c5708f60dc230b381270d40d68dc2c32d4e8c3194b53b85090760"),
+        // GPU's values required (the use case unet3d-h100), the read sizes st_blksize, DESIGN_REVIEW §3.78; 2026-10-30:
+        // the read loop under a buffer smaller than NumPy's chunk, from its trace (it divided by zero), the
+        // fingerprints at a 1 MiB buffer unchanged
+        ("npy_per_sample", "3f24c2682c9af3d305c0b04add8a17bac19c9c0e4b55e148ce843e581990fb67"),
         // 2026-10-02: `enumerate` on by default; 2026-10-22: the job's and the GPU's values and the corpus's median
         // required (its unsettled case jpeg-50m), the read sizes st_blksize, DESIGN_REVIEW §3.78
         ("file_per_sample", "7d31eb53d7446f9da83cec42e2342f87ced07ac2c135702a4c699d9e8e8080f7"),
@@ -380,6 +382,39 @@ const UNTIL_EOF: &str = r#"{
     ]}}
   ]}}
 }"#;
+
+/// npy_per_sample under a buffer smaller than NumPy's chunk (st_blksize 4096, a local file
+/// system): its read loop against `np.load` (NumPy 2.5.4, CPython 3.12) traced 2026-10-30 over
+/// `np.savez(x=<256×256×k uint8>, y=[0])` archives, the calls after the `lseek` to 0 (`R` a read
+/// asked:returned, `T` a tell); the abstract divided by zero here until then.
+#[test]
+fn npy_per_sample_under_a_small_buffer() {
+    let text = std::fs::read_to_string(crate::common::workload_ast("npy_per_sample")).unwrap();
+    let pair = "R258048:258048 R4096:4096 T";
+    let traced = [
+        (16, format!("R4096:4096 T T T R4096:4096 T R253952:253952 R4096:4096 T {} R258048:258048 R4096:498 T", [pair; 2].join(" "))),
+        (17, format!("R4096:4096 T T T R4096:4096 T R253952:253952 R4096:4096 T {} R61440:61440 R4096:498 T", [pair; 3].join(" "))),
+        (50, format!("R4096:4096 T T T R4096:4096 T R253952:253952 R4096:4096 T {} R126976:126976 R4096:498 T", [pair; 11].join(" "))),
+    ];
+    for (k, want) in traced {
+        let size = (65536 * k + 498).to_string();
+        let params = [("batch", "1"), ("workers", "1"), ("prefetch", "1"), ("step_time", "0"), ("samples", "1"), ("steps", "1"), ("walk", "false"), ("sample_mean", size.as_str()), ("sample_sd", "0")];
+        let mut cfg = config(1, 0, &params);
+        cfg.st_blksize.insert("train".into(), 4096);
+        let ops = collect(&text, &cfg, "gpu", 1);
+        let fourth = ops.iter().enumerate().filter(|(_, o)| o.2 == OpKind::Read).nth(3).unwrap().0;
+        let got: Vec<String> = ops[fourth + 2..]
+            .iter()
+            .take_while(|o| o.2 != OpKind::Close)
+            .map(|o| match o.2 {
+                OpKind::Read => format!("R{}:{}", o.5, o.6),
+                OpKind::Lseek => "T".to_string(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(got.join(" "), want, "k = {k}");
+    }
+}
 
 #[test]
 fn until_eof_and_positions() {

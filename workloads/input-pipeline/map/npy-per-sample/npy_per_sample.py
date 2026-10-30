@@ -4,6 +4,9 @@
 a buffer fill at offset 0 for the magic, the zip tail (EOCD, the zip64 locator probe, the central
 directory), then the archive front to back in buffer fills, with one `tell` per NumPy chunk. The
 `x` member is the whole archive but for a few hundred bytes of `y` and directory at the end.
+Under a buffer smaller than NumPy's chunk (`st_blksize` 4096, a local file system; traced
+2026-10-30, `DESIGN_REVIEW.md` §3.89), each chunk is a read of whole blocks past the buffer and a
+refill of it, and the header takes a second fill under zipfile's 4096-byte minimum read.
 """
 from aeiou import *
 
@@ -82,13 +85,30 @@ with w.actor("gpu") as gpu:
             worker.lseek(f, f.size - EOCD - P.cd_len, "SET")
             worker.read(f, P.hdr_read)                                   # central directory to EOF, short
             worker.lseek(f, 0, "SET")                                    # local header of "x", then its data
-            with worker.loop("k", chunks(f) // per_fill):                # buffer fills that NumPy drains whole
-                worker.read(f, P.xfer)
-                with worker.loop("t", per_fill):
-                    worker.lseek(f, 0, "CUR")                            # one tell per NumPy chunk
-            worker.read(f, P.xfer, repeat=ceil_div(f.size, P.xfer) - chunks(f) // per_fill)   # the rest, to EOF; the last is short
-            with worker.loop("t", chunks(f) % per_fill + 4):             # its chunks, and four tells of the header parse
+            with worker.when(P.xfer >= P.np_chunk):
+                with worker.loop("k", chunks(f) // per_fill):            # buffer fills that NumPy drains whole
+                    worker.read(f, P.xfer)
+                    with worker.loop("t", per_fill):
+                        worker.lseek(f, 0, "CUR")                        # one tell per NumPy chunk
+                worker.read(f, P.xfer, repeat=ceil_div(f.size, P.xfer) - chunks(f) // per_fill)   # the rest, to EOF; the last is short
+                with worker.loop("t", chunks(f) % per_fill + 4):         # its chunks, and four tells of the header parse
+                    worker.lseek(f, 0, "CUR")
+            with worker.otherwise():                                     # a buffer smaller than a chunk (st_blksize 4096, traced 2026-10-30)
+                worker.read(f, P.xfer)                                   # the local header and the npy header
+                with worker.loop("t", 3):
+                    worker.lseek(f, 0, "CUR")
+                worker.read(f, P.xfer)                                   # under zipfile's 4096-byte minimum read
                 worker.lseek(f, 0, "CUR")
+                with worker.loop("p", ceil_div(f.size - P.xfer, P.np_chunk)) as p:   # a chunk: the BufferedReader reads
+                    pos = worker.let("pos", when(p == 0, 2 * P.xfer, p * P.np_chunk + P.xfer))   # whole blocks past its buffer
+                    direct = worker.let("direct", min_(P.np_chunk - P.xfer - when(p == 0, P.xfer, 0),   # into NumPy's, then refills it;
+                                                       (f.size - pos - 1) // P.xfer * P.xfer))          # the last stops short of the zip tail
+                    with worker.when(direct > 0):
+                        worker.read(f, direct)
+                    worker.read(f, P.xfer)                               # the last is short
+                    worker.lseek(f, 0, "CUR")                            # one tell per NumPy chunk
+                with worker.loop("t", chunks(f) - ceil_div(f.size - P.xfer, P.np_chunk)):   # chunks the buffer held
+                    worker.lseek(f, 0, "CUR")
             worker.close(f)
 
     with gpu.phase("train"), gpu.loop("step", P.steps) as step:

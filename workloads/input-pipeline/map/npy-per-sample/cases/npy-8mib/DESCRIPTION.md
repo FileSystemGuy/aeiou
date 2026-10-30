@@ -76,14 +76,30 @@ The API the traced application used: `posix` sync (none declared); a run under a
     - `lseek` `f` to `size(f) − 22 − cd_len` from the start.
     - `read` `f`: 1 MiB (`hdr_read`) at the file position.
     - `lseek` `f` to 0 from the start.
-    - For `k` from 0 while below `⌈(size(f) − framing) / np_chunk⌉ div (xfer div np_chunk)`:
-      - `read` `f`: 1 MiB (`xfer`) at the file position.
-      - 4 times (`xfer div np_chunk`), `t` = 0 to 3:
+    - If `xfer ≥ np_chunk` (true here):
+      - For `k` from 0 while below `⌈(size(f) − framing) / np_chunk⌉ div (xfer div np_chunk)`:
+        - `read` `f`: 1 MiB (`xfer`) at the file position.
+        - 4 times (`xfer div np_chunk`), `t` = 0 to 3:
+          - `lseek` `f` to 0 from the current position.
+      - For `rep` from 0 while below `⌈size(f) / xfer⌉ − (⌈(size(f) − framing) / np_chunk⌉ div (xfer div np_chunk))`:
+        - `read` `f`: 1 MiB (`xfer`) at the file position.
+      - For `t` from 0 while below `(⌈(size(f) − framing) / np_chunk⌉ mod (xfer div np_chunk)) + 4`:
         - `lseek` `f` to 0 from the current position.
-    - For `rep` from 0 while below `⌈size(f) / xfer⌉ − (⌈(size(f) − framing) / np_chunk⌉ div (xfer div np_chunk))`:
+    - Otherwise (not taken here):
       - `read` `f`: 1 MiB (`xfer`) at the file position.
-    - For `t` from 0 while below `(⌈(size(f) − framing) / np_chunk⌉ mod (xfer div np_chunk)) + 4`:
+      - 3 times, `t` = 0 to 2:
+        - `lseek` `f` to 0 from the current position.
+      - `read` `f`: 1 MiB (`xfer`) at the file position.
       - `lseek` `f` to 0 from the current position.
+      - For `p` from 0 while below `⌈(size(f) − xfer) / np_chunk⌉`:
+        - `pos` = `(if p = 0 then 2 × xfer else p × np_chunk + xfer)`.
+        - `direct` = `min(np_chunk − xfer − (if p = 0 then xfer else 0), ((size(f) − pos − 1) div xfer) × xfer)`.
+        - If `direct > 0`:
+          - `read` `f`: `direct` at the file position.
+        - `read` `f`: 1 MiB (`xfer`) at the file position.
+        - `lseek` `f` to 0 from the current position.
+      - For `t` from 0 while below `⌈(size(f) − framing) / np_chunk⌉ − ⌈(size(f) − xfer) / np_chunk⌉`:
+        - `lseek` `f` to 0 from the current position.
     - `close` `f`.
 - Phase `train`:
   - 128 times (`steps`), `step` = 0 to 127:

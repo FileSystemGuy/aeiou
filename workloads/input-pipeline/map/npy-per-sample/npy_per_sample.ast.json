@@ -487,63 +487,199 @@
                       }
                     },
                     {
-                      "loop": {
-                        "index": "k",
-                        "to": {
-                          "div": [
+                      "cond": {
+                        "if": {
+                          "ge": [
                             {
-                              "ceil_div": [
-                                {
-                                  "sub": [
-                                    {
-                                      "size": {
-                                        "ref": "f"
-                                      }
-                                    },
-                                    {
-                                      "param": "framing"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "param": "np_chunk"
-                                }
-                              ]
+                              "param": "xfer"
                             },
                             {
-                              "div": [
-                                {
-                                  "param": "xfer"
-                                },
-                                {
-                                  "param": "np_chunk"
-                                }
-                              ]
+                              "param": "np_chunk"
                             }
                           ]
                         },
-                        "body": [
+                        "then": [
                           {
-                            "read": {
-                              "file": {
-                                "ref": "f"
+                            "loop": {
+                              "index": "k",
+                              "to": {
+                                "div": [
+                                  {
+                                    "ceil_div": [
+                                      {
+                                        "sub": [
+                                          {
+                                            "size": {
+                                              "ref": "f"
+                                            }
+                                          },
+                                          {
+                                            "param": "framing"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "param": "np_chunk"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "div": [
+                                      {
+                                        "param": "xfer"
+                                      },
+                                      {
+                                        "param": "np_chunk"
+                                      }
+                                    ]
+                                  }
+                                ]
                               },
-                              "len": {
-                                "param": "xfer"
-                              }
+                              "body": [
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "param": "xfer"
+                                    }
+                                  }
+                                },
+                                {
+                                  "loop": {
+                                    "index": "t",
+                                    "to": {
+                                      "div": [
+                                        {
+                                          "param": "xfer"
+                                        },
+                                        {
+                                          "param": "np_chunk"
+                                        }
+                                      ]
+                                    },
+                                    "body": [
+                                      {
+                                        "lseek": {
+                                          "file": {
+                                            "ref": "f"
+                                          },
+                                          "offset": 0,
+                                          "whence": "CUR"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "rep",
+                              "to": {
+                                "sub": [
+                                  {
+                                    "ceil_div": [
+                                      {
+                                        "size": {
+                                          "ref": "f"
+                                        }
+                                      },
+                                      {
+                                        "param": "xfer"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "div": [
+                                      {
+                                        "ceil_div": [
+                                          {
+                                            "sub": [
+                                              {
+                                                "size": {
+                                                  "ref": "f"
+                                                }
+                                              },
+                                              {
+                                                "param": "framing"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "param": "np_chunk"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "div": [
+                                          {
+                                            "param": "xfer"
+                                          },
+                                          {
+                                            "param": "np_chunk"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              "body": [
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "param": "xfer"
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           },
                           {
                             "loop": {
                               "index": "t",
                               "to": {
-                                "div": [
+                                "add": [
                                   {
-                                    "param": "xfer"
+                                    "mod": [
+                                      {
+                                        "ceil_div": [
+                                          {
+                                            "sub": [
+                                              {
+                                                "size": {
+                                                  "ref": "f"
+                                                }
+                                              },
+                                              {
+                                                "param": "framing"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "param": "np_chunk"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "div": [
+                                          {
+                                            "param": "xfer"
+                                          },
+                                          {
+                                            "param": "np_chunk"
+                                          }
+                                        ]
+                                      }
+                                    ]
                                   },
-                                  {
-                                    "param": "np_chunk"
-                                  }
+                                  4
                                 ]
                               },
                               "body": [
@@ -559,62 +695,8 @@
                               ]
                             }
                           }
-                        ]
-                      }
-                    },
-                    {
-                      "loop": {
-                        "index": "rep",
-                        "to": {
-                          "sub": [
-                            {
-                              "ceil_div": [
-                                {
-                                  "size": {
-                                    "ref": "f"
-                                  }
-                                },
-                                {
-                                  "param": "xfer"
-                                }
-                              ]
-                            },
-                            {
-                              "div": [
-                                {
-                                  "ceil_div": [
-                                    {
-                                      "sub": [
-                                        {
-                                          "size": {
-                                            "ref": "f"
-                                          }
-                                        },
-                                        {
-                                          "param": "framing"
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "param": "np_chunk"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "div": [
-                                    {
-                                      "param": "xfer"
-                                    },
-                                    {
-                                      "param": "np_chunk"
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        "body": [
+                        ],
+                        "else": [
                           {
                             "read": {
                               "file": {
@@ -624,52 +706,34 @@
                                 "param": "xfer"
                               }
                             }
-                          }
-                        ]
-                      }
-                    },
-                    {
-                      "loop": {
-                        "index": "t",
-                        "to": {
-                          "add": [
-                            {
-                              "mod": [
+                          },
+                          {
+                            "loop": {
+                              "index": "t",
+                              "to": 3,
+                              "body": [
                                 {
-                                  "ceil_div": [
-                                    {
-                                      "sub": [
-                                        {
-                                          "size": {
-                                            "ref": "f"
-                                          }
-                                        },
-                                        {
-                                          "param": "framing"
-                                        }
-                                      ]
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "f"
                                     },
-                                    {
-                                      "param": "np_chunk"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "div": [
-                                    {
-                                      "param": "xfer"
-                                    },
-                                    {
-                                      "param": "np_chunk"
-                                    }
-                                  ]
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
                                 }
                               ]
-                            },
-                            4
-                          ]
-                        },
-                        "body": [
+                            }
+                          },
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "f"
+                              },
+                              "len": {
+                                "param": "xfer"
+                              }
+                            }
+                          },
                           {
                             "lseek": {
                               "file": {
@@ -677,6 +741,245 @@
                               },
                               "offset": 0,
                               "whence": "CUR"
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "p",
+                              "to": {
+                                "ceil_div": [
+                                  {
+                                    "sub": [
+                                      {
+                                        "size": {
+                                          "ref": "f"
+                                        }
+                                      },
+                                      {
+                                        "param": "xfer"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "param": "np_chunk"
+                                  }
+                                ]
+                              },
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "pos",
+                                    "value": {
+                                      "cond": {
+                                        "if": {
+                                          "eq": [
+                                            {
+                                              "index": "p"
+                                            },
+                                            0
+                                          ]
+                                        },
+                                        "then": {
+                                          "mul": [
+                                            2,
+                                            {
+                                              "param": "xfer"
+                                            }
+                                          ]
+                                        },
+                                        "else": {
+                                          "add": [
+                                            {
+                                              "mul": [
+                                                {
+                                                  "index": "p"
+                                                },
+                                                {
+                                                  "param": "np_chunk"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "param": "xfer"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "let": {
+                                    "name": "direct",
+                                    "value": {
+                                      "min": [
+                                        {
+                                          "sub": [
+                                            {
+                                              "sub": [
+                                                {
+                                                  "param": "np_chunk"
+                                                },
+                                                {
+                                                  "param": "xfer"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "cond": {
+                                                "if": {
+                                                  "eq": [
+                                                    {
+                                                      "index": "p"
+                                                    },
+                                                    0
+                                                  ]
+                                                },
+                                                "then": {
+                                                  "param": "xfer"
+                                                },
+                                                "else": 0
+                                              }
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "mul": [
+                                            {
+                                              "div": [
+                                                {
+                                                  "sub": [
+                                                    {
+                                                      "sub": [
+                                                        {
+                                                          "size": {
+                                                            "ref": "f"
+                                                          }
+                                                        },
+                                                        {
+                                                          "ref": "pos"
+                                                        }
+                                                      ]
+                                                    },
+                                                    1
+                                                  ]
+                                                },
+                                                {
+                                                  "param": "xfer"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "param": "xfer"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "cond": {
+                                    "if": {
+                                      "gt": [
+                                        {
+                                          "ref": "direct"
+                                        },
+                                        0
+                                      ]
+                                    },
+                                    "then": [
+                                      {
+                                        "read": {
+                                          "file": {
+                                            "ref": "f"
+                                          },
+                                          "len": {
+                                            "ref": "direct"
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "param": "xfer"
+                                    }
+                                  }
+                                },
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "t",
+                              "to": {
+                                "sub": [
+                                  {
+                                    "ceil_div": [
+                                      {
+                                        "sub": [
+                                          {
+                                            "size": {
+                                              "ref": "f"
+                                            }
+                                          },
+                                          {
+                                            "param": "framing"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "param": "np_chunk"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "ceil_div": [
+                                      {
+                                        "sub": [
+                                          {
+                                            "size": {
+                                              "ref": "f"
+                                            }
+                                          },
+                                          {
+                                            "param": "xfer"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "param": "np_chunk"
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              "body": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                }
+                              ]
                             }
                           }
                         ]
@@ -756,12 +1059,12 @@
   "provenance": {
     "generator": {
       "script": "npy_per_sample.py",
-      "sha256": "2f03d651b5fb03f6837f3715d5ace38c13191b1cf62310880e4d133045ea9769",
-      "builder_version": "0.2.1",
-      "git": "fb9e001f282a-dirty"
+      "sha256": "c51900e7bddce814d8c06c9c542e3b59c2a12aaa0d1a61b3100937b07229606b",
+      "builder_version": "0.3.0",
+      "git": "7f9fd7113683-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "54aacfd3477c5708f60dc230b381270d40d68dc2c32d4e8c3194b53b85090760"
+    "ast_sha256": "3f24c2682c9af3d305c0b04add8a17bac19c9c0e4b55e148ce843e581990fb67"
   }
 }

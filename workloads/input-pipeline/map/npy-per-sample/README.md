@@ -32,6 +32,16 @@ aeiou-trace compare $C/captures/2026-10-01/trace.metrics.json abstract.metrics.j
 
 `builder/tests/test_trace.py` repeats the last two steps against the committed metrics.
 
+The trace above is of a 1 MiB buffer, where NumPy's 256 KiB chunks are drained from whole buffer
+fills. On storage whose `st_blksize` is smaller than a chunk (4096 on ext4, XFS, and tmpfs),
+CPython's `BufferedReader` reads the whole blocks of each chunk past its buffer and then refills
+it: per chunk a read of 252 KiB (248 KiB for the first), a 4 KiB refill, and the tell; the npy
+header takes a second 4 KiB fill, since zipfile reads at least 4096 bytes. Traced 2026-10-30
+with `np.load` alone (NumPy 2.5.4, Python 3.12.13, no DataLoader) over three archives on a local
+file system and held to that trace by `runner/aeiou/tests/golden.rs`
+(`npy_per_sample_under_a_small_buffer`); the abstract divided by zero there until then. A
+buffer between 4 KiB and 256 KiB is not traced (the second header fill would not happen).
+
 The script's `glob` (one `scandir` per directory) is the abstract's optional `walk`
 phase since 2026-10-02 (`enumerate` until 2026-10-13). At scale a job lists its corpus from an
 inventory instead: the optional `inventory` phase reads `train/inventory.txt`, whose shape is

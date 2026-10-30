@@ -8185,7 +8185,14 @@ workload: the application re-forks its workers each pass (four lanes of twelve u
 time) where the runner keeps two threads of 24, and the runner reads its `.aeiou-dataset.json`
 and stats the root. A bug on the way: `npy_per_sample` divides by zero on storage whose
 `st_blksize` is 4096, ext4's default, since `xfer` is the block size and the fill count is
-`xfer div np_chunk`; the spike ran with `--param xfer=1048576`. Not yet fixed.
+`xfer div np_chunk`; the spike ran with `--param xfer=1048576`. ~~Not yet fixed.~~ *Fixed
+2026-10-30:* the read loop as `np.load` issues it under a 4096-byte buffer, from an strace of
+three archives (the mechanism's README): per NumPy chunk, a read of the whole blocks past the
+buffer (the first 2 blocks short of a chunk, the rest 1, the last stopping at the block before
+the zip tail and skipped when that is none), a refill of one block, and a tell; the header's two
+fills and four tells first, so the tells stay `chunks + 4`. Under `when(xfer ≥ np_chunk)`, the
+1 MiB loop is unchanged and so are its fingerprints; a buffer strictly between 4 KiB and 256 KiB
+is not traced.
 
 **Four documents, two sides (the user's question).** A trace yields a digest (structure) and a
 metrics document (numbers); a model is an abstract (structure) and a parameters file (numbers).
