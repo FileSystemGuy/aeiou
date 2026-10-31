@@ -25,8 +25,8 @@ hyphenated. Inside:
   the options; and `[[assert]]` entries, what the record answers for the digest: a `template`
   glob (matched against the paths of a template), either `fact` and `value` or `question` and
   `answer` in the digest's own vocabulary (facts `candidates`, `passes`, `keys`, `requests`,
-  `size`, `values:<field>`; questions `selection`, `size`, `order`, `origin`, `reuse`, `skew`,
-  `memory`, `dependency`, `field:<field>`, each with its two candidates, see
+  `size`, `keep`, `writers`, `values:<field>`; questions `selection`, `size`, `order`, `origin`,
+  `reuse`, `skew`, `memory`, `dependency`, `label`, each with its two candidates, see
   `aeiou-trace(1)`), a `note`, the `source` and `confidence`, and an optional
   `when = { option = "...", choice = "..." }`.
 

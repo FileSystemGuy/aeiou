@@ -8128,19 +8128,20 @@ until a trace of each confirms them, which item 45(d) will.
 
 *Built 2026-10-29, step (4), the three site kinds, with the verdicts chosen here and open to
 the user's review:* `kind_of` sorts every template: a *set* (opened twice or more, read; the
-verdicts of §3.87), *keyed* (opened twice or more with a hex field or a path both written and
-read; the KV cache and the leaf fetch), *bulk write* (opened twice or more, only written; the
+verdicts of §3.87), *keyed* (~~opened twice or more with a hex field or a path both written and
+read; the KV cache and the leaf fetch~~ writes and reads interleaving, the KV cache, revised
+2026-10-30, point 1 below), *bulk write* (opened twice or more, only written; the
 checkpoint and the index build), *within* (one open read at eight or more offsets in more than
 one run; the index traversal). Keyed: keys, writes, reads after a write and before any, re-reads
 and the top tenth's share, the lag from write to read in time and in touches; `origin`
 (`traced` when every key read was written in the trace, else undecided between a warm cache
 from an earlier run and another writer the trace does not cover, settled by a trace from the
 start or of every writer), `reuse` (`repeated` when a key is read again, else undecided, settled
-by a longer trace), `size`. Bulk write: every int field of the name `varies`, or `constant` once
+by a longer trace), `size`. Bulk write: every int field of the name `varies`, ~~or `constant` once
 a path is written again, or undecided between a new value per write and a rewrite, settled by a
 second write (this is where ranks and steps become the field-level facts: `values:<field>` at
-scale for a varying field, and the question `field:<field>` for a constant one); `rewrite`,
-`sync` (the share of opens with an fsync), `size`. Within: reads, distinct offsets, the share
+scale for a varying field, and the question `field:<field>` for a constant one)~~ (revised
+2026-10-30, point 2 below); `rewrite`, `sync` (the share of opens with an fsync), `size`. Within: reads, distinct offsets, the share
 revisiting one, the span, sequential runs; `skew` judged against a uniform spread's top-tenth
 share, 0.1 (1 + 1.75 / sqrt(reads per offset)) from the Poisson counts a uniform draw gives,
 `skewed` above 1.5 of it, `uniform` below 1.2, undecided between or under fifty reads; and
@@ -8149,8 +8150,8 @@ file's size against the hosts' memory; the application's source, or the same que
 twice, since a dependent walk repeats its offsets exactly). Each kind's facts: keys and
 requests; values per field and the writes the benchmark makes; the file's size and the queries.
 Divergence at scale is a formula only for a set's selection; the other items rank by order with
-what differs at scale said in words. The records' vocabulary follows (`values:<field>`,
-`field:<field>`). Thirteen tests over constructed traces (`calls_strace`), the module at 100 %.
+what differs at scale said in words. The records' vocabulary follows (`values:<field>`~~,
+`field:<field>`~~). Thirteen tests over constructed traces (`calls_strace`), the module at 100 %.
 Not done here: the leaf fetch as a keyed site is read from an strace of the application that
 reads the leaves, which exists for no vector-search kit yet; the keyed verdicts were checked
 against the LMCache source's behavior (write once, read on a hit, never rewritten), not a trace.
@@ -8170,9 +8171,10 @@ here), at medium confidence until a real audit log is read. Ceph RGW's ops log a
 log stay as item 49's gap, as does the merge of an object log with an strace on the clock. Six
 tests over constructed logs of both formats.
 
-*Revised with the user 2026-10-30 (the step-4 verdicts reviewed; recorded, not yet built, so
+*Revised with the user 2026-10-30 (the step-4 verdicts reviewed; ~~recorded, not yet built, so
 the step-4 note above still describes the code; its superseded parts are struck when the digest
-changes, in Python or in the Rust of §3.89 stage 2, whichever comes first):*
+changes, in Python or in the Rust of §3.89 stage 2, whichever comes first~~ built in the Python
+digest 2026-10-31, the note below; the step-4 note's superseded parts struck):*
 
 1. **Keyed is the access pattern, not the name.** A keyed store (the KV cache) is written and
    then read at least once within one phase of a run; a KV cache has no phases. A leaf fetch in
@@ -8220,6 +8222,38 @@ changes, in Python or in the Rust of §3.89 stage 2, whichever comes first):*
    owner confirms the label when neither decides.
 6. **Phase detection and all-rank traces are their own items**, queued at the user's request:
    brief items 51 and 52.
+
+*Built 2026-10-31, points 1 to 4 in the Python digest (test first; Rust is §3.89 stage 2):* a
+site is now a template or, where a template is two phases, the opens of one (`phase` `write`
+or `read`, shown `0/write`), and an answer may name the phase; without one it answers every
+site of the template that has its fact or question, so a record's assertion needs no phase.
+`parts_of` sorts a template: reads and writes interleaving (a read before a later write, or an
+open both read and written) is `keyed`, its hex name recorded as `hex_name`, support only;
+every write before every read is a `bulk_write` part and a `set` part, the bulk write's label
+refuted as a checkpoint ("read after its first write"); every read before the first write, of
+paths never written, is a new kind, `restore` (files, bytes, `size`; no facts), then the bulk
+write, which lists the restore among its supports; read-only hex names are a set, noted. Bulk
+write: the saves are bursts (`saves_of`: an open begins the next once it starts later after
+the burst than the burst has lasted), `simultaneous` when each save's lanes open their first
+files within a quarter of its length (`SIMULTANEOUS`, chosen here: a start window small
+against the save, which the user's "nearly simultaneous" leaves to us), `one_writer` (one lane:
+DDP accepted, the fact `writers` asked), `staggered` (a save whose lanes start far apart), or
+`mixed`, with the interval between saves' starts as the cadence; a field is `varies`,
+`constant` once two saves keep it, else undecided until a second save and asked as
+`values:<field>` (the `field:<field>` question and its candidates gone, from the records'
+vocabulary too); `rewrite` notes that a rewritten path is evidence against a checkpoint;
+`retention` from the template's successful unlinks (a new `removes` list per template),
+`kept`, `keeps` N (the most saves held just after a deletion, every deletion after a later
+save was stable), or `unsafe` (a save, or a path the trace never wrote, deleted before any
+later save was stable), with the fact `keep` checked against it; and a new question, `label`,
+`checkpoint` or `output`, decided `output` by a rewrite or a read after the first write, never
+`checkpoint` by a trace, with the evidence that `supports` a checkpoint listed (a simultaneous
+start, one writing lane, every file fsynced, a restore, a safe retention). The
+pytorch-dcp 2.14 record asserts `label` `checkpoint` for its shards, from the DCP documentation
+it already cites. Point 5's records (DeepSpeed, Megatron-LM, Hugging Face Trainer, Lightning)
+wait for their sources to be read. Not built: a burst's completion spread, which point 4 says
+only supports; a "near the start" test for a restore, read as "before the first write".
+Eleven tests changed or added in `test_digest.py`, the record test in `test_applications.py`.
 
 ### 3.89 One observation document, the digest-to-digest comparison, and `aeiou-trace` in Rust (designed with the user 2026-10-29)
 

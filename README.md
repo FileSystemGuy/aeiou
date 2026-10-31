@@ -347,7 +347,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-29)
+## Status (2026-10-31)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -513,8 +513,14 @@ Not built, in rough order of interest:
   is a binary of the runner's crate, its strace reader, exporter, and object-log reader ported
   from the Python and held to a golden corpus of every trace the Python tests used, 13 to 15
   times faster and in a tenth to a twentieth of the memory; `compare` and `digest` still run the
-  Python's until their stages. To build next: the digest's analysis and the version-2 document
-  in Rust (after the user reviews the step-4 verdicts of §3.88), then the comparison;
+  Python's until their stages. The step-4 verdicts revised with the user 2026-10-30 and built
+  in the Python digest 2026-10-31 (§3.88): keyed is writes and reads interleaving, a hex name
+  only supporting it; all writes before all reads is two sites, a bulk write and a reader;
+  reads of paths never written before the first write a restore; a bulk write's saves found
+  as bursts (simultaneous across lanes, one writer, staggered) with their interval, its
+  retention (kept, keeps N, unsafe), and whether it is a checkpoint, which a rewrite or a read
+  after the first write refutes and nothing in a trace decides. To build next: the digest's
+  analysis and the version-2 document in Rust, then the comparison;
   `aeiou-catalog disclose`, every string
   and number a contribution would publish (item 47); a fitting skill in the open skill format
   over those tools and `aeiou-fit`, evaluated against the committed captures, beside a written

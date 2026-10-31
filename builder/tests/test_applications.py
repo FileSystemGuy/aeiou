@@ -156,9 +156,12 @@ when = { option = "sync_files", choice = "fsync off" }
     got = ap.assertions(r, {}, templates)
     assert got == [{"template": "ckpt/step_{a:06}/__{b}_0.distcp", "question": "size", "answer": "per-path",
                     "note": "a rank's shard holds the bytes of its plan's items; the bytes are a property of the file, the same at every load",
-                    "by": "PyTorch Distributed Checkpoint 2.14 record, read 2026-10-29 (high confidence)", "source": "workloads/checkpointing/dcp-load/kit/params.py (the plan read from .metadata)"}]
+                    "by": "PyTorch Distributed Checkpoint 2.14 record, read 2026-10-29 (high confidence)", "source": "workloads/checkpointing/dcp-load/kit/params.py (the plan read from .metadata)"},
+                   {"template": "ckpt/step_{a:06}/__{b}_0.distcp", "question": "label", "answer": "checkpoint",
+                    "note": "the shards are a training job's state, saved to survive a failure and loaded to resume",
+                    "by": "PyTorch Distributed Checkpoint 2.14 record, read 2026-10-29 (high confidence)", "source": "https://docs.pytorch.org/docs/stable/distributed.checkpoint.html"}]
     got = ap.assertions(r, {"sync_files": "fsync off"}, templates)
-    assert [a.get("fact") or a["question"] for a in got] == ["size", "passes"] and got[1]["value"] == 3 and "medium confidence" in got[1]["by"]
+    assert [a.get("fact") or a["question"] for a in got] == ["size", "label", "passes"] and got[2]["value"] == 3 and "medium confidence" in got[2]["by"]
     assert ap.assertions(r, {}, [("other/{a}.bin", ["other/1.bin"])]) == []
     milvus = ap.load(tree)["milvus"].records[0]
     spots = ap.blind_spots(milvus, {"mmap_vector_field": "memory-mapped", "mmap_vector_index": "loaded into memory"})

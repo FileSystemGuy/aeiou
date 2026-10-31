@@ -716,22 +716,40 @@ exists, and `--no-questions` is absent, and it refuses `-` as the trace. `tests/
 holds the verdicts to constructed sequences, the answers to their checks, the interview to a
 scripted console, and the command to its refusals.
 
-**The site kinds (built 2026-10-29, §3.88):** `kind_of` sorts a template into a `set` (opened
-twice or more, read: the verdicts above), `keyed` (opened twice or more with a hex field or a
-path both written and read: `keyed_of` counts keys, writes, reads after a write and before any,
-re-reads and the top tenth's share, the lag from write to read as histograms of nanoseconds and
-of touches; verdicts `lag`, `origin`, `reuse`, `size`), `bulk_write` (opened twice or more and
-only written: `bulk_of` gives every int field a verdict, `varies`, `constant` once a path is
-written again, else undecided; `rewrite`, `sync`, `size`), or `within` (one open read at eight
-or more offsets in more than one run: `within_of` gives reuse, span, sequential runs, `skew`
-against a uniform spread's top-tenth share, 0.1 (1 + 1.75 / sqrt(reads per offset)), and the
-two verdicts no trace decides, `memory` and `dependency`). `facts_of` names each kind's facts
-(`candidates` and `passes`; `keys` and `requests`; `values:<field>` per varying field and
-`passes`; `size` and `requests`), `questions_of` its questions (`field:<field>` per int field of
-a bulk write, then the kind's), `verdict_of` the verdict a question is about, `candidates_of`
-a question's candidates, and `site_line` the one line of evidence the interview and the report
-show per kind. A site's `projection` holds its kind's facts, given or None, and which were
-asserted. `tests/test_digest.py` holds each kind to constructed traces (`calls_strace`).
+**The site kinds (built 2026-10-29, revised 2026-10-30, §3.88):** `parts_of` turns a
+template into its sites, each a `Part` (the template, its kind, its `phase`, its opens):
+one site of its kind, or, where the template is two phases, two with `phase` `write` and
+`read`. A `set` (opened twice or more, read: the verdicts above; read-only names with a hex
+field noted that a store written elsewhere fits too); `keyed` (writes and reads
+interleaving, a read before a later write or an open both read and written; a hex field
+only supports it, `hex_name`: `keyed_of` counts keys, writes, reads after a write and
+before any, re-reads and the top tenth's share, the lag from write to read as histograms
+of nanoseconds and of touches; verdicts `lag`, `origin`, `reuse`, `size`); every write
+before every read is a `bulk_write` part and a `set` part; every read before the first
+write, of paths never written, a `restore` part (files and bytes; `size`) and a
+`bulk_write` part; `bulk_write` (opened twice or more and only written: `bulk_of` finds
+the saves, `saves_of`'s bursts, an open beginning the next once it starts later after the
+burst than the burst has lasted, judged `simultaneous` when each save's lanes open their
+first files within `SIMULTANEOUS` (a quarter) of its length, `one_writer`, `staggered`, or
+`mixed`, with their lanes, spread, length, and interval; every field over the part's paths
+(`fields_of`), `varies`, `constant` over two saves or more, else undecided; `rewrite`,
+whose paths written again are evidence against a checkpoint; `sync`; `retention_of` from
+the template's successful unlinks, `kept`, `keeps` N, or `unsafe`; `label`, `output` with
+the refuting evidence (a rewrite, a read after the first write) or undecided with what
+`supports` a checkpoint; `size`), or `within` (one open read at eight or more offsets in
+more than one run: `within_of` gives reuse, span, sequential runs, `skew` against a uniform
+spread's top-tenth share, 0.1 (1 + 1.75 / sqrt(reads per offset)), and the two verdicts no
+trace decides, `memory` and `dependency`). `facts_of` names each part's facts
+(`candidates` and `passes`; `keys` and `requests`; `values:<field>` per int field not
+constant, `passes`, `keep`, and `writers` for one writing lane; none for a restore; `size`
+and `requests`), `fact_check` holds each to the part, `questions_of` a site's questions
+(`QUESTIONS_OF`), `verdict_of` the verdict a question is about, `candidates_of` a
+question's candidates, `site_name` a site as `0` or `0/write`, and `site_line` the one line
+of evidence the interview and the report show per kind. An answer names a `phase` to reach
+one site of a split template, else it answers each site of the template that has its fact
+or question. A site's `projection` holds its kind's facts, given or None, and which were
+asserted. `tests/test_digest.py` holds each kind to constructed traces (`calls_strace`,
+whose entries may place an open in time and unlink a path).
 
 **Object-store request logs (~~`aeiou/objectlog.py`~~ `runner/aeiou/src/objectlog.rs` since the port
 the same day, §3.89; built 2026-10-29, §3.88):** a MinIO audit log

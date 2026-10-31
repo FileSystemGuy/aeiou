@@ -946,7 +946,10 @@ numbers; the order is this note's.
     records (`--applications`, `--application`; `aeiou/applications.py`), and the three site
     kinds beside the set, keyed, bulk write, and within one open, each with its facts (keys and
     requests; values per field, ranks and steps; size and queries) and questions, and the
-    object-log readers of item 49. Not yet: digest-to-digest comparison, `aeiou-catalog disclose`. *2026-10-29, `DESIGN_REVIEW.md` §3.89 (designed with the user):* one
+    object-log readers of item 49. *Revised 2026-10-30 and built 2026-10-31 (§3.88):* keyed is
+    writes and reads interleaving; all writes before all reads two sites; a restore kind; a bulk
+    write's saves, retention, and `label` (checkpoint or output), the facts `keep` and `writers`,
+    the `field:` questions gone. Not yet: digest-to-digest comparison, `aeiou-catalog disclose`. *2026-10-29, `DESIGN_REVIEW.md` §3.89 (designed with the user):* one
     observation document, `aeiou_digest: 2`, the digest's structure and the metrics of the same
     events, `aeiou-trace metrics` retired and `dry-run --metrics-json` writing the same document;
     `aeiou-trace compare` over two of them, structure by equality and numbers by the tolerance

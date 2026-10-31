@@ -953,44 +953,57 @@ def test_cli_states_the_application_and_replays_it(tmp_path, monkeypatch):
     assert again["application"] == doc["application"] and again["asserted"] == doc["asserted"]
 
 
-# ---------------------------------------------------------------- the site kinds (§3.88 step 4)
+# ---------------------------------------------------------------- the site kinds (§3.88 step 4, revised 2026-10-30)
 
 
 def calls_strace(seq, root="/d", t0=1700000000.0, gap=0.001):
-    """An strace of arbitrary opens: `seq` is (tid, path, ops), ops a list of ("read", n) |
-    ("write", n) | ("pread", n, offset) | ("pwrite", n, offset) | ("fsync",), each open one line per
-    call, `gap` seconds apart, closed at the end."""
+    """An strace of arbitrary opens: `seq` is (tid, path, ops) or (tid, path, ops, t), ops a list
+    of ("read", n) | ("write", n) | ("rw", n) | ("pread", n, offset) | ("pwrite", n, offset) |
+    ("fsync",), each open one line per call, `gap` seconds apart, closed at the end; `t` places
+    the open at t0 + t seconds, else it follows the one before; ops [("unlink",)] is an unlink of
+    the path and no open. The lines are written in time order, lanes interleaving."""
     lines, t, fd = [], t0, 3
-    for tid, path, ops in seq:
-        flags = "O_RDONLY" if all(o[0] in ("read", "pread") for o in ops) else "O_WRONLY|O_CREAT"
-        lines.append(f'{tid} {t:.6f} openat(AT_FDCWD</d>, "{root}/{path}", {flags}|O_CLOEXEC, 0644) = {fd}<{root}/{path}> <0.000010>')
+    for entry in seq:
+        tid, path, ops = entry[:3]
+        if len(entry) == 4:
+            t = t0 + entry[3]
+        if ops == [("unlink",)]:
+            lines.append((t, f'{tid} {t:.6f} unlink("{root}/{path}") = 0 <0.000010>'))
+            t += gap
+            continue
+        flags = "O_RDONLY" if all(o[0] in ("read", "pread") for o in ops) else ("O_RDWR|O_CREAT" if any(o[0] == "rw" for o in ops) else "O_WRONLY|O_CREAT")
+        lines.append((t, f'{tid} {t:.6f} openat(AT_FDCWD</d>, "{root}/{path}", {flags}|O_CLOEXEC, 0644) = {fd}<{root}/{path}> <0.000010>'))
         t += gap
         for o in ops:
-            if o[0] == "read":
-                lines.append(f'{tid} {t:.6f} read({fd}<{root}/{path}>, "x"..., {o[1]}) = {o[1]} <0.000100>')
+            if o[0] in ("read", "rw"):
+                lines.append((t, f'{tid} {t:.6f} read({fd}<{root}/{path}>, "x"..., {o[1]}) = {o[1]} <0.000100>'))
+                if o[0] == "rw":
+                    t += gap
+                    lines.append((t, f'{tid} {t:.6f} write({fd}<{root}/{path}>, "x"..., {o[1]}) = {o[1]} <0.000100>'))
             elif o[0] == "write":
-                lines.append(f'{tid} {t:.6f} write({fd}<{root}/{path}>, "x"..., {o[1]}) = {o[1]} <0.000100>')
+                lines.append((t, f'{tid} {t:.6f} write({fd}<{root}/{path}>, "x"..., {o[1]}) = {o[1]} <0.000100>'))
             elif o[0] == "pread":
-                lines.append(f'{tid} {t:.6f} pread64({fd}<{root}/{path}>, "x"..., {o[1]}, {o[2]}) = {o[1]} <0.000100>')
+                lines.append((t, f'{tid} {t:.6f} pread64({fd}<{root}/{path}>, "x"..., {o[1]}, {o[2]}) = {o[1]} <0.000100>'))
             elif o[0] == "pwrite":
-                lines.append(f'{tid} {t:.6f} pwrite64({fd}<{root}/{path}>, "x"..., {o[1]}, {o[2]}) = {o[1]} <0.000100>')
+                lines.append((t, f'{tid} {t:.6f} pwrite64({fd}<{root}/{path}>, "x"..., {o[1]}, {o[2]}) = {o[1]} <0.000100>'))
             else:
-                lines.append(f"{tid} {t:.6f} fsync({fd}<{root}/{path}>) = 0 <0.000500>")
+                lines.append((t, f"{tid} {t:.6f} fsync({fd}<{root}/{path}>) = 0 <0.000500>"))
             t += gap
-        lines.append(f"{tid} {t:.6f} close({fd}<{root}/{path}>) = 0 <0.000005>")
+        lines.append((t, f"{tid} {t:.6f} close({fd}<{root}/{path}>) = 0 <0.000005>"))
         t += gap * 10
         fd += 1
-    return "\n".join(lines) + "\n"
+    return "\n".join(line for _, line in sorted(lines, key=lambda x: x[0])) + "\n"
 
 
 KEYS = ["3f2a9c0e1b7d4e6f8a9b0c1d2e3f4a5b", "0000111122223333444455556666777a", "deadbeefdeadbeefdeadbeefdeadbeef", "cafebabecafebabecafebabecafebabe"]
 
 
 def kv_trace():
-    """A KV cache: four keys written once, three read after their write (one of them twice), and one key read that the trace never saw written."""
+    """A KV cache: four keys written once, their reads interleaving with the writes, three read
+    after their write (one of them twice), and one key read that the trace never saw written."""
     k = [f"kv/{h}.pt" for h in KEYS]
-    seq = [(100, k[0], [("write", 8192)]), (100, k[1], [("write", 8192)]), (100, k[2], [("write", 8192)]), (100, k[3], [("write", 8192)]),
-           (101, k[0], [("read", 8192)]), (101, k[1], [("read", 8192)]), (101, "kv/9999888877776666555544443333222a.pt", [("read", 8192)]),
+    seq = [(100, k[0], [("write", 8192)]), (100, k[1], [("write", 8192)]), (101, k[0], [("read", 8192)]), (100, k[2], [("write", 8192)]),
+           (101, k[1], [("read", 8192)]), (101, "kv/9999888877776666555544443333222a.pt", [("read", 8192)]), (100, k[3], [("write", 8192)]),
            (101, k[0], [("read", 8192)]), (101, k[2], [("read", 8192)])]
     return calls_strace(seq)
 
@@ -998,7 +1011,7 @@ def kv_trace():
 def test_a_keyed_site_counts_keys_hits_and_the_lag_from_write_to_read():
     d = digest_of(kv_trace())
     (s,) = d["sites"]
-    assert s["kind"] == "keyed" and s["template"] == 0 and s["touches"] == 9 and s["distinct"] == 5
+    assert s["kind"] == "keyed" and s["template"] == 0 and s["phase"] is None and s["touches"] == 9 and s["distinct"] == 5 and s["hex_name"] is True
     a = s["access"]
     assert a == {"keys": 5, "written": 4, "read": 4, "reads": 5, "writes": 4, "written_once_share": 1.0, "read_after_write": 4, "read_before_write": 1,
                  "rereads": 1, "reread_share": 0.2, "top_10pct_share": 0.4, "reads_per_key": a["reads_per_key"]}
@@ -1009,28 +1022,38 @@ def test_a_keyed_site_counts_keys_hits_and_the_lag_from_write_to_read():
     assert s["size"]["verdict"] == "constant"
     assert "selection" not in s and "order" not in s
     assert [(it["question"], it["candidates"]) for it in d["open"]] == [("origin", ["earlier_run", "other_writer"])]
-    assert "never wrote" in d["open"][0]["ask"] and d["open"][0]["divergence"] == 0.0
+    assert "never wrote" in d["open"][0]["ask"] and d["open"][0]["divergence"] == 0.0 and "phase" not in d["open"][0]
     assert s["projection"] == {"keys": None, "requests": None, "asserted": []}
 
 
-def test_a_keyed_site_with_every_key_traced_and_no_reread_leaves_reuse_open():
-    k = [f"kv/{h}.pt" for h in KEYS[:2]]
-    d = digest_of(calls_strace([(1, k[0], [("write", 100)]), (1, k[1], [("write", 200)]), (2, k[0], [("read", 100)]), (2, k[1], [("read", 200)])]))
+def test_keyed_is_writes_and_reads_interleaving_and_a_hex_name_only_supports_it():
+    k = [f"kv/{h}.pt" for h in KEYS[:3]]
+    d = digest_of(calls_strace([(1, k[0], [("write", 100)]), (2, k[0], [("read", 100)]), (1, k[1], [("write", 200)]), (2, k[1], [("read", 200)])]))
     (s,) = d["sites"]
-    assert s["origin"]["verdict"] == "traced" and s["reuse"]["verdict"] == "undecided" and s["lag"]["verdict"] == "write_then_read"
+    assert s["kind"] == "keyed" and s["origin"]["verdict"] == "traced" and s["reuse"]["verdict"] == "undecided" and s["lag"]["verdict"] == "write_then_read"
     assert [it["question"] for it in d["open"]] == ["reuse"] and d["open"][0]["candidates"] == ["once", "repeated"]
     assert s["size"]["verdict"] == "per-path"
-    # a hex key alone makes the site keyed, reads only: read_only, origin undecided
+    # hex names read and never written: a sample set, noted that a store written elsewhere fits it
     d = digest_of(calls_strace([(2, k[0], [("read", 100)]), (2, k[1], [("read", 200)])]))
     (s,) = d["sites"]
-    assert s["kind"] == "keyed" and s["lag"]["verdict"] == "read_only" and s["access"]["written"] == 0 and s["origin"]["verdict"] == "undecided"
-    # written and never read: write_only, nothing open about origin or reuse
+    assert s["kind"] == "set" and "written elsewhere" in s["note"]
+    # hex names written and never read: a bulk write
     d = digest_of(calls_strace([(1, k[0], [("write", 100)]), (1, k[1], [("write", 200)])]))
+    assert [s["kind"] for s in d["sites"]] == ["bulk_write"]
+    # interleaving without a hex name is keyed, the name no support
+    d = digest_of(calls_strace([(1, "spill/7.bin", [("write", 100)]), (1, "spill/7.bin", [("read", 100)]), (1, "spill/8.bin", [("write", 100)])]))
     (s,) = d["sites"]
-    assert s["lag"]["verdict"] == "write_only" and s["origin"]["verdict"] == "traced" and s["reuse"]["verdict"] == "undecided"
-    # a path written then read without a hex key is keyed too
-    d = digest_of(calls_strace([(1, "spill/7.bin", [("write", 100)]), (1, "spill/8.bin", [("write", 100)]), (1, "spill/7.bin", [("read", 100)])]))
-    assert d["sites"][0]["kind"] == "keyed"
+    assert s["kind"] == "keyed" and s["hex_name"] is False
+    # an open both read and written interleaves within itself
+    d = digest_of(calls_strace([(1, "db/1.bin", [("rw", 100)]), (1, "db/2.bin", [("rw", 100)])]))
+    assert [s["kind"] for s in d["sites"]] == ["keyed"]
+    # reads before writes of the same paths: a path read and then written again
+    d = digest_of(calls_strace([(1, "spill/1.bin", [("read", 100)]), (1, "spill/2.bin", [("read", 100)]), (1, "spill/1.bin", [("write", 100)])]))
+    assert [s["kind"] for s in d["sites"]] == ["keyed"]
+    # interleaved with no read after a write of its key
+    d = digest_of(calls_strace([(2, k[0], [("read", 100)]), (1, k[1], [("write", 100)]), (2, k[2], [("read", 100)])]))
+    (s,) = d["sites"]
+    assert s["kind"] == "keyed" and s["lag"]["verdict"] == "no_read_after_write"
 
 
 def test_keyed_facts_and_answers():
@@ -1056,63 +1079,171 @@ def test_keyed_facts_and_answers():
     assert [(a.get("fact") or a["question"]) for a in answers] == ["keys", "origin"]
 
 
-def dcp_save(steps=1, rewrite=False):
-    seq = []
-    for step in range(1, steps + 1):
-        for rank in range(2):
-            seq.append((100 + rank, f"ckpt/step_{step:06}/__{rank}_0.distcp", [("write", 4096 * (rank + 1)), ("fsync",)]))
-        seq.append((100, f"ckpt/step_{step:06}/.metadata", [("write", 512)]))
-    if rewrite:
-        seq.append((100, "ckpt/step_000001/__0_0.distcp", [("write", 4096)]))
+def build_search():
+    """A leaf store: three leaves written by a build, then read by a search; never interleaving."""
+    seq = [(1, f"leaves/{i}.bin", [("write", 4096 * (i + 1))]) for i in range(3)]
+    seq += [(2, f"leaves/{i}.bin", [("read", 4096 * (i + 1))]) for i in (2, 0, 1)]
     return calls_strace(seq)
 
 
-def test_a_bulk_write_site_judges_its_fields_the_rewrite_and_the_syncs():
+def test_all_writes_before_all_reads_is_two_phases_a_bulk_write_and_a_reader():
+    d = digest_of(build_search())
+    assert [(s["template"], s["phase"], s["kind"], s["touches"]) for s in d["sites"]] == [(0, "write", "bulk_write", 3), (0, "read", "set", 3)]
+    w = d["sites"][0]
+    assert w["label"]["verdict"] == "output" and w["label"]["refuted"] == {"checkpoint": "read after its first write: a checkpoint is read only after a failure, in another trace"}
+    assert w["saves"]["verdict"] == "one_writer" and w["saves"]["count"] == 3
+    assert [(it["site"], it["phase"], it["question"]) for it in d["open"]] == [(0, "read", "selection"), (0, "write", "size"), (0, "read", "size"), (0, "read", "order")]
+    t = "leaves/{a}.bin"
+    d = answered(build_search(), [{"template": t, "question": "label", "answer": "checkpoint"},
+                                  {"template": t, "question": "selection", "answer": "consume"},
+                                  {"template": t, "question": "size", "answer": "per-path", "phase": "write"},
+                                  {"template": t, "fact": "keep", "value": 1, "phase": "read"},
+                                  {"template": t, "fact": "passes", "value": 2, "phase": "sideways"}])
+    assert [(a["phase"], a["question"]) for a in d["asserted"]] == [("read", "selection"), ("write", "size")]
+    assert [r["why"] for r in d["rejected"]] == [
+        "the trace decided output: read after its first write: a checkpoint is read only after a failure, in another trace",
+        "no such fact for a set site: candidates, passes",
+        "no such phase here: write, read",
+    ]
+    assert d["sites"][1]["selection"]["asserted"]["answer"] == "consume" and "asserted" not in d["sites"][1]["size"]
+    # a phase of one open is a site only when it is one read at many offsets
+    idx = [("pread", 4096, 4096 * i) for i in (5, 1, 9, 2, 7, 3, 8, 0)]
+    d = digest_of(calls_strace([(1, "idx/0.bin", [("write", 65536)]), (1, "idx/1.bin", [("write", 65536)]), (2, "idx/0.bin", idx)]))
+    assert [(s["phase"], s["kind"]) for s in d["sites"]] == [("write", "bulk_write"), ("read", "within")]
+    d = digest_of(calls_strace([(1, "idx/0.bin", [("write", 65536)]), (2, "idx/0.bin", [("read", 100)]), (2, "idx/1.bin", [("read", 100)])]))
+    assert [(s["phase"], s["kind"]) for s in d["sites"]] == [("read", "set")]
+
+
+def restore_save():
+    """A job restarted: each rank reads its shard of step 1, then saves step 2."""
+    return calls_strace([(100, "ckpt/step_000001/__0_0.distcp", [("read", 4096)], 0), (101, "ckpt/step_000001/__1_0.distcp", [("read", 8192)], 0.0001),
+                         (100, "ckpt/step_000002/__0_0.distcp", [("write", 4096), ("fsync",)], 10), (101, "ckpt/step_000002/__1_0.distcp", [("write", 8192), ("fsync",)], 10.0001)])
+
+
+def test_reads_before_the_first_write_of_paths_never_written_are_a_restore():
+    d = digest_of(restore_save())
+    assert [(s["phase"], s["kind"]) for s in d["sites"]] == [("read", "restore"), ("write", "bulk_write")]
+    r, w = d["sites"]
+    assert r["restore"] == {"files": 2, "bytes": 12288} and r["projection"] == {"asserted": []}
+    assert [(f["name"], f["values"], f["verdict"]) for f in w["fields"]] == [("a", 1, "undecided"), ("b", 2, "varies"), ("c", 1, "undecided")]
+    assert w["label"]["verdict"] == "undecided" and w["label"]["supports"] == [
+        "every save starts on all its lanes together", "every file fsynced", "2 file(s) of it read before its first write and never written: a restore"]
+    assert digest.facts_of(digest.parts_of(digest.analyze(restore_save().splitlines(True), "/d").templates[0])[0]) == []
+
+
+def dcp_save(steps=1, rewrite=False, keep=None, unsafe=False, prior=False):
+    """DCP saves 10 s apart, each rank's shard opened together and fsynced, then rank 0's
+    `.metadata`; `keep` deletes the shards of the save `keep` back once the next is written,
+    `unsafe` deletes the last one's before the next starts, `prior` deletes a save from before
+    the trace after the first, and `rewrite` writes a shard of step 1 again."""
+    seq = []
+    for step in range(1, steps + 1):
+        base = 10 * step
+        if unsafe and step >= 2:
+            seq += [(100, f"ckpt/step_{step - 1:06}/__{r}_0.distcp", [("unlink",)], base - 1 + 0.001 * r) for r in range(2)]
+        for rank in range(2):
+            seq.append((100 + rank, f"ckpt/step_{step:06}/__{rank}_0.distcp", [("write", 4096 * (rank + 1)), ("fsync",)], base + 0.0001 * rank))
+        seq.append((100, f"ckpt/step_{step:06}/.metadata", [("write", 512)], base + 0.01))
+        if keep and step > keep:
+            seq += [(100, f"ckpt/step_{step - keep:06}/__{r}_0.distcp", [("unlink",)], base + 0.02 + 0.001 * r) for r in range(2)]
+        if prior and step == 1:
+            seq.append((100, "ckpt/step_000000/__0_0.distcp", [("unlink",)], base + 0.02))
+    if rewrite:
+        seq.append((100, "ckpt/step_000001/__0_0.distcp", [("write", 4096)], 10 * (steps + 1)))
+    return calls_strace(seq)
+
+
+def test_a_bulk_write_site_judges_its_saves_fields_retention_and_label():
     d = digest_of(dcp_save())
     (s,) = d["sites"]   # the shard template; .metadata is written once, one open, no site
     assert s["kind"] == "bulk_write" and s["touches"] == 2 and s["distinct"] == 2
     assert s["rewrite"] == {"verdict": "new_names", "rewritten_paths": 0}
     assert [(f["name"], f["values"], f["verdict"]) for f in s["fields"]] == [("a", 1, "undecided"), ("b", 2, "varies"), ("c", 1, "undecided")]
-    assert s["fields"][0]["settles"] == "a second write of this kind of file: a new value is a name per write, the same value a rewrite"
+    assert s["fields"][0]["settles"].startswith("a second save")
     assert s["sync"] == {"fsync_share": 1.0, "opens": 2}
+    sv = s["saves"]
+    assert sv["verdict"] == "simultaneous" and sv["count"] == 1 and sv["lanes"]["max"] == 2 and sv["interval_ns"]["n"] == 0 and sv["start_spread_ns"]["max"] <= 200_000
+    assert s["retention"] == {"verdict": "kept", "deleted": 0, "unsafe": 0}
+    assert s["label"]["verdict"] == "undecided" and s["label"]["consistent"] == ["checkpoint", "output"] and s["label"]["supports"] == ["every save starts on all its lanes together", "every file fsynced"]
     assert s["size"]["verdict"] == "undecided"
-    assert [(it["question"], it["candidates"]) for it in d["open"]] == [("field:a", ["new_values", "constant"]), ("field:c", ["new_values", "constant"]), ("size", ["per-path", "drawn"])]
-    assert "field a, 1 in the trace" in d["open"][0]["ask"]
-    assert s["projection"] == {"values:b": None, "passes": None, "asserted": []}
-    # two steps: the step field varies, no question about it; the rank field's values at scale is a fact
+    assert [(it["question"], it["candidates"]) for it in d["open"]] == [("label", ["checkpoint", "output"]), ("size", ["per-path", "drawn"])]
+    assert "read back only after one" in d["open"][0]["ask"]
+    assert s["projection"] == {"values:a": None, "values:b": None, "values:c": None, "passes": None, "keep": None, "asserted": []}
+    # two saves: the step field varies, the item field holds one value over both, so it is constant and no fact
     d = digest_of(dcp_save(steps=2))
     s = d["sites"][0]
-    assert [(f["name"], f["verdict"]) for f in s["fields"]] == [("a", "varies"), ("b", "varies"), ("c", "undecided")] and s["size"]["verdict"] == "undecided"
-    assert s["projection"] == {"values:a": None, "values:b": None, "passes": None, "asserted": []}
-    # a rewrite decides every constant field: the same names come again
+    assert [(f["name"], f["verdict"]) for f in s["fields"]] == [("a", "varies"), ("b", "varies"), ("c", "constant")]
+    assert s["saves"]["count"] == 2 and s["saves"]["interval_ns"]["n"] == 1
+    assert s["projection"] == {"values:a": None, "values:b": None, "passes": None, "keep": None, "asserted": []}
+    # a rewrite is evidence against a checkpoint, which is never overwritten
     d = digest_of(dcp_save(rewrite=True))
     s = d["sites"][0]
-    assert s["rewrite"] == {"verdict": "overwrite", "rewritten_paths": 1} and [f["verdict"] for f in s["fields"]] == ["constant", "varies", "constant"]
+    assert s["rewrite"]["verdict"] == "overwrite" and s["rewrite"]["rewritten_paths"] == 1 and "never overwritten" in s["rewrite"]["note"]
+    assert [f["verdict"] for f in s["fields"]] == ["constant", "varies", "constant"] and s["saves"]["verdict"] == "mixed"
+    assert s["label"] == {"verdict": "output", "refuted": {"checkpoint": "1 path(s) written again: a checkpoint is never overwritten"},
+                          "supports": [], "settles": "decided"}
     assert s["size"]["verdict"] == "per-path" and d["open"] == []
+
+
+def test_retention_is_kept_keeps_n_or_unsafe():
+    s = digest_of(dcp_save(steps=3, keep=1))["sites"][0]
+    assert s["retention"] == {"verdict": "keeps", "n": 1, "deleted": 4, "unsafe": 0}
+    assert "earlier saves deleted only once the next was stable (keeps 1)" in s["label"]["supports"]
+    s = digest_of(dcp_save(steps=2, keep=2))["sites"][0]
+    assert s["retention"] == {"verdict": "kept", "deleted": 0, "unsafe": 0}
+    s = digest_of(dcp_save(prior=True))["sites"][0]   # a save from before the trace, deleted once the first is stable
+    assert s["retention"] == {"verdict": "keeps", "n": 1, "deleted": 1, "unsafe": 0}
+    s = digest_of(dcp_save(steps=2, unsafe=True))["sites"][0]
+    assert s["retention"]["verdict"] == "unsafe" and s["retention"]["unsafe"] == 2 and "contradicts what a checkpoint is for" in s["retention"]["note"]
+
+
+def test_one_writing_lane_is_accepted_and_the_writers_asked():
+    seq = [(100, f"ckpt/step_{s:06}.pt", [("write", 1 << 20)], 10 * s) for s in (1, 2, 3)]
+    an = digest.analyze(calls_strace(seq).splitlines(True), "/d")
+    (part,) = digest.parts_of(an.templates[0])
+    assert [n for n, _ in digest.facts_of(part)] == ["values:a", "passes", "keep", "writers"]
+    s = digest.document(an)["sites"][0]
+    assert s["saves"]["verdict"] == "one_writer" and s["saves"]["count"] == 3 and s["saves"]["interval_ns"]["n"] == 2
+    assert s["saves"]["interval_ns"]["mean"] == pytest.approx(10e9, rel=1e-3)
+    assert s["label"]["supports"] == ["one writing lane, as plain DDP's rank 0"]
+    # lanes whose opens overlap but start far apart against the burst's length are no checkpoint's burst
+    seq = [(100, "out/part_0.bin", [("write", 4096)], 0), (101, "out/part_1.bin", [("write", 4096)], 0.0015)]
+    s = digest_of(calls_strace(seq))["sites"][0]
+    assert s["saves"]["verdict"] == "staggered" and s["saves"]["count"] == 1
 
 
 def test_bulk_write_facts_and_answers():
     t = "ckpt/step_{a:06}/__{b}_{c}.distcp"
     d = answered(dcp_save(), [{"template": t, "fact": "values:b", "value": 512, "note": "512 ranks"}, {"template": t, "fact": "passes", "value": 20},
-                              {"template": t, "question": "field:a", "answer": "new_values", "note": "a directory per step"},
-                              {"template": t, "fact": "values:b", "value": 1}, {"template": t, "fact": "values:a", "value": 9},
-                              {"template": t, "question": "field:zz", "answer": "constant"}])
+                              {"template": t, "fact": "keep", "value": 2},
+                              {"template": t, "question": "label", "answer": "checkpoint", "note": "torch.distributed.checkpoint"},
+                              {"template": t, "fact": "values:b", "value": 1}, {"template": t, "fact": "writers", "value": 4},
+                              {"template": t, "question": "field:a", "answer": "new_values"}])
     s = d["sites"][0]
-    assert s["projection"] == {"values:b": 512, "passes": 20, "asserted": ["passes", "values:b"]}
-    assert s["fields"][0]["asserted"]["answer"] == "new_values" and [it["question"] for it in d["open"]] == ["field:c", "size"]
+    assert s["projection"] == {"values:a": None, "values:b": 512, "values:c": None, "passes": 20, "keep": 2, "asserted": ["keep", "passes", "values:b"]}
+    assert s["label"]["asserted"]["answer"] == "checkpoint" and [it["question"] for it in d["open"]] == ["size"]
     assert [r["why"] for r in d["rejected"]] == [
         "field b took 2 values in the trace; 1 is fewer",
-        "no such fact for a bulk_write site: values:b, passes",
-        "no such question for a bulk_write site: field:a, field:b, field:c, size",
+        "no such fact for a bulk_write site: values:a, values:b, values:c, passes, keep",
+        "no such question for a bulk_write site: label, size",
     ]
-    d = answered(dcp_save(rewrite=True), [{"template": t, "question": "field:a", "answer": "new_values"}])
-    assert d["rejected"][0]["why"] == "the trace decided constant: 1 path(s) written again under the same name"
-    doc, answers, io = interview(dcp_save(), "512", "", "1", "", "3", "", "3", "")
+    t2 = "ckpt/step_{a:06}/__{b}_{c}.distcp"
+    d = answered(dcp_save(steps=2), [{"template": t2, "fact": "passes", "value": 1}, {"template": t2, "fact": "keep", "value": 1}])
+    assert [r["why"] for r in d["rejected"]] == ["the trace shows 2 saves; 1 is fewer", "the trace kept all 2 saves; 1 is fewer"]
+    d = answered(dcp_save(steps=3, keep=2), [{"template": t2, "fact": "keep", "value": 1}])
+    assert [r["why"] for r in d["rejected"]] == ["the trace kept 2 saves at once; 1 is fewer"]
+    d = answered(dcp_save(rewrite=True), [{"template": t, "question": "label", "answer": "checkpoint"}])
+    assert d["rejected"][0]["why"] == "the trace decided output: 1 path(s) written again: a checkpoint is never overwritten"
+    doc, answers, io = interview(dcp_save(), "", "512", "", "", "", "1", "", "3", "")
     said = "\n".join(io.said)
     assert "How many values does field b (0..1 in the trace) take at the scale the application runs?" in said
-    assert "How many times will the benchmark write this kind of file" in said
-    assert "bulk write: 2 files, 0 rewritten, fsync on 100%" in said
-    assert "Does field a, 1 in the trace, take a new value each time the application writes this kind of file" in said
+    assert "How many times will the benchmark write this kind of file" in said and "How many saves of this kind does the application keep" in said
+    assert "bulk write: 2 files in 1 save(s), 0 rewritten, fsync on 100%" in said
+    assert "1. checkpoint: a checkpoint: the application's state, read back only after a failure" in said
+    assert [(a.get("fact") or a["question"]) for a in answers] == ["values:b", "label", "size"]
+    # the interview names a site of a split template by its phase, and its answers carry it
+    doc, answers, io = interview(build_search(), "", "", "", "", "", "", "2", "")
+    assert any(line.startswith("site 0/write  leaves/{a}.bin") for line in io.said) and answers[0] == {"template": "leaves/{a}.bin", "question": "selection", "answer": "choose", "phase": "read"}
 
 
 def index_trace(reads, seed=1, hot=0):
@@ -1124,8 +1255,6 @@ def index_trace(reads, seed=1, hot=0):
         sector = r.randrange(hot) if hot and r.random() < 0.5 else r.randrange(200)
         ops.append(("pread", 4096, sector * 4096))
     return calls_strace([(7, "sift_disk.index", ops)])
-
-
 def test_a_within_site_measures_reuse_and_skew_of_the_offsets_in_one_open():
     d = digest_of(index_trace(400))
     (s,) = d["sites"]
@@ -1170,16 +1299,27 @@ def test_within_facts_and_answers():
 def test_render_shows_every_kind():
     text = digest.render(digest_of(kv_trace()))
     assert "keyed: 5 keys, 4 written, 5 reads" in text and "lag: write_then_read" in text and "origin: undecided" in text and "reuse: repeated" in text
-    text = digest.render(digest_of(dcp_save()))
-    assert "bulk write: 2 files, 0 rewritten, fsync on 100%" in text and "field a: undecided (1 value" in text and "field b: varies (2 values 0..1)" in text
-    text = digest.render(digest_of(index_trace(400)))
+    text = digest.render(digest_of(dcp_save(steps=3, keep=1)))
+    assert "bulk write: 6 files in 3 save(s), 0 rewritten, fsync on 100%" in text and "field c: constant (1 value 0..0)" in text and "field b: varies (2 values 0..1)" in text
+    assert "saves: simultaneous, 3 save(s), interval p50" in text and "retention: keeps 1" in text and "label: undecided; supports: every save starts on all its lanes together" in text
+    text = digest.render(digest_of(dcp_save(rewrite=True)))
+    assert "label: output; checkpoint refuted: 1 path(s) written again" in text
+    text = digest.render(digest_of(dcp_save(steps=2, unsafe=True)))
+    assert "retention: unsafe (2 file(s) deleted before the next save was stable)" in text
+    text = digest.render(digest_of(restore_save()))
+    assert "site 0/read (template 0): restore: 2 files, 12.0 KiB read before the first write" in text and "site 0/write (template 0): bulk write" in text
+    text = digest.render(answered(build_search(), [{"template": "leaves/{a}.bin", "question": "selection", "answer": "consume"}]))
+    assert "1. site 0/write size" in text and "site 0/read selection: consume" in text
+    text = digest.render(digest_of(calls_strace([(1, f"kv/{h}.pt", [("write", 100)]) for h in KEYS[:2]])))
+    assert "field a: undecided (1 value)" not in text and "field a: varies (2 values)" in text
+    text = digest.render(digest.document(digest.analyze(index_trace(400).splitlines(True), "/d")))
     assert "within one open: 400 reads at" in text and "skew: uniform" in text and "dependency: undecided" in text
 
 
 def test_the_last_branches_of_the_kinds():
-    # a template that is no site has no facts
+    # a template that is no site has no parts
     an = digest.analyze(calls_strace([(7, "once.bin", [("read", 10)])]).splitlines(True), "/d")
-    assert digest.facts_of(an.templates[0]) == [] and digest.kind_of(an.templates[0]) is None
+    assert digest.parts_of(an.templates[0]) == []
     d = answered(calls_strace([(7, "once.bin", [("read", 10)])]), [{"template": "once.bin", "fact": "size", "value": 5}])
     assert d["rejected"][0]["why"] == "not a site"
     # an answer against a traced origin
@@ -1187,7 +1327,7 @@ def test_the_last_branches_of_the_kinds():
     d = answered(calls_strace([(1, k[0], [("write", 100)]), (2, k[0], [("read", 100)]), (2, k[1], [("read", 100)]), (1, k[1], [("write", 100)])]),
                  [{"template": "kv/{a:x32}.pt", "question": "origin", "answer": "other_writer"}])
     assert d["sites"][0]["origin"]["verdict"] == "undecided"   # k[1] was read before its write
-    d = answered(calls_strace([(1, k[0], [("write", 100)]), (1, k[1], [("write", 100)]), (2, k[0], [("read", 100)])]),
+    d = answered(calls_strace([(1, k[0], [("write", 100)]), (2, k[0], [("read", 100)]), (1, k[1], [("write", 100)])]),
                  [{"template": "kv/{a:x32}.pt", "question": "origin", "answer": "other_writer"}])
     assert d["rejected"][0]["why"] == "the trace decided traced: every key read was written earlier in the trace"
     # a skew between 1.2x and 1.5x of a uniform spread's top-tenth share stays undecided
@@ -1201,4 +1341,4 @@ def test_the_last_branches_of_the_kinds():
 
 def test_the_record_vocabulary_matches_the_digest():
     assert ap.FACTS == tuple(digest.FACT_NAMES) and ap.QUESTIONS == {q: tuple(c) for q, c in digest.CANDIDATES.items()}
-    assert digest.candidates_of("field:step") == ["new_values", "constant"] and digest.candidates_of("nothing") is None
+    assert digest.candidates_of("label") == ["checkpoint", "output"] and digest.candidates_of("field:step") is None and digest.candidates_of("nothing") is None

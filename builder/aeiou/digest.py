@@ -119,6 +119,7 @@ class Template:
         self.offsets: Counter = Counter()
         self.runs = LogHist()
         self.touches: list = []     # (t, path, oid) of every open, for the site
+        self.removes: list = []     # (t, path) of every unlink that succeeded, for a bulk write's retention
 
     def add_path(self, path: str, values: list[tuple[str, str]]):
         self.paths.add(path)
@@ -382,6 +383,8 @@ class Digester:
         tpl.ops[op] += 1
         u = self._unit(lane, tpl, e["path"], t, dur)
         u.ops.append(op)
+        if op == "unlink" and e.get("ret", 0) == 0:
+            tpl.removes.append((t, e["path"]))
         if op == "rename" and "to" in e:
             self.template(e["to"]).ops["renamed_to"] += 1
 
@@ -567,28 +570,30 @@ def size_of(touches: list[tuple[int, str, Unit]]) -> dict:
     return {"verdict": "per-path", "repeated_paths": len(repeated)}
 
 
-def paths_of(tpl: Template) -> list[str]:
-    """The paths of a template's opens, in time order."""
-    return [p for _, p, _ in sorted(tpl.touches, key=lambda x: x[0])]
-
-
-# ---------------------------------------------------------------- the site kinds (§3.88)
+# ---------------------------------------------------------------- the site kinds (§3.88, revised 2026-10-30)
 #
-# A site is a template the digest judges. Four kinds: a `set`, a template opened twice or more
-# and read (a sample set: selection, order, size); `keyed`, opened twice or more with a hex field
-# or a path both written and read (a KV cache, a RAG leaf store: keys, hits, the lag from a key's
-# write to its reads, where the keys came from); `bulk_write`, opened twice or more and only
-# written (a checkpoint, an index build: every field a name part that varies or stays, rewrites,
-# syncs); `within`, one open read at many offsets (an index traversal: reuse, skew, runs). Each
-# kind has its facts (what a person knows about the scale) and its questions.
+# A site is what the digest judges: a template, or, where a template is two phases, the opens of
+# one of them (`phase` `write` or `read`). Five kinds: a `set`, opened twice or more and read (a
+# sample set: selection, order, size); `keyed`, its writes and reads interleaving within the trace
+# (a KV cache: keys, hits, the lag from a key's write to its reads, where the keys came from; a hex
+# field in the name only supports it); `bulk_write`, opened twice or more and only written, or the
+# writes of a template whose writes all come before its reads or after a restore (a checkpoint, an
+# index build: its saves, every field of the name, rewrites, syncs, retention, and whether it is a
+# checkpoint); `restore`, reads before a template's first write of paths it never writes (a load of
+# an earlier checkpoint); `within`, one open read at many offsets (an index traversal: reuse, skew,
+# runs). Each kind has its facts (what a person knows about the scale) and its questions. All the
+# writes before all the reads is two phases, a bulk write and a reader; a trace is otherwise one
+# phase (finding phases within it is brief item 51).
 
-FACT_NAMES = ("candidates", "passes", "keys", "requests", "size")      # plus values:<field>
+FACT_NAMES = ("candidates", "passes", "keys", "requests", "size", "keep", "writers")      # plus values:<field>
 FACT_ASK = {
     "candidates": "How many files of this kind does the application have at the scale it runs?",
     "passes": "How many passes over them will the benchmark run?",
     "keys": "How many distinct keys does the application hold at the scale it runs (its pool)?",
     "requests": "How many requests will the benchmark serve?",
     "size": "How large is this file at the scale the application runs, in bytes?",
+    "keep": "How many saves of this kind does the application keep (its retention policy)?",
+    "writers": "How many processes write each save at the scale the application runs (plain DDP: rank 0 alone)?",
 }
 BULK_PASSES = "How many times will the benchmark write this kind of file (checkpoints, builds)?"
 WITHIN_REQUESTS = "How many queries will the benchmark run?"
@@ -601,97 +606,139 @@ ASK = {
     "skew": "Are the offsets read spread evenly over the file, or do a few parts of it take most of the reads?",
     "memory": "Does this file fit in memory at the scale the application runs, so that reads after the first hit the page cache, or does it exceed it?",
     "dependency": "Does each read's offset depend on what the previous read returned (a graph walk, a tree descent), or are the offsets independent of one another?",
+    "label": "Is this kind of file a checkpoint (the application's state, written to survive a failure and read back only after one), or output (an index build, a dataset, results)?",
 }
 CANDIDATES = {
     "selection": ["consume", "choose"], "size": ["per-path", "drawn"], "order": ["sequential", "permuted"],
     "origin": ["earlier_run", "other_writer"], "reuse": ["once", "repeated"],
     "skew": ["uniform", "skewed"], "memory": ["fits", "exceeds"], "dependency": ["dependent", "independent"],
+    "label": ["checkpoint", "output"],
 }
-FIELD_CANDIDATES = ["new_values", "constant"]
-QUESTIONS_OF = {"set": ("selection", "size", "order"), "keyed": ("origin", "reuse", "size"), "bulk_write": ("size",), "within": ("skew", "memory", "dependency")}
+QUESTIONS_OF = {"set": ("selection", "size", "order"), "keyed": ("origin", "reuse", "size"), "bulk_write": ("label", "size"),
+                "restore": ("size",), "within": ("skew", "memory", "dependency")}
 WITHIN_MIN_READS = 8
+SIMULTANEOUS = 0.25      # a save's lanes start together when their first opens fall within this share of its length
+LABEL_SETTLES = "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)"
 
 
 def candidates_of(q: str) -> list[str] | None:
-    if q in CANDIDATES:
-        return CANDIDATES[q]
-    return FIELD_CANDIDATES if q.startswith("field:") else None
+    return CANDIDATES.get(q)
 
 
-def kind_of(tpl: Template) -> str | None:
-    units = [u for _, _, u in tpl.touches]
-    if tpl.opens >= 2:
-        written = {u.path for u in units if u.bytes[1] > 0}
-        read = {u.path for u in units if u.bytes[0] > 0}
-        if any(f.out(i)["kind"] == "hex" for i, f in enumerate(tpl.fields)) or (written & read):
-            return "keyed"
-        if tpl.bytes[0] == 0 and tpl.bytes[1] > 0:
-            return "bulk_write"
-        return "set"
-    if tpl.opens == 1 and len(units[0].data) >= WITHIN_MIN_READS and offsets_class(units[0].data)[0] == "positioned":
-        return "within"
-    return None
+def _within(touches: list[tuple[int, str, Unit]]) -> bool:
+    u = touches[0][2]
+    return len(touches) == 1 and len(u.data) >= WITHIN_MIN_READS and offsets_class(u.data)[0] == "positioned"
 
 
-def facts_of(tpl: Template) -> list[tuple[str, str]]:
-    """The facts a person can give about a template's site at scale: (name, question)."""
-    kind = kind_of(tpl)
-    if kind == "set":
+class Part:
+    """A site's opens: a template's, or one phase's of a template that is two (`phase`)."""
+
+    def __init__(self, tpl: Template, kind: str, phase: str | None, touches: list, read_after: bool = False, restored: int = 0):
+        self.tpl, self.kind, self.phase, self.touches = tpl, kind, phase, touches
+        self.paths = [p for _, p, _ in touches]
+        self.read_after = read_after      # the template is read after this, its first write
+        self.restored = restored          # files a restore read before this, the template's first write
+        self.bulk = bulk_of(self) if kind == "bulk_write" else None
+
+    def key(self) -> tuple[int, str | None]:
+        return self.tpl.id, self.phase
+
+
+def _half(tpl: Template, kind: str, phase: str, touches: list, **kw) -> list[Part]:
+    if len(touches) >= 2:
+        return [Part(tpl, kind, phase, touches, **kw)]
+    if kind != "bulk_write" and _within(touches):
+        return [Part(tpl, "within", phase, touches)]
+    return []
+
+
+def parts_of(tpl: Template) -> list[Part]:
+    """The sites of a template, in time order."""
+    touches = sorted(tpl.touches, key=lambda x: x[0])
+    if len(touches) < 2:
+        return [Part(tpl, "within", None, touches)] if touches and _within(touches) else []
+    w = [x for x in touches if x[2].bytes[1] > 0]
+    r = [x for x in touches if x[2].bytes[0] > 0]
+    if w and r:
+        both = any(x[2].bytes[0] > 0 for x in w)
+        if not both and w[-1][0] < r[0][0]:
+            return _half(tpl, "bulk_write", "write", w, read_after=True) + _half(tpl, "set", "read", r)
+        if not both and r[-1][0] < w[0][0] and not {p for _, p, _ in r} & {p for _, p, _ in w}:
+            restore = _half(tpl, "restore", "read", r)
+            return restore + _half(tpl, "bulk_write", "write", w, restored=len({p for _, p, _ in r}) if restore else 0)
+        return [Part(tpl, "keyed", None, touches)]
+    return [Part(tpl, "bulk_write" if w else "set", None, touches)]
+
+
+def fields_of(part: Part) -> list[dict]:
+    """The template's fields over this part's paths only."""
+    fields = [Field(f.kind) for f in part.tpl.fields]
+    for p in part.paths:
+        for f, (_, text) in zip(fields, split(p)[1]):
+            f.add(text)
+    return [f.out(i) for i, f in enumerate(fields)]
+
+
+def facts_of(part: Part) -> list[tuple[str, str]]:
+    """The facts a person can give about a site at scale: (name, question)."""
+    if part.kind == "set":
         return [("candidates", FACT_ASK["candidates"]), ("passes", FACT_ASK["passes"])]
-    if kind == "keyed":
+    if part.kind == "keyed":
         return [("keys", FACT_ASK["keys"]), ("requests", FACT_ASK["requests"])]
-    if kind == "bulk_write":
-        out = []
-        for i, f in enumerate(tpl.fields):
-            o = f.out(i)
-            if o["kind"] == "int" and o["values"] >= 2:
-                out.append((f"values:{o['name']}", f"How many values does field {o['name']} ({o['min']}..{o['max']} in the trace) take at the scale the application runs?"))
-        out.append(("passes", BULK_PASSES))
+    if part.kind == "bulk_write":
+        out = [(f"values:{o['name']}", f"How many values does field {o['name']} ({o['min']}..{o['max']} in the trace) take at the scale the application runs?")
+               for o in part.bulk["fields"] if o["kind"] == "int" and o["verdict"] != "constant"]
+        out += [("passes", BULK_PASSES), ("keep", FACT_ASK["keep"])]
+        if part.bulk["saves"]["verdict"] == "one_writer":
+            out.append(("writers", FACT_ASK["writers"]))
         return out
-    if kind == "within":
+    if part.kind == "within":
         return [("size", FACT_ASK["size"]), ("requests", WITHIN_REQUESTS)]
     return []
 
 
-def fact_check(tpl: Template, fact: str, value: int) -> str | None:
+def fact_check(part: Part, fact: str, value: int) -> str | None:
     """Why the trace contradicts a fact, or None."""
-    paths = paths_of(tpl)
-    if fact == "candidates":
-        d = len(set(paths))
+    if fact in ("candidates", "keys"):
+        d = len(set(part.paths))
         if value < d:
-            return f"the trace touched {d} distinct paths of this template; {value} is fewer"
-    elif fact == "keys":
-        d = len(set(paths))
-        if value < d:
-            return f"the trace touched {d} distinct keys of this template; {value} is fewer"
-    elif fact == "passes" and kind_of(tpl) == "set":
-        n = len(full_passes(epochs_of(paths)))
+            return f"the trace touched {d} distinct {'paths' if fact == 'candidates' else 'keys'} of this template; {value} is fewer"
+    elif fact == "passes" and part.kind == "set":
+        n = len(full_passes(epochs_of(part.paths)))
         if value < n:
             return f"the trace shows {n} full passes over the set; {value} is fewer"
+    elif fact == "passes":
+        n = part.bulk["saves"]["count"]
+        if value < n:
+            return f"the trace shows {n} saves; {value} is fewer"
+    elif fact == "keep":
+        rt, n = part.bulk["retention"], part.bulk["saves"]["count"]
+        if rt["verdict"] == "kept" and value < n:
+            return f"the trace kept all {n} saves; {value} is fewer"
+        if rt["verdict"] == "keeps" and value < rt["n"]:
+            return f"the trace kept {rt['n']} saves at once; {value} is fewer"
     elif fact == "size":
-        span = _span(tpl)
+        span = _span(part.touches)
         if value < span:
             return f"the trace read up to byte {span} of this file; {value} is smaller"
     elif fact.startswith("values:"):
         name = fact[len("values:"):]
-        for i, f in enumerate(tpl.fields):
-            o = f.out(i)
+        for o in fields_of(part):
             if o["name"] == name and value < o["values"]:
                 return f"field {name} took {o['values']} values in the trace; {value} is fewer"
     return None
 
 
-def _span(tpl: Template) -> int:
-    return max((off + moved for _, _, u in tpl.touches for off, _, moved in u.data), default=0)
+def _span(touches) -> int:
+    return max((off + moved for _, _, u in touches for off, _, moved in u.data), default=0)
 
 
-def site_of(tpl: Template, facts: dict, candidates: int | None, epochs: int, notes: Counter) -> dict:
-    """The site of a template: its kind's verdicts, and its `projection`, the facts at scale
-    (`--candidates` and `--epochs` for a set, else what the owner asserted) with which were asserted."""
-    kind = kind_of(tpl)
-    touches = sorted(tpl.touches, key=lambda x: x[0])
-    paths = [p for _, p, _ in touches]
-    s: dict = {"template": tpl.id, "kind": kind, "touches": len(paths), "distinct": len(set(paths))}
+def site_of(part: Part, facts: dict, candidates: int | None, epochs: int, notes: Counter) -> dict:
+    """A site: its kind's verdicts, and its `projection`, the facts at scale (`--candidates` and
+    `--epochs` for a set, else what the owner asserted) with which were asserted."""
+    tpl, kind, touches, paths = part.tpl, part.kind, part.touches, part.paths
+    s: dict = {"template": tpl.id, "phase": part.phase, "kind": kind, "touches": len(paths), "distinct": len(set(paths))}
+    hex_name = any(f.kind == "hex" for f in tpl.fields)
     if kind == "set":
         epochs_seen = epochs_of(paths)
         ranks = {p: i for i, p in enumerate(sorted(set(paths)))}
@@ -701,14 +748,21 @@ def site_of(tpl: Template, facts: dict, candidates: int | None, epochs: int, not
         s["order"] = order_of(epochs_seen, ranks)
         s["size"] = size_of(touches)
         s["projection"] = {"candidates": c, "passes": facts.get("passes", epochs)}
+        if hex_name and part.phase is None:
+            s["note"] = "names with a hex field, read and never written: a keyed store written elsewhere fits it as well"
     elif kind == "keyed":
+        s["hex_name"] = hex_name
         s.update(keyed_of(touches))
         s["size"] = size_of(touches)
         s["projection"] = {"keys": facts.get("keys"), "requests": facts.get("requests")}
     elif kind == "bulk_write":
-        s.update(bulk_of(tpl, touches))
+        s.update(part.bulk)
         s["size"] = size_of(touches)
-        s["projection"] = {name: facts.get(name) for name, _ in facts_of(tpl)}
+        s["projection"] = {name: facts.get(name) for name, _ in facts_of(part)}
+    elif kind == "restore":
+        s["restore"] = {"files": len(set(paths)), "bytes": sum(u.bytes[0] for _, _, u in touches)}
+        s["size"] = size_of(touches)
+        s["projection"] = {}
     else:
         s.update(within_of(touches[0][2]))
         s["projection"] = {"size": facts.get("size"), "requests": facts.get("requests")}
@@ -744,10 +798,9 @@ def keyed_of(touches: list[tuple[int, str, Unit]]) -> dict:
     for c in seen_read.values():
         per_key.add(c)
     top = max(1, math.ceil(len(seen_read) / 10))
-    share = sum(sorted(seen_read.values(), reverse=True)[:top]) / reads if reads else 0.0
+    share = sum(sorted(seen_read.values(), reverse=True)[:top]) / reads
     keys_reread = sum(1 for c in seen_read.values() if c > 1)
-    lag = {"verdict": "write_then_read" if after else ("read_only" if reads and not writes else ("write_only" if writes and not reads else "no_read_after_write")),
-           "ns": lag_ns.out(), "touches": lag_touches.out()}
+    lag = {"verdict": "write_then_read" if after else "no_read_after_write", "ns": lag_ns.out(), "touches": lag_touches.out()}
     origin = {"verdict": "traced", "settles": "decided"} if not before else {
         "verdict": "undecided", "consistent": ["earlier_run", "other_writer"], "refuted": {},
         "settles": "a trace from the application's start, or of every process that writes this kind of file: a key read before any write is then a miss or another writer's"}
@@ -756,33 +809,131 @@ def keyed_of(touches: list[tuple[int, str, Unit]]) -> dict:
         "settles": "a longer trace: a request repeating a prefix, or a neighbor found again, reads a key a second time"}
     return {
         "access": {"keys": len({p for _, p, _ in touches}), "written": len(written), "read": len(seen_read), "reads": reads, "writes": writes,
-                   "written_once_share": (sum(1 for c in written.values() if c == 1) / len(written)) if written else 0.0,
+                   "written_once_share": sum(1 for c in written.values() if c == 1) / len(written),
                    "read_after_write": after, "read_before_write": before, "rereads": rereads,
-                   "reread_share": rereads / reads if reads else 0.0, "top_10pct_share": share, "reads_per_key": per_key.out()},
+                   "reread_share": rereads / reads, "top_10pct_share": share, "reads_per_key": per_key.out()},
         "lag": lag, "origin": origin, "reuse": reuse,
     }
 
 
-def bulk_of(tpl: Template, touches: list[tuple[int, str, Unit]]) -> dict:
-    """Every field a part of the name that varies or stays; the paths written again; the syncs."""
-    per_path = Counter(p for _, p, _ in touches)
+class Save:
+    """One burst of a bulk write: the opens that overlap, or follow within the burst's own length."""
+
+    def __init__(self, u: Unit, path: str):
+        self.first, self.last = u.first, u.last
+        self.lanes: dict[int, int] = {u.lane: u.first}     # lane -> its first open
+        self.paths = {path}
+
+    def add(self, u: Unit, path: str):
+        self.last = max(self.last, u.last)
+        self.lanes.setdefault(u.lane, u.first)
+        self.paths.add(path)
+
+    def spread(self) -> int:
+        return max(self.lanes.values()) - min(self.lanes.values())
+
+    def simultaneous(self) -> bool:
+        return len(self.lanes) >= 2 and self.spread() <= SIMULTANEOUS * (self.last - self.first)
+
+
+def saves_of(touches: list[tuple[int, str, Unit]]) -> list[Save]:
+    """The bursts: an open starting later after the burst than the burst has lasted begins the next."""
+    out: list[Save] = []
+    for _, p, u in sorted(touches, key=lambda x: x[2].first):
+        cur = out[-1] if out else None
+        if cur is not None and u.first - cur.last <= cur.last - cur.first:
+            cur.add(u, p)
+        else:
+            out.append(Save(u, p))
+    return out
+
+
+def retention_of(tpl: Template, saves: list[Save]) -> dict:
+    """What the trace deleted of this template's saves: nothing (`kept`), only saves an
+    already stable later one replaced (`keeps` N, the most it held at once after a deletion), or
+    a save before the next was stable (`unsafe`). A path the trace never wrote is a save from before it."""
+    save_of: dict[str, int] = {}
+    for i, sv in enumerate(saves):
+        for p in sv.paths:
+            save_of.setdefault(p, i)
+    ends = [sv.last for sv in saves]
+    deleted = unsafe = held = 0
+    dead: set[int] = set()
+    for t, p in sorted(tpl.removes):
+        k = save_of.get(p, -1)
+        deleted += 1
+        if not any(ends[j] <= t for j in range(k + 1, len(saves))):
+            unsafe += 1
+        if k >= 0:
+            dead.add(k)
+        held = max(held, sum(1 for j, e in enumerate(ends) if e <= t and j not in dead))
+    if not deleted:
+        return {"verdict": "kept", "deleted": 0, "unsafe": 0}
+    if unsafe:
+        return {"verdict": "unsafe", "deleted": deleted, "unsafe": unsafe,
+                "note": "an earlier save deleted before the next was stable, which contradicts what a checkpoint is for"}
+    return {"verdict": "keeps", "n": held, "deleted": deleted, "unsafe": 0}
+
+
+def bulk_of(part: Part) -> dict:
+    """The saves (bursts) and their cadence; every field a part of the name that varies or stays
+    over the saves; the paths written again; the syncs; the retention; and whether it is a
+    checkpoint, which the trace refutes (a rewrite, a read after the first write) but never decides."""
+    touches = part.touches
+    saves = saves_of(touches)
+    per_path = Counter(part.paths)
     rewritten = sum(1 for c in per_path.values() if c > 1)
     fields = []
-    for i, f in enumerate(tpl.fields):
-        o = f.out(i)          # an int field: a hex one makes the site keyed, never a bulk write
+    for o in fields_of(part):
         if o["values"] >= 2:
             o["verdict"] = "varies"
-        elif rewritten:
+        elif len(saves) >= 2:
             o["verdict"] = "constant"
         else:
             o["verdict"] = "undecided"
-            o["consistent"] = list(FIELD_CANDIDATES)
-            o["refuted"] = {}
-            o["settles"] = "a second write of this kind of file: a new value is a name per write, the same value a rewrite"
+            o["settles"] = f"a second save: a field keeping its one value over the saves is the same in every save's name; how many values it takes at scale is the fact values:{o['name']}"
         fields.append(o)
+    multi = [sv for sv in saves if len(sv.lanes) >= 2]
+    if any(not sv.simultaneous() for sv in multi):
+        verdict = "staggered"
+    elif not multi:
+        verdict = "one_writer"
+    else:
+        verdict = "simultaneous" if len(multi) == len(saves) else "mixed"
+    lanes, spread, length, interval = LogHist(), LogHist(), LogHist(), LogHist()
+    for i, sv in enumerate(saves):
+        lanes.add(len(sv.lanes))
+        spread.add(sv.spread())
+        length.add(sv.last - sv.first)
+        if i:
+            interval.add(sv.first - saves[i - 1].first)
+    retention = retention_of(part.tpl, saves)
     synced = sum(1 for _, _, u in touches if "fsync" in u.ops or "fdatasync" in u.ops)
-    return {"fields": fields, "rewrite": {"verdict": "overwrite" if rewritten else "new_names", "rewritten_paths": rewritten},
-            "sync": {"fsync_share": synced / len(touches), "opens": len(touches)}}
+    rewrite: dict = {"verdict": "overwrite" if rewritten else "new_names", "rewritten_paths": rewritten}
+    against, supports = [], []
+    if rewritten:
+        rewrite["note"] = "a checkpoint is never overwritten: a rewritten path is evidence against one"
+        against.append(f"{rewritten} path(s) written again: a checkpoint is never overwritten")
+    if part.read_after:
+        against.append("read after its first write: a checkpoint is read only after a failure, in another trace")
+    if verdict == "simultaneous":
+        supports.append("every save starts on all its lanes together")
+    elif verdict == "one_writer":
+        supports.append("one writing lane, as plain DDP's rank 0")
+    if synced == len(touches):
+        supports.append("every file fsynced")
+    if part.restored:
+        supports.append(f"{part.restored} file(s) of it read before its first write and never written: a restore")
+    if retention["verdict"] == "keeps":
+        supports.append(f"earlier saves deleted only once the next was stable (keeps {retention['n']})")
+    if against:
+        label = {"verdict": "output", "refuted": {"checkpoint": "; ".join(against)}, "supports": supports, "settles": "decided"}
+    else:
+        label = {"verdict": "undecided", "consistent": list(CANDIDATES["label"]), "refuted": {}, "supports": supports, "settles": LABEL_SETTLES}
+    return {"fields": fields, "rewrite": rewrite, "sync": {"fsync_share": synced / len(touches), "opens": len(touches)},
+            "saves": {"verdict": verdict, "count": len(saves), "lanes": lanes.out(), "start_spread_ns": spread.out(),
+                      "duration_ns": length.out(), "interval_ns": interval.out()},
+            "retention": retention, "label": label}
 
 
 def within_of(u: Unit) -> dict:
@@ -832,18 +983,11 @@ def _span_of(u: Unit) -> int:
 
 def verdict_of(s: dict, q: str) -> dict | None:
     """The verdict a question of a site is about, or None when the site has no such question."""
-    if q.startswith("field:"):
-        name = q[len("field:"):]
-        for f in s.get("fields", []):
-            if f["name"] == name:
-                return f
-        return None
     return s[q] if q in QUESTIONS_OF[s["kind"]] else None
 
 
 def questions_of(s: dict) -> list[str]:
-    out = [f"field:{f['name']}" for f in s.get("fields", [])]
-    return out + list(QUESTIONS_OF[s["kind"]])
+    return list(QUESTIONS_OF[s["kind"]])
 
 
 def open_of(sites: list[dict], epochs: int) -> list[dict]:
@@ -854,13 +998,14 @@ def open_of(sites: list[dict], epochs: int) -> list[dict]:
     for s in sites:
         for q in questions_of(s):
             v = verdict_of(s, q)
-            if v is None or v["verdict"] != "undecided":
+            if v["verdict"] != "undecided":
                 continue
-            it = {"site": s["template"], "question": q, "candidates": list(candidates_of(q)), "settles": v["settles"], "divergence": 0.0}
+            it = {"site": s["template"], "question": q, "candidates": list(candidates_of(q)), "settles": v["settles"], "divergence": 0.0, "ask": ASK[q]}
+            if s["phase"]:
+                it["phase"] = s["phase"]
             if q == "selection":
                 e = s["projection"].get("passes") or epochs
                 never = math.exp(-e)
-                it["ask"] = ASK[q]
                 it["divergence"] = never
                 it["at_scale"] = {
                     "epochs": e,
@@ -868,12 +1013,7 @@ def open_of(sites: list[dict], epochs: int) -> list[dict]:
                     "consume": {"never_read_share": 0.0, "repeat_share": (e - 1) / e},
                     "choose": {"never_read_share": never, "repeat_share": 1 - (1 - never) / e},
                 }
-            elif q.startswith("field:"):
-                it["ask"] = (f"Does field {v['name']}, {v['min']} in the trace, take a new value each time the application writes this kind of file "
-                             f"(a name per write), or stay the same (the same file written again)?")
-                it["at_scale"] = {"note": "new values multiply the files the benchmark writes; the same value rewrites one"}
             else:
-                it["ask"] = ASK[q]
                 it["at_scale"] = {"epochs": s["projection"].get("passes") or epochs, "note": AT_SCALE[q]}
             items.append(it)
     return ranked(items)
@@ -887,6 +1027,7 @@ AT_SCALE = {
     "skew": "a skewed spread keeps a hot set in the page cache at scale; a uniform one does not",
     "memory": "a file that fits is read from storage once; one that exceeds memory is read from storage at every query",
     "dependency": "a dependent walk is a chain of reads each waiting on the last; independent offsets can be issued together",
+    "label": "a checkpoint is saved at an interval, its saves kept or deleted by a retention policy, and read only after a failure; output is written once per build",
 }
 
 
@@ -933,6 +1074,8 @@ class Analysis:
         self.d = digester
         self.templates = sorted(digester.templates.values(), key=lambda t: t.id)
         self.by_name = {t.name(): t for t in self.templates}
+        self.parts = {t.id: parts_of(t) for t in self.templates}
+        self.part = {p.key(): p for ps in self.parts.values() for p in ps}
 
 
 def analyze(lines, root: str | None, *, exclude=(), cwd=None) -> Analysis:
@@ -979,15 +1122,17 @@ def document(an: Analysis, *, epochs: int = 1, candidates: int | None = None, pa
         notes[f"blind_spot_{b['kind']}"] = b["note"]
     asserted: list[dict] = []
     rejected: list[tuple[int, dict]] = []     # (the answer's index, so rejections keep the answers' order)
-    facts: dict[int, dict] = {}
+    facts: dict[tuple, dict] = {}
     questions = []
     index = {id(a): i for i, a in enumerate(answers)}
 
     def reject(a: dict, why: str):
         rejected.append((index[id(a)], {**a, "why": why}))
 
-    def record(tpl: Template, a: dict, kind: str, value):
-        e = {"site": tpl.id, "template": tpl.name(), kind: a[kind], ("value" if kind == "fact" else "answer"): value}
+    def record(part: Part, a: dict, kind: str, value):
+        e = {"site": part.tpl.id, "template": part.tpl.name(), kind: a[kind], ("value" if kind == "fact" else "answer"): value}
+        if part.phase:
+            e["phase"] = part.phase
         if a.get("note"):
             e["note"] = a["note"]
         e["by"], e["at"] = a.get("by") or by, a.get("at") or at
@@ -996,52 +1141,72 @@ def document(an: Analysis, *, epochs: int = 1, candidates: int | None = None, pa
         asserted.append(e)
         return e
 
-    for a in answers:
+    def parts(a: dict) -> list[Part] | None:
+        """The sites an answer is about: its template's, or the one of the phase it names; None, rejected, when there is none."""
         tpl = an.by_name.get(a.get("template"))
         if tpl is None:
             reject(a, "no such template in the trace")
-        elif "fact" in a:
+            return None
+        ps = an.parts[tpl.id]
+        if not ps:
+            reject(a, "not a site" if "fact" in a else "not a site: the template was opened once and read in one run, or never opened")
+            return None
+        if "phase" in a:
+            named = [p for p in ps if p.phase == a["phase"]]
+            if not named:
+                reject(a, f"no such phase here: {', '.join(p.phase for p in ps if p.phase) or 'none'}")
+                return None
+            ps = named
+        return ps
+
+    for a in answers:
+        ps = parts(a)
+        if ps is None:
+            continue
+        if "fact" in a:
             v = a.get("value")
-            names = [n for n, _ in facts_of(tpl)]
-            if a["fact"] not in names:
-                reject(a, f"no such fact for a {kind_of(tpl)} site: {', '.join(names)}" if names else "not a site")
+            having = [p for p in ps if a["fact"] in [n for n, _ in facts_of(p)]]
+            if not having:
+                reject(a, f"no such fact for a {ps[0].kind} site: {', '.join(n for n, _ in facts_of(ps[0])) or 'none'}")
             elif not isinstance(v, int) or isinstance(v, bool) or v < 1:
                 reject(a, "not a whole number of at least 1")
-            elif (why := fact_check(tpl, a["fact"], v)):
+            elif (why := next((w for p in having if (w := fact_check(p, a["fact"], v))), None)):
                 reject(a, why)
             else:
-                facts.setdefault(tpl.id, {})[a["fact"]] = v
-                record(tpl, a, "fact", v)
+                for p in having:
+                    facts.setdefault(p.key(), {})[a["fact"]] = v
+                    record(p, a, "fact", v)
         elif "question" in a:
-            questions.append((tpl, a))
+            questions.append((ps, a))
         else:
             reject(a, "neither a fact nor a question")
 
-    sites = [site_of(t, facts.get(t.id, {}), candidates, epochs, notes) for t in an.templates if kind_of(t) is not None]
-    by_tid = {s["template"]: s for s in sites}
+    sites = [site_of(p, facts.get(p.key(), {}), candidates, epochs, notes) for t in an.templates for p in an.parts[t.id]]
+    by_key = {(s["template"], s["phase"]): s for s in sites}
 
-    for tpl, a in questions:
+    for ps, a in questions:
         q, ans = a["question"], a.get("answer")
-        s = by_tid.get(tpl.id)
-        v = verdict_of(s, q) if s is not None else None
-        if s is None:
-            reject(a, "not a site: the template was opened once and read in one run, or never opened")
-        elif v is None:
-            reject(a, f"no such question for a {s['kind']} site: {', '.join(questions_of(s))}")
-        elif ans not in candidates_of(q) and ans != UNKNOWN:
+        having = [(p, by_key[p.key()]) for p in ps if verdict_of(by_key[p.key()], q) is not None]
+        if not having:
+            reject(a, f"no such question for a {ps[0].kind} site: {', '.join(questions_of(by_key[ps[0].key()]))}")
+            continue
+        if ans not in candidates_of(q) and ans != UNKNOWN:
             reject(a, f"not one of {', '.join(candidates_of(q))}, {UNKNOWN}")
-        elif v["verdict"] != "undecided":
-            if ans in (v["verdict"], UNKNOWN):
-                notes["redundant_answers"] += 1
+            continue
+        for p, s in having:
+            v = verdict_of(s, q)
+            if v["verdict"] != "undecided":
+                if ans in (v["verdict"], UNKNOWN):
+                    notes["redundant_answers"] += 1
+                else:
+                    reject(a, f"the trace decided {v['verdict']}: {evidence(q, v, ans)}")
             else:
-                reject(a, f"the trace decided {v['verdict']}: {evidence(q, v, ans)}")
-        else:
-            e = record(tpl, a, "question", ans)
-            v["asserted"] = {k: e[k] for k in ("answer", "by", "at", "note") if k in e}
+                e = record(p, a, "question", ans)
+                v["asserted"] = {k: e[k] for k in ("answer", "by", "at", "note") if k in e}
 
     open_items = []
     for it in open_of(sites, epochs):
-        asserted_answer = verdict_of(by_tid[it["site"]], it["question"]).get("asserted", {}).get("answer")
+        asserted_answer = verdict_of(by_key[(it["site"], it.get("phase"))], it["question"]).get("asserted", {}).get("answer")
         if asserted_answer is None:
             open_items.append(it)
         elif asserted_answer == UNKNOWN:
@@ -1096,8 +1261,8 @@ LABELS = {
     "exceeds": "the file exceeds memory at scale",
     "dependent": "each offset depends on what the previous read returned",
     "independent": "the offsets are independent of one another",
-    "new_values": "a new value each time (a name per write)",
-    "constant": "the same value (the same file written again)",
+    "checkpoint": "a checkpoint: the application's state, read back only after a failure",
+    "output": "output: an index build, a dataset, results",
 }
 
 
@@ -1114,13 +1279,18 @@ def evidence(q: str, v: dict, against: str) -> str:
     if q == "skew":
         share = f"the top tenth of the offsets took {v['top_10pct_share']:.2f} of the reads, about {v['uniform_share']:.2f} under a uniform spread"
         return share + (", uniform within noise" if v["verdict"] == "uniform" else "")
-    if q.startswith("field:"):
-        return f"{v['values']} values {v['min']}..{v['max']}" if v["verdict"] == "varies" else "1 path(s) written again under the same name"
+    if q == "label":
+        return v["refuted"]["checkpoint"]
     if v["verdict"] == "constant":
         return f"every open moved {v['bytes']} B"
     if v["verdict"] == "per-path":
         return f"{v['repeated_paths']} repeated path(s) always moved the same bytes"
     return f"{v['paths_with_differing_bytes']} of {v['repeated_paths']} repeated path(s) moved differing bytes"
+
+
+def site_name(site: int, phase: str | None) -> str:
+    """A site as the report and the interview name it: its template, and its phase when the template is two."""
+    return f"{site}/{phase}" if phase else str(site)
 
 
 def site_line(s: dict) -> str:
@@ -1131,7 +1301,9 @@ def site_line(s: dict) -> str:
         a = s["access"]
         return f"keyed: {a['keys']} keys, {a['written']} written, {a['reads']} reads ({a['read_after_write']} after a write, {a['rereads']} re-reads)"
     if s["kind"] == "bulk_write":
-        return f"bulk write: {s['distinct']} files, {s['rewrite']['rewritten_paths']} rewritten, fsync on {s['sync']['fsync_share']:.0%}"
+        return f"bulk write: {s['distinct']} files in {s['saves']['count']} save(s), {s['rewrite']['rewritten_paths']} rewritten, fsync on {s['sync']['fsync_share']:.0%}"
+    if s["kind"] == "restore":
+        return f"restore: {s['restore']['files']} files, {_bytes(s['restore']['bytes'])} read before the first write"
     return f"within one open: {s['reads']} reads at {s['distinct_offsets']} offsets over {_bytes(s['span'])}, top tenth {s['skew']['top_10pct_share']:.2f}"
 
 
@@ -1266,14 +1438,15 @@ def interview(an: Analysis, io, *, epochs: int = 1, candidates: int | None = Non
                         answers.append(mine)
 
     doc = document(an, answers=answers, application=state["application"], **kw)
-    open_sites = {it["site"] for it in doc["open"]}
+    open_sites = {(it["site"], it.get("phase")) for it in doc["open"]}
     for s in doc["sites"]:
-        if s["template"] not in open_sites:
+        if (s["template"], s["phase"]) not in open_sites:
             continue
-        tpl = an.templates[s["template"]]
+        part = an.part[(s["template"], s["phase"])]
+        tpl = part.tpl
         io.say("")
-        io.say(f"site {s['template']}  {tpl.name()}: {site_line(s)}")
-        for fact, question in facts_of(tpl):
+        io.say(f"site {site_name(s['template'], s['phase'])}  {tpl.name()}: {site_line(s)}")
+        for fact, question in facts_of(part):
             io.say(f"  {question}")
             while True:
                 line = io.ask("number (Enter for don't know): ")
@@ -1285,19 +1458,19 @@ def interview(an: Analysis, io, *, epochs: int = 1, candidates: int | None = Non
                 if not line.isdigit() or int(line) < 1:
                     io.say("  a whole number of at least 1, or Enter for don't know")
                     continue
-                why = fact_check(tpl, fact, int(line))
+                why = fact_check(part, fact, int(line))
                 if why:
                     io.say(f"  {why}")
                     continue
-                answers.append({"template": tpl.name(), "fact": fact, "value": int(line)})
+                answers.append({"template": tpl.name(), "fact": fact, "value": int(line)} | ({"phase": part.phase} if part.phase else {}))
                 break
     doc = document(an, answers=answers, application=state["application"], **kw)
     for it in doc["open"]:
-        s = next(x for x in doc["sites"] if x["template"] == it["site"])
+        s = next(x for x in doc["sites"] if (x["template"], x["phase"]) == (it["site"], it.get("phase")))
         tpl = an.templates[it["site"]]
         cands = it["candidates"]
         io.say("")
-        io.say(f"site {it['site']}  {tpl.name()}: {site_line(s)}; {it['question']} undecided")
+        io.say(f"site {site_name(it['site'], it.get('phase'))}  {tpl.name()}: {site_line(s)}; {it['question']} undecided")
         io.say(f"  {it['ask']}")
         for i, c in enumerate(cands, 1):
             io.say(f"    {i}. {c}: {LABELS[c]}")
@@ -1306,10 +1479,8 @@ def interview(an: Analysis, io, *, epochs: int = 1, candidates: int | None = Non
         if "choose" in sc:
             io.say(f"  at {sc['epochs']} pass(es): a draw with replacement never reads {sc['choose']['never_read_share']:.1%} of the set and re-reads "
                    f"{sc['choose']['repeat_share']:.1%} of what it touches; a permutation reads every file each pass")
-        elif "epochs" in sc:
-            io.say(f"  at {sc['epochs']} pass(es): {sc['note']}")
         else:
-            io.say(f"  at scale: {sc['note']}")
+            io.say(f"  at {sc['epochs']} pass(es): {sc['note']}")
         io.say(f"  settles: {it['settles']}")
         while True:
             line = io.ask(f"answer [1-{len(cands) + 1}]: ")
@@ -1320,7 +1491,7 @@ def interview(an: Analysis, io, *, epochs: int = 1, candidates: int | None = Non
                 break
             io.say(f"  a number from 1 to {len(cands) + 1}")
         ans = cands[int(line) - 1] if int(line) <= len(cands) else UNKNOWN
-        a = {"template": tpl.name(), "question": it["question"], "answer": ans}
+        a = {"template": tpl.name(), "question": it["question"], "answer": ans} | ({"phase": it["phase"]} if "phase" in it else {})
         answers.append(a)
         note = io.ask("how do you know? (Enter to skip): ")
         if note is None:
@@ -1427,7 +1598,7 @@ def render(doc: dict) -> str:
             out.append(line)
     out.append("sites:")
     for s in doc["sites"]:
-        line = f"  site {s['template']} (template {s['template']}): {site_line(s)}"
+        line = f"  site {site_name(s['template'], s['phase'])} (template {s['template']}): {site_line(s)}"
         pr = s.get("projection")
         if pr and pr["asserted"]:
             line += "; projected at " + ", ".join(f"{k} {v}" for k, v in pr.items() if k != "asserted" and v is not None) + f" (asserted: {', '.join(pr['asserted'])})"
@@ -1465,7 +1636,7 @@ def render(doc: dict) -> str:
     if not doc["open"]:
         out.append("  none: the trace decides every verdict")
     for it in doc["open"]:
-        line = f"  {it['rank']}. site {it['site']} {it['question']}: {' | '.join(it['candidates'])}; divergence {it['divergence']:.3f}"
+        line = f"  {it['rank']}. site {site_name(it['site'], it.get('phase'))} {it['question']}: {' | '.join(it['candidates'])}; divergence {it['divergence']:.3f}"
         if "answered" in it:
             line += f"; answered: {it['answered']}"
         out.append(line)
@@ -1493,7 +1664,7 @@ def render(doc: dict) -> str:
         out.append("asserted:")
         for a in asserted:
             kind = "fact" if "fact" in a else "question"
-            line = f"  site {a['site']} {a[kind]}: {a['value'] if kind == 'fact' else a['answer']}"
+            line = f"  site {site_name(a['site'], a.get('phase'))} {a[kind]}: {a['value'] if kind == 'fact' else a['answer']}"
             if a.get("note"):
                 line += f" ({a['note']})"
             out.append(line + f"; by {a['by']}, {a['at']}")
@@ -1525,12 +1696,32 @@ def _kind_lines(s: dict) -> list[str]:
                 line += f"; settles: {v['settles']}"
             out.append(line + _asserted(v))
     elif s["kind"] == "bulk_write":
+        sv = s["saves"]
+        line = f"    saves: {sv['verdict']}, {sv['count']} save(s)"
+        if sv["interval_ns"]["n"]:
+            line += f", interval p50 {_ns(_p50(sv['interval_ns']))}"
+        out.append(line)
+        rt = s["retention"]
+        line = f"    retention: {rt['verdict']}" + (f" {rt['n']}" if rt["verdict"] == "keeps" else "")
+        if rt["unsafe"]:
+            line += f" ({rt['unsafe']} file(s) deleted before the next save was stable)"
+        out.append(line)
         out.append(f"    rewrite: {s['rewrite']['verdict']} ({s['rewrite']['rewritten_paths']} path(s) written again)")
         for f in s["fields"]:
-            line = f"    field {f['name']}: {f['verdict']} ({f['values']} value{'s' if f['values'] != 1 else ''} {f['min']}..{f['max']})"
+            rng = f" {f['min']}..{f['max']}" if f["kind"] == "int" else ""
+            line = f"    field {f['name']}: {f['verdict']} ({f['values']} value{'s' if f['values'] != 1 else ''}{rng})"
             if f["verdict"] == "undecided":
                 line += f"; settles: {f['settles']}"
-            out.append(line + _asserted(f))
+            out.append(line)
+        lb = s["label"]
+        line = f"    label: {lb['verdict']}" + "".join(f"; {k} refuted: {why}" for k, why in lb["refuted"].items())
+        if lb["supports"]:
+            line += f"; supports: {', '.join(lb['supports'])}"
+        if lb["verdict"] == "undecided":
+            line += f"; settles: {lb['settles']}"
+        out.append(line + _asserted(lb))
+    elif s["kind"] == "restore":
+        pass
     else:
         out.append(f"    reuse: {s['reuse_share']:.2f} of the reads revisit an offset; runs p50 {_p50(s['runs'])} max {s['runs']['max']}")
         for q in ("skew", "memory", "dependency"):

@@ -120,24 +120,39 @@ template the op mix, bytes, request sizes, and how each open moved through its f
 the calls on one open from `open` to `close` (a path call or an `io_submit` is a unit of
 one op); a unit's motif is its op sequence with repeats collapsed (`read+`, `(lseek
 read)+`); a phase is a run of units of one motif on one template, with the repeat counts
-and the think time between units. **Sites**: the templates the digest judges, of four
-kinds. A *set*, a template opened at least twice and read (a sample set), has the three
-verdicts below. A *keyed* site, opened at least twice with a hex field in its name or a
-path both written and read (a KV cache, a RAG leaf store), counts its keys, the reads
+and the think time between units. **Sites**: what the digest judges, a template or, where
+a template is two phases, the opens of one (`0/write`, `0/read`), of five kinds. A
+*set*, a template opened at least twice and read (a sample set), has the three verdicts
+below; read-only names with a hex field are a set, noted that a keyed store written
+elsewhere fits as well. A *keyed* site is a template whose writes and reads interleave
+(a read of a path before a later write, or an open both read and written; a KV cache); a
+hex field in its name supports it and never makes it alone. It counts its keys, the reads
 after a write and before any, the re-reads and the share of reads the top tenth of the
 keys take, and the lag from a key's write to each later read, in time and in touches; its
 verdicts are *origin* (`traced` when every key read was written in the trace, else
 undecided between an earlier run's warm cache and another writer), *reuse* (`repeated`
-when a key is read again, else undecided), and *size*. A *bulk write* site, opened at
-least twice and only written (a checkpoint, an index build), judges every field of its
-name, `varies` or undecided between a new value per write and a rewrite, which a path
-written again decides as `constant`; its *rewrite* verdict, the share of opens with an
-`fsync`, and *size*. A *within* site is one open read at eight or more offsets in more
-than one run (an index traversal): the reads, the distinct offsets and the share that
-revisit one, the span read, the sequential runs, *skew* (the top tenth of the offsets'
-share of the reads against a uniform spread's, undecided under fifty reads), and two
-verdicts no trace decides, *memory* (does the file fit at scale) and *dependency* (does
-each offset depend on the last read). For a set, its
+when a key is read again, else undecided), and *size*. All of a template's writes before
+all its reads is two phases, a *bulk write* and a reader (a vector database's leaves,
+written by a build and read by a search); reads before its first write, of paths it never
+writes, are a *restore* (a load of an earlier checkpoint) and the writes after it a bulk
+write. A *bulk write* site, opened at least twice and only written (a checkpoint, an index
+build), finds its *saves*: bursts of opens, each starting within the burst's own length of
+the one before, `simultaneous` when every save's lanes open their first files within a
+quarter of its length (a distributed checkpoint), `one_writer` when one lane writes them
+all (plain DDP's rank 0, whose writer count at scale is asked), `staggered` or `mixed`
+otherwise, and their interval; every field of its name, `varies`, `constant` once a second
+save keeps it, else undecided until one; its *rewrite* (a checkpoint is never overwritten,
+so a path written again is evidence against one), the share of opens with an `fsync`;
+*retention*, from its unlinks: `kept` (nothing deleted), `keeps` N (saves deleted only once
+a later one was stable; N the most held after a deletion), or `unsafe` (a save deleted
+before the next was stable); *label*, `checkpoint` or `output`, which a rewrite or a read
+after the first write decides as `output` and nothing in a trace decides as `checkpoint`,
+with the evidence that supports it listed; and *size*. A *within* site is one open read at
+eight or more offsets in more than one run (an index traversal): the reads, the distinct
+offsets and the share that revisit one, the span read, the sequential runs, *skew* (the top
+tenth of the offsets' share of the reads against a uniform spread's, undecided under fifty
+reads), and two verdicts no trace decides, *memory* (does the file fit at scale) and
+*dependency* (does each offset depend on the last read). For a set, its
 *selection* verdict says what the sequence of paths decides between a permutation pass
 over the set (`consume`, each path once per pass) and a draw with replacement (`choose`): a
 repeat before the set is exhausted refutes the pass; two or more passes of equal length
@@ -160,9 +175,10 @@ record claims gets the nearest lower record, its assertions offered one by one f
 person to confirm. Then, facts first and the open questions in rank order: for every site with an open
 question, the facts of its kind (a set: how many files of its kind exist at the scale the
 application runs and how many passes the benchmark will make; a keyed site: the keys it
-holds at scale and the requests the benchmark serves; a bulk write: every varying field's
-count of values at scale, ranks or steps, and how many times the benchmark writes this
-kind of file; a within site: the file's size at scale and the queries the benchmark runs;
+holds at scale and the requests the benchmark serves; a bulk write: every field's count of
+values at scale (ranks or steps) unless two saves showed it constant, how many times the
+benchmark writes this kind of file, how many saves the application keeps, and, for one
+writing lane, how many processes write each save at scale; a within site: the file's size at scale and the queries the benchmark runs;
 Enter for don't know; a fact decides what it can, so a corpus small enough refutes a draw
 and no behavioral question follows), then each open item
 on one screen, the evidence, the question in the application's terms, numbered choices with
@@ -416,9 +432,12 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
   An answers file, `aeiou_answers: 1`: `trace`, `trace_sha256`, `by`, `at`, `application`
   (what the owner said the application is, its record, options, and blind spots), and `answers`,
-  a list of facts (`{"template", "fact": "candidates" | "passes", "value", "note"}`) and
-  answers (`{"template", "question": "selection" | "size" | "order", "answer", "note"}`,
-  the answer one of the question's candidates or `unknown`). Written by an interactive
+  a list of facts (`{"template", "fact", "value", "note"}`, the fact one of the site's kind's:
+  `candidates`, `passes`, `keys`, `requests`, `size`, `keep`, `writers`, `values:<field>`) and
+  answers (`{"template", "question", "answer", "note"}`, the question one of `selection`,
+  `size`, `order`, `origin`, `reuse`, `skew`, `memory`, `dependency`, `label`, the answer one
+  of its candidates or `unknown`), either with `phase` (`write` or `read`) when its template is
+  two sites; without one it answers every site of the template that has the fact or question. Written by an interactive
   `digest`, replayed by `--answers`; a hand-off, not a thing to edit.
 - `*.tolerances.json`
 

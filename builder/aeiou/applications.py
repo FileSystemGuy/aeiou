@@ -21,19 +21,12 @@ FORMAT = 1
 KINDS = ("library", "service", "managed")
 CONFIDENCE = ("high", "medium")
 # the digest's own vocabulary for what a record may assert (kept here so the loader does not import
-# the digest; `tests/test_digest.py` holds the two equal): facts, plus `values:<field>`; questions,
-# plus `field:<field>` with the candidates `new_values` and `constant`
-FACTS = ("candidates", "passes", "keys", "requests", "size")
+# the digest; `tests/test_digest.py` holds the two equal): facts, plus `values:<field>`; questions
+FACTS = ("candidates", "passes", "keys", "requests", "size", "keep", "writers")
 QUESTIONS = {"selection": ("consume", "choose"), "size": ("per-path", "drawn"), "order": ("sequential", "permuted"),
              "origin": ("earlier_run", "other_writer"), "reuse": ("once", "repeated"),
-             "skew": ("uniform", "skewed"), "memory": ("fits", "exceeds"), "dependency": ("dependent", "independent")}
-FIELD_CANDIDATES = ("new_values", "constant")
-
-
-def question_candidates(q: str) -> tuple | None:
-    if q in QUESTIONS:
-        return QUESTIONS[q]
-    return FIELD_CANDIDATES if q.startswith("field:") else None
+             "skew": ("uniform", "skewed"), "memory": ("fits", "exceeds"), "dependency": ("dependent", "independent"),
+             "label": ("checkpoint", "output")}
 
 
 class Record:
@@ -245,9 +238,9 @@ def _record(app: Application, path: pathlib.Path, r: dict, spots: dict, conf: di
                 problems.add(path, f"assert {i}: value must be a whole number of at least 1")
                 ok = False
         elif "question" in a:
-            cands = question_candidates(a["question"]) if isinstance(a["question"], str) else None
+            cands = QUESTIONS.get(a["question"]) if isinstance(a["question"], str) else None
             if cands is None:
-                problems.add(path, f"assert {i}: question must be one of {', '.join(QUESTIONS)}, or field:<field>")
+                problems.add(path, f"assert {i}: question must be one of {', '.join(QUESTIONS)}")
                 ok = False
             elif a.get("answer") not in cands:
                 problems.add(path, f"assert {i}: answer must be one of {', '.join(cands)}")
