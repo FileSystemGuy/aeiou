@@ -1017,6 +1017,34 @@ numbers; the order is this note's.
     took the catalog from about 15 to 36 minutes, 2026-10-23); and the tail once one long run is
     left (metrics sampling, shorter check lengths for the heaviest cases).
 
+51. **Phases detected in a trace (raised by the user 2026-10-30, queued, not started).** A
+    digest treats a trace as one phase (`DESIGN_REVIEW.md` §3.88, revision of 2026-10-30), but
+    real traces hold several: training's restore, epochs, periodic evaluation passes, and
+    periodic checkpoints; a vector database's index load, searches, and periodic index rebuilds
+    or compactions; a KV cache, whose mix varies but never switches into a new regime and back.
+    The user's approach: a rolling window of significant size over the broad I/O mix, a phase
+    change being an abrupt change (a step, never a drift; a KV cache's warm-up is a drift) that
+    lasts and, for a periodic phase, returns to the original mix. Points agreed: segment first
+    by which templates are active, the op mix (bytes read and written, request sizes, metadata
+    per data op, creation rate) as the second signal for phases that change the mix within a
+    template; windows sized in the application's own steps, not seconds, with a minimum dwell;
+    the outcomes named periodic (A B A B: the period and duty as measured facts), sequential
+    (A then B: each side digested on its own), or stationary; the owner confirms each label, as
+    the digest asks. Bounded memory, so it streams over 7 GiB traces. Needs a real trace with
+    checkpoints or evaluation in it to design against.
+
+52. **All-rank traces of a scale-out run (raised by the user 2026-10-30, queued, not started).**
+    Ground truth for a distributed application is every rank's trace at once, aligned on
+    timestamp. A degenerate single-node run shows every operation the scale-out deployment
+    performs, but not which node issues it, so locality of operations to nodes (and the
+    simultaneity of a checkpoint's burst across nodes, `DESIGN_REVIEW.md` §3.88 revision point
+    4) is seen only in the scale-out run. The item: the capture (one strace per node, or per
+    process, with the clock's quality recorded: NTP, chrony, or PTP, against the millisecond
+    simultaneity it must resolve; an anchor event every node performs, such as a stat of an
+    agreed path, to align on beside the clock), and the reading (`aeiou-trace` over several
+    traces as one stream, a lane per host and process, which item 49 also needs, and the merge
+    of an object log with an strace on the clock).
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS

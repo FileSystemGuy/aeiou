@@ -8170,6 +8170,57 @@ here), at medium confidence until a real audit log is read. Ceph RGW's ops log a
 log stay as item 49's gap, as does the merge of an object log with an strace on the clock. Six
 tests over constructed logs of both formats.
 
+*Revised with the user 2026-10-30 (the step-4 verdicts reviewed; recorded, not yet built, so
+the step-4 note above still describes the code; its superseded parts are struck when the digest
+changes, in Python or in the Rust of §3.89 stage 2, whichever comes first):*
+
+1. **Keyed is the access pattern, not the name.** A keyed store (the KV cache) is written and
+   then read at least once within one phase of a run; a KV cache has no phases. A leaf fetch in
+   a vector database is not keyed: its build phase writes the leaves and never reads them, its
+   search phase reads them and never writes them. A template is keyed only when its writes and
+   reads interleave (a read of one key before a later write); all writes before all reads is
+   two phases, a bulk write and a reader; a hex field in the name is supporting evidence that
+   raises confidence in a pattern that already matches, never sufficient alone; a read-only
+   template with hex or id names is a sample set, noted as a store written elsewhere fits it. A
+   trace is one phase unless its owner says otherwise (phase detection is brief item 51).
+2. **A checkpoint is never overwritten.** The prior checkpoint stays intact until the next is
+   fully written and stable, then may be deleted under the application's retention policy. So
+   the step-4 rule `constant` *once a path is written again* goes, and with it the question of
+   §3.88's table, row "checkpointing", *whether names are new per step or overwritten*: a
+   rewritten path is evidence against a checkpoint. A field holding one value over the trace's
+   saves is undecided until a second save and is asked as `values:<field>` (how many at scale:
+   the ranks). New verdict `retention`: `kept` (nothing deleted), `keeps N`, or *unsafe* (an
+   earlier save deleted before the next was stable, which contradicts what a checkpoint is
+   for), with the number kept also asked as a fact, a policy.
+3. **A checkpoint is read only after a failure.** So a read of a template's path after the
+   template's first write means it is not a checkpoint. A read of the checkpoint pattern at or
+   near the start of a trace, of paths this trace does not write (an earlier step), is a
+   restore: a load site (`dcp-load`) before the save site (`dcp-save`), then a repeating
+   pattern of other I/O and a checkpoint write. A failure and the restart after it are always
+   two traces. Asynchronous or tiered checkpointing shows only the save to the local tier in
+   the traced process; the drain to shared storage runs elsewhere and is not in the trace.
+4. **A distributed checkpoint is one burst.** Each rank (process or node) writes its own files,
+   all starting simultaneously and finishing nearly so, since a checkpoint is the application's
+   instantaneous state. The save is recognised as a burst: one new file per lane, the opens
+   within a window small against the burst's length, quiet between bursts; the bursts' cadence
+   is the checkpoint interval as a measured fact. Simultaneous start is the strong test;
+   completion depends on per-rank size and on the storage under test, so it only supports.
+   Plain DDP writes from rank 0 alone, which the trace cannot tell from the other ranks
+   blocking on it with any reliability (the user's point): one writing lane is accepted, and
+   the writer count at scale asked.
+5. **Commit markers and framework names belong in the application records.** PyTorch DCP's
+   coordinator alone writes `.metadata` after every rank's `__<rank>_<n>.distcp`; no rank
+   writes an equivalent, and plain DDP's `torch.save` writes neither. Several frameworks
+   overwrite a small pointer after a save completes (DeepSpeed's `latest`, Megatron's
+   `latest_checkpointed_iteration.txt`), the one rewritten path a checkpoint has, and a
+   commit marker rather than checkpoint data (from memory, medium confidence: each to be read
+   from the framework's source before its record is written). Such names are evidence per
+   application, so they go in `applications/` records (DeepSpeed, Megatron-LM, Hugging Face
+   Trainer, Lightning beside pytorch-dcp) as assertions, which the trace still checks, and the
+   owner confirms the label when neither decides.
+6. **Phase detection and all-rank traces are their own items**, queued at the user's request:
+   brief items 51 and 52.
+
 ### 3.89 One observation document, the digest-to-digest comparison, and `aeiou-trace` in Rust (designed with the user 2026-10-29)
 
 The comparison item 47 left open, designed in a conversation that widened it twice. Recorded
