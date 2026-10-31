@@ -579,8 +579,8 @@ def size_of(touches: list[tuple[int, str, Unit]]) -> dict:
 # field in the name only supports it); `bulk_write`, opened twice or more and only written, or the
 # writes of a template whose writes all come before its reads or after a restore (a checkpoint, an
 # index build: its saves, every field of the name, rewrites, syncs, retention, and whether it is a
-# checkpoint); `restore`, reads before a template's first write of paths it never writes (a load of
-# an earlier checkpoint); `within`, one open read at many offsets (an index traversal: reuse, skew,
+# checkpoint); `restore`, reads before a template's first write of paths it never writes, starting
+# in the trace's first quarter (a load of an earlier checkpoint; later, they are a reader); `within`, one open read at many offsets (an index traversal: reuse, skew,
 # runs). Each kind has its facts (what a person knows about the scale) and its questions. All the
 # writes before all the reads is two phases, a bulk write and a reader; a trace is otherwise one
 # phase (finding phases within it is brief item 51).
@@ -652,8 +652,10 @@ def _half(tpl: Template, kind: str, phase: str, touches: list, **kw) -> list[Par
     return []
 
 
-def parts_of(tpl: Template) -> list[Part]:
-    """The sites of a template, in time order."""
+def parts_of(tpl: Template, early: int) -> list[Part]:
+    """The sites of a template, in time order. `early` ends the trace's first quarter, within
+    which a restore's reads start (§3.88, 2026-10-31: an application restoring a checkpoint does
+    its start-up I/O, reads the model, then the parameters and optimizer state, the checkpoint)."""
     touches = sorted(tpl.touches, key=lambda x: x[0])
     if len(touches) < 2:
         return [Part(tpl, "within", None, touches)] if touches and _within(touches) else []
@@ -664,8 +666,10 @@ def parts_of(tpl: Template) -> list[Part]:
         if not both and w[-1][0] < r[0][0]:
             return _half(tpl, "bulk_write", "write", w, read_after=True) + _half(tpl, "set", "read", r)
         if not both and r[-1][0] < w[0][0] and not {p for _, p, _ in r} & {p for _, p, _ in w}:
-            restore = _half(tpl, "restore", "read", r)
-            return restore + _half(tpl, "bulk_write", "write", w, restored=len({p for _, p, _ in r}) if restore else 0)
+            if all(u.first <= early for _, _, u in r):
+                restore = _half(tpl, "restore", "read", r)
+                return restore + _half(tpl, "bulk_write", "write", w, restored=len({p for _, p, _ in r}) if restore else 0)
+            return _half(tpl, "set", "read", r) + _half(tpl, "bulk_write", "write", w)
         return [Part(tpl, "keyed", None, touches)]
     return [Part(tpl, "bulk_write" if w else "set", None, touches)]
 
@@ -1074,7 +1078,9 @@ class Analysis:
         self.d = digester
         self.templates = sorted(digester.templates.values(), key=lambda t: t.id)
         self.by_name = {t.name(): t for t in self.templates}
-        self.parts = {t.id: parts_of(t) for t in self.templates}
+        units = [u for us in digester.units.values() for u in us]
+        start, end = min((u.first for u in units), default=0), max((u.last for u in units), default=0)
+        self.parts = {t.id: parts_of(t, start + (end - start) // 4) for t in self.templates}
         self.part = {p.key(): p for ps in self.parts.values() for p in ps}
 
 

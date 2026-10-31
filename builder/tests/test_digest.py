@@ -1128,7 +1128,17 @@ def test_reads_before_the_first_write_of_paths_never_written_are_a_restore():
     assert [(f["name"], f["values"], f["verdict"]) for f in w["fields"]] == [("a", 1, "undecided"), ("b", 2, "varies"), ("c", 1, "undecided")]
     assert w["label"]["verdict"] == "undecided" and w["label"]["supports"] == [
         "every save starts on all its lanes together", "every file fsynced", "2 file(s) of it read before its first write and never written: a restore"]
-    assert digest.facts_of(digest.parts_of(digest.analyze(restore_save().splitlines(True), "/d").templates[0])[0]) == []
+    assert digest.facts_of(digest.analyze(restore_save().splitlines(True), "/d").parts[0][0]) == []
+    # a restore starts within the trace's first quarter (2026-10-31, the user's): start-up I/O, the
+    # model, then the parameters and optimizer state; reads of the pattern later are a reader, no restore
+    late = [(100, "config.json", [("read", 100)], 0), (100, "ckpt/step_000001/__0_0.distcp", [("read", 4096)], 6),
+            (101, "ckpt/step_000001/__1_0.distcp", [("read", 8192)], 6.0001),
+            (100, "ckpt/step_000002/__0_0.distcp", [("write", 4096), ("fsync",)], 10), (101, "ckpt/step_000002/__1_0.distcp", [("write", 8192), ("fsync",)], 10.0001)]
+    d = digest_of(calls_strace(late))
+    assert [(s["phase"], s["kind"]) for s in d["sites"]] == [("read", "set"), ("write", "bulk_write")]
+    assert d["sites"][1]["label"]["supports"] == ["every save starts on all its lanes together", "every file fsynced"]
+    late[1], late[2] = late[1][:3] + (2,), late[2][:3] + (2.0001,)
+    assert [s["kind"] for s in digest_of(calls_strace(late))["sites"]] == ["restore", "bulk_write"]
 
 
 def dcp_save(steps=1, rewrite=False, keep=None, unsafe=False, prior=False):
@@ -1200,7 +1210,7 @@ def test_retention_is_kept_keeps_n_or_unsafe():
 def test_one_writing_lane_is_accepted_and_the_writers_asked():
     seq = [(100, f"ckpt/step_{s:06}.pt", [("write", 1 << 20)], 10 * s) for s in (1, 2, 3)]
     an = digest.analyze(calls_strace(seq).splitlines(True), "/d")
-    (part,) = digest.parts_of(an.templates[0])
+    (part,) = an.parts[0]
     assert [n for n, _ in digest.facts_of(part)] == ["values:a", "passes", "keep", "writers"]
     s = digest.document(an)["sites"][0]
     assert s["saves"]["verdict"] == "one_writer" and s["saves"]["count"] == 3 and s["saves"]["interval_ns"]["n"] == 2
@@ -1319,7 +1329,7 @@ def test_render_shows_every_kind():
 def test_the_last_branches_of_the_kinds():
     # a template that is no site has no parts
     an = digest.analyze(calls_strace([(7, "once.bin", [("read", 10)])]).splitlines(True), "/d")
-    assert digest.parts_of(an.templates[0]) == []
+    assert an.parts[0] == []
     d = answered(calls_strace([(7, "once.bin", [("read", 10)])]), [{"template": "once.bin", "fact": "size", "value": 5}])
     assert d["rejected"][0]["why"] == "not a site"
     # an answer against a traced origin

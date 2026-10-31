@@ -8252,8 +8252,23 @@ start, one writing lane, every file fsynced, a restore, a safe retention). The
 pytorch-dcp 2.14 record asserts `label` `checkpoint` for its shards, from the DCP documentation
 it already cites. Point 5's records (DeepSpeed, Megatron-LM, Hugging Face Trainer, Lightning)
 wait for their sources to be read. Not built: a burst's completion spread, which point 4 says
-only supports; a "near the start" test for a restore, read as "before the first write".
+only supports~~; a "near the start" test for a restore, read as "before the first write"~~ (built
+2026-10-31, below).
 Eleven tests changed or added in `test_digest.py`, the record test in `test_applications.py`.
+
+*Revised with the user 2026-10-31, "near the start":* the user agreed the quarter-length
+window for simultaneous starts and bounded the restore: its reads start within the first
+quarter of the trace (from its first call, of any lane, to its last). The user's account of a
+restart: the application does some I/O just to start, then reads the model into the GPUs, then
+reads the training parameters and the optimizer state; the parameters and the optimizer state
+are the only part of that which is the checkpoint, and after the restore the job goes on with
+the stereotypical training I/O, new checkpoints written periodically among it. So the start-up
+I/O and the model read are other templates and other sites, and a restore is the checkpoint's
+own pattern read early. Reads of a never-written pattern that start later, still before its
+first write, are a reader beside the bulk write, neither a restore nor support for a
+checkpoint, nor evidence against one. Built the same day, test first
+(`test_reads_before_the_first_write_of_paths_never_written_are_a_restore`: a restore at 2 s of
+a 10 s trace, a reader at 6 s).
 
 ### 3.89 One observation document, the digest-to-digest comparison, and `aeiou-trace` in Rust (designed with the user 2026-10-29)
 

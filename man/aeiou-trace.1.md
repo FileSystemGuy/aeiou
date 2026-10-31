@@ -134,8 +134,9 @@ undecided between an earlier run's warm cache and another writer), *reuse* (`rep
 when a key is read again, else undecided), and *size*. All of a template's writes before
 all its reads is two phases, a *bulk write* and a reader (a vector database's leaves,
 written by a build and read by a search); reads before its first write, of paths it never
-writes, are a *restore* (a load of an earlier checkpoint) and the writes after it a bulk
-write. A *bulk write* site, opened at least twice and only written (a checkpoint, an index
+writes, starting in the trace's first quarter (from its first call to its last), are a
+*restore* (a load of an earlier checkpoint, after the application's start-up I/O and its
+model) and the writes after it a bulk write; starting later, they are a reader. A *bulk write* site, opened at least twice and only written (a checkpoint, an index
 build), finds its *saves*: bursts of opens, each starting within the burst's own length of
 the one before, `simultaneous` when every save's lanes open their first files within a
 quarter of its length (a distributed checkpoint), `one_writer` when one lane writes them

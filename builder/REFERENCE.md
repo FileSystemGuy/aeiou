@@ -726,7 +726,8 @@ only supports it, `hex_name`: `keyed_of` counts keys, writes, reads after a writ
 before any, re-reads and the top tenth's share, the lag from write to read as histograms
 of nanoseconds and of touches; verdicts `lag`, `origin`, `reuse`, `size`); every write
 before every read is a `bulk_write` part and a `set` part; every read before the first
-write, of paths never written, a `restore` part (files and bytes; `size`) and a
+write, of paths never written, starting in the trace's first quarter (`parts_of`'s `early`,
+from the first call of any lane to the last), a `restore` part (later, a `set` part) (files and bytes; `size`) and a
 `bulk_write` part; `bulk_write` (opened twice or more and only written: `bulk_of` finds
 the saves, `saves_of`'s bursts, an open beginning the next once it starts later after the
 burst than the burst has lasted, judged `simultaneous` when each save's lanes open their
