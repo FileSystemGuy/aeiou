@@ -1031,7 +1031,20 @@ numbers; the order is this note's.
     the outcomes named periodic (A B A B: the period and duty as measured facts), sequential
     (A then B: each side digested on its own), or stationary; the owner confirms each label, as
     the digest asks. Bounded memory, so it streams over 7 GiB traces. Needs a real trace with
-    checkpoints or evaluation in it to design against.
+    checkpoints or evaluation in it to design against. *The smaller phases to look for, listed
+    the same day (from understanding, not yet read from sources; each checked before it becomes
+    a rule or a record):* training: the restore at the start, epoch boundaries (workers
+    re-forked and the corpus listed again, a metadata burst; the §3.89 spike saw the re-fork),
+    evaluation passes, a first-epoch cache of the corpus to local disk (one-way), and periodic
+    small appends of logs and metrics (continuous, not a phase); the checkpoint itself: the save
+    burst, the fsyncs, the commit marker, then retention's deletes; vector search: the index
+    load and cache warm-up at the start (DiskANN's node cache), ingestion mixed with search,
+    periodic segment flushes, compactions, and index builds on sealed segments (Milvus),
+    optimizer runs and snapshots (Qdrant); DiskANN's build, a chain of one-way phases (sample,
+    partition passes, shard builds, merge, disk layout) the abstract already models; KV cache:
+    warm-up (a drift, so no phase), the local tier filling so every write evicts (abrupt and
+    one-way, so sequential), and the model load and engine start; RAG: periodic re-ingestion
+    and re-indexing.
 
 52. **All-rank traces of a scale-out run (raised by the user 2026-10-30, queued, not started).**
     Ground truth for a distributed application is every rank's trace at once, aligned on
