@@ -1813,7 +1813,9 @@ side. The choices were made while building and **confirmed by the user the same 
   every client, and `-yy` gives the path behind each descriptor. *Against:* it slows the
   application several-fold (irrelevant to these metrics, which are not timings, except the
   chain gap), and it cannot see `io_uring` or page faults. An eBPF or `LD_PRELOAD` capture
-  would be a second front end to the same `Metrics`; none is written.
+  would be a second front end to the same `Metrics`; none is written. *(2026-10-31: queued
+  as `PROJECT_BRIEF.md` item 54, an eBPF capture of mapping faults and `io_uring` operations
+  beside the `strace`, and a capture kit with its instructions; not started.)*
 - **Only paths under `--root` count.** A real process loads libraries, reads `/proc`,
   talks on sockets. The abstract models the I/O on the storage under test, so the trace is
   cut to that before anything is counted.

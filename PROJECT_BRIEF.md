@@ -1123,6 +1123,54 @@ numbers; the order is this note's.
     identify an owner; and the application's identity, which a record match adds and an owner
     may still want left out.
 
+54. **What `strace` cannot see: an eBPF capture beside it, and the instructions for a capture
+    (raised by the user 2026-10-31, queued, not started).** An `strace` misses three kinds of
+    I/O the abstracts model: the accesses through a mapping (it sees `mmap`, `madvise`,
+    `msync`, `munmap`, never the loads; `builder/REFERENCE.md` §7), the operations of an
+    `io_uring` (it sees `io_uring_setup`, `io_uring_register`, and `io_uring_enter`, never the
+    SQEs, and under `SQPOLL` not even the enter), and object requests (HTTP over a socket).
+    The user was reminded that eBPF tracing in the kernel can report mapping and `io_uring`
+    activity; `DESIGN_REVIEW.md` §3.42 already named an eBPF capture as "a second front end to
+    the same `Metrics`; none is written". This side's first assessment, from memory, each claim
+    to be checked against the kernel's source for the kernels targeted before anything is
+    built (the confidence after each):
+    - **Mappings.** A probe on `filemap_fault` gives the file and page offset of each fault
+      that reaches the page cache, and the tracepoint `filemap:mm_filemap_add_to_page_cache`
+      each page as it enters the cache (buffered reads too) (medium). What it shows is the
+      kernel's I/O, not the application's calls: a warm cache hides faults, and fault-around
+      and readahead make the unit larger than the touch. So a capture needs a cold cache (or a
+      dataset larger than memory) and says which, and a site fitted from it is marked
+      kernel-observed, weaker evidence than a call, beside the principle that an abstract is
+      the application's call stream.
+    - **`io_uring`.** The tracepoints `io_uring:io_uring_submit_req` (named
+      `io_uring_submit_sqe` before about 6.0) and `io_uring:io_uring_complete` give the
+      opcode, `user_data`, and the result, not, as far as recalled, the descriptor, offset, or
+      length (medium); those need a probe on `io_issue_sqe` reading the request, whose layout
+      changes with the kernel version, so BTF and CO-RE.
+    - **Object requests (still open).** Server-side logs are read already (MinIO audit, S3
+      server access, `runner/aeiou/src/objectlog.rs`). On the client, probes on OpenSSL's
+      `SSL_write`/`SSL_read` (as bcc's `sslsniff`) see the plaintext request line, method,
+      key, and `Range`, but only for a client linked to the system's OpenSSL: the AWS CRT
+      (`s3torchconnector`, Mountpoint) uses s2n-tls on Linux, and Go clients carry their own
+      TLS (low to medium; each client's source read first). An SDK's debug log, and a packet
+      capture against a plain-HTTP test endpoint, are the other leads.
+    - **The capture.** `strace` stays the primary record (its `-yy` paths are better than
+      what a probe resolves), and the eBPF log is a second input joined to it by thread and
+      time, as the object logs are a second input today. `strace -ttt` is wall-clock and BPF
+      the monotonic clock, so the capture records their offset. It needs root, or `CAP_BPF`
+      and `CAP_PERFMON`, and `bpftrace` or a small tool of ours, which some owners' hosts and
+      containers will not allow; its overhead is far below `strace`'s.
+    - **The instructions.** A trace's owner today is given one `strace` line (the man page of
+      `aeiou-trace`). The item gives them a capture kit: one script that checks the kernel and
+      the tracepoints present, starts `strace` and the probes together, records the kernel
+      version, the clock offset, and whether the cache was cold, and says what the capture
+      could not see; the instructions as a page an owner follows without us. The kit is worth
+      writing for `strace` alone before any probe is added.
+    Questions to settle: whether a mapping's faults are evidence enough for a site of an
+    abstract, or only a check on one; which kernels the probes must support; whether the
+    digest's record of what a trace cannot see (an application record's blind spots) becomes
+    a record of what this capture did see.
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS

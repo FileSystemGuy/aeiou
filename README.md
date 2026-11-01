@@ -577,7 +577,9 @@ Not built, in rough order of interest:
   `aeiou-catalog disclose`, every string
   and number a contribution would publish (item 47); a digest redacted for publication, its
   path literals tokenized and its owner's names dropped (item 53, queued 2026-10-31); a trace's
-  phases in the catalog, measured per phase and described in prose from its digest (item 51); a fitting skill in the open skill format
+  phases in the catalog, measured per phase and described in prose from its digest (item 51); an
+  eBPF capture of what `strace` cannot see (mapping faults, `io_uring` operations) and a capture
+  kit with its instructions for a trace's owner (item 54, queued 2026-10-31); a fitting skill in the open skill format
   over those tools and `aeiou-fit`, evaluated against the committed captures, beside a written
   procedure for the same work without an LLM (item 48).
 - The case for calling aeiou a "scalable trace" (raised by the user 2026-10-28, §3.85): the
