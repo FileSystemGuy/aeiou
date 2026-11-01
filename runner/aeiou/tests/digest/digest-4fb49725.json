@@ -1,0 +1,107 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-a984c85d.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 4,
+    "phases": [
+     {
+      "bytes_read": 4096,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 3005028,
+      "motif": "open fstat read close",
+      "ops": 4,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [],
+  "ops": 4,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 4096,
+    "bytes_written": 0,
+    "fields": [],
+    "id": 0,
+    "offsets": {
+     "whole": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "fstat": 1,
+     "open": 1,
+     "read": 1
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       1
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 1
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       1
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 1
+    },
+    "template": "one.bin",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,277 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "answer": "other_writer",
+    "question": "origin",
+    "template": "kv/{a:x32}.pt"
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-ccd541f8.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [
+   {
+    "answer": "other_writer",
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "question": "origin",
+    "site": 0,
+    "template": "kv/{a:x32}.pt"
+   }
+  ],
+  "contexts": 2,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 6,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 200,
+      "first": 0,
+      "last": 38003922,
+      "motif": "open write close",
+      "ops": 6,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         33554432,
+         1
+        ]
+       ],
+       "max": 33994913,
+       "mean": 33994913.0,
+       "n": 1
+      },
+      "units": 2
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 6,
+    "phases": [
+     {
+      "bytes_read": 200,
+      "bytes_written": 0,
+      "first": 12000084,
+      "last": 26005030,
+      "motif": "open read close",
+      "ops": 6,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         1
+        ]
+       ],
+       "max": 9994983,
+       "mean": 9994983.0,
+       "n": 1
+      },
+      "units": 2
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "threads_without_clone": 1
+  },
+  "open": [
+   {
+    "ask": "Is a key read again after its first read (a request repeating a prefix, a neighbor found again), or is each key read once?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a key read again is a hit the pool must hold; keys read once make the pool a write-once log"
+    },
+    "candidates": [
+     "once",
+     "repeated"
+    ],
+    "divergence": 0.0,
+    "question": "reuse",
+    "rank": 1,
+    "settles": "a longer trace: a request repeating a prefix, or a neighbor found again, reads a key a second time",
+    "site": 0
+   }
+  ],
+  "ops": 12,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "access": {
+     "keys": 2,
+     "read": 2,
+     "read_after_write": 1,
+     "read_before_write": 1,
+     "reads": 2,
+     "reads_per_key": {
+      "buckets": [
+       [
+        1,
+        2
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 2
+     },
+     "reread_share": 0.0,
+     "rereads": 0,
+     "top_10pct_share": 0.5,
+     "writes": 2,
+     "written": 2,
+     "written_once_share": 1.0
+    },
+    "distinct": 2,
+    "hex_name": true,
+    "kind": "keyed",
+    "lag": {
+     "ns": {
+      "buckets": [
+       [
+        10485760,
+        1
+       ]
+      ],
+      "max": 12000084,
+      "mean": 12000084.0,
+      "n": 1
+     },
+     "touches": {
+      "buckets": [
+       [
+        1,
+        1
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 1
+     },
+     "verdict": "write_then_read"
+    },
+    "origin": {
+     "asserted": {
+      "answer": "other_writer",
+      "at": "2026-10-29T12:00:00+00:00",
+      "by": "someone@host"
+     },
+     "consistent": [
+      "earlier_run",
+      "other_writer"
+     ],
+     "refuted": {},
+     "settles": "a trace from the application's start, or of every process that writes this kind of file: a key read before any write is then a miss or another writer's",
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "keys": null,
+     "requests": null
+    },
+    "reuse": {
+     "consistent": [
+      "once",
+      "repeated"
+     ],
+     "keys_reread": 0,
+     "refuted": {},
+     "settles": "a longer trace: a request repeating a prefix, or a neighbor found again, reads a key a second time",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 100,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 4
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 200,
+    "bytes_written": 200,
+    "fields": [
+     {
+      "kind": "hex",
+      "name": "a",
+      "values": 2,
+      "width": 32
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 4
+    },
+    "opens": 4,
+    "ops": {
+     "close": 4,
+     "open": 4,
+     "read": 2,
+     "write": 2
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [
+      [
+       96,
+       2
+      ]
+     ],
+     "max": 100,
+     "mean": 100.0,
+     "n": 2
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       4
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 4
+    },
+    "template": "kv/{a:x32}.pt",
+    "write_size": {
+     "buckets": [
+      [
+       96,
+       2
+      ]
+     ],
+     "max": 100,
+     "mean": 100.0,
+     "n": 2
+    }
+   }
+  ]
+ }
+}

@@ -26,11 +26,14 @@ strace as the file the runner's `trace` node executes literally, and digests one
 structural summary an abstract is fitted from.
 
 **aeiou-trace** is a binary of the runner's crate, built and shipped beside **aeiou**(1).
-`metrics` and `export` are its own (Rust, since 2026-10-29); `compare` and `digest` are still
-the Python package's, which the binary runs as `python3 -m aeiou.trace` (or with the
-interpreter `AEIOU_PYTHON` names) until they are ported (`DESIGN_REVIEW.md` §3.89). The
-trace is read in a stream, and the state kept is per open, per thread, and per path under the
-root, never per call, so a trace of several gigabytes is read in the time it takes to read it.
+`metrics` and `export` are its own (Rust, since 2026-10-29), and so is `digest`'s document
+and report (since 2026-10-31); `compare`, and a `digest` that asks on a terminal or is told
+the application (`--application`, `--applications`), are still the Python package's, which
+the binary runs as `python3 -m aeiou.trace` (or with the interpreter `AEIOU_PYTHON` names)
+until they are ported (`DESIGN_REVIEW.md` §3.89); the Python asks, and every document it shows
+or writes is the binary's. The trace is read in a stream, and the state kept is per open, per
+thread, and per path under the root, never per call, so a trace of several gigabytes is read
+in the time it takes to read it.
 
 The trace is taken with
 
@@ -108,7 +111,7 @@ class tolerances built in are the repository's defaults: 0.05 for `mix`, `ops`,
 
 ### digest
 
-Writes the digest document (`aeiou_digest: 1`) of a trace, the structural summary a fit is
+Writes the digest document (`aeiou_digest: 2`) of a trace, the structural summary a fit is
 made from, without the trace leaving its owner: no raw path unless `--paths` asks, no data
 bytes ever. It reads the same calls `export` writes, through the same resolver, or an
 exported trace file. **Path templates**: every run of digits in a path under the root is a
@@ -161,7 +164,12 @@ refute the draw; no repeat at all decides nothing unless the corpus (`--candidat
 small enough that a draw would have repeated (the birthday bound, at 5 %), and then the
 verdict says how many touches would decide it. *Order* within a pass (`sequential`,
 `permuted`, `other`) and the bytes per open (`constant`, `per-path`, `drawn`) are judged
-the same way, each `undecided` with what settles it. **Open**: every undecided verdict as a
+the same way, each `undecided` with what settles it. **Facts**: every site lists the facts a
+person can give about it at scale (below, under asking), each with its question and, where the
+trace bounds it, the least value the trace allows and what it shows. **Metrics**: the numbers
+`metrics` computes, by its definitions, over the same exported calls (`aeiou_metrics: 2`, as
+the metrics of the exported trace file: a lane is a context, the whole trace one instance), so
+one document carries a trace's structure and its numbers. **Open**: every undecided verdict as a
 question in the application's terms, its candidate constructs, what evidence settles it,
 and the candidates' divergence at `--epochs` passes (the share of the set a draw with
 replacement never reads, e^-N, against zero for a pass), ranked largest first. **Asking**:
@@ -399,13 +407,14 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
 - **AEIOU_PYTHON**
 
-  The interpreter that runs `compare` and `digest`, which must be able to import the `aeiou`
-  package (the wheel's); default `python3`.
+  The interpreter that runs `compare` and the digest's asking (a terminal, `--application`,
+  `--applications`), which must be able to import the `aeiou` package (the wheel's); default
+  `python3`.
 - **AEIOU_TRACE**
 
-  Read by the Python package, which asks the binary for a trace's exported lines when it
-  digests one: the path of **aeiou-trace**. Default: the one beside `AEIOU_RUNNER`, else the
-  one on the `PATH`, else the checkout's release build.
+  Read by the Python package, which asks the binary for every digest document it shows or
+  writes: the path of **aeiou-trace**. Default: the one beside `AEIOU_RUNNER`, else the one on
+  the `PATH`, else the checkout's release build.
 
 ## FILES
 
@@ -415,13 +424,16 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
   --metrics-json`. The histograms are in full, per actor template and in total.
 - `*.digest.json`
 
-  A digest document, `aeiou_digest: 1`: `trace` and `trace_sha256`, `templates`, `lanes`
-  with their `phases`, `sites` with the `selection`, `order`, and `size` verdicts and a
-  `projection` (the candidates and passes the site was judged at, and which of them were
-  asserted), `open`, the ranked questions, `asserted`, every fact and answer recorded with
+  A digest document, `aeiou_digest: 2`: `trace` and `trace_sha256`, `templates`, `lanes`
+  with their `phases`, `sites` with their kind's verdicts, their `facts` (`name`, `ask`, and,
+  where the trace bounds it, `least` and `why`), and a `projection` (the facts the site was
+  judged at, and which of them were asserted), `open`, the ranked questions, `asserted`, every fact and answer recorded with
   `site`, `template`, `by`, `at`, and its `note`, and `rejected`, every answer the trace
   contradicted, with `why`. Times are nanoseconds from the first exported call; histograms
-  are the metrics' quarter-octave buckets.
+  are the metrics' quarter-octave buckets. `metrics` is the metrics document of the same
+  calls (`aeiou_metrics: 2`; its `notes` count, as `lines_not_counted`, the lines of an
+  exported file the runner would refuse, such as an op on an open no line made, which the
+  structure notes and the numbers leave out).
 - `applications/`
 
   The application records (`applications/README.md`): one directory per application,

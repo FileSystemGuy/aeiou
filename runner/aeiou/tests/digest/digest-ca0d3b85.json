@@ -1,0 +1,9 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/other"
+ },
+ "error": "an exported trace file carries its root (/d); --root /other is not it",
+ "input": "trace-925be8f1.in"
+}

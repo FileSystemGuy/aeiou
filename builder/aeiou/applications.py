@@ -20,8 +20,8 @@ from .nodes import BuildError
 FORMAT = 1
 KINDS = ("library", "service", "managed")
 CONFIDENCE = ("high", "medium")
-# the digest's own vocabulary for what a record may assert (kept here so the loader does not import
-# the digest; `tests/test_digest.py` holds the two equal): facts, plus `values:<field>`; questions
+# the digest's own vocabulary for what a record may assert (the Rust digest's, `digest.rs`, which
+# `runner/aeiou/tests/digest_corpus.rs` holds this to): facts, plus `values:<field>`; questions
 FACTS = ("candidates", "passes", "keys", "requests", "size", "keep", "writers")
 QUESTIONS = {"selection": ("consume", "choose"), "size": ("per-path", "drawn"), "order": ("sequential", "permuted"),
              "origin": ("earlier_run", "other_writer"), "reuse": ("once", "repeated"),

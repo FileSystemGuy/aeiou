@@ -1,0 +1,255 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-83f26e52.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 6,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 300,
+      "first": 0,
+      "last": 14004946,
+      "motif": "open write close",
+      "ops": 6,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         1
+        ]
+       ],
+       "max": 9994984,
+       "mean": 9994984.0,
+       "n": 1
+      },
+      "units": 2
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Is this kind of file a checkpoint (the application's state, written to survive a failure and read back only after one), or output (an index build, a dataset, results)?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a checkpoint is saved at an interval, its saves kept or deleted by a retention policy, and read only after a failure; output is written once per build"
+    },
+    "candidates": [
+     "checkpoint",
+     "output"
+    ],
+    "divergence": 0.0,
+    "question": "label",
+    "rank": 1,
+    "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+    "site": 0
+   },
+   {
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "question": "size",
+    "rank": 2,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   }
+  ],
+  "ops": 6,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 2,
+    "fields": [
+     {
+      "kind": "hex",
+      "name": "a",
+      "values": 2,
+      "verdict": "varies",
+      "width": 32
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "consistent": [
+      "checkpoint",
+      "output"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+     "supports": [
+      "one writing lane, as plain DDP's rank 0"
+     ],
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "keep": null,
+     "passes": null,
+     "writers": null
+    },
+    "retention": {
+     "deleted": 0,
+     "unsafe": 0,
+     "verdict": "kept"
+    },
+    "rewrite": {
+     "rewritten_paths": 0,
+     "verdict": "new_names"
+    },
+    "saves": {
+     "count": 2,
+     "duration_ns": {
+      "buckets": [
+       [
+        1835008,
+        2
+       ]
+      ],
+      "max": 2005100,
+      "mean": 2004981.0,
+      "n": 2
+     },
+     "interval_ns": {
+      "buckets": [
+       [
+        10485760,
+        1
+       ]
+      ],
+      "max": 12000084,
+      "mean": 12000084.0,
+      "n": 1
+     },
+     "lanes": {
+      "buckets": [
+       [
+        1,
+        2
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 2
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        0,
+        2
+       ]
+      ],
+      "max": 0,
+      "mean": 0.0,
+      "n": 2
+     },
+     "verdict": "one_writer"
+    },
+    "size": {
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "sync": {
+     "fsync_share": 0.0,
+     "opens": 2
+    },
+    "template": 0,
+    "touches": 2
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 0,
+    "bytes_written": 300,
+    "fields": [
+     {
+      "kind": "hex",
+      "name": "a",
+      "values": 2,
+      "width": 32
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 2
+    },
+    "opens": 2,
+    "ops": {
+     "close": 2,
+     "open": 2,
+     "write": 2
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       2
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 2
+    },
+    "template": "kv/{a:x32}.pt",
+    "write_size": {
+     "buckets": [
+      [
+       96,
+       1
+      ],
+      [
+       192,
+       1
+      ]
+     ],
+     "max": 200,
+     "mean": 150.0,
+     "n": 2
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,9 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": null
+ },
+ "error": "line 2: Expecting value: line 1 column 1 (char 0)",
+ "input": "trace-afa83ddc.in"
+}

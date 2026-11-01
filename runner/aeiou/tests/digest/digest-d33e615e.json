@@ -1,0 +1,9 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/nowhere"
+ },
+ "error": "no call under --root /nowhere (4 line(s) read, 4 parsed as strace calls): check --root against the paths the trace shows",
+ "input": "trace-67afa0c4.in"
+}

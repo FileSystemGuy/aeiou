@@ -58,6 +58,12 @@ def digest_of(text, root="/d", **kw):
     return digest.digest_of(text.splitlines(True), root, **kw)
 
 
+def report_of(text, root="/d", **kw):
+    """The binary's text report (`runner/aeiou/tests/digest_corpus.rs` holds every report the
+    Python digest wrote; these say what a reader looks for)."""
+    return digest.report(digest.analyze(text.splitlines(True), root), **kw)
+
+
 # ---------------------------------------------------------------- templates
 
 
@@ -311,7 +317,8 @@ def test_an_exported_trace_file_digests_as_its_strace(tmp_path):
 
 def test_the_document_names_its_format_and_root():
     d = digest_of(strace_of(["a.bin", "b.bin"]))
-    assert d["aeiou_digest"] == 1 and d["root"] == "/d" and d["source"] == "strace"
+    assert d["aeiou_digest"] == 2 and d["root"] == "/d" and d["source"] == "strace"
+    assert d["metrics"]["aeiou_metrics"] == 2 and d["metrics"]["total"]["ops"] == 8
     assert d["ops"] == 8 and d["contexts"] == 1
     assert isinstance(d["notes"], dict)
 
@@ -323,8 +330,7 @@ def test_nothing_under_the_root_is_an_error():
 
 def test_text_report_reads_like_a_summary():
     ids = permutation(28, 1)
-    d = digest_of(strace_of([f"s/{i:03}.npz" for i in ids]), epochs=2)
-    text = digest.render(d)
+    text = report_of(strace_of([f"s/{i:03}.npz" for i in ids]), epochs=2)
     assert "s/{a:03}.npz" in text and "28 paths" in text
     assert "open fstat read close" in text
     assert "selection" in text and "undecided" in text
@@ -346,7 +352,7 @@ def test_cli_writes_json_or_text(tmp_path):
     r = run(str(tr), "--root", "/d")
     assert r.returncode == 0, r.stderr
     doc = json.loads(r.stdout)
-    assert doc["aeiou_digest"] == 1 and doc["trace"] == str(tr)
+    assert doc["aeiou_digest"] == 2 and doc["trace"] == str(tr)
     out = tmp_path / "d.json"
     r = run(str(tr), "--root", "/d", "-o", str(out), "--epochs", "3", "--candidates", "500", "--paths")
     assert r.returncode == 0, r.stderr
@@ -415,7 +421,7 @@ def test_io_submit_is_a_unit_of_its_own_and_an_open_left_open_is_noted():
     (lane,) = d["lanes"]
     assert [(p["motif"], p["units"]) for p in lane["phases"]] == [("open", 1), ("submit member+", 1), ("submit member", 1)] or \
         [(p["motif"], p["units"]) for p in lane["phases"]] == [("open", 1), ("submit member+", 2)]
-    text = digest.render(d)
+    text = report_of(AIO)
     assert "idx" in text and "none: the trace decides every verdict" in text
 
 
@@ -429,7 +435,7 @@ def test_exported_file_refusals_and_unknown_opens(tmp_path):
         digest.digest_of(['{"aeiou_trace": 9}\n'], None)
     with pytest.raises(BuildError, match="no call in it"):
         digest.digest_of([hdr + "\n", "\n"], None)
-    with pytest.raises(BuildError, match="needs --root"):
+    with pytest.raises(BuildError, match="--root <DIR>"):
         digest.digest_of(strace_of(["a.bin"]).splitlines(True), None)
     with pytest.raises(BuildError, match="carries its root"):
         digest.digest_of([hdr + "\n", json.dumps({"lane": 0, "t": 0, "op": "stat", "path": "a"}) + "\n"], "/other")
@@ -444,12 +450,14 @@ def test_exported_file_refusals_and_unknown_opens(tmp_path):
         {"lane": 0, "t": 6, "dur": 1, "op": "close", "fd": 0, "ret": "EIO"},
         {"lane": 0, "t": 7, "dur": 1, "op": "submit", "ops": [{"op": "read", "fd": 9, "offset": 0, "len": 1, "ret": 1}]},
     ]
-    d = digest.digest_of([hdr + "\n", *(json.dumps(e) + "\n" for e in events)], "/d")
+    lines = [hdr + "\n", *(json.dumps(e) + "\n" for e in events)]
+    d = digest.digest_of(lines, "/d")
     assert d["notes"]["data_on_unknown_open"] == 2 and d["notes"]["close_of_unknown_open"] == 1 and d["notes"]["fstat_on_unknown_open"] == 1
     assert d["notes"]["x"] == 1 and d["source"] == "trace"
     (t,) = d["templates"]
     assert t["template"] == "w/{a}.bin" and t["bytes_written"] == 200 and t["offsets"] == {"whole": 1}
-    text = digest.render(d)
+    assert d["metrics"]["notes"]["lines_not_counted"] == 3     # what the runner refuses: a read, a close, and a submit on opens no line made
+    text = digest.report(digest.analyze(lines, "/d"))
     assert "wrote 200 B" in text and "submit" in text
 
 
@@ -457,11 +465,12 @@ def test_order_other_and_the_rendering_of_every_verdict():
     down = digest_of(strace_of([f"s/{i:03}.npz" for i in range(29, -1, -1)]), paths=True)
     s = down["sites"][0]
     assert s["order"]["verdict"] == "other" and s["order"]["ascending"] == 0.0
-    text = digest.render(down)
+    text = report_of(strace_of([f"s/{i:03}.npz" for i in range(29, -1, -1)]), paths=True)
     assert "other" in text and "interleaved scans" in text and "s/000.npz" in text
     # a refuted candidate, and an undecided size, each rendered
-    two = digest_of(strace_of([], per_open=[(f"s/{i}.npz", 100 * (i + 1)) for i in range(12)]), candidates=12)
-    text = digest.render(two)
+    two_text = strace_of([], per_open=[(f"s/{i}.npz", 100 * (i + 1)) for i in range(12)])
+    two = digest_of(two_text, candidates=12)
+    text = report_of(two_text, candidates=12)
     assert "choose refuted" in text and "size: undecided; settles: a repeat" in text
     assert any(o["question"] == "size" for o in two["open"]) and "at scale: the op multiset is the same in distribution" in text
     assert two["projection"]["candidates"] == 12 and ", 12 candidates):" in text
@@ -471,22 +480,6 @@ def test_fewer_candidates_than_paths_seen_is_noted_and_the_seen_count_used():
     d = digest_of(strace_of([f"s/{i:03}.npz" for i in permutation(12, 1)]), candidates=3)
     assert "12 distinct paths of template 0" in d["notes"]["candidates"]
     assert d["sites"][0]["selection"]["p_no_repeat_under_choose"] == pytest.approx(math.exp(-12 * 11 / 24))
-
-
-def test_touches_to_decide_is_the_least_that_refutes_no_repeat():
-    for n in list(range(2, 60)) + [100, 1000, 12345]:
-        k = digest.touches_to_decide(n)
-        assert digest.p_no_repeat(k, n) <= 0.05
-        assert k == 2 or digest.p_no_repeat(k - 1, n) > 0.05
-    assert digest.candidates_for_choose(2) == 2
-
-
-def test_formatting_helpers():
-    assert digest._bytes(5) == "5 B" and digest._bytes(3 << 30) == "3.0 GiB"
-    assert digest._ns(2.5e9) == "2.50 s" and digest._ns(3e6) == "3.0 ms" and digest._ns(4e3) == "4 us" and digest._ns(7) == "7 ns"
-    assert digest._p50({"n": 0, "max": 0, "buckets": []}) == 0
-    assert digest.offsets_class([]) == ("none", 0)
-    assert digest.compress(["a", "b", "a", "b", "c"]) == [("a b", 2), ("c", 1)]
 
 
 # ---------------------------------------------------------------- the questions (§3.88)
@@ -665,14 +658,16 @@ def test_answers_file_round_trip(tmp_path):
         digest.read_answers(str(tmp_path / "junk.json"))
 
 
+ANSWERS_SHOWN = [
+    {"template": "s/{a:03}.npz", "fact": "passes", "value": 4},
+    {"template": "s/{a:03}.npz", "question": "selection", "answer": "consume", "note": "shuffle=True"},
+    {"template": "s/{a:03}.npz", "question": "order", "answer": "unknown"},
+    {"template": "s/{a:03}.npz", "fact": "candidates", "value": 3},
+]
+
+
 def test_render_shows_the_assertions_and_the_rejections():
-    d = answered(open_all(), [
-        {"template": "s/{a:03}.npz", "fact": "passes", "value": 4},
-        {"template": "s/{a:03}.npz", "question": "selection", "answer": "consume", "note": "shuffle=True"},
-        {"template": "s/{a:03}.npz", "question": "order", "answer": "unknown"},
-        {"template": "s/{a:03}.npz", "fact": "candidates", "value": 3},
-    ])
-    text = digest.render(d)
+    text = digest.report(digest.analyze(open_all().splitlines(True), "/d"), answers=ANSWERS_SHOWN, by=BY, at=AT)
     assert "3 asserted" in text.splitlines()[0] and "1 rejected" in text.splitlines()[0]
     assert "asserted:" in text and "; by someone@host, 2026-10-29T12:00:00+00:00" in text
     assert "site 0 passes: 4" in text and "site 0 selection: consume (shuffle=True)" in text and "site 0 order: unknown" in text
@@ -820,7 +815,7 @@ def test_the_document_carries_the_application_and_its_blind_spots_as_notes():
            "blind_spots": [{"kind": "mmap", "note": "vectors are mapped", "source": "x"}]}
     d = answered(open_all(), [], application=app)
     assert d["application"] == app and d["notes"]["blind_spot_mmap"] == "vectors are mapped"
-    text = digest.render(d)
+    text = digest.report(digest.analyze(open_all().splitlines(True), "/d"), application=app, by=BY, at=AT)
     assert "application: Qdrant 1.20; record 1.19" in text and "  vectors_memory: cold" in text and "blind spot (mmap): vectors are mapped" in text
 
 
@@ -899,16 +894,16 @@ def test_a_choice_with_a_blind_spot_is_said_and_noted():
     app = doc["application"]
     assert app["record"] == "3.0" and app["exact"] and [b["kind"] for b in app["blind_spots"]] == ["object", "mmap"]
     assert doc["notes"]["blind_spot_mmap"].startswith("the application maps") and "blind_spot_object" in doc["notes"]
-    text = digest.render(doc)
+    text = digest.report(digest.analyze(milvus.splitlines(True), "/d"), application=app, answers=answers, by=BY, at=AT)
     assert "application: Milvus 3.0.3; record 3.0" in text and "  mmap_vector_field: memory-mapped" in text
-    doc["application"]["record"] = None
-    assert "application: Milvus 3.0.3; no record" in digest.render(doc)
+    text = digest.report(digest.analyze(milvus.splitlines(True), "/d"), application={**app, "record": None}, by=BY, at=AT)
+    assert "application: Milvus 3.0.3; no record" in text
 
 
 def test_the_identification_stops_at_end_of_input_wherever_it_is():
     for lines in [(), ("1",), ("1", "2.14.1"), ("2",), ("2", "1")]:
         doc, answers, io = interview_with(dcp_load(), *lines)
-        assert doc["aeiou_digest"] == 1
+        assert doc["aeiou_digest"] == 2
     assert interview_with(dcp_load())[0]["application"] is None
     assert interview_with(dcp_load(), "1", "2.14.1")[0]["application"]["record"] == "2.14"
 
@@ -1128,7 +1123,7 @@ def test_reads_before_the_first_write_of_paths_never_written_are_a_restore():
     assert [(f["name"], f["values"], f["verdict"]) for f in w["fields"]] == [("a", 1, "undecided"), ("b", 2, "varies"), ("c", 1, "undecided")]
     assert w["label"]["verdict"] == "undecided" and w["label"]["supports"] == [
         "every save starts on all its lanes together", "every file fsynced", "2 file(s) of it read before its first write and never written: a restore"]
-    assert digest.facts_of(digest.analyze(restore_save().splitlines(True), "/d").parts[0][0]) == []
+    assert r["facts"] == []
     # a restore starts within the trace's first quarter (2026-10-31, the user's): start-up I/O, the
     # model, then the parameters and optimizer state; reads of the pattern later are a reader, no restore
     late = [(100, "config.json", [("read", 100)], 0), (100, "ckpt/step_000001/__0_0.distcp", [("read", 4096)], 6),
@@ -1209,10 +1204,8 @@ def test_retention_is_kept_keeps_n_or_unsafe():
 
 def test_one_writing_lane_is_accepted_and_the_writers_asked():
     seq = [(100, f"ckpt/step_{s:06}.pt", [("write", 1 << 20)], 10 * s) for s in (1, 2, 3)]
-    an = digest.analyze(calls_strace(seq).splitlines(True), "/d")
-    (part,) = an.parts[0]
-    assert [n for n, _ in digest.facts_of(part)] == ["values:a", "passes", "keep", "writers"]
-    s = digest.document(an)["sites"][0]
+    s = digest_of(calls_strace(seq))["sites"][0]
+    assert [f["name"] for f in s["facts"]] == ["values:a", "passes", "keep", "writers"]
     assert s["saves"]["verdict"] == "one_writer" and s["saves"]["count"] == 3 and s["saves"]["interval_ns"]["n"] == 2
     assert s["saves"]["interval_ns"]["mean"] == pytest.approx(10e9, rel=1e-3)
     assert s["label"]["supports"] == ["one writing lane, as plain DDP's rank 0"]
@@ -1307,29 +1300,28 @@ def test_within_facts_and_answers():
 
 
 def test_render_shows_every_kind():
-    text = digest.render(digest_of(kv_trace()))
+    text = report_of(kv_trace())
     assert "keyed: 5 keys, 4 written, 5 reads" in text and "lag: write_then_read" in text and "origin: undecided" in text and "reuse: repeated" in text
-    text = digest.render(digest_of(dcp_save(steps=3, keep=1)))
+    text = report_of(dcp_save(steps=3, keep=1))
     assert "bulk write: 6 files in 3 save(s), 0 rewritten, fsync on 100%" in text and "field c: constant (1 value 0..0)" in text and "field b: varies (2 values 0..1)" in text
     assert "saves: simultaneous, 3 save(s), interval p50" in text and "retention: keeps 1" in text and "label: undecided; supports: every save starts on all its lanes together" in text
-    text = digest.render(digest_of(dcp_save(rewrite=True)))
+    text = report_of(dcp_save(rewrite=True))
     assert "label: output; checkpoint refuted: 1 path(s) written again" in text
-    text = digest.render(digest_of(dcp_save(steps=2, unsafe=True)))
+    text = report_of(dcp_save(steps=2, unsafe=True))
     assert "retention: unsafe (2 file(s) deleted before the next save was stable)" in text
-    text = digest.render(digest_of(restore_save()))
+    text = report_of(restore_save())
     assert "site 0/read (template 0): restore: 2 files, 12.0 KiB read before the first write" in text and "site 0/write (template 0): bulk write" in text
-    text = digest.render(answered(build_search(), [{"template": "leaves/{a}.bin", "question": "selection", "answer": "consume"}]))
+    text = report_of(build_search(), answers=[{"template": "leaves/{a}.bin", "question": "selection", "answer": "consume"}], by=BY, at=AT)
     assert "1. site 0/write size" in text and "site 0/read selection: consume" in text
-    text = digest.render(digest_of(calls_strace([(1, f"kv/{h}.pt", [("write", 100)]) for h in KEYS[:2]])))
+    text = report_of(calls_strace([(1, f"kv/{h}.pt", [("write", 100)]) for h in KEYS[:2]]))
     assert "field a: undecided (1 value)" not in text and "field a: varies (2 values)" in text
-    text = digest.render(digest.document(digest.analyze(index_trace(400).splitlines(True), "/d")))
+    text = report_of(index_trace(400))
     assert "within one open: 400 reads at" in text and "skew: uniform" in text and "dependency: undecided" in text
 
 
 def test_the_last_branches_of_the_kinds():
-    # a template that is no site has no parts
-    an = digest.analyze(calls_strace([(7, "once.bin", [("read", 10)])]).splitlines(True), "/d")
-    assert an.parts[0] == []
+    # a template that is no site has no sites
+    assert digest_of(calls_strace([(7, "once.bin", [("read", 10)])]))["sites"] == []
     d = answered(calls_strace([(7, "once.bin", [("read", 10)])]), [{"template": "once.bin", "fact": "size", "value": 5}])
     assert d["rejected"][0]["why"] == "not a site"
     # an answer against a traced origin
@@ -1347,8 +1339,3 @@ def test_the_last_branches_of_the_kinds():
     s = digest_of(calls_strace([(7, "idx", ops)]))["sites"][0]
     assert s["skew"]["verdict"] == "undecided" and 1.2 < s["skew"]["top_10pct_share"] / s["skew"]["uniform_share"] < 1.5, s["skew"]
     assert "within 1.2x" in s["skew"]["settles"]
-
-
-def test_the_record_vocabulary_matches_the_digest():
-    assert ap.FACTS == tuple(digest.FACT_NAMES) and ap.QUESTIONS == {q: tuple(c) for q, c in digest.CANDIDATES.items()}
-    assert digest.candidates_of("label") == ["checkpoint", "output"] and digest.candidates_of("field:step") is None and digest.candidates_of("nothing") is None

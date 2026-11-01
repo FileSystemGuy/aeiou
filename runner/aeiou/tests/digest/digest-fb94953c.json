@@ -1,0 +1,234 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": []
+ },
+ "input": "trace-dc2852b4.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 9,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 3145728,
+      "first": 0,
+      "last": 20002005100,
+      "motif": "open write close",
+      "ops": 9,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8589934592,
+         2
+        ]
+       ],
+       "max": 9997994900,
+       "mean": 9997994900.0,
+       "n": 2
+      },
+      "units": 3
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Is this kind of file a checkpoint (the application's state, written to survive a failure and read back only after one), or output (an index build, a dataset, results)?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a checkpoint is saved at an interval, its saves kept or deleted by a retention policy, and read only after a failure; output is written once per build"
+    },
+    "candidates": [
+     "checkpoint",
+     "output"
+    ],
+    "divergence": 0.0,
+    "question": "label",
+    "rank": 1,
+    "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+    "site": 0
+   }
+  ],
+  "ops": 9,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 3,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 1,
+      "name": "a",
+      "values": 3,
+      "verdict": "varies",
+      "width": 6
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "consistent": [
+      "checkpoint",
+      "output"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+     "supports": [
+      "one writing lane, as plain DDP's rank 0"
+     ],
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "keep": null,
+     "passes": null,
+     "values:a": null,
+     "writers": null
+    },
+    "retention": {
+     "deleted": 0,
+     "unsafe": 0,
+     "verdict": "kept"
+    },
+    "rewrite": {
+     "rewritten_paths": 0,
+     "verdict": "new_names"
+    },
+    "saves": {
+     "count": 3,
+     "duration_ns": {
+      "buckets": [
+       [
+        1835008,
+        3
+       ]
+      ],
+      "max": 2005100,
+      "mean": 2005100.0,
+      "n": 3
+     },
+     "interval_ns": {
+      "buckets": [
+       [
+        8589934592,
+        2
+       ]
+      ],
+      "max": 10000000000,
+      "mean": 10000000000.0,
+      "n": 2
+     },
+     "lanes": {
+      "buckets": [
+       [
+        1,
+        3
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 3
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        0,
+        3
+       ]
+      ],
+      "max": 0,
+      "mean": 0.0,
+      "n": 3
+     },
+     "verdict": "one_writer"
+    },
+    "size": {
+     "bytes": 1048576,
+     "verdict": "constant"
+    },
+    "sync": {
+     "fsync_share": 0.0,
+     "opens": 3
+    },
+    "template": 0,
+    "touches": 3
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 0,
+    "bytes_written": 3145728,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 1,
+      "name": "a",
+      "values": 3,
+      "width": 6
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 3
+    },
+    "opens": 3,
+    "ops": {
+     "close": 3,
+     "open": 3,
+     "write": 3
+    },
+    "paths": 3,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       3
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 3
+    },
+    "template": "ckpt/step_{a:06}.pt",
+    "write_size": {
+     "buckets": [
+      [
+       1048576,
+       3
+      ]
+     ],
+     "max": 1048576,
+     "mean": 1048576.0,
+     "n": 3
+    }
+   }
+  ]
+ }
+}

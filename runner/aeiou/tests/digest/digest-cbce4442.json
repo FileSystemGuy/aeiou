@@ -1,0 +1,207 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-3d9dfcfb.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 480,
+    "phases": [
+     {
+      "bytes_read": 491520,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 1549978018,
+      "motif": "open fstat read close",
+      "ops": 480,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         119
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9994995.470588235,
+       "n": 119
+      },
+      "units": 120
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [],
+  "ops": 480,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 45,
+    "epochs": [
+     10,
+     9,
+     8,
+     4,
+     14,
+     9,
+     16,
+     7,
+     17,
+     11,
+     11,
+     4
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.49074074074074076,
+     "pairs": 108,
+     "step_of_one": 0.027777777777777776,
+     "verdict": "permuted"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "choose": {
+      "candidates_implied": 71,
+      "top_10pct_share": 0.26666666666666666,
+      "touches_per_path": {
+       "buckets": [
+        [
+         1,
+         12
+        ],
+        [
+         2,
+         11
+        ],
+        [
+         3,
+         14
+        ],
+        [
+         4,
+         3
+        ],
+        [
+         5,
+         1
+        ],
+        [
+         6,
+         1
+        ],
+        [
+         7,
+         3
+        ]
+       ],
+       "max": 7,
+       "mean": 2.6666666666666665,
+       "n": 45
+      }
+     },
+     "consistent": [
+      "choose"
+     ],
+     "refuted": {
+      "consume": "passes of unequal length 4-17: a permutation pass over the set touches each path once"
+     },
+     "settles": "decided",
+     "verdict": "choose"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 120
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 491520,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 49,
+      "min": 2,
+      "name": "a",
+      "values": 45,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 120
+    },
+    "opens": 120,
+    "ops": {
+     "close": 120,
+     "fstat": 120,
+     "open": 120,
+     "read": 120
+    },
+    "paths": 45,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       120
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 120
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       120
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 120
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

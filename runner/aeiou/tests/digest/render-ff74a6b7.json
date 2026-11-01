@@ -1,0 +1,193 @@
+{
+ "doc": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 402,
+    "phases": [
+     {
+      "bytes_read": 1638400,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 400975943,
+      "motif": "open read+ close",
+      "ops": 402,
+      "repeats": {
+       "read+": {
+        "buckets": [
+         [
+          384,
+          1
+         ]
+        ],
+        "max": 400,
+        "mean": 400.0,
+        "n": 1
+       }
+      },
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Does this file fit in memory at the scale the application runs, so that reads after the first hit the page cache, or does it exceed it?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a file that fits is read from storage once; one that exceeds memory is read from storage at every query"
+    },
+    "candidates": [
+     "fits",
+     "exceeds"
+    ],
+    "divergence": 0.0,
+    "question": "memory",
+    "rank": 1,
+    "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+    "site": 0
+   },
+   {
+    "ask": "Does each read's offset depend on what the previous read returned (a graph walk, a tree descent), or are the offsets independent of one another?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a dependent walk is a chain of reads each waiting on the last; independent offsets can be issued together"
+    },
+    "candidates": [
+     "dependent",
+     "independent"
+    ],
+    "divergence": 0.0,
+    "question": "dependency",
+    "rank": 2,
+    "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+    "site": 0
+   }
+  ],
+  "ops": 402,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "dependency": {
+     "consistent": [
+      "dependent",
+      "independent"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+     "verdict": "undecided"
+    },
+    "distinct": 1,
+    "distinct_offsets": 174,
+    "kind": "within",
+    "memory": {
+     "consistent": [
+      "fits",
+      "exceeds"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "requests": null,
+     "size": null
+    },
+    "reads": 400,
+    "reuse_share": 0.565,
+    "runs": {
+     "buckets": [
+      [
+       1,
+       390
+      ],
+      [
+       2,
+       5
+      ]
+     ],
+     "max": 2,
+     "mean": 1.0126582278481013,
+     "n": 395
+    },
+    "skew": {
+     "settles": "decided",
+     "top_10pct_share": 0.2175,
+     "uniform_share": 0.21542042713488804,
+     "verdict": "uniform"
+    },
+    "span": 819200,
+    "template": 0,
+    "touches": 1
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 1638400,
+    "bytes_written": 0,
+    "fields": [],
+    "id": 0,
+    "offsets": {
+     "positioned": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1,
+     "read": 400
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       400
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 400
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       384,
+       1
+      ]
+     ],
+     "max": 395,
+     "mean": 395.0,
+     "n": 1
+    },
+    "template": "sift_disk.index",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ },
+ "want": "digest of /d: 402 ops on 1 lane(s) under /d; 1 path template(s), 1 site(s), 2 open question(s)\ntemplates:\n    0  sift_disk.index  1 paths, 1 opens; ops read 400, open 1, close 1; read 1.6 MiB (request p50 4.0 KiB); offsets positioned 1\nlanes:\n  lane 0: 402 ops\n    phase 1  open read+ close x1 on template 0; repeats read+ p50 384 max 400; read 1.6 MiB\nsites:\n  site 0 (template 0): within one open: 400 reads at 174 offsets over 800.0 KiB, top tenth 0.22\n    reuse: 0.56 of the reads revisit an offset; runs p50 1 max 2\n    skew: uniform\n    memory: undecided; settles: not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)\n    dependency: undecided; settles: not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)\nopen questions (projected over 1 pass(es)):\n  1. site 0 memory: fits | exceeds; divergence 0.000\n     ask: Does this file fit in memory at the scale the application runs, so that reads after the first hit the page cache, or does it exceed it?\n     settles: not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)\n     at scale: a file that fits is read from storage once; one that exceeds memory is read from storage at every query\n  2. site 0 dependency: dependent | independent; divergence 0.000\n     ask: Does each read's offset depend on what the previous read returned (a graph walk, a tree descent), or are the offsets independent of one another?\n     settles: not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)\n     at scale: a dependent walk is a chain of reads each waiting on the last; independent offsets can be issued together\n"
+}

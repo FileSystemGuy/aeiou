@@ -1,0 +1,9 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": null
+ },
+ "error": "line 2: not a JSON object",
+ "input": "trace-4972ae47.in"
+}

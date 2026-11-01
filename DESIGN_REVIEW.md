@@ -8391,8 +8391,45 @@ stay in the Python package, which the binary runs (`python3 -m aeiou.trace`, or
 `$AEIOU_PYTHON`), and the digest takes a trace's calls from `aeiou-trace export`. On the
 synthetic strace of 211 MB, the metrics take 2.8 s and 0.15 GB (the Python 36 s and 0.61 GB)
 and the export 3.2 s and 0.06 GB for both passes (the Python 50 s and 1.46 GB), the outputs
-equal. The binary ships in the release tarball beside `aeiou`. Next, stage 2, waits on the
-user's review of the step-4 verdicts of §3.88.
+equal. The binary ships in the release tarball beside `aeiou`. ~~Next, stage 2, waits on the
+user's review of the step-4 verdicts of §3.88.~~ *The verdicts were reviewed 2026-10-30 and built
+in the Python 2026-10-31 (§3.88); stage 2 followed the same day, below.*
+
+**Stage 2 built (2026-10-31).** The digest is Rust, `src/digest.rs`, and `aeiou-trace digest`
+writes the document and the report. The cut, chosen while building: the analysis, the document,
+an answers file applied, and the text report are the port; the interview, the application
+records, and `--application` stay Python until stage 3, since the records' loader, their
+signatures, and the console are its work. The binary decides which: a digest that would ask (a
+terminal, no `--answers` file there, no `--no-questions`) or that names the application
+(`--application`, `--applications`) goes to `python3 -m aeiou.trace`, which asks and gets every
+document it shows or writes from the binary, the answers so far given as an answers file and
+the trace read again each time (four reads at most, until stage 3 keeps the analysis in one
+process). For the interview to check a fact without the analysis, each site carries its `facts`:
+the name, the question, and, where the trace bounds it, the least value it allows and what it
+shows (every bound `fact_check` applies is a least value: the distinct paths or keys, the full
+passes or the saves, the saves kept, the bytes read, a field's values). The golden corpus is
+stage 1's method again: every trace the Python digest's tests fed it, every document made from
+one with the answers and options given, and every report, recorded before the Python was cut
+(`tests/digest/`, 140 documents over 74 traces, 22 reports), and reproduced exactly; one
+difference is chosen, a report lists a template's ops of equal count by name, since the order
+they first appeared in is not in the document, a JSON object read back (serde_json's maps are
+sorted, and `preserve_order` would change the bytes of every committed shape). Streaming as
+designed above, with one refinement: a `within` site's offsets are kept exactly, as a count per
+offset of the one open that could still be a template's only open or only reader, not in a
+bounded histogram, so its verdicts stay the Python's; every other open's counts are dropped at
+its close. The `metrics` section is the metrics of the exported calls (`export::FileMetrics`,
+what `aeiou dry-run --metrics` of a `trace` node must equal) rather than of the strace
+(`strace::metrics`, with its instances and `io_submit` chains): the same events the structure is
+made from, and the same definitions the run side will have from `dry-run --emit-trace`. A line
+the runner would refuse (an op on an open no line made) is noted in the structure, as before,
+and counted out of the numbers (`lines_not_counted`). `aeiou-trace metrics` stays until stage
+4, since `compare` still reads metrics documents. On a synthetic strace of 200 MB, 2 M lines
+(npz-shaped, four threads, two shuffled passes): 7.8 s and 0.21 GB, metrics included, against
+the Python digest's 14.5 s and 1.7 GB over the same Rust export, the documents equal; half the
+time is the export's two passes, and of the rest the metrics and the structure take about half
+each. The peak memory of 960,000 reads equals that of 3,200 over the same 200 opens within a
+few MiB (`tests/trace_tool.rs`). Next, stage 3: the interview, the records, and the answers
+file in Rust.
 
 ## 4. Plan changes
 

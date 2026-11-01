@@ -1,0 +1,224 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-97711859.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 402,
+    "phases": [
+     {
+      "bytes_read": 1638400,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 400975943,
+      "motif": "open read+ close",
+      "ops": 402,
+      "repeats": {
+       "read+": {
+        "buckets": [
+         [
+          384,
+          1
+         ]
+        ],
+        "max": 400,
+        "mean": 400.0,
+        "n": 1
+       }
+      },
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Are the offsets read spread evenly over the file, or do a few parts of it take most of the reads?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a skewed spread keeps a hot set in the page cache at scale; a uniform one does not"
+    },
+    "candidates": [
+     "uniform",
+     "skewed"
+    ],
+    "divergence": 0.0,
+    "question": "skew",
+    "rank": 1,
+    "settles": "more reads: a top-tenth share settling within 1.2x of a uniform spread's (0.21) is uniform, above 1.5x skewed",
+    "site": 0
+   },
+   {
+    "ask": "Does this file fit in memory at the scale the application runs, so that reads after the first hit the page cache, or does it exceed it?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a file that fits is read from storage once; one that exceeds memory is read from storage at every query"
+    },
+    "candidates": [
+     "fits",
+     "exceeds"
+    ],
+    "divergence": 0.0,
+    "question": "memory",
+    "rank": 2,
+    "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+    "site": 0
+   },
+   {
+    "ask": "Does each read's offset depend on what the previous read returned (a graph walk, a tree descent), or are the offsets independent of one another?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a dependent walk is a chain of reads each waiting on the last; independent offsets can be issued together"
+    },
+    "candidates": [
+     "dependent",
+     "independent"
+    ],
+    "divergence": 0.0,
+    "question": "dependency",
+    "rank": 3,
+    "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+    "site": 0
+   }
+  ],
+  "ops": 402,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "dependency": {
+     "consistent": [
+      "dependent",
+      "independent"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+     "verdict": "undecided"
+    },
+    "distinct": 1,
+    "distinct_offsets": 162,
+    "kind": "within",
+    "memory": {
+     "consistent": [
+      "fits",
+      "exceeds"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "requests": null,
+     "size": null
+    },
+    "reads": 400,
+    "reuse_share": 0.595,
+    "runs": {
+     "buckets": [
+      [
+       1,
+       400
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 400
+    },
+    "skew": {
+     "consistent": [
+      "uniform",
+      "skewed"
+     ],
+     "refuted": {},
+     "settles": "more reads: a top-tenth share settling within 1.2x of a uniform spread's (0.21) is uniform, above 1.5x skewed",
+     "top_10pct_share": 0.29,
+     "uniform_share": 0.21136931803688125,
+     "verdict": "undecided"
+    },
+    "span": 815104,
+    "template": 0,
+    "touches": 1
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 1638400,
+    "bytes_written": 0,
+    "fields": [],
+    "id": 0,
+    "offsets": {
+     "positioned": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1,
+     "read": 400
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       400
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 400
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       384,
+       1
+      ]
+     ],
+     "max": 400,
+     "mean": 400.0,
+     "n": 1
+    },
+    "template": "idx",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

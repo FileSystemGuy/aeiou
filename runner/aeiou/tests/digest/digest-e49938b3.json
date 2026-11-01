@@ -1,0 +1,349 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "fact": "passes",
+    "template": "s/{a:03}.npz",
+    "value": 4
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-37ee99c4.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [
+   {
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "fact": "passes",
+    "site": 0,
+    "template": "s/{a:03}.npz",
+    "value": 4
+   }
+  ],
+  "contexts": 2,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 112,
+    "phases": [
+     {
+      "bytes_read": 114688,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 353998900,
+      "motif": "open fstat read close",
+      "ops": 112,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         27
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9995001.148148147,
+       "n": 27
+      },
+      "units": 28
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 40,
+    "phases": [
+     {
+      "bytes_read": 40960,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 120002985,
+      "motif": "open fstat read close",
+      "ops": 40,
+      "repeats": {},
+      "template": 1,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         9
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9995010.0,
+       "n": 9
+      },
+      "units": 10
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "threads_without_clone": 1
+  },
+  "open": [
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 16 candidates refutes a draw with replacement (no repeat in 10 touches would have probability below 0.05)",
+    "site": 1
+   },
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.01831563888873418,
+      "repeat_share": 0.7545789097221836
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.75
+     },
+     "epochs": 4,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.01831563888873418,
+    "question": "selection",
+    "rank": 2,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 127 candidates refutes a draw with replacement (no repeat in 28 touches would have probability below 0.05)",
+    "site": 0
+   }
+  ],
+  "ops": 152,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 28,
+    "epochs": [
+     28
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.48148148148148145,
+     "pairs": 27,
+     "step_of_one": 0.07407407407407407,
+     "verdict": "permuted"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [
+      "passes"
+     ],
+     "candidates": null,
+     "passes": 4
+    },
+    "selection": {
+     "candidates_for_choose": 127,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 28
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 127 candidates refutes a draw with replacement (no repeat in 28 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 28
+   },
+   {
+    "distinct": 10,
+    "epochs": [
+     10
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.5555555555555556,
+     "pairs": 9,
+     "step_of_one": 0.1111111111111111,
+     "verdict": "permuted"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 16,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 10
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 16 candidates refutes a draw with replacement (no repeat in 10 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 1,
+    "touches": 10
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 114688,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 27,
+      "min": 0,
+      "name": "a",
+      "values": 28,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 28
+    },
+    "opens": 28,
+    "ops": {
+     "close": 28,
+     "fstat": 28,
+     "open": 28,
+     "read": 28
+    },
+    "paths": 28,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       28
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 28
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       28
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 28
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   {
+    "bytes_read": 40960,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 9,
+      "min": 0,
+      "name": "a",
+      "values": 10,
+      "width": 2
+     }
+    ],
+    "id": 1,
+    "offsets": {
+     "whole": 10
+    },
+    "opens": 10,
+    "ops": {
+     "close": 10,
+     "fstat": 10,
+     "open": 10,
+     "read": 10
+    },
+    "paths": 10,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       10
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 10
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       10
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 10
+    },
+    "template": "t/{a:02}.bin",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

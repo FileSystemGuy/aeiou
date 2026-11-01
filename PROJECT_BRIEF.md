@@ -956,7 +956,9 @@ numbers; the order is this note's.
     classes, templates paired by text, shape, or `--pair`, the runner's own I/O set aside; the run
     side from `dry-run --emit-trace` (item 49) or an strace of `aeiou run`; and the trace-side tools
     in Rust as the binary `aeiou-trace`, streaming, since a real trace runs to several GiB and the
-    Python parser holds every event. Build order in §3.89.
+    Python parser holds every event. Build order in §3.89. *Stage 2 built 2026-10-31:* the digest
+    in Rust (`runner/aeiou/src/digest.rs`), `aeiou_digest: 2` with its `metrics` section and each
+    site's `facts`; the interview and the records stay Python until stage 3 (§3.89).
 
 48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
     2026-10-28).** A skill in the open skill format (`skills/fit-abstract/SKILL.md` and its
@@ -1117,7 +1119,8 @@ line says:
   `aeiou-build` (the builder; renamed from `abstract-build`), `aeiou-params` (parameter files,
   2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01; a
   binary of the runner's crate since 2026-10-29, `DESIGN_REVIEW.md` §3.89, its name kept, its
-  `compare` and `digest` the Python package's until ported),
+  digest Rust since 2026-10-31, its `compare` and the digest's interview the Python package's
+  until ported),
   `aeiou-catalog` (the workload catalog's records, shapes, and `CATALOG.md`, 2026-10-10),
   `aeiou-header` (a container header from the format's own library, run by `aeiou datagen`
   from beside its binary, 2026-10-12), and later

@@ -1,0 +1,9 @@
+100 1700000010.000000 openat(AT_FDCWD</d>, "/d/ckpt/step_000001.pt", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 3</d/ckpt/step_000001.pt> <0.000010>
+100 1700000010.001000 write(3</d/ckpt/step_000001.pt>, "x"..., 1048576) = 1048576 <0.000100>
+100 1700000010.002000 close(3</d/ckpt/step_000001.pt>) = 0 <0.000005>
+100 1700000020.000000 openat(AT_FDCWD</d>, "/d/ckpt/step_000002.pt", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 4</d/ckpt/step_000002.pt> <0.000010>
+100 1700000020.001000 write(4</d/ckpt/step_000002.pt>, "x"..., 1048576) = 1048576 <0.000100>
+100 1700000020.002000 close(4</d/ckpt/step_000002.pt>) = 0 <0.000005>
+100 1700000030.000000 openat(AT_FDCWD</d>, "/d/ckpt/step_000003.pt", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 5</d/ckpt/step_000003.pt> <0.000010>
+100 1700000030.001000 write(5</d/ckpt/step_000003.pt>, "x"..., 1048576) = 1048576 <0.000100>
+100 1700000030.002000 close(5</d/ckpt/step_000003.pt>) = 0 <0.000005>

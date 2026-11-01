@@ -1,0 +1,9 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "nowhere"
+ },
+ "error": "no request under --root nowhere (19 request(s) read)",
+ "input": "trace-1a3f6d94.in"
+}

@@ -1,0 +1,392 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "answer": "checkpoint",
+    "question": "label",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-92d18eeb.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 2,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 10,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 4096,
+      "first": 0,
+      "last": 3005028,
+      "motif": "open write fsync close",
+      "ops": 4,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 512,
+      "first": 9999990,
+      "last": 12005091,
+      "motif": "open write close",
+      "ops": 3,
+      "repeats": {},
+      "template": 1,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 4096,
+      "first": 10000000000,
+      "last": 10002005100,
+      "motif": "open write close",
+      "ops": 3,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 4,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 8192,
+      "first": 99897,
+      "last": 3104925,
+      "motif": "open write fsync close",
+      "ops": 4,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "rejected_answers": 1,
+   "threads_without_clone": 1
+  },
+  "open": [],
+  "ops": 14,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [
+   {
+    "answer": "checkpoint",
+    "question": "label",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+    "why": "the trace decided output: 1 path(s) written again: a checkpoint is never overwritten"
+   }
+  ],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 2,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "values": 1,
+      "verdict": "constant",
+      "width": 6
+     },
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "b",
+      "values": 2,
+      "verdict": "varies",
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 0,
+      "min": 0,
+      "name": "c",
+      "values": 1,
+      "verdict": "constant",
+      "width": null
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "refuted": {
+      "checkpoint": "1 path(s) written again: a checkpoint is never overwritten"
+     },
+     "settles": "decided",
+     "supports": [],
+     "verdict": "output"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "keep": null,
+     "passes": null,
+     "values:b": null
+    },
+    "retention": {
+     "deleted": 0,
+     "unsafe": 0,
+     "verdict": "kept"
+    },
+    "rewrite": {
+     "note": "a checkpoint is never overwritten: a rewritten path is evidence against one",
+     "rewritten_paths": 1,
+     "verdict": "overwrite"
+    },
+    "saves": {
+     "count": 2,
+     "duration_ns": {
+      "buckets": [
+       [
+        1835008,
+        1
+       ],
+       [
+        2621440,
+        1
+       ]
+      ],
+      "max": 3104925,
+      "mean": 2555012.5,
+      "n": 2
+     },
+     "interval_ns": {
+      "buckets": [
+       [
+        8589934592,
+        1
+       ]
+      ],
+      "max": 10000000000,
+      "mean": 10000000000.0,
+      "n": 1
+     },
+     "lanes": {
+      "buckets": [
+       [
+        1,
+        1
+       ],
+       [
+        2,
+        1
+       ]
+      ],
+      "max": 2,
+      "mean": 1.5,
+      "n": 2
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        0,
+        1
+       ],
+       [
+        98304,
+        1
+       ]
+      ],
+      "max": 99897,
+      "mean": 49948.5,
+      "n": 2
+     },
+     "verdict": "mixed"
+    },
+    "size": {
+     "repeated_paths": 1,
+     "verdict": "per-path"
+    },
+    "sync": {
+     "fsync_share": 0.6666666666666666,
+     "opens": 3
+    },
+    "template": 0,
+    "touches": 3
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 0,
+    "bytes_written": 16384,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "values": 1,
+      "width": 6
+     },
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "b",
+      "values": 2,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 0,
+      "min": 0,
+      "name": "c",
+      "values": 1,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 3
+    },
+    "opens": 3,
+    "ops": {
+     "close": 3,
+     "fsync": 2,
+     "open": 3,
+     "write": 3
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       3
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 3
+    },
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+    "write_size": {
+     "buckets": [
+      [
+       4096,
+       2
+      ],
+      [
+       8192,
+       1
+      ]
+     ],
+     "max": 8192,
+     "mean": 5461.333333333333,
+     "n": 3
+    }
+   },
+   {
+    "bytes_read": 0,
+    "bytes_written": 512,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "values": 1,
+      "width": 6
+     }
+    ],
+    "id": 1,
+    "offsets": {
+     "whole": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1,
+     "write": 1
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       1
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 1
+    },
+    "template": "ckpt/step_{a:06}/.metadata",
+    "write_size": {
+     "buckets": [
+      [
+       512,
+       1
+      ]
+     ],
+     "max": 512,
+     "mean": 512.0,
+     "n": 1
+    }
+   }
+  ]
+ }
+}

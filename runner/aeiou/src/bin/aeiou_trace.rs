@@ -1,8 +1,9 @@
 //! `aeiou-trace`: the trace side of the suite (`builder/REFERENCE.md` §7, `DESIGN_REVIEW.md`
 //! §3.42, §3.89): the locality metrics of a real application from an strace of it, an exported
-//! trace file, or an object-store request log; the runner's trace file for a `trace` node; and,
-//! until they are ported (§3.89 build order), the comparison of two metrics documents and the
-//! structural digest, which run the Python package's (`python3 -m aeiou.trace`, or the
+//! trace file, or an object-store request log; the runner's trace file for a `trace` node; the
+//! structural digest a fit is made from (`aeiou::digest`); and, until they are ported (§3.89
+//! build order), the comparison of two metrics documents and the digest's interview and
+//! application records, which run the Python package's (`python3 -m aeiou.trace`, or the
 //! interpreter `$AEIOU_PYTHON` names).
 
 use std::fs::File;
@@ -14,7 +15,7 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{json, Value};
 
 use aeiou::usage::{self, Missing, UsageError};
-use aeiou::{export, objectlog, strace};
+use aeiou::{digest, export, objectlog, strace};
 
 const ABOUT: &str = "Locality metrics of a real application from an strace of it, their comparison with an abstract's (aeiou dry-run --metrics-json), the runner's trace file, and the structural digest a fit is made from";
 const EXIT_PIPE: i32 = 141;
@@ -38,8 +39,8 @@ enum Cmd {
     #[command(disable_help_flag = true, override_usage = "aeiou-trace compare [OPTIONS] <A> <B>")]
     Compare(Passed),
     /// Write the structural digest of a trace: path templates, lanes and their phases, a verdict per site on what the trace decides (permutation or draw, order, size), and the open questions ranked by their divergence at scale
-    #[command(disable_help_flag = true, override_usage = "aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>")]
-    Digest(Passed),
+    #[command(override_usage = "aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>")]
+    Digest(DigestArgs),
 }
 
 #[derive(clap::Args)]
@@ -85,6 +86,51 @@ struct ExportArgs {
     /// Required: the trace file to write; its sha256 is printed, for the abstract's `trace` node
     #[arg(short, long, value_name = "FILE")]
     out: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct DigestArgs {
+    /// The strace output file, an exported trace file, or an object-store request log (MinIO audit, S3 server access); a file, never stdin: the comparison after the fit and a re-run with answers read it again
+    trace: Option<String>,
+    /// Digest only calls on paths under DIR, written relative to it (required for an strace, not for an exported trace file)
+    #[arg(long, value_name = "DIR")]
+    root: Option<String>,
+    /// Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)
+    #[arg(long, value_name = "GLOB")]
+    exclude: Vec<String>,
+    /// Resolve relative paths against DIR when the trace does not say (no -y)
+    #[arg(long, value_name = "DIR")]
+    cwd: Option<String>,
+    /// Project the open questions over N passes over the set (default 1): the share a draw with replacement never reads is e^-N
+    #[arg(long, value_name = "N", allow_negative_numbers = true)]
+    epochs: Option<i64>,
+    /// The files the application could have chosen among (the corpus); default: the distinct paths the trace touched. Decides a pass from a draw when no path repeats
+    #[arg(long, value_name = "N", allow_negative_numbers = true)]
+    candidates: Option<i64>,
+    /// Include every raw path under each template (the digest otherwise carries templates and counts only)
+    #[arg(long)]
+    paths: bool,
+    /// Print the text report instead of the JSON document (with -o, the report is printed beside the file anyway)
+    #[arg(long)]
+    text: bool,
+    /// Write the JSON document (aeiou_digest: 2) to FILE and print the text report
+    #[arg(short, long, value_name = "FILE")]
+    out: Option<PathBuf>,
+    /// The answers file (aeiou_answers: 1): replayed when it exists, so the questions are not asked; written there after an interactive run. Default after an interactive run with -o: the document's name with .answers.json
+    #[arg(long, value_name = "FILE")]
+    answers: Option<String>,
+    /// Ask nothing even on a terminal: every undecided verdict stays open
+    #[arg(long)]
+    no_questions: bool,
+    /// Record NAME as the one who answered (default: user@host)
+    #[arg(long, value_name = "NAME")]
+    answered_by: Option<String>,
+    /// The application records (default: the ones shipped with the tool, or the checkout's applications/)
+    #[arg(long, value_name = "DIR")]
+    applications: Option<String>,
+    /// State the traced application instead of being asked: its record's defaults and assertions apply, with the record as their provenance
+    #[arg(long, value_name = "NAME[@VERSION]")]
+    application: Option<String>,
 }
 
 /// A subcommand the Python package still runs: its arguments, untouched.
@@ -300,13 +346,125 @@ fn export_cmd(a: ExportArgs) -> Result<()> {
     Ok(())
 }
 
-/// Run a subcommand the Python package still holds, with its arguments as given.
-fn passed(sub: &str, args: &[String]) -> Result<()> {
+/// `user@host`, as the Python's `getpass.getuser()` finds the user.
+fn who() -> String {
+    let user = ["LOGNAME", "USER", "LNAME", "USERNAME"].iter().find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty())).unwrap_or_else(|| unsafe { libc::getuid() }.to_string());
+    format!("{user}@{}", aeiou::run::hostname())
+}
+
+/// Now in UTC to the second, `2026-10-31T12:00:00+00:00`.
+fn now() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    // civil from days (Howard Hinnant's algorithm)
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}+00:00", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+fn sha256_of(path: &str) -> Result<String> {
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    std::io::copy(&mut File::open(path).map_err(|e| anyhow!("{path}: {}", cause(&e)))?, &mut h)?;
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// The answers file: its header and its answers.
+fn read_answers(path: &str) -> Result<(Value, Vec<Value>)> {
+    let text = std::fs::read_to_string(path).map_err(|e| anyhow!("{path}: {}", cause(&e)))?;
+    let doc: Value = serde_json::from_str(&text).map_err(|e| anyhow!("{path}: {e}"))?;
+    if doc.get("aeiou_answers").and_then(Value::as_u64) != Some(1) {
+        return Err(anyhow!("{path}: not an aeiou_answers: 1 file"));
+    }
+    match doc.get("answers").and_then(Value::as_array) {
+        Some(a) if a.iter().all(Value::is_object) => Ok((doc.clone(), a.clone())),
+        _ => Err(anyhow!("{path}: answers must be a list of objects")),
+    }
+}
+
+fn digest_cmd(a: DigestArgs, raw: &[String]) -> Result<()> {
+    let mut m = Missing::new();
+    let trace = m.want(a.trace.clone(), "<TRACE>", "the strace output file, or an exported trace file", None);
+    m.check()?;
+    let trace = trace.unwrap();
+    let epochs = a.epochs.unwrap_or(1);
+    if epochs < 1 {
+        return Err(usage::err("--epochs must be at least 1"));
+    }
+    if a.candidates.is_some_and(|c| c < 1) {
+        return Err(usage::err("--candidates must be at least 1"));
+    }
+    if trace == "-" {
+        return Err(usage::err("the digest reads the trace as a file, never stdin: the comparison after the fit and a re-run with answers read it again"));
+    }
+    let answers_exist = a.answers.as_deref().is_some_and(|p| std::path::Path::new(p).exists());
+    let terminal = unsafe { libc::isatty(0) } == 1;
+    // the records, and the asking, are the Python package's until stage 3 (its own answers file
+    // given back here with --no-questions)
+    if a.application.is_some() || a.applications.is_some() || (!a.no_questions && terminal && !answers_exist) {
+        return passed("digest", raw, "the interview and the application records are");
+    }
+    let input = Input::open(&trace)?;
+    let first = input.first_line()?;
+    let exported = first.starts_with("{\"aeiou_trace\"");
+    if !exported && a.root.is_none() {
+        let mut m = Missing::new();
+        m.need(false, "--root <DIR>", "digest only calls on paths under DIR", Some("needed for an strace; an exported trace file carries its root"));
+        m.check()?;
+    }
+    let opener = || input.reader();
+    let an = digest::analyze(&opener, &first, a.root.as_deref(), &a.exclude, a.cwd.as_deref()).map_err(|e| anyhow!("{trace}: {e:#}"))?;
+    let sha = sha256_of(&trace)?;
+    let (mut by, mut at) = (a.answered_by.clone().unwrap_or_else(who), now());
+    let o = digest::Opts { epochs, candidates: a.candidates, paths: a.paths };
+    let mut doc = if answers_exist {
+        let path = a.answers.as_deref().unwrap();
+        let (header, answers) = read_answers(path)?;
+        let said = |k: &str| header.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+        by = said("by").unwrap_or(by);
+        at = said("at").unwrap_or(at);
+        let mut doc = an.document(&o, &answers, Some(&by), Some(&at), header.get("application").unwrap_or(&Value::Null));
+        if header.get("trace_sha256").and_then(Value::as_str) != Some(sha.as_str()) {
+            let named = header.get("trace").and_then(Value::as_str).unwrap_or("None");
+            doc["notes"]["answers_trace"] = json!(format!("{path} was answered on another trace ({named}); its answers were checked against this one"));
+        }
+        doc
+    } else {
+        if let Some(path) = &a.answers {
+            return Err(anyhow!("{path}: no such answers file, and no terminal to ask on"));
+        }
+        an.document(&o, &[], Some(&by), Some(&at), &Value::Null)
+    };
+    doc["trace"] = json!(trace);
+    doc["trace_sha256"] = json!(sha);
+    let report = digest::render(&doc);
+    if let Some(out) = &a.out {
+        write_out(out, &(serde_json::to_string_pretty(&doc)? + "\n"))?;
+        print_out(&format!("{report}written: {}\n{}", out.display(), notes_lines(&doc["notes"])));
+    } else if a.text {
+        print_out(&report);
+    } else {
+        print_out(&(serde_json::to_string_pretty(&doc)? + "\n"));
+    }
+    Ok(())
+}
+
+/// Run a subcommand the Python package still holds, with its arguments as given; `what` says
+/// what of it is still the package's.
+fn passed(sub: &str, args: &[String], what: &str) -> Result<()> {
     let python = std::env::var("AEIOU_PYTHON").unwrap_or_else(|_| "python3".into());
     let probe = std::process::Command::new(&python).args(["-c", "import aeiou.trace"]).stderr(std::process::Stdio::null()).stdout(std::process::Stdio::null()).status();
     if !probe.is_ok_and(|s| s.success()) {
         return Err(anyhow!(
-            "{sub} is the Python package's until it is ported (DESIGN_REVIEW.md §3.89), and {python} cannot import aeiou: install the aeiou wheel, or set AEIOU_PYTHON to an interpreter that has it"
+            "{what} the Python package's until {} ported (DESIGN_REVIEW.md §3.89), and {python} cannot import aeiou: install the aeiou wheel, or set AEIOU_PYTHON to an interpreter that has it",
+            if what.ends_with(" is") { "it is" } else { "they are" }
         ));
     }
     let status = std::process::Command::new(&python).args(["-m", "aeiou.trace", sub]).args(args).status().map_err(|e| anyhow!("{python}: {}", cause(&e)))?;
@@ -351,8 +509,11 @@ fn main() {
         }
         Some(Cmd::Metrics(a)) => metrics(a),
         Some(Cmd::Export(a)) => export_cmd(a),
-        Some(Cmd::Compare(p)) => passed("compare", &p.args),
-        Some(Cmd::Digest(p)) => passed("digest", &p.args),
+        Some(Cmd::Compare(p)) => passed("compare", &p.args, "compare is"),
+        Some(Cmd::Digest(a)) => {
+            let at = args.iter().skip(1).position(|a| a == "digest").map_or(args.len(), |i| i + 2);
+            digest_cmd(a, &args[at..])
+        }
     };
     if let Err(e) = result {
         if e.downcast_ref::<UsageError>().is_some() {

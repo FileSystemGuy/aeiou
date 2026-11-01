@@ -1,0 +1,128 @@
+{
+ "doc": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 3,
+    "phases": [
+     {
+      "bytes_read": 12288,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 10014,
+      "motif": "open",
+      "ops": 1,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 0,
+      "first": 99897,
+      "last": 309945,
+      "motif": "submit member+",
+      "ops": 5,
+      "repeats": {
+       "member+": {
+        "buckets": [
+         [
+          2,
+          1
+         ]
+        ],
+        "max": 2,
+        "mean": 2.0,
+        "n": 1
+       }
+      },
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         163840,
+         1
+        ]
+       ],
+       "max": 190020,
+       "mean": 190020.0,
+       "n": 1
+      },
+      "units": 2
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "opens_not_closed": 1,
+   "submit_members": 3
+  },
+  "open": [],
+  "ops": 3,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 12288,
+    "bytes_written": 0,
+    "fields": [],
+    "id": 0,
+    "offsets": {
+     "positioned": 1
+    },
+    "opens": 1,
+    "ops": {
+     "open": 1,
+     "read": 3
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       3
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 3
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       3,
+       1
+      ]
+     ],
+     "max": 3,
+     "mean": 3.0,
+     "n": 1
+    },
+    "template": "idx",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ },
+ "want": "digest of /d: 3 ops on 1 lane(s) under /d; 1 path template(s), 0 site(s), 0 open question(s)\ntemplates:\n    0  idx  1 paths, 1 opens; ops read 3, open 1; read 12.0 KiB (request p50 4.0 KiB); offsets positioned 1\nlanes:\n  lane 0: 3 ops\n    phase 1  open x1 on template 0; read 12.0 KiB\n    phase 2  submit member+ x2 on template 0; repeats member+ p50 2 max 2; think p50 164 us\nsites:\nopen questions (projected over 1 pass(es)):\n  none: the trace decides every verdict\n"
+}

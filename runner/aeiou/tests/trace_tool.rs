@@ -224,3 +224,179 @@ fn the_unported_subcommands_say_what_they_need() {
         assert!(String::from_utf8_lossy(&o.stderr).starts_with("aeiou-trace compare: "), "{}", String::from_utf8_lossy(&o.stderr));
     }
 }
+
+/// An strace of `np.load`-shaped opens, one line per call, 1 ms apart.
+fn npz_strace(paths: &[&str]) -> String {
+    let (mut out, mut t) = (String::new(), 1700000000.0f64);
+    for p in paths {
+        for line in [
+            format!("100 {t:.6} openat(AT_FDCWD</d>, \"/d/{p}\", O_RDONLY|O_CLOEXEC) = 3</d/{p}> <0.000010>"),
+            format!("100 {:.6} read(3</d/{p}>, \"x\"..., 4096) = 4096 <0.000100>", t + 0.001),
+            format!("100 {:.6} close(3</d/{p}>) = 0 <0.000005>", t + 0.002),
+        ] {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        t += 0.01;
+    }
+    out
+}
+
+fn sha256_of(p: &Path) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(std::fs::read(p).unwrap()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn digest_prints_the_document_the_report_or_writes_the_file() {
+    let d = tmp("digest");
+    let trace = d.join("t.strace");
+    let paths: Vec<String> = (0..12).map(|i| format!("train/s_{i:03}.npz")).collect();
+    let mut order: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let again = order.clone();
+    order.extend(again);
+    std::fs::write(&trace, npz_strace(&order)).unwrap();
+    let o = tool(&["digest", s(&trace), "--root", "/d", "--no-questions"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(doc["aeiou_digest"], 2);
+    assert_eq!(doc["trace"], s(&trace));
+    assert_eq!(doc["trace_sha256"], sha256_of(&trace));
+    assert_eq!(doc["sites"][0]["selection"]["verdict"], "consume");
+    assert_eq!(doc["metrics"]["aeiou_metrics"], 2);
+    assert_eq!(doc["metrics"]["total"]["ops"], 72);
+    assert_eq!(doc["sites"][0]["facts"][0], serde_json::json!({"name": "candidates", "ask": "How many files of this kind does the application have at the scale it runs?", "least": 12, "why": "the trace touched 12 distinct paths of this template"}));
+    assert_eq!(doc["sites"][0]["facts"][1]["least"], 2);
+
+    let (out, _) = text(&tool(&["digest", s(&trace), "--root", "/d", "--no-questions", "--text"]));
+    assert!(out.starts_with(&format!("digest of {}: 72 ops on 1 lane(s) under /d; 1 path template(s), 1 site(s), 0 open question(s)\n", s(&trace))), "{out}");
+    assert!(out.contains("    selection: consume; choose refuted: 2 full passes of equal length 12"), "{out}");
+
+    let file = d.join("t.digest.json");
+    let o = tool(&["digest", s(&trace), "--root", "/d", "--no-questions", "-o", s(&file), "--epochs", "3", "--candidates", "40", "--paths"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let (out, _) = text(&o);
+    assert!(out.starts_with("digest of "), "{out}");
+    assert!(out.contains(&format!("\nwritten: {}\n", s(&file))), "{out}");
+    assert!(out.contains("note: candidates: --candidates 40") || !out.contains("note: "), "{out}");
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(doc["projection"], serde_json::json!({"epochs": 3, "candidates": 40}));
+    assert_eq!(doc["templates"][0]["raw_paths"].as_array().unwrap().len(), 12);
+
+    // an exported trace file carries its root, and digests as its strace
+    let exported = d.join("t.jsonl");
+    assert_eq!(tool(&["export", s(&trace), "--root", "/d", "-o", s(&exported)]).status.code(), Some(0));
+    let o = tool(&["digest", s(&exported), "--no-questions"]);
+    let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(doc["source"], "trace");
+    assert_eq!(doc["sites"][0]["selection"]["verdict"], "consume");
+}
+
+#[test]
+fn digest_usage_errors_and_failures() {
+    let d = tmp("digest-usage");
+    let (_, err) = text(&tool(&["digest"]));
+    assert!(err.starts_with("aeiou-trace digest: the following required arguments were not provided:\n  <TRACE>"), "{err}");
+    assert!(err.contains("Usage: aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>"), "{err}");
+    let trace = d.join("t.strace");
+    std::fs::write(&trace, npz_strace(&["a/1.npz", "a/2.npz"])).unwrap();
+    let o = tool(&["digest", s(&trace), "--no-questions"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o).1.contains("--root <DIR>") && text(&o).1.contains("needed for an strace; an exported trace file carries its root"), "{}", text(&o).1);
+    for (args, want) in [
+        (vec!["--epochs", "0"], "--epochs must be at least 1"),
+        (vec!["--candidates", "0"], "--candidates must be at least 1"),
+    ] {
+        let mut a = vec!["digest", s(&trace), "--root", "/d"];
+        a.extend(args);
+        let o = tool(&a);
+        assert_eq!(o.status.code(), Some(2));
+        assert!(text(&o).1.starts_with(&format!("aeiou-trace digest: {want}")), "{}", text(&o).1);
+    }
+    let o = tool(&["digest", "-", "--root", "/d"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o).1.contains("the digest reads the trace as a file, never stdin"), "{}", text(&o).1);
+    let o = tool(&["digest", "/no/such/trace", "--root", "/d"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).1.starts_with("aeiou-trace digest: /no/such/trace: No such file or directory"), "{}", text(&o).1);
+    let o = tool(&["digest", s(&trace), "--root", "/nowhere", "--no-questions"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).1.starts_with(&format!("aeiou-trace digest: {}: no call under --root /nowhere", s(&trace))), "{}", text(&o).1);
+    // answers named and absent, with no terminal to ask on
+    let missing = d.join("none.answers.json");
+    let o = Command::new(bin()).args(["digest", s(&trace), "--root", "/d", "--answers", s(&missing)]).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).1.contains("no such answers file, and no terminal to ask on"), "{}", text(&o).1);
+    // what the Python package still asks needs its interpreter
+    let o = Command::new(bin()).args(["digest", s(&trace), "--root", "/d", "--application", "x"]).env("AEIOU_PYTHON", "/no/such/python").output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).1.starts_with("aeiou-trace digest: the interview and the application records are the Python package's until they are ported"), "{}", text(&o).1);
+}
+
+#[test]
+fn digest_replays_an_answers_file_and_says_when_it_is_another_traces() {
+    let d = tmp("digest-answers");
+    let trace = d.join("t.strace");
+    let paths: Vec<String> = (0..30).map(|i| format!("train/s_{i:03}.npz")).collect();
+    std::fs::write(&trace, npz_strace(&paths.iter().map(String::as_str).collect::<Vec<_>>())).unwrap();
+    let answers = d.join("a.answers.json");
+    let header = |sha: &str| serde_json::json!({"aeiou_answers": 1, "trace": "t", "trace_sha256": sha, "by": "owner@host", "at": "2026-10-31T00:00:00+00:00", "application": null,
+        "answers": [{"template": "train/s_{a:03}.npz", "fact": "candidates", "value": 31}, {"template": "train/s_{a:03}.npz", "question": "order", "answer": "permuted"}]});
+    std::fs::write(&answers, header(&sha256_of(&trace)).to_string()).unwrap();
+    let o = tool(&["digest", s(&trace), "--root", "/d", "--answers", s(&answers)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(doc["asserted"][0]["value"], 31);
+    assert_eq!(doc["asserted"][0]["by"], "owner@host");
+    assert_eq!(doc["sites"][0]["selection"]["verdict"], "consume");
+    assert!(doc["notes"].get("answers_trace").is_none());
+    std::fs::write(&answers, header("0").to_string()).unwrap();
+    let doc: Value = serde_json::from_slice(&tool(&["digest", s(&trace), "--root", "/d", "--answers", s(&answers)]).stdout).unwrap();
+    assert!(doc["notes"]["answers_trace"].as_str().unwrap().contains("was answered on another trace (t)"), "{}", doc["notes"]);
+    for (body, want) in [("{", "a.answers.json: "), ("[]", "not an aeiou_answers: 1 file"), (r#"{"aeiou_answers": 1, "answers": [1]}"#, "answers must be a list of objects")] {
+        std::fs::write(&answers, body).unwrap();
+        let o = tool(&["digest", s(&trace), "--root", "/d", "--answers", s(&answers)]);
+        assert_eq!(o.status.code(), Some(1));
+        assert!(text(&o).1.contains(want), "{want}: {}", text(&o).1);
+    }
+}
+
+/// The child's peak resident set, in KiB.
+fn peak_kib(args: &[&str]) -> i64 {
+    let child = Command::new(bin()).args(args).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+    let mut status = 0;
+    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+    let pid = unsafe { libc::wait4(child.id() as libc::pid_t, &mut status, 0, &mut ru) };
+    assert_eq!(pid, child.id() as libc::pid_t);
+    assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0);
+    ru.ru_maxrss
+}
+
+#[test]
+fn the_digests_memory_follows_the_opens_never_the_ops() {
+    // the same 200 opens of 200 files, each reading the same 16 blocks once or 300 times over:
+    // 3,200 reads against 960,000, and the peak the same within a few MiB
+    let d = tmp("digest-memory");
+    let write = |name: &str, rounds: usize| -> PathBuf {
+        let p = d.join(name);
+        let mut f = std::io::BufWriter::new(std::fs::File::create(&p).unwrap());
+        writeln!(f, r#"{{"aeiou_trace":1,"root":"/d","lanes":1,"lines":0,"opens":200,"creates":[],"notes":{{}}}}"#).unwrap();
+        let mut t = 0;
+        for i in 0..200 {
+            writeln!(f, r#"{{"lane":0,"t":{t},"dur":1,"op":"open","fd":{i},"path":"f/{i:04}.bin","flags":["RDONLY"]}}"#).unwrap();
+            for _ in 0..rounds {
+                for b in 0..16 {
+                    t += 1;
+                    writeln!(f, r#"{{"lane":0,"t":{t},"dur":1,"op":"read","fd":{i},"offset":{},"len":4096,"ret":4096}}"#, b * 4096).unwrap();
+                }
+            }
+            t += 1;
+            writeln!(f, r#"{{"lane":0,"t":{t},"dur":1,"op":"close","fd":{i},"ret":0}}"#).unwrap();
+        }
+        p
+    };
+    let (small, large) = (write("small.jsonl", 1), write("large.jsonl", 300));
+    let a = peak_kib(&["digest", s(&small), "--no-questions"]);
+    let b = peak_kib(&["digest", s(&large), "--no-questions"]);
+    assert!(b < a + 8 * 1024, "{a} KiB for 3,200 reads, {b} KiB for 960,000");
+}

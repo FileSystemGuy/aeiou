@@ -1,0 +1,179 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-97c86c41.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 32,
+    "phases": [
+     {
+      "bytes_read": 32768,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 94002962,
+      "motif": "open fstat read close",
+      "ops": 32,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         7
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9995017.57142857,
+       "n": 7
+      },
+      "units": 8
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 1,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   }
+  ],
+  "ops": 32,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 4,
+    "epochs": [
+     4,
+     4
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 1.0,
+     "pairs": 6,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 1.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "consistent": [
+      "consume"
+     ],
+     "consume": {
+      "epoch": 4
+     },
+     "refuted": {
+      "choose": "2 full passes of equal length 4 over 4 paths; a draw with replacement repeats after about sqrt(pi N / 2) touches and its passes have unequal lengths"
+     },
+     "settles": "decided",
+     "verdict": "consume"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 8
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 32768,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 0,
+      "name": "a",
+      "values": 4,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 8
+    },
+    "opens": 8,
+    "ops": {
+     "close": 8,
+     "fstat": 8,
+     "open": 8,
+     "read": 8
+    },
+    "paths": 4,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       8
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 8
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       8
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 8
+    },
+    "template": "s/{a}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

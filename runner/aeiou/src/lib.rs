@@ -18,6 +18,7 @@ pub mod datagen;
 pub mod endpoint;
 #[cfg(feature = "formats")]
 pub mod formats;
+pub mod digest;
 pub mod dryrun;
 pub mod eval;
 pub mod export;

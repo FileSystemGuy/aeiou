@@ -1,0 +1,9 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": null
+ },
+ "error": "an strace or an object-store request log needs --root (the directory, or BUCKET[/PREFIX])",
+ "input": "trace-67afa0c4.in"
+}

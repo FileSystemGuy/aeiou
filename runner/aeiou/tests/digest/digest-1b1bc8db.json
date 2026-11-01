@@ -1,0 +1,211 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-95c7bbd2.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 402,
+    "phases": [
+     {
+      "bytes_read": 1638400,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 400975943,
+      "motif": "open read+ close",
+      "ops": 402,
+      "repeats": {
+       "read+": {
+        "buckets": [
+         [
+          384,
+          1
+         ]
+        ],
+        "max": 400,
+        "mean": 400.0,
+        "n": 1
+       }
+      },
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Does this file fit in memory at the scale the application runs, so that reads after the first hit the page cache, or does it exceed it?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a file that fits is read from storage once; one that exceeds memory is read from storage at every query"
+    },
+    "candidates": [
+     "fits",
+     "exceeds"
+    ],
+    "divergence": 0.0,
+    "question": "memory",
+    "rank": 1,
+    "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+    "site": 0
+   },
+   {
+    "ask": "Does each read's offset depend on what the previous read returned (a graph walk, a tree descent), or are the offsets independent of one another?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a dependent walk is a chain of reads each waiting on the last; independent offsets can be issued together"
+    },
+    "candidates": [
+     "dependent",
+     "independent"
+    ],
+    "divergence": 0.0,
+    "question": "dependency",
+    "rank": 2,
+    "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+    "site": 0
+   }
+  ],
+  "ops": 402,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "dependency": {
+     "consistent": [
+      "dependent",
+      "independent"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+     "verdict": "undecided"
+    },
+    "distinct": 1,
+    "distinct_offsets": 133,
+    "kind": "within",
+    "memory": {
+     "consistent": [
+      "fits",
+      "exceeds"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "requests": null,
+     "size": null
+    },
+    "reads": 400,
+    "reuse_share": 0.6675,
+    "runs": {
+     "buckets": [
+      [
+       1,
+       369
+      ],
+      [
+       2,
+       14
+      ],
+      [
+       3,
+       1
+      ]
+     ],
+     "max": 3,
+     "mean": 1.0416666666666667,
+     "n": 384
+    },
+    "skew": {
+     "settles": "decided",
+     "top_10pct_share": 0.58,
+     "uniform_share": 0.2009099227033695,
+     "verdict": "skewed"
+    },
+    "span": 819200,
+    "template": 0,
+    "touches": 1
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 1638400,
+    "bytes_written": 0,
+    "fields": [],
+    "id": 0,
+    "offsets": {
+     "positioned": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1,
+     "read": 400
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       400
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 400
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       384,
+       1
+      ]
+     ],
+     "max": 384,
+     "mean": 384.0,
+     "n": 1
+    },
+    "template": "sift_disk.index",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

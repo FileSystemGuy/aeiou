@@ -1,0 +1,24 @@
+100 1700000000.000000 openat(AT_FDCWD</d>, "/d/kv/3f2a9c0e1b7d4e6f8a9b0c1d2e3f4a5b.bin", O_RDONLY|O_CLOEXEC) = 3</d/kv/3f2a9c0e1b7d4e6f8a9b0c1d2e3f4a5b.bin> <0.000010>
+100 1700000000.001000 fstat(3</d/kv/3f2a9c0e1b7d4e6f8a9b0c1d2e3f4a5b.bin>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.002000 read(3</d/kv/3f2a9c0e1b7d4e6f8a9b0c1d2e3f4a5b.bin>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.003000 close(3</d/kv/3f2a9c0e1b7d4e6f8a9b0c1d2e3f4a5b.bin>) = 0 <0.000005>
+100 1700000000.013000 openat(AT_FDCWD</d>, "/d/kv/0000111122223333444455556666777a.bin", O_RDONLY|O_CLOEXEC) = 3</d/kv/0000111122223333444455556666777a.bin> <0.000010>
+100 1700000000.014000 fstat(3</d/kv/0000111122223333444455556666777a.bin>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.015000 read(3</d/kv/0000111122223333444455556666777a.bin>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.016000 close(3</d/kv/0000111122223333444455556666777a.bin>) = 0 <0.000005>
+100 1700000000.026000 openat(AT_FDCWD</d>, "/d/model-00001-of-00003.safetensors", O_RDONLY|O_CLOEXEC) = 3</d/model-00001-of-00003.safetensors> <0.000010>
+100 1700000000.026999 fstat(3</d/model-00001-of-00003.safetensors>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.027999 read(3</d/model-00001-of-00003.safetensors>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.028999 close(3</d/model-00001-of-00003.safetensors>) = 0 <0.000005>
+100 1700000000.038999 openat(AT_FDCWD</d>, "/d/model-00002-of-00003.safetensors", O_RDONLY|O_CLOEXEC) = 3</d/model-00002-of-00003.safetensors> <0.000010>
+100 1700000000.039999 fstat(3</d/model-00002-of-00003.safetensors>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.040999 read(3</d/model-00002-of-00003.safetensors>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.041999 close(3</d/model-00002-of-00003.safetensors>) = 0 <0.000005>
+100 1700000000.051999 openat(AT_FDCWD</d>, "/d/idx/7.lst", O_RDONLY|O_CLOEXEC) = 3</d/idx/7.lst> <0.000010>
+100 1700000000.052999 fstat(3</d/idx/7.lst>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.053999 read(3</d/idx/7.lst>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.054999 close(3</d/idx/7.lst>) = 0 <0.000005>
+100 1700000000.064999 openat(AT_FDCWD</d>, "/d/idx/12.lst", O_RDONLY|O_CLOEXEC) = 3</d/idx/12.lst> <0.000010>
+100 1700000000.065999 fstat(3</d/idx/12.lst>, {st_mode=S_IFREG|0644, st_size=4096, ...}) = 0 <0.000005>
+100 1700000000.066999 read(3</d/idx/12.lst>, "x"..., 4096) = 4096 <0.000100>
+100 1700000000.067999 close(3</d/idx/12.lst>) = 0 <0.000005>

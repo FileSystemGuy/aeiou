@@ -1,0 +1,17 @@
+100 1700000000.000000 openat(AT_FDCWD</d>, "/d/config.json", O_RDONLY|O_CLOEXEC, 0644) = 3</d/config.json> <0.000010>
+100 1700000000.001000 read(3</d/config.json>, "x"..., 100) = 100 <0.000100>
+100 1700000000.002000 close(3</d/config.json>) = 0 <0.000005>
+100 1700000006.000000 openat(AT_FDCWD</d>, "/d/ckpt/step_000001/__0_0.distcp", O_RDONLY|O_CLOEXEC, 0644) = 4</d/ckpt/step_000001/__0_0.distcp> <0.000010>
+101 1700000006.000100 openat(AT_FDCWD</d>, "/d/ckpt/step_000001/__1_0.distcp", O_RDONLY|O_CLOEXEC, 0644) = 5</d/ckpt/step_000001/__1_0.distcp> <0.000010>
+100 1700000006.001000 read(4</d/ckpt/step_000001/__0_0.distcp>, "x"..., 4096) = 4096 <0.000100>
+101 1700000006.001100 read(5</d/ckpt/step_000001/__1_0.distcp>, "x"..., 8192) = 8192 <0.000100>
+100 1700000006.002000 close(4</d/ckpt/step_000001/__0_0.distcp>) = 0 <0.000005>
+101 1700000006.002100 close(5</d/ckpt/step_000001/__1_0.distcp>) = 0 <0.000005>
+100 1700000010.000000 openat(AT_FDCWD</d>, "/d/ckpt/step_000002/__0_0.distcp", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 6</d/ckpt/step_000002/__0_0.distcp> <0.000010>
+101 1700000010.000100 openat(AT_FDCWD</d>, "/d/ckpt/step_000002/__1_0.distcp", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 7</d/ckpt/step_000002/__1_0.distcp> <0.000010>
+100 1700000010.001000 write(6</d/ckpt/step_000002/__0_0.distcp>, "x"..., 4096) = 4096 <0.000100>
+101 1700000010.001100 write(7</d/ckpt/step_000002/__1_0.distcp>, "x"..., 8192) = 8192 <0.000100>
+100 1700000010.002000 fsync(6</d/ckpt/step_000002/__0_0.distcp>) = 0 <0.000500>
+101 1700000010.002100 fsync(7</d/ckpt/step_000002/__1_0.distcp>) = 0 <0.000500>
+100 1700000010.003000 close(6</d/ckpt/step_000002/__0_0.distcp>) = 0 <0.000005>
+101 1700000010.003100 close(7</d/ckpt/step_000002/__1_0.distcp>) = 0 <0.000005>

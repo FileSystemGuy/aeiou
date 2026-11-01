@@ -1,10 +1,10 @@
-"""`aeiou-trace compare` and `aeiou-trace digest`, the two subcommands of the trace-side tool still in
+"""`aeiou-trace compare` and the questions of `aeiou-trace digest`, what of the trace-side tool is still
 Python (`DESIGN_REVIEW.md` §3.89). The tool is the runner's binary `aeiou-trace` (`runner/aeiou/src/
 bin/aeiou_trace.rs`): `metrics` and `export` are Rust since 2026-10-29 (`strace.rs`, `export.rs`,
-`objectlog.rs`), and the binary runs these two through `python3 -m aeiou.trace` (or `$AEIOU_PYTHON`)
-until their stages of §3.89 port them. The digest reads a trace's calls as the exported lines, which
-`export_of` asks the binary for (`aeiou-trace export`), whatever the trace: an strace, an object-store
-request log, or an exported trace file already.
+`objectlog.rs`), the digest's document and report since 2026-10-31 (`digest.rs`), and the binary runs
+`compare`, and a digest that asks (on a terminal) or states the application (`--application`), through
+`python3 -m aeiou.trace` (or `$AEIOU_PYTHON`) until their stages of §3.89 port them; every document
+the interview shows or writes is the binary's. `export_of` and `LogHist` remain for the tests.
 
 `compare` holds two metrics documents (`aeiou_metrics: 2`, from `aeiou-trace metrics` or `aeiou dry-run
 --metrics-json`; version 1, a capture's from before 2026-10-22) row by row, and `--judge` holds each row
@@ -391,7 +391,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     dp.add_argument("--candidates", type=int, metavar="N", help="The files the application could have chosen among (the corpus); default: the distinct paths the trace touched. Decides a pass from a draw when no path repeats")
     dp.add_argument("--paths", action="store_true", help="Include every raw path under each template (the digest otherwise carries templates and counts only)")
     dp.add_argument("--text", action="store_true", help="Print the text report instead of the JSON document (with -o, the report is printed beside the file anyway)")
-    dp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_digest: 1) to FILE and print the text report")
+    dp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_digest: 2) to FILE and print the text report")
     dp.add_argument("--answers", metavar="FILE", help="The answers file (aeiou_answers: 1): replayed when it exists, so the questions are not asked; written there after an interactive run. Default after an interactive run with -o: the document's name with .answers.json")
     dp.add_argument("--no-questions", action="store_true", help="Ask nothing even on a terminal: every undecided verdict stays open")
     dp.add_argument("--answered-by", metavar="NAME", help="Record NAME as the one who answered (default: user@host)")
@@ -469,7 +469,10 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
 
 
 def _digest(args, dp: usage.Parser) -> int:
+    """The interview and a stated application (`--application`), which the binary hands here;
+    every document, and the report, is the binary's (`DESIGN_REVIEW.md` §3.89, stage 2)."""
     import pathlib
+    import tempfile
     from . import applications as ap
     from . import digest as dg
     if args.epochs < 1:
@@ -478,82 +481,83 @@ def _digest(args, dp: usage.Parser) -> int:
         dp.error("--candidates must be at least 1")
     if args.trace == "-":
         dp.error("the digest reads the trace as a file, never stdin: the comparison after the fit and a re-run with answers read it again")
+    answers_exist = bool(args.answers) and os.path.exists(args.answers)
+    asking = not (args.no_questions or not sys.stdin.isatty())
+    apps = ap.load(pathlib.Path(args.applications) if args.applications else ap.default_dir())
+    if answers_exist or (not asking and not args.application):
+        return _digest_binary(args)
     f = _open_trace(args.trace)
     with f:
         first = f.readline()
-        lines = itertools.chain([first], f)
-        if not first.startswith('{"aeiou_trace"') and not args.root:
-            missing = usage.Missing(dp)
-            missing.need(False, "--root <DIR>", "digest only calls on paths under DIR", "needed for an strace; an exported trace file carries its root")
-            missing.check()
-        try:
-            an = dg.analyze(lines, args.root, exclude=args.exclude, cwd=args.cwd)
-        except BuildError as e:
-            raise BuildError(f"{args.trace}: {e}") from None
-    sha = _sha256_of(args.trace)
+    if not first.startswith('{"aeiou_trace"') and not args.root:
+        missing = usage.Missing(dp)
+        missing.need(False, "--root <DIR>", "digest only calls on paths under DIR", "needed for an strace; an exported trace file carries its root")
+        missing.check()
+    try:
+        an = dg.analyze_file(args.trace, args.root, exclude=args.exclude, cwd=args.cwd)
+    except BuildError as e:
+        raise BuildError(f"{args.trace}: {e}") from None
     by = args.answered_by or _who()
     at = _now()
     kw = dict(epochs=args.epochs, candidates=args.candidates, paths=args.paths)
     said = []
-    apps = ap.load(pathlib.Path(args.applications) if args.applications else ap.default_dir())
     stated = _stated_application(apps, args.application, dp) if args.application else None
-    if args.answers and os.path.exists(args.answers):
-        header, answers = dg.read_answers(args.answers)
-        by, at = header.get("by") or by, header.get("at") or at
-        doc = dg.document(an, answers=answers, by=by, at=at, application=header.get("application"), **kw)
-        if header.get("trace_sha256") != sha:
-            doc["notes"]["answers_trace"] = f"{args.answers} was answered on another trace ({header.get('trace')}); its answers were checked against this one"
-    elif args.no_questions or not sys.stdin.isatty():
-        if args.answers:
-            raise BuildError(f"{args.answers}: no such answers file, and no terminal to ask on")
-        answers = []
-        if stated:
+    with tempfile.TemporaryDirectory(prefix="aeiou-digest-") as d:
+        path = None
+        if not asking:
+            if args.answers:
+                raise BuildError(f"{args.answers}: no such answers file, and no terminal to ask on")
+            answers = []
             record, exact = ap.resolve(stated["app"], stated["version"])
             if record is not None:
                 stated["record"], stated["exact"] = record.version, exact
                 stated["options"] = {o["name"]: o["default"] for o in record.options if "default" in o}
                 stated["blind_spots"] = ap.blind_spots(record, stated["options"])
                 if exact:
-                    answers = ap.assertions(record, stated["options"], [(t.name(), sorted(t.paths)) for t in an.templates])
+                    templates = [(t["template"], t["raw_paths"]) for t in dg.document(an, paths=True)["templates"]]
+                    answers = ap.assertions(record, stated["options"], templates)
             del stated["app"]
-        doc = dg.document(an, answers=answers, by=by, at=at, application=stated, **kw)
-    else:
-        preset = None
-        if stated:
-            preset = {k: v for k, v in stated.items() if k != "app"}
-        doc, answers = dg.interview(an, dg.Console(), by=by, at=at, apps=apps, application=preset, **kw)
-        if answers or doc.get("application"):
-            path = args.answers or (_answers_beside(args.out) if args.out else None)
-            if path:
-                try:
-                    dg.write_answers(path, answers, trace=args.trace, trace_sha256=sha, by=by, at=at, application=doc.get("application"))
-                except OSError as e:
-                    raise BuildError(f"{path}: {_cause(e)}")
-                replay = ["aeiou-trace", "digest", args.trace] + (["--root", args.root] if args.root else []) + ["--answers", path] + (["-o", args.out] if args.out else [])
-                said.append(f"answers: {path}")
-                said.append("replay without questions: " + " ".join(replay))
-            else:
-                said.append("answers: in the document only (give -o or --answers FILE to keep them as a file)")
-    doc["trace"] = args.trace
-    doc["trace_sha256"] = sha
-    report = dg.render(doc)
-    if args.out:
-        try:
-            with open(args.out, "w", encoding="utf-8") as out:
-                out.write(json.dumps(doc, indent=2) + "\n")
-        except OSError as e:
-            raise BuildError(f"{args.out}: {_cause(e)}")
-        sys.stdout.write(report)
-        print(f"written: {args.out}")
-        for k, v in doc["notes"].items():
-            print(f"note: {k}: {v}")
-    elif args.text:
-        sys.stdout.write(report)
-    else:
-        sys.stdout.write(json.dumps(doc, indent=2) + "\n")
+            path = os.path.join(d, "answers.json")
+            dg.write_answers(path, answers, trace=args.trace, trace_sha256=an.sha256, by=by, at=at, application=stated)
+        else:
+            preset = {k: v for k, v in stated.items() if k != "app"} if stated else None
+            doc, answers = dg.interview(an, dg.Console(), by=by, at=at, apps=apps, application=preset, **kw)
+            if answers or doc.get("application"):
+                path = args.answers or (_answers_beside(args.out) if args.out else None)
+                if path:
+                    try:
+                        dg.write_answers(path, answers, trace=args.trace, trace_sha256=an.sha256, by=by, at=at, application=doc.get("application"))
+                    except OSError as e:
+                        raise BuildError(f"{path}: {_cause(e)}")
+                    replay = ["aeiou-trace", "digest", args.trace] + (["--root", args.root] if args.root else []) + ["--answers", path] + (["-o", args.out] if args.out else [])
+                    said.append(f"answers: {path}")
+                    said.append("replay without questions: " + " ".join(replay))
+                else:
+                    path = os.path.join(d, "answers.json")
+                    dg.write_answers(path, answers, trace=args.trace, trace_sha256=an.sha256, by=by, at=at, application=doc.get("application"))
+                    said.append("answers: in the document only (give -o or --answers FILE to keep them as a file)")
+        code = _digest_binary(args, answers=path)
     for line in said:
         print(line, file=sys.stderr)
-    return 0
+    return code
+
+
+def _digest_binary(args, answers: str | None = None) -> int:
+    """The binary's digest of the same trace with the same options, asking nothing; its output
+    and its refusal written here as it wrote them."""
+    cmd = [binary(), "digest", args.trace] + (["--root", args.root] if args.root else [])
+    for g in args.exclude:
+        cmd += ["--exclude", g]
+    if args.cwd:
+        cmd += ["--cwd", args.cwd]
+    cmd += ["--epochs", str(args.epochs)] + (["--candidates", str(args.candidates)] if args.candidates is not None else [])
+    cmd += (["--paths"] if args.paths else []) + (["--text"] if args.text else []) + (["-o", args.out] if args.out else [])
+    cmd += ["--no-questions"] + (["--answers", answers or args.answers] if (answers or args.answers) else [])
+    cmd += ["--answered-by", args.answered_by] if args.answered_by else []
+    r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    return r.returncode
 
 
 def _stated_application(apps: dict, stated: str, dp: usage.Parser) -> dict:
@@ -568,12 +572,6 @@ def _stated_application(apps: dict, stated: str, dp: usage.Parser) -> dict:
 def _answers_beside(out: str) -> str:
     """The answers file an interactive run leaves beside the document it wrote."""
     return out[: -len(".digest.json")] + ".answers.json" if out.endswith(".digest.json") else out + ".answers.json"
-
-
-def _sha256_of(path: str) -> str:
-    import hashlib
-    with open(path, "rb") as f:
-        return hashlib.file_digest(f, "sha256").hexdigest()
 
 
 def _who() -> str:

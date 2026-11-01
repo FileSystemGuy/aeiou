@@ -1,0 +1,625 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-7a704d86.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 2,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 25,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 4096,
+      "first": 0,
+      "last": 3005028,
+      "motif": "open write fsync close",
+      "ops": 4,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 512,
+      "first": 9999990,
+      "last": 12005091,
+      "motif": "open write close",
+      "ops": 3,
+      "repeats": {},
+      "template": 1,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 4096,
+      "first": 10000000000,
+      "last": 10003005028,
+      "motif": "open write fsync close",
+      "ops": 4,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 512,
+      "first": 10009999990,
+      "last": 10012005091,
+      "motif": "open write close",
+      "ops": 3,
+      "repeats": {},
+      "template": 1,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 0,
+      "first": 10019999981,
+      "last": 10021009922,
+      "motif": "unlink",
+      "ops": 2,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         917504,
+         1
+        ]
+       ],
+       "max": 989913,
+       "mean": 989913.0,
+       "n": 1
+      },
+      "units": 2
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 4096,
+      "first": 20000000000,
+      "last": 20003005028,
+      "motif": "open write fsync close",
+      "ops": 4,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 512,
+      "first": 20009999990,
+      "last": 20012005091,
+      "motif": "open write close",
+      "ops": 3,
+      "repeats": {},
+      "template": 1,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 0,
+      "first": 20019999981,
+      "last": 20021009922,
+      "motif": "unlink",
+      "ops": 2,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         917504,
+         1
+        ]
+       ],
+       "max": 989913,
+       "mean": 989913.0,
+       "n": 1
+      },
+      "units": 2
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 12,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 24576,
+      "first": 99897,
+      "last": 20003104925,
+      "motif": "open write fsync close",
+      "ops": 12,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8589934592,
+         2
+        ]
+       ],
+       "max": 9996994972,
+       "mean": 9996994972.0,
+       "n": 2
+      },
+      "units": 3
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "threads_without_clone": 1
+  },
+  "open": [
+   {
+    "ask": "Is this kind of file a checkpoint (the application's state, written to survive a failure and read back only after one), or output (an index build, a dataset, results)?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a checkpoint is saved at an interval, its saves kept or deleted by a retention policy, and read only after a failure; output is written once per build"
+    },
+    "candidates": [
+     "checkpoint",
+     "output"
+    ],
+    "divergence": 0.0,
+    "question": "label",
+    "rank": 1,
+    "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+    "site": 0
+   },
+   {
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "question": "size",
+    "rank": 2,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   },
+   {
+    "ask": "Is this kind of file a checkpoint (the application's state, written to survive a failure and read back only after one), or output (an index build, a dataset, results)?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a checkpoint is saved at an interval, its saves kept or deleted by a retention policy, and read only after a failure; output is written once per build"
+    },
+    "candidates": [
+     "checkpoint",
+     "output"
+    ],
+    "divergence": 0.0,
+    "question": "label",
+    "rank": 3,
+    "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+    "site": 1
+   }
+  ],
+  "ops": 37,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 6,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 1,
+      "name": "a",
+      "values": 3,
+      "verdict": "varies",
+      "width": 6
+     },
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "b",
+      "values": 2,
+      "verdict": "varies",
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 0,
+      "min": 0,
+      "name": "c",
+      "values": 1,
+      "verdict": "constant",
+      "width": null
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "consistent": [
+      "checkpoint",
+      "output"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+     "supports": [
+      "every save starts on all its lanes together",
+      "every file fsynced",
+      "earlier saves deleted only once the next was stable (keeps 1)"
+     ],
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "keep": null,
+     "passes": null,
+     "values:a": null,
+     "values:b": null
+    },
+    "retention": {
+     "deleted": 4,
+     "n": 1,
+     "unsafe": 0,
+     "verdict": "keeps"
+    },
+    "rewrite": {
+     "rewritten_paths": 0,
+     "verdict": "new_names"
+    },
+    "saves": {
+     "count": 3,
+     "duration_ns": {
+      "buckets": [
+       [
+        2621440,
+        3
+       ]
+      ],
+      "max": 3104925,
+      "mean": 3104925.0,
+      "n": 3
+     },
+     "interval_ns": {
+      "buckets": [
+       [
+        8589934592,
+        2
+       ]
+      ],
+      "max": 10000000000,
+      "mean": 10000000000.0,
+      "n": 2
+     },
+     "lanes": {
+      "buckets": [
+       [
+        2,
+        3
+       ]
+      ],
+      "max": 2,
+      "mean": 2.0,
+      "n": 3
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        98304,
+        3
+       ]
+      ],
+      "max": 99897,
+      "mean": 99897.0,
+      "n": 3
+     },
+     "verdict": "simultaneous"
+    },
+    "size": {
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "sync": {
+     "fsync_share": 1.0,
+     "opens": 6
+    },
+    "template": 0,
+    "touches": 6
+   },
+   {
+    "distinct": 3,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 1,
+      "name": "a",
+      "values": 3,
+      "verdict": "varies",
+      "width": 6
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "consistent": [
+      "checkpoint",
+      "output"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+     "supports": [
+      "one writing lane, as plain DDP's rank 0"
+     ],
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "keep": null,
+     "passes": null,
+     "values:a": null,
+     "writers": null
+    },
+    "retention": {
+     "deleted": 0,
+     "unsafe": 0,
+     "verdict": "kept"
+    },
+    "rewrite": {
+     "rewritten_paths": 0,
+     "verdict": "new_names"
+    },
+    "saves": {
+     "count": 3,
+     "duration_ns": {
+      "buckets": [
+       [
+        1835008,
+        3
+       ]
+      ],
+      "max": 2005101,
+      "mean": 2005101.0,
+      "n": 3
+     },
+     "interval_ns": {
+      "buckets": [
+       [
+        8589934592,
+        2
+       ]
+      ],
+      "max": 10000000000,
+      "mean": 10000000000.0,
+      "n": 2
+     },
+     "lanes": {
+      "buckets": [
+       [
+        1,
+        3
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 3
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        0,
+        3
+       ]
+      ],
+      "max": 0,
+      "mean": 0.0,
+      "n": 3
+     },
+     "verdict": "one_writer"
+    },
+    "size": {
+     "bytes": 512,
+     "verdict": "constant"
+    },
+    "sync": {
+     "fsync_share": 0.0,
+     "opens": 3
+    },
+    "template": 1,
+    "touches": 3
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 0,
+    "bytes_written": 36864,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 1,
+      "name": "a",
+      "values": 3,
+      "width": 6
+     },
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "b",
+      "values": 2,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 0,
+      "min": 0,
+      "name": "c",
+      "values": 1,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 6
+    },
+    "opens": 6,
+    "ops": {
+     "close": 6,
+     "fsync": 6,
+     "open": 6,
+     "unlink": 4,
+     "write": 6
+    },
+    "paths": 6,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       6
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 6
+    },
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+    "write_size": {
+     "buckets": [
+      [
+       4096,
+       3
+      ],
+      [
+       8192,
+       3
+      ]
+     ],
+     "max": 8192,
+     "mean": 6144.0,
+     "n": 6
+    }
+   },
+   {
+    "bytes_read": 0,
+    "bytes_written": 1536,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 1,
+      "name": "a",
+      "values": 3,
+      "width": 6
+     }
+    ],
+    "id": 1,
+    "offsets": {
+     "whole": 3
+    },
+    "opens": 3,
+    "ops": {
+     "close": 3,
+     "open": 3,
+     "write": 3
+    },
+    "paths": 3,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       3
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 3
+    },
+    "template": "ckpt/step_{a:06}/.metadata",
+    "write_size": {
+     "buckets": [
+      [
+       512,
+       3
+      ]
+     ],
+     "max": 512,
+     "mean": 512.0,
+     "n": 3
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,9 @@
+{"aeiou_trace": 1, "source": "strace", "root": "/d", "lanes": 1, "lines": 0, "opens": 0, "creates": [], "notes": {"x": 1}}
+{"lane": 0, "t": 0, "dur": 1, "op": "read", "fd": 7, "len": 10, "ret": 10}
+{"lane": 0, "t": 1, "dur": 1, "op": "close", "fd": 7}
+{"lane": 0, "t": 2, "dur": 1, "op": "fstat", "fd": 7}
+{"lane": 0, "t": 3, "dur": 1, "op": "open", "fd": 0, "path": "w/1.bin", "flags": ["WRONLY", "CREAT"]}
+{"lane": 0, "t": 4, "dur": 1, "op": "write", "fd": 0, "len": 100, "ret": 100, "offset": 0}
+{"lane": 0, "t": 5, "dur": 1, "op": "write", "fd": 0, "len": 100, "ret": 100, "offset": 100}
+{"lane": 0, "t": 6, "dur": 1, "op": "close", "fd": 0, "ret": "EIO"}
+{"lane": 0, "t": 7, "dur": 1, "op": "submit", "ops": [{"op": "read", "fd": 9, "offset": 0, "len": 1, "ret": 1}]}

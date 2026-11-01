@@ -1,0 +1,252 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-3c57356d.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 2,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 3,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 4096,
+      "first": 0,
+      "last": 2005100,
+      "motif": "open write close",
+      "ops": 3,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 3,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 4096,
+      "first": 1499891,
+      "last": 3504992,
+      "motif": "open write close",
+      "ops": 3,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "threads_without_clone": 1
+  },
+  "open": [
+   {
+    "ask": "Is this kind of file a checkpoint (the application's state, written to survive a failure and read back only after one), or output (an index build, a dataset, results)?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a checkpoint is saved at an interval, its saves kept or deleted by a retention policy, and read only after a failure; output is written once per build"
+    },
+    "candidates": [
+     "checkpoint",
+     "output"
+    ],
+    "divergence": 0.0,
+    "question": "label",
+    "rank": 1,
+    "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+    "site": 0
+   }
+  ],
+  "ops": 6,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 2,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "a",
+      "values": 2,
+      "verdict": "varies",
+      "width": null
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "consistent": [
+      "checkpoint",
+      "output"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+     "supports": [],
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "keep": null,
+     "passes": null,
+     "values:a": null
+    },
+    "retention": {
+     "deleted": 0,
+     "unsafe": 0,
+     "verdict": "kept"
+    },
+    "rewrite": {
+     "rewritten_paths": 0,
+     "verdict": "new_names"
+    },
+    "saves": {
+     "count": 1,
+     "duration_ns": {
+      "buckets": [
+       [
+        3145728,
+        1
+       ]
+      ],
+      "max": 3504992,
+      "mean": 3504992.0,
+      "n": 1
+     },
+     "interval_ns": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "lanes": {
+      "buckets": [
+       [
+        2,
+        1
+       ]
+      ],
+      "max": 2,
+      "mean": 2.0,
+      "n": 1
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        1310720,
+        1
+       ]
+      ],
+      "max": 1499891,
+      "mean": 1499891.0,
+      "n": 1
+     },
+     "verdict": "staggered"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "sync": {
+     "fsync_share": 0.0,
+     "opens": 2
+    },
+    "template": 0,
+    "touches": 2
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 0,
+    "bytes_written": 8192,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "a",
+      "values": 2,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 2
+    },
+    "opens": 2,
+    "ops": {
+     "close": 2,
+     "open": 2,
+     "write": 2
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       2
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 2
+    },
+    "template": "out/part_{a}.bin",
+    "write_size": {
+     "buckets": [
+      [
+       4096,
+       2
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 2
+    }
+   }
+  ]
+ }
+}

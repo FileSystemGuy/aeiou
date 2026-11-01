@@ -1,0 +1,278 @@
+{
+ "doc": {
+  "aeiou_digest": 1,
+  "application": {
+   "blind_spots": [
+    {
+     "kind": "object",
+     "note": "segments and index files persist on the object store (minio.rootPath 'files' in the bucket); an strace of a query node shows only what it pulls to local storage and memory, never the object requests",
+     "source": "https://milvus.io/docs/architecture_overview.md"
+    },
+    {
+     "choice": "memory-mapped",
+     "kind": "mmap",
+     "note": "the application maps its files and reads them through page faults; the trace shows the mmap and none of the reads, so the digest undercounts",
+     "option": "mmap_vector_field",
+     "source": "https://github.com/milvus-io/milvus/blob/master/configs/milvus.yaml says vectorField: true; https://milvus.io/docs/mmap.md says the four keys default to false after 2.4.10; the configuration file is taken as the newer source"
+    }
+   ],
+   "display": "Milvus",
+   "exact": true,
+   "name": "milvus",
+   "options": {
+    "index": "in-memory index",
+    "mmap_vector_field": "memory-mapped",
+    "mmap_vector_index": "loaded into memory",
+    "tiered_storage": "eviction off"
+   },
+   "record": null,
+   "version": "3.0.3"
+  },
+  "asserted": [
+   {
+    "answer": "unknown",
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "question": "selection",
+    "site": 0,
+    "template": "files/insert_log/{a}/{b}/{c}/{d:03}/{e}"
+   },
+   {
+    "answer": "unknown",
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "question": "order",
+    "site": 0,
+    "template": "files/insert_log/{a}/{b}/{c}/{d:03}/{e}"
+   }
+  ],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 12,
+    "phases": [
+     {
+      "bytes_read": 12288,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 29004097,
+      "motif": "open fstat read close",
+      "ops": 12,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         2
+        ]
+       ],
+       "max": 9994984,
+       "mean": 9994983.5,
+       "n": 2
+      },
+      "units": 3
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "blind_spot_mmap": "the application maps its files and reads them through page faults; the trace shows the mmap and none of the reads, so the digest undercounts",
+   "blind_spot_object": "segments and index files persist on the object store (minio.rootPath 'files' in the bucket); an strace of a query node shows only what it pulls to local storage and memory, never the object requests"
+  },
+  "open": [
+   {
+    "answered": "unknown",
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 3 candidates refutes a draw with replacement (no repeat in 3 touches would have probability below 0.05)",
+    "site": 0
+   },
+   {
+    "answered": "unknown",
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 2,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   }
+  ],
+  "ops": 12,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 3,
+    "epochs": [
+     3
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 1.0,
+     "asserted": {
+      "answer": "unknown",
+      "at": "2026-10-29T12:00:00+00:00",
+      "by": "someone@host"
+     },
+     "pairs": 2,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 1.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "asserted": {
+      "answer": "unknown",
+      "at": "2026-10-29T12:00:00+00:00",
+      "by": "someone@host"
+     },
+     "candidates_for_choose": 3,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 3
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 3 candidates refutes a draw with replacement (no repeat in 3 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 3
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 12288,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "values": 1,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 2,
+      "min": 2,
+      "name": "b",
+      "values": 1,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 5,
+      "min": 3,
+      "name": "c",
+      "values": 3,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 100,
+      "min": 100,
+      "name": "d",
+      "values": 1,
+      "width": 3
+     },
+     {
+      "kind": "int",
+      "max": 5,
+      "min": 3,
+      "name": "e",
+      "values": 3,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 3
+    },
+    "opens": 3,
+    "ops": {
+     "close": 3,
+     "fstat": 3,
+     "open": 3,
+     "read": 3
+    },
+    "paths": 3,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       3
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 3
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       3
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 3
+    },
+    "template": "files/insert_log/{a}/{b}/{c}/{d:03}/{e}",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ },
+ "want": "digest of /d: 12 ops on 1 lane(s) under /d; 1 path template(s), 1 site(s), 2 open question(s), 2 asserted\ntemplates:\n    0  files/insert_log/{a}/{b}/{c}/{d:03}/{e}  3 paths, 3 opens; ops open 3, fstat 3, read 3, close 3; read 12.0 KiB (request p50 4.0 KiB); offsets whole 3\n       a: int, no fixed width, 1 value(s) 1..1\n       b: int, no fixed width, 1 value(s) 2..2\n       c: int, no fixed width, 3 value(s) 3..5\n       d: int, width 3, 1 value(s) 100..100\n       e: int, no fixed width, 3 value(s) 3..5\nlanes:\n  lane 0: 12 ops\n    phase 1  open fstat read close x3 on template 0; think p50 8.4 ms; read 12.0 KiB\nsites:\n  site 0 (template 0): 3 touches of 3 paths, passes [3]\n    selection: undecided - consume or choose (a draw needs a corpus of at least 3); settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 3 candidates refutes a draw with replacement (no repeat in 3 touches would have probability below 0.05); asserted unknown\n    order: undecided (ascending 1.00 of 2 pairs, step of one 1.00); asserted unknown\n    size: constant 4096 B\nopen questions (projected over 1 pass(es)):\n  1. site 0 selection: consume | choose; divergence 0.368; answered: unknown\n     ask: Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?\n     settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 3 candidates refutes a draw with replacement (no repeat in 3 touches would have probability below 0.05)\n     at 1 pass(es): never read 0.368 under choose, 0.000 under consume; re-reads 0.368 and 0.000 of the touches\n  2. site 0 order: sequential | permuted; divergence 0.000; answered: unknown\n     ask: Within a pass, does the application take the files in their sorted order, or in a shuffled one?\n     settles: at least 8 consecutive touches within one pass\n     at scale: the op multiset is the same; the order within a pass differs, which read-ahead sees\napplication: Milvus 3.0.3; no record\n  index: in-memory index\n  mmap_vector_field: memory-mapped\n  mmap_vector_index: loaded into memory\n  tiered_storage: eviction off\n  blind spot (object): segments and index files persist on the object store (minio.rootPath 'files' in the bucket); an strace of a query node shows only what it pulls to local storage and memory, never the object requests\n  blind spot (mmap): the application maps its files and reads them through page faults; the trace shows the mmap and none of the reads, so the digest undercounts\nasserted:\n  site 0 selection: unknown; by someone@host, 2026-10-29T12:00:00+00:00\n  site 0 order: unknown; by someone@host, 2026-10-29T12:00:00+00:00\n"
+}

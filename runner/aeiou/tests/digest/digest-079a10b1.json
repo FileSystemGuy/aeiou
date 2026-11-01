@@ -1,0 +1,216 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": 12,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-a0715ccc.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 48,
+    "phases": [
+     {
+      "bytes_read": 7800,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 146002054,
+      "motif": "open fstat read close",
+      "ops": 48,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         11
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9995005.181818182,
+       "n": 11
+      },
+      "units": 12
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "question": "size",
+    "rank": 1,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   }
+  ],
+  "ops": 48,
+  "projection": {
+   "candidates": 12,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 12,
+    "epochs": [
+     12
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.9090909090909091,
+     "note": "neither a scan (steps of one) nor a permutation (half the pairs ascending): interleaved scans, or a sort the trace does not show",
+     "pairs": 11,
+     "step_of_one": 0.8181818181818182,
+     "verdict": "other"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": 12,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 23,
+     "consistent": [
+      "consume"
+     ],
+     "consume": {
+      "epoch": 12
+     },
+     "p_no_repeat_under_choose": 0.004086771438464067,
+     "refuted": {
+      "choose": "no repeat in 12 touches of 12 candidates has probability 0.0041 under a draw with replacement"
+     },
+     "settles": "decided",
+     "verdict": "consume"
+    },
+    "size": {
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "template": 0,
+    "touches": 12
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 7800,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 11,
+      "min": 0,
+      "name": "a",
+      "values": 12,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 12
+    },
+    "opens": 12,
+    "ops": {
+     "close": 12,
+     "fstat": 12,
+     "open": 12,
+     "read": 12
+    },
+    "paths": 12,
+    "read_size": {
+     "buckets": [
+      [
+       96,
+       1
+      ],
+      [
+       192,
+       1
+      ],
+      [
+       256,
+       1
+      ],
+      [
+       384,
+       1
+      ],
+      [
+       448,
+       1
+      ],
+      [
+       512,
+       1
+      ],
+      [
+       640,
+       1
+      ],
+      [
+       768,
+       1
+      ],
+      [
+       896,
+       2
+      ],
+      [
+       1024,
+       2
+      ]
+     ],
+     "max": 1200,
+     "mean": 650.0,
+     "n": 12
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       12
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 12
+    },
+    "template": "s/{a}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

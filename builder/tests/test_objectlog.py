@@ -196,7 +196,7 @@ def test_an_object_log_digests_in_process():
     assert an.source == "minio-audit" and an.root == "a-bucket/files"
     doc = digest.document(an)
     assert doc["source"] == "minio-audit" and len(doc["templates"]) >= 2
-    with pytest.raises(BuildError, match="needs --root"):
+    with pytest.raises(BuildError, match="--root <DIR>"):
         digest.analyze(MINIO.splitlines(True), None)
     with pytest.raises(BuildError, match="no request under --root"):
         digest.analyze(MINIO.splitlines(True), "nowhere")

@@ -1,0 +1,162 @@
+{
+ "doc": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [
+   {
+    "answer": "consume",
+    "at": "2026-10-31T23:20:33+00:00",
+    "by": "curtis@DESKTOP-JS4EFLH",
+    "question": "selection",
+    "site": 0,
+    "template": "s/{a:03}.npz"
+   }
+  ],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 112,
+    "phases": [
+     {
+      "bytes_read": 114688,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 353998900,
+      "motif": "open fstat read close",
+      "ops": 112,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         27
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9995001.148148147,
+       "n": 27
+      },
+      "units": 28
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [],
+  "ops": 112,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 28,
+    "epochs": [
+     28
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.48148148148148145,
+     "pairs": 27,
+     "step_of_one": 0.07407407407407407,
+     "verdict": "permuted"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "asserted": {
+      "answer": "consume",
+      "at": "2026-10-31T23:20:33+00:00",
+      "by": "curtis@DESKTOP-JS4EFLH"
+     },
+     "candidates_for_choose": 127,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 28
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 127 candidates refutes a draw with replacement (no repeat in 28 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 28
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 114688,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 27,
+      "min": 0,
+      "name": "a",
+      "values": 28,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 28
+    },
+    "opens": 28,
+    "ops": {
+     "close": 28,
+     "fstat": 28,
+     "open": 28,
+     "read": 28
+    },
+    "paths": 28,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       28
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 28
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       28
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 28
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ],
+  "trace": "/tmp/pytest-of-curtis/pytest-98/test_cli_answers_file_refusals0/t.txt",
+  "trace_sha256": "c3e43a4615f40af2939311fdbea026318db864f3cd34cfaadbd8f8716b24ca3e"
+ },
+ "want": "digest of /tmp/pytest-of-curtis/pytest-98/test_cli_answers_file_refusals0/t.txt: 112 ops on 1 lane(s) under /d; 1 path template(s), 1 site(s), 0 open question(s), 1 asserted\ntemplates:\n    0  s/{a:03}.npz  28 paths, 28 opens; ops open 28, fstat 28, read 28, close 28; read 112.0 KiB (request p50 4.0 KiB); offsets whole 28\n       a: int, width 3, 28 value(s) 0..27\nlanes:\n  lane 0: 112 ops\n    phase 1  open fstat read close x28 on template 0; think p50 8.4 ms; read 112.0 KiB\nsites:\n  site 0 (template 0): 28 touches of 28 paths, passes [28]\n    selection: undecided - consume or choose (a draw needs a corpus of at least 127); settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 127 candidates refutes a draw with replacement (no repeat in 28 touches would have probability below 0.05); asserted consume\n    order: permuted (ascending 0.48 of 27 pairs, step of one 0.07)\n    size: constant 4096 B\nopen questions (projected over 1 pass(es)):\n  none: the trace decides every verdict\nasserted:\n  site 0 selection: consume; by curtis@DESKTOP-JS4EFLH, 2026-10-31T23:20:33+00:00\n"
+}

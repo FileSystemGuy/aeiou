@@ -1,0 +1,260 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-fda03093.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 2,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 6,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 300,
+      "first": 0,
+      "last": 26005030,
+      "motif": "open write close",
+      "ops": 6,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         20971520,
+         1
+        ]
+       ],
+       "max": 21994829,
+       "mean": 21994829.0,
+       "n": 1
+      },
+      "units": 2
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 6,
+    "phases": [
+     {
+      "bytes_read": 300,
+      "bytes_written": 0,
+      "first": 12000084,
+      "last": 38003922,
+      "motif": "open read close",
+      "ops": 6,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         20971520,
+         1
+        ]
+       ],
+       "max": 21995067,
+       "mean": 21995067.0,
+       "n": 1
+      },
+      "units": 2
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "threads_without_clone": 1
+  },
+  "open": [
+   {
+    "ask": "Is a key read again after its first read (a request repeating a prefix, a neighbor found again), or is each key read once?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a key read again is a hit the pool must hold; keys read once make the pool a write-once log"
+    },
+    "candidates": [
+     "once",
+     "repeated"
+    ],
+    "divergence": 0.0,
+    "question": "reuse",
+    "rank": 1,
+    "settles": "a longer trace: a request repeating a prefix, or a neighbor found again, reads a key a second time",
+    "site": 0
+   }
+  ],
+  "ops": 12,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "access": {
+     "keys": 2,
+     "read": 2,
+     "read_after_write": 2,
+     "read_before_write": 0,
+     "reads": 2,
+     "reads_per_key": {
+      "buckets": [
+       [
+        1,
+        2
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 2
+     },
+     "reread_share": 0.0,
+     "rereads": 0,
+     "top_10pct_share": 0.5,
+     "writes": 2,
+     "written": 2,
+     "written_once_share": 1.0
+    },
+    "distinct": 2,
+    "hex_name": true,
+    "kind": "keyed",
+    "lag": {
+     "ns": {
+      "buckets": [
+       [
+        10485760,
+        2
+       ]
+      ],
+      "max": 12000084,
+      "mean": 12000084.0,
+      "n": 2
+     },
+     "touches": {
+      "buckets": [
+       [
+        1,
+        2
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 2
+     },
+     "verdict": "write_then_read"
+    },
+    "origin": {
+     "settles": "decided",
+     "verdict": "traced"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "keys": null,
+     "requests": null
+    },
+    "reuse": {
+     "consistent": [
+      "once",
+      "repeated"
+     ],
+     "keys_reread": 0,
+     "refuted": {},
+     "settles": "a longer trace: a request repeating a prefix, or a neighbor found again, reads a key a second time",
+     "verdict": "undecided"
+    },
+    "size": {
+     "repeated_paths": 2,
+     "verdict": "per-path"
+    },
+    "template": 0,
+    "touches": 4
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 300,
+    "bytes_written": 300,
+    "fields": [
+     {
+      "kind": "hex",
+      "name": "a",
+      "values": 2,
+      "width": 32
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 4
+    },
+    "opens": 4,
+    "ops": {
+     "close": 4,
+     "open": 4,
+     "read": 2,
+     "write": 2
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [
+      [
+       96,
+       1
+      ],
+      [
+       192,
+       1
+      ]
+     ],
+     "max": 200,
+     "mean": 150.0,
+     "n": 2
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       4
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 4
+    },
+    "template": "kv/{a:x32}.pt",
+    "write_size": {
+     "buckets": [
+      [
+       96,
+       1
+      ],
+      [
+       192,
+       1
+      ]
+     ],
+     "max": 200,
+     "mean": 150.0,
+     "n": 2
+    }
+   }
+  ]
+ }
+}

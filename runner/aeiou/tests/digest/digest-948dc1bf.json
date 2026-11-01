@@ -1,0 +1,386 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "answer": "choose",
+    "phase": "read",
+    "question": "selection",
+    "template": "leaves/{a}.bin"
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-e5c00d06.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [
+   {
+    "answer": "choose",
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "phase": "read",
+    "question": "selection",
+    "site": 0,
+    "template": "leaves/{a}.bin"
+   }
+  ],
+  "contexts": 2,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 9,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 24576,
+      "first": 0,
+      "last": 26005030,
+      "motif": "open write close",
+      "ops": 9,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         2
+        ]
+       ],
+       "max": 9994984,
+       "mean": 9994983.5,
+       "n": 2
+      },
+      "units": 3
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 9,
+    "phases": [
+     {
+      "bytes_read": 24576,
+      "bytes_written": 0,
+      "first": 36000013,
+      "last": 62004090,
+      "motif": "open read close",
+      "ops": 9,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         2
+        ]
+       ],
+       "max": 9994983,
+       "mean": 9994983.0,
+       "n": 2
+      },
+      "units": 3
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "threads_without_clone": 1
+  },
+  "open": [
+   {
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "phase": "write",
+    "question": "size",
+    "rank": 1,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   },
+   {
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "phase": "read",
+    "question": "size",
+    "rank": 2,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   },
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "phase": "read",
+    "question": "order",
+    "rank": 3,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   }
+  ],
+  "ops": 18,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 3,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 2,
+      "min": 0,
+      "name": "a",
+      "values": 3,
+      "verdict": "varies",
+      "width": null
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "refuted": {
+      "checkpoint": "read after its first write: a checkpoint is read only after a failure, in another trace"
+     },
+     "settles": "decided",
+     "supports": [
+      "one writing lane, as plain DDP's rank 0"
+     ],
+     "verdict": "output"
+    },
+    "phase": "write",
+    "projection": {
+     "asserted": [],
+     "keep": null,
+     "passes": null,
+     "values:a": null,
+     "writers": null
+    },
+    "retention": {
+     "deleted": 0,
+     "unsafe": 0,
+     "verdict": "kept"
+    },
+    "rewrite": {
+     "rewritten_paths": 0,
+     "verdict": "new_names"
+    },
+    "saves": {
+     "count": 3,
+     "duration_ns": {
+      "buckets": [
+       [
+        1835008,
+        3
+       ]
+      ],
+      "max": 2005101,
+      "mean": 2005021.0,
+      "n": 3
+     },
+     "interval_ns": {
+      "buckets": [
+       [
+        10485760,
+        2
+       ]
+      ],
+      "max": 12000084,
+      "mean": 11999964.5,
+      "n": 2
+     },
+     "lanes": {
+      "buckets": [
+       [
+        1,
+        3
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 3
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        0,
+        3
+       ]
+      ],
+      "max": 0,
+      "mean": 0.0,
+      "n": 3
+     },
+     "verdict": "one_writer"
+    },
+    "size": {
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "sync": {
+     "fsync_share": 0.0,
+     "opens": 3
+    },
+    "template": 0,
+    "touches": 3
+   },
+   {
+    "distinct": 3,
+    "epochs": [
+     3
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.5,
+     "pairs": 2,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 0.5,
+     "verdict": "undecided"
+    },
+    "phase": "read",
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "asserted": {
+      "answer": "choose",
+      "at": "2026-10-29T12:00:00+00:00",
+      "by": "someone@host"
+     },
+     "candidates_for_choose": 3,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 3
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 3 candidates refutes a draw with replacement (no repeat in 3 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "template": 0,
+    "touches": 3
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 24576,
+    "bytes_written": 24576,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 2,
+      "min": 0,
+      "name": "a",
+      "values": 3,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 6
+    },
+    "opens": 6,
+    "ops": {
+     "close": 6,
+     "open": 6,
+     "read": 3,
+     "write": 3
+    },
+    "paths": 3,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       1
+      ],
+      [
+       8192,
+       1
+      ],
+      [
+       12288,
+       1
+      ]
+     ],
+     "max": 12288,
+     "mean": 8192.0,
+     "n": 3
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       6
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 6
+    },
+    "template": "leaves/{a}.bin",
+    "write_size": {
+     "buckets": [
+      [
+       4096,
+       1
+      ],
+      [
+       8192,
+       1
+      ],
+      [
+       12288,
+       1
+      ]
+     ],
+     "max": 12288,
+     "mean": 8192.0,
+     "n": 3
+    }
+   }
+  ]
+ }
+}

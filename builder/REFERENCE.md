@@ -411,7 +411,7 @@ ported line for line and deleted; their behavior is kept as the golden corpus
 `runner/aeiou/tests/strace/` (every trace the Python tests fed them, with what they made of it,
 reproduced exactly by `tests/strace_corpus.rs`), and the Python tests drive the binary as its
 acceptance tests. `compare` and `digest` stay in `aeiou/trace.py` and `aeiou/digest.py` until
-their stages of §3.89, run by the binary as `python3 -m aeiou.trace` (or `$AEIOU_PYTHON`); the
+their stages of §3.89 (the digest's document and report Rust since 2026-10-31, stage 2, below), run by the binary as `python3 -m aeiou.trace` (or `$AEIOU_PYTHON`); the
 digest takes a trace's calls from `aeiou-trace export` (`trace.export_of`, which finds the binary
 through `$AEIOU_TRACE`, beside `$AEIOU_RUNNER`, on the `PATH`, or in the checkout's build). The
 export reads its input twice, the first pass learning what only the end of the trace says, so
@@ -675,7 +675,7 @@ them at the reap, so the reuse-distance histogram of that pair differs within a 
 **`aeiou-trace digest`: the structural summary a fit is made from (added 2026-10-29;
 `DESIGN_REVIEW.md` §3.87, `PROJECT_BRIEF.md` item 47).** The same calls `export` writes,
 through the same resolver, or an exported trace file, reduced to a document that can leave
-the trace's owner (`aeiou_digest: 1`; no raw path unless `--paths`, no data bytes ever):
+the trace's owner (~~`aeiou_digest: 1`~~ `aeiou_digest: 2` since 2026-10-31, below; no raw path unless `--paths`, no data bytes ever):
 
 ```
 aeiou-trace digest trace.txt --root /mnt/data [--exclude GLOB]… [--cwd DIR] [--epochs N] [--candidates N] [--paths] [--text] [-o trace.digest.json]
@@ -751,6 +751,35 @@ one site of a split template, else it answers each site of the template that has
 or question. A site's `projection` holds its kind's facts, given or None, and which were
 asserted. `tests/test_digest.py` holds each kind to constructed traces (`calls_strace`,
 whose entries may place an open in time and unlink a path).
+
+*Since 2026-10-31 (`DESIGN_REVIEW.md` §3.89, stage 2):* the digest described above is Rust,
+`runner/aeiou/src/digest.rs`, its functions the ones named here (`parts_of`, `bulk_of`,
+`saves_of`, `retention_of`, `keyed_of`, `within_of`, `facts_of`, `fact_check`, `open_of`,
+`render`), and `aeiou-trace digest` writes its document and report itself. Before the Python
+was cut down, every trace its tests fed `analyze` and every document `document` made from it,
+with the answers, options, and application given, was recorded with the document, and every
+document `render` wrote with its text (`runner/aeiou/tests/digest/`, 140 cases over 74 traces
+and 22 reports); `tests/digest_corpus.rs` reproduces each exactly, but for a report's ops of
+equal count, listed by name where the Python listed them as they first appeared. It streams:
+an open's ops become its unit at its close, a site keeps one record per open, paths are kept
+once per template, and the counts per offset of an open are kept only while it could be a
+template's one open or one reader, a `within` site (`tests/trace_tool.rs` holds the peak
+memory of 960,000 reads to that of 3,200 over the same opens). The document is version 2:
+`metrics`, the `aeiou_metrics: 2` document of the same exported calls (`export::FileMetrics`,
+the metrics of an exported file; a line it would refuse, such as an op on an open no line
+made, counted in its `notes` as `lines_not_counted`), and each site's `facts`, `name`, `ask`,
+and, where the trace bounds it, `least` and `why`, the value below which `fact_check` rejects
+it. On a synthetic strace of 200 MB (npz-shaped opens, four threads, two shuffled passes) the
+port takes 7.8 s and 0.21 GB, the metrics included, against the Python's 14.5 s and 1.7 GB over
+the same export; the documents are equal. What asks stays Python until stage 3: the binary hands
+a digest that would ask (on a terminal, no `--answers` file there, no `--no-questions`) or that
+names the application (`--application`, `--applications`) to `python3 -m aeiou.trace`, whose
+`interview` and records run as above and get every document from the binary (`digest.Trace`,
+which runs `aeiou-trace digest --no-questions` with the answers so far as an answers file, the
+trace read again each time; `analyze`, `document`, `report`, `digest_of`), checking a fact
+against the site's `facts`; the final document and report are the binary's, given the answers
+file the interview wrote. The records' vocabulary (`applications.FACTS`, `QUESTIONS`) is held
+to the Rust digest's by `tests/digest_corpus.rs`.
 
 **Object-store request logs (~~`aeiou/objectlog.py`~~ `runner/aeiou/src/objectlog.rs` since the port
 the same day, §3.89; built 2026-10-29, §3.88):** a MinIO audit log

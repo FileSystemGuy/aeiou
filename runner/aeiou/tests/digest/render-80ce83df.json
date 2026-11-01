@@ -1,0 +1,230 @@
+{
+ "doc": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 28,
+    "phases": [
+     {
+      "bytes_read": 114688,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 81002951,
+      "motif": "open fstat read close",
+      "ops": 28,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         6
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9995023.333333334,
+       "n": 6
+      },
+      "units": 7
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 8 candidates refutes a draw with replacement (no repeat in 7 touches would have probability below 0.05)",
+    "site": 0
+   },
+   {
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "question": "size",
+    "rank": 2,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   },
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 3,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   }
+  ],
+  "ops": 28,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 7,
+    "epochs": [
+     7
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.3333333333333333,
+     "pairs": 6,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 0.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 8,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 7
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 8 candidates refutes a draw with replacement (no repeat in 7 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "template": 0,
+    "touches": 7
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 114688,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 6,
+      "min": 0,
+      "name": "a",
+      "values": 7,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 7
+    },
+    "opens": 7,
+    "ops": {
+     "close": 7,
+     "fstat": 7,
+     "open": 7,
+     "read": 7
+    },
+    "paths": 7,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       1
+      ],
+      [
+       8192,
+       1
+      ],
+      [
+       12288,
+       1
+      ],
+      [
+       16384,
+       1
+      ],
+      [
+       20480,
+       1
+      ],
+      [
+       24576,
+       1
+      ],
+      [
+       28672,
+       1
+      ]
+     ],
+     "max": 28672,
+     "mean": 16384.0,
+     "n": 7
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       7
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 7
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ],
+  "trace": "/tmp/pytest-of-curtis/pytest-98/test_cli_asks_nothing_without_0/t.txt",
+  "trace_sha256": "1b35ac0cd794002ab25c640d32b71715db2a1b29fd5a0c10301e5ce86acf9bac"
+ },
+ "want": "digest of /tmp/pytest-of-curtis/pytest-98/test_cli_asks_nothing_without_0/t.txt: 28 ops on 1 lane(s) under /d; 1 path template(s), 1 site(s), 3 open question(s)\ntemplates:\n    0  s/{a:03}.npz  7 paths, 7 opens; ops open 7, fstat 7, read 7, close 7; read 112.0 KiB (request p50 16.0 KiB); offsets whole 7\n       a: int, width 3, 7 value(s) 0..6\nlanes:\n  lane 0: 28 ops\n    phase 1  open fstat read close x7 on template 0; think p50 8.4 ms; read 112.0 KiB\nsites:\n  site 0 (template 0): 7 touches of 7 paths, passes [7]\n    selection: undecided - consume or choose (a draw needs a corpus of at least 8); settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 8 candidates refutes a draw with replacement (no repeat in 7 touches would have probability below 0.05)\n    order: undecided (ascending 0.33 of 6 pairs, step of one 0.00)\n    size: undecided; settles: a repeat of a path: the same bytes again is a size per path, other bytes a draw per open\nopen questions (projected over 1 pass(es)):\n  1. site 0 selection: consume | choose; divergence 0.368\n     ask: Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?\n     settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 8 candidates refutes a draw with replacement (no repeat in 7 touches would have probability below 0.05)\n     at 1 pass(es): never read 0.368 under choose, 0.000 under consume; re-reads 0.368 and 0.000 of the touches\n  2. site 0 size: per-path | drawn; divergence 0.000\n     ask: Is the number of bytes read from a file a property of the file (its size), or chosen per access?\n     settles: a repeat of a path: the same bytes again is a size per path, other bytes a draw per open\n     at scale: the op multiset is the same in distribution; which file gets which bytes differs\n  3. site 0 order: sequential | permuted; divergence 0.000\n     ask: Within a pass, does the application take the files in their sorted order, or in a shuffled one?\n     settles: at least 8 consecutive touches within one pass\n     at scale: the op multiset is the same; the order within a pass differs, which read-ahead sees\n"
+}

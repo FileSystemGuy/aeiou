@@ -1,0 +1,261 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "fact": "candidates",
+    "template": "s/{a:03}.npz",
+    "value": 2000
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-1b35ac0c.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [
+   {
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "fact": "candidates",
+    "site": 0,
+    "template": "s/{a:03}.npz",
+    "value": 2000
+   }
+  ],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 28,
+    "phases": [
+     {
+      "bytes_read": 114688,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 81002951,
+      "motif": "open fstat read close",
+      "ops": 28,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         6
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9995023.333333334,
+       "n": 6
+      },
+      "units": 7
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second pass over the set: a repeat only after all 7 decides a permutation, an earlier one a draw; or 110 touches of 2000 candidates, after which a draw with replacement has repeated with 95 % probability",
+    "site": 0
+   },
+   {
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "question": "size",
+    "rank": 2,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   },
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 3,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   }
+  ],
+  "ops": 28,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 7,
+    "epochs": [
+     7
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.3333333333333333,
+     "pairs": 6,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 0.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [
+      "candidates"
+     ],
+     "candidates": 2000,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 8,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 7
+     },
+     "p_no_repeat_under_choose": 0.9895549325678993,
+     "refuted": {},
+     "settles": "a second pass over the set: a repeat only after all 7 decides a permutation, an earlier one a draw; or 110 touches of 2000 candidates, after which a draw with replacement has repeated with 95 % probability",
+     "touches_to_decide": 110,
+     "verdict": "undecided"
+    },
+    "size": {
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "template": 0,
+    "touches": 7
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 114688,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 6,
+      "min": 0,
+      "name": "a",
+      "values": 7,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 7
+    },
+    "opens": 7,
+    "ops": {
+     "close": 7,
+     "fstat": 7,
+     "open": 7,
+     "read": 7
+    },
+    "paths": 7,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       1
+      ],
+      [
+       8192,
+       1
+      ],
+      [
+       12288,
+       1
+      ],
+      [
+       16384,
+       1
+      ],
+      [
+       20480,
+       1
+      ],
+      [
+       24576,
+       1
+      ],
+      [
+       28672,
+       1
+      ]
+     ],
+     "max": 28672,
+     "mean": 16384.0,
+     "n": 7
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       7
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 7
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,423 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "fact": "values:b",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+    "value": 512
+   },
+   {
+    "answer": "checkpoint",
+    "question": "label",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   },
+   {
+    "answer": "unknown",
+    "question": "size",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-3df24f6e.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [
+   {
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "fact": "values:b",
+    "site": 0,
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+    "value": 512
+   },
+   {
+    "answer": "checkpoint",
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "question": "label",
+    "site": 0,
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   },
+   {
+    "answer": "unknown",
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "question": "size",
+    "site": 0,
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   }
+  ],
+  "contexts": 2,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 7,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 4096,
+      "first": 0,
+      "last": 3005028,
+      "motif": "open write fsync close",
+      "ops": 4,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 512,
+      "first": 9999990,
+      "last": 12005091,
+      "motif": "open write close",
+      "ops": 3,
+      "repeats": {},
+      "template": 1,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 4,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 8192,
+      "first": 99897,
+      "last": 3104925,
+      "motif": "open write fsync close",
+      "ops": 4,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "threads_without_clone": 1
+  },
+  "open": [
+   {
+    "answered": "unknown",
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "question": "size",
+    "rank": 1,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   }
+  ],
+  "ops": 11,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 2,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "settles": "a second save: a field keeping its one value over the saves is the same in every save's name; how many values it takes at scale is the fact values:a",
+      "values": 1,
+      "verdict": "undecided",
+      "width": 6
+     },
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "b",
+      "values": 2,
+      "verdict": "varies",
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 0,
+      "min": 0,
+      "name": "c",
+      "settles": "a second save: a field keeping its one value over the saves is the same in every save's name; how many values it takes at scale is the fact values:c",
+      "values": 1,
+      "verdict": "undecided",
+      "width": null
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "asserted": {
+      "answer": "checkpoint",
+      "at": "2026-10-29T12:00:00+00:00",
+      "by": "someone@host"
+     },
+     "consistent": [
+      "checkpoint",
+      "output"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+     "supports": [
+      "every save starts on all its lanes together",
+      "every file fsynced"
+     ],
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [
+      "values:b"
+     ],
+     "keep": null,
+     "passes": null,
+     "values:a": null,
+     "values:b": 512,
+     "values:c": null
+    },
+    "retention": {
+     "deleted": 0,
+     "unsafe": 0,
+     "verdict": "kept"
+    },
+    "rewrite": {
+     "rewritten_paths": 0,
+     "verdict": "new_names"
+    },
+    "saves": {
+     "count": 1,
+     "duration_ns": {
+      "buckets": [
+       [
+        2621440,
+        1
+       ]
+      ],
+      "max": 3104925,
+      "mean": 3104925.0,
+      "n": 1
+     },
+     "interval_ns": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "lanes": {
+      "buckets": [
+       [
+        2,
+        1
+       ]
+      ],
+      "max": 2,
+      "mean": 2.0,
+      "n": 1
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        98304,
+        1
+       ]
+      ],
+      "max": 99897,
+      "mean": 99897.0,
+      "n": 1
+     },
+     "verdict": "simultaneous"
+    },
+    "size": {
+     "asserted": {
+      "answer": "unknown",
+      "at": "2026-10-29T12:00:00+00:00",
+      "by": "someone@host"
+     },
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "sync": {
+     "fsync_share": 1.0,
+     "opens": 2
+    },
+    "template": 0,
+    "touches": 2
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 0,
+    "bytes_written": 12288,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "values": 1,
+      "width": 6
+     },
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "b",
+      "values": 2,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 0,
+      "min": 0,
+      "name": "c",
+      "values": 1,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 2
+    },
+    "opens": 2,
+    "ops": {
+     "close": 2,
+     "fsync": 2,
+     "open": 2,
+     "write": 2
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       2
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 2
+    },
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+    "write_size": {
+     "buckets": [
+      [
+       4096,
+       1
+      ],
+      [
+       8192,
+       1
+      ]
+     ],
+     "max": 8192,
+     "mean": 6144.0,
+     "n": 2
+    }
+   },
+   {
+    "bytes_read": 0,
+    "bytes_written": 512,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "values": 1,
+      "width": 6
+     }
+    ],
+    "id": 1,
+    "offsets": {
+     "whole": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1,
+     "write": 1
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       1
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 1
+    },
+    "template": "ckpt/step_{a:06}/.metadata",
+    "write_size": {
+     "buckets": [
+      [
+       512,
+       1
+      ]
+     ],
+     "max": 512,
+     "mean": 512.0,
+     "n": 1
+    }
+   }
+  ]
+ }
+}

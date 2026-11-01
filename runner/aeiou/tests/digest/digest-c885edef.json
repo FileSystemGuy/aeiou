@@ -1,0 +1,181 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "fact": "candidates",
+    "note": "the dataset has 100 archives",
+    "template": "s/{a:03}.npz",
+    "value": 100
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-c3e43a46.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [
+   {
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "fact": "candidates",
+    "note": "the dataset has 100 archives",
+    "site": 0,
+    "template": "s/{a:03}.npz",
+    "value": 100
+   }
+  ],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 112,
+    "phases": [
+     {
+      "bytes_read": 114688,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 353998900,
+      "motif": "open fstat read close",
+      "ops": 112,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         27
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9995001.148148147,
+       "n": 27
+      },
+      "units": 28
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [],
+  "ops": 112,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 28,
+    "epochs": [
+     28
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.48148148148148145,
+     "pairs": 27,
+     "step_of_one": 0.07407407407407407,
+     "verdict": "permuted"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [
+      "candidates"
+     ],
+     "candidates": 100,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 127,
+     "consistent": [
+      "consume"
+     ],
+     "consume": {
+      "epoch": 28
+     },
+     "p_no_repeat_under_choose": 0.02282269142509298,
+     "refuted": {
+      "choose": "no repeat in 28 touches of 100 candidates has probability 0.023 under a draw with replacement"
+     },
+     "settles": "decided",
+     "verdict": "consume"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 28
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 114688,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 27,
+      "min": 0,
+      "name": "a",
+      "values": 28,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 28
+    },
+    "opens": 28,
+    "ops": {
+     "close": 28,
+     "fstat": 28,
+     "open": 28,
+     "read": 28
+    },
+    "paths": 28,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       28
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 28
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       28
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 28
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

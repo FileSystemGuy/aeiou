@@ -1,0 +1,204 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-e645a313.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 100,
+    "phases": [
+     {
+      "bytes_read": 102400,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 314999104,
+      "motif": "open fstat read close",
+      "ops": 100,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         24
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9994993.416666666,
+       "n": 24
+      },
+      "units": 25
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second full pass: the same length 20 again is a permutation over the set; an earlier repeat, a draw with replacement from about 255 candidates",
+    "site": 0
+   }
+  ],
+  "ops": 100,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 20,
+    "epochs": [
+     20,
+     5
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.4782608695652174,
+     "pairs": 23,
+     "step_of_one": 0.043478260869565216,
+     "verdict": "permuted"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "choose": {
+      "candidates_implied": 255,
+      "top_10pct_share": 0.16,
+      "touches_per_path": {
+       "buckets": [
+        [
+         1,
+         15
+        ],
+        [
+         2,
+         5
+        ]
+       ],
+       "max": 2,
+       "mean": 1.25,
+       "n": 20
+      }
+     },
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 20
+     },
+     "refuted": {},
+     "settles": "a second full pass: the same length 20 again is a permutation over the set; an earlier repeat, a draw with replacement from about 255 candidates",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 25
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 102400,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 19,
+      "min": 0,
+      "name": "a",
+      "values": 20,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 25
+    },
+    "opens": 25,
+    "ops": {
+     "close": 25,
+     "fstat": 25,
+     "open": 25,
+     "read": 25
+    },
+    "paths": 20,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       25
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 25
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       25
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 25
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

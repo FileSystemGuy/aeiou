@@ -1,0 +1,9 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": null
+ },
+ "error": "a trace file with no call in it",
+ "input": "trace-d37a504d.in"
+}

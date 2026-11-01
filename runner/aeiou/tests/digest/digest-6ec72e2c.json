@@ -1,0 +1,732 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "a-bucket/files"
+ },
+ "document": {
+  "answers": []
+ },
+ "input": "trace-1a3f6d94.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 4,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 14,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 12288,
+      "first": 0,
+      "last": 12000083,
+      "motif": "open write close",
+      "ops": 6,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         7340032,
+         1
+        ]
+       ],
+       "max": 7999897,
+       "mean": 7999897.0,
+       "n": 1
+      },
+      "units": 2
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 0,
+      "first": 49999952,
+      "last": 53000211,
+      "motif": "stat",
+      "ops": 2,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 2
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 0,
+      "first": 59999943,
+      "last": 62000036,
+      "motif": "open readdir close",
+      "ops": 3,
+      "repeats": {},
+      "template": 1,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 0,
+      "first": 69999933,
+      "last": 72000026,
+      "motif": "unlink",
+      "ops": 1,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 0,
+      "first": 150000095,
+      "last": 152000188,
+      "motif": "open close",
+      "ops": 2,
+      "repeats": {},
+      "template": 3,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 7,
+    "phases": [
+     {
+      "bytes_read": 5120,
+      "bytes_written": 0,
+      "first": 19999981,
+      "last": 32000064,
+      "motif": "open read close",
+      "ops": 6,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         7340032,
+         1
+        ]
+       ],
+       "max": 7999897,
+       "mean": 7999897.0,
+       "n": 1
+      },
+      "units": 2
+     },
+     {
+      "bytes_read": 0,
+      "bytes_written": 0,
+      "first": 39999962,
+      "last": 42000055,
+      "motif": "open",
+      "ops": 1,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   },
+   {
+    "lane": 2,
+    "ops": 3,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 2097152,
+      "first": 79999924,
+      "last": 101999998,
+      "motif": "open write+ close",
+      "ops": 4,
+      "repeats": {
+       "write+": {
+        "buckets": [
+         [
+          2,
+          1
+         ]
+        ],
+        "max": 2,
+        "mean": 2.0,
+        "n": 1
+       }
+      },
+      "template": 2,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "lanes": "one per client host; the log knows no thread",
+   "multipart_not_completed": 1,
+   "multipart_without_start": 1,
+   "opens_not_closed": 1,
+   "requests_not_exported:CopyObject": 1,
+   "requests_not_exported:GetBucketLocation": 1,
+   "requests_outside_root": 2,
+   "shared_positions_resolved": 2,
+   "time_is_response_end": "a MinIO audit entry's time is taken as when the response completed; the request starts timeToResponse earlier"
+  },
+  "open": [
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "phase": "read",
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 2 candidates refutes a draw with replacement (no repeat in 2 touches would have probability below 0.05)",
+    "site": 0
+   },
+   {
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "phase": "write",
+    "question": "size",
+    "rank": 2,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   },
+   {
+    "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+    },
+    "candidates": [
+     "per-path",
+     "drawn"
+    ],
+    "divergence": 0.0,
+    "phase": "read",
+    "question": "size",
+    "rank": 3,
+    "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+    "site": 0
+   },
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "phase": "read",
+    "question": "order",
+    "rank": 4,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   }
+  ],
+  "ops": 25,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "a-bucket/files",
+  "sites": [
+   {
+    "distinct": 2,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "values": 1,
+      "verdict": "constant",
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 2,
+      "min": 2,
+      "name": "b",
+      "values": 1,
+      "verdict": "constant",
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 3,
+      "name": "c",
+      "values": 1,
+      "verdict": "constant",
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 100,
+      "min": 100,
+      "name": "d",
+      "values": 1,
+      "verdict": "constant",
+      "width": 3
+     },
+     {
+      "kind": "int",
+      "max": 8,
+      "min": 7,
+      "name": "e",
+      "values": 2,
+      "verdict": "varies",
+      "width": null
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "refuted": {
+      "checkpoint": "read after its first write: a checkpoint is read only after a failure, in another trace"
+     },
+     "settles": "decided",
+     "supports": [
+      "one writing lane, as plain DDP's rank 0"
+     ],
+     "verdict": "output"
+    },
+    "phase": "write",
+    "projection": {
+     "asserted": [],
+     "keep": null,
+     "passes": null,
+     "values:e": null,
+     "writers": null
+    },
+    "retention": {
+     "deleted": 1,
+     "note": "an earlier save deleted before the next was stable, which contradicts what a checkpoint is for",
+     "unsafe": 1,
+     "verdict": "unsafe"
+    },
+    "rewrite": {
+     "rewritten_paths": 0,
+     "verdict": "new_names"
+    },
+    "saves": {
+     "count": 2,
+     "duration_ns": {
+      "buckets": [
+       [
+        1835008,
+        2
+       ]
+      ],
+      "max": 2000093,
+      "mean": 2000093.0,
+      "n": 2
+     },
+     "interval_ns": {
+      "buckets": [
+       [
+        8388608,
+        1
+       ]
+      ],
+      "max": 9999990,
+      "mean": 9999990.0,
+      "n": 1
+     },
+     "lanes": {
+      "buckets": [
+       [
+        1,
+        2
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 2
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        0,
+        2
+       ]
+      ],
+      "max": 0,
+      "mean": 0.0,
+      "n": 2
+     },
+     "verdict": "one_writer"
+    },
+    "size": {
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "sync": {
+     "fsync_share": 0.0,
+     "opens": 2
+    },
+    "template": 0,
+    "touches": 2
+   },
+   {
+    "distinct": 2,
+    "epochs": [
+     2
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 1.0,
+     "pairs": 1,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 1.0,
+     "verdict": "undecided"
+    },
+    "phase": "read",
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 2,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 2
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 2 candidates refutes a draw with replacement (no repeat in 2 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "template": 0,
+    "touches": 2
+   }
+  ],
+  "source": "minio-audit",
+  "templates": [
+   {
+    "bytes_read": 5120,
+    "bytes_written": 12288,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "values": 1,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 2,
+      "min": 2,
+      "name": "b",
+      "values": 1,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 3,
+      "name": "c",
+      "values": 1,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 100,
+      "min": 100,
+      "name": "d",
+      "values": 1,
+      "width": 3
+     },
+     {
+      "kind": "int",
+      "max": 9,
+      "min": 7,
+      "name": "e",
+      "values": 3,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "none": 1,
+     "sequential": 1,
+     "whole": 3
+    },
+    "opens": 5,
+    "ops": {
+     "close": 4,
+     "open": 5,
+     "read": 2,
+     "stat": 2,
+     "unlink": 1,
+     "write": 2
+    },
+    "paths": 3,
+    "read_size": {
+     "buckets": [
+      [
+       1024,
+       1
+      ],
+      [
+       4096,
+       1
+      ]
+     ],
+     "max": 4096,
+     "mean": 2560.0,
+     "n": 2
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       4
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 4
+    },
+    "template": "insert_log/{a}/{b}/{c}/{d:03}/{e}",
+    "write_size": {
+     "buckets": [
+      [
+       4096,
+       1
+      ],
+      [
+       8192,
+       1
+      ]
+     ],
+     "max": 8192,
+     "mean": 6144.0,
+     "n": 2
+    }
+   },
+   {
+    "bytes_read": 0,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "a",
+      "values": 1,
+      "width": null
+     }
+    ],
+    "id": 1,
+    "offsets": {
+     "none": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1,
+     "readdir": 1
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "template": "insert_log/{a}",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   {
+    "bytes_read": 0,
+    "bytes_written": 2097152,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 5,
+      "min": 5,
+      "name": "a",
+      "values": 1,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 1,
+      "name": "b",
+      "values": 1,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 2,
+      "min": 2,
+      "name": "c",
+      "values": 1,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 3,
+      "name": "d",
+      "values": 1,
+      "width": null
+     }
+    ],
+    "id": 2,
+    "offsets": {
+     "whole": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1,
+     "write": 2
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       1
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 1
+    },
+    "template": "index_files/{a}/{b}/{c}/{d}/big",
+    "write_size": {
+     "buckets": [
+      [
+       1048576,
+       2
+      ]
+     ],
+     "max": 1048576,
+     "mean": 1048576.0,
+     "n": 2
+    }
+   },
+   {
+    "bytes_read": 0,
+    "bytes_written": 0,
+    "fields": [],
+    "id": 3,
+    "offsets": {
+     "none": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "runs_per_open": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "template": "dangling",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

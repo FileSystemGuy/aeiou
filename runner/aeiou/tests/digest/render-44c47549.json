@@ -1,0 +1,204 @@
+{
+ "doc": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 120,
+    "phases": [
+     {
+      "bytes_read": 122880,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 379997969,
+      "motif": "open fstat read close",
+      "ops": 120,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         29
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9994999.931034483,
+       "n": 29
+      },
+      "units": 30
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 146 candidates refutes a draw with replacement (no repeat in 30 touches would have probability below 0.05)",
+    "site": 0
+   }
+  ],
+  "ops": 120,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 30,
+    "epochs": [
+     30
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.0,
+     "note": "neither a scan (steps of one) nor a permutation (half the pairs ascending): interleaved scans, or a sort the trace does not show",
+     "pairs": 29,
+     "step_of_one": 0.0,
+     "verdict": "other"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 146,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 30
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 146 candidates refutes a draw with replacement (no repeat in 30 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 30
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 122880,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 29,
+      "min": 0,
+      "name": "a",
+      "values": 30,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 30
+    },
+    "opens": 30,
+    "ops": {
+     "close": 30,
+     "fstat": 30,
+     "open": 30,
+     "read": 30
+    },
+    "paths": 30,
+    "raw_paths": [
+     "s/000.npz",
+     "s/001.npz",
+     "s/002.npz",
+     "s/003.npz",
+     "s/004.npz",
+     "s/005.npz",
+     "s/006.npz",
+     "s/007.npz",
+     "s/008.npz",
+     "s/009.npz",
+     "s/010.npz",
+     "s/011.npz",
+     "s/012.npz",
+     "s/013.npz",
+     "s/014.npz",
+     "s/015.npz",
+     "s/016.npz",
+     "s/017.npz",
+     "s/018.npz",
+     "s/019.npz",
+     "s/020.npz",
+     "s/021.npz",
+     "s/022.npz",
+     "s/023.npz",
+     "s/024.npz",
+     "s/025.npz",
+     "s/026.npz",
+     "s/027.npz",
+     "s/028.npz",
+     "s/029.npz"
+    ],
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       30
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 30
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       30
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 30
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ },
+ "want": "digest of /d: 120 ops on 1 lane(s) under /d; 1 path template(s), 1 site(s), 1 open question(s)\ntemplates:\n    0  s/{a:03}.npz  30 paths, 30 opens; ops open 30, fstat 30, read 30, close 30; read 120.0 KiB (request p50 4.0 KiB); offsets whole 30\n       a: int, width 3, 30 value(s) 0..29\n       s/000.npz\n       s/001.npz\n       s/002.npz\n       s/003.npz\n       s/004.npz\n       s/005.npz\n       s/006.npz\n       s/007.npz\n       s/008.npz\n       s/009.npz\n       s/010.npz\n       s/011.npz\n       s/012.npz\n       s/013.npz\n       s/014.npz\n       s/015.npz\n       s/016.npz\n       s/017.npz\n       s/018.npz\n       s/019.npz\n       s/020.npz\n       s/021.npz\n       s/022.npz\n       s/023.npz\n       s/024.npz\n       s/025.npz\n       s/026.npz\n       s/027.npz\n       s/028.npz\n       s/029.npz\nlanes:\n  lane 0: 120 ops\n    phase 1  open fstat read close x30 on template 0; think p50 8.4 ms; read 120.0 KiB\nsites:\n  site 0 (template 0): 30 touches of 30 paths, passes [30]\n    selection: undecided - consume or choose (a draw needs a corpus of at least 146); settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 146 candidates refutes a draw with replacement (no repeat in 30 touches would have probability below 0.05)\n    order: other (ascending 0.00 of 29 pairs, step of one 0.00); neither a scan (steps of one) nor a permutation (half the pairs ascending): interleaved scans, or a sort the trace does not show\n    size: constant 4096 B\nopen questions (projected over 1 pass(es)):\n  1. site 0 selection: consume | choose; divergence 0.368\n     ask: Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?\n     settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 146 candidates refutes a draw with replacement (no repeat in 30 touches would have probability below 0.05)\n     at 1 pass(es): never read 0.368 under choose, 0.000 under consume; re-reads 0.368 and 0.000 of the touches\n"
+}

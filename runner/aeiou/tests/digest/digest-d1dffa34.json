@@ -1,0 +1,163 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-1eef3f2f.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 240,
+    "phases": [
+     {
+      "bytes_read": 245760,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 769990921,
+      "motif": "open fstat read close",
+      "ops": 240,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         59
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9994995.576271186,
+       "n": 59
+      },
+      "units": 60
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [],
+  "ops": 240,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 23,
+    "epochs": [
+     20,
+     20,
+     20
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.43859649122807015,
+     "pairs": 57,
+     "step_of_one": 0.03508771929824561,
+     "verdict": "permuted"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "consistent": [
+      "consume"
+     ],
+     "consume": {
+      "epoch": 20,
+      "seen_not_every_pass": 3
+     },
+     "refuted": {
+      "choose": "3 full passes of equal length 20 over 23 paths; a draw with replacement repeats after about sqrt(pi N / 2) touches and its passes have unequal lengths"
+     },
+     "settles": "decided",
+     "verdict": "consume"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 60
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 245760,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 22,
+      "min": 0,
+      "name": "a",
+      "values": 23,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 60
+    },
+    "opens": 60,
+    "ops": {
+     "close": 60,
+     "fstat": 60,
+     "open": 60,
+     "read": 60
+    },
+    "paths": 23,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       60
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 60
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       60
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 60
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

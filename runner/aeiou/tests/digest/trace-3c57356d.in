@@ -1,0 +1,6 @@
+100 1700000000.000000 openat(AT_FDCWD</d>, "/d/out/part_0.bin", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 3</d/out/part_0.bin> <0.000010>
+100 1700000000.001000 write(3</d/out/part_0.bin>, "x"..., 4096) = 4096 <0.000100>
+101 1700000000.001500 openat(AT_FDCWD</d>, "/d/out/part_1.bin", O_WRONLY|O_CREAT|O_CLOEXEC, 0644) = 4</d/out/part_1.bin> <0.000010>
+100 1700000000.002000 close(3</d/out/part_0.bin>) = 0 <0.000005>
+101 1700000000.002500 write(4</d/out/part_1.bin>, "x"..., 4096) = 4096 <0.000100>
+101 1700000000.003500 close(4</d/out/part_1.bin>) = 0 <0.000005>

@@ -1,0 +1,521 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-db16c1d3.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 24,
+    "phases": [
+     {
+      "bytes_read": 8192,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 16005039,
+      "motif": "open fstat read close",
+      "ops": 8,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         1
+        ]
+       ],
+       "max": 9994983,
+       "mean": 9994983.0,
+       "n": 1
+      },
+      "units": 2
+     },
+     {
+      "bytes_read": 8192,
+      "bytes_written": 0,
+      "first": 26000023,
+      "last": 42004109,
+      "motif": "open fstat read close",
+      "ops": 8,
+      "repeats": {},
+      "template": 1,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         1
+        ]
+       ],
+       "max": 9994984,
+       "mean": 9994984.0,
+       "n": 1
+      },
+      "units": 2
+     },
+     {
+      "bytes_read": 8192,
+      "bytes_written": 0,
+      "first": 51999092,
+      "last": 68003893,
+      "motif": "open fstat read close",
+      "ops": 8,
+      "repeats": {},
+      "template": 2,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         1
+        ]
+       ],
+       "max": 9994984,
+       "mean": 9994984.0,
+       "n": 1
+      },
+      "units": 2
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 2 candidates refutes a draw with replacement (no repeat in 2 touches would have probability below 0.05)",
+    "site": 0
+   },
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 2,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 2 candidates refutes a draw with replacement (no repeat in 2 touches would have probability below 0.05)",
+    "site": 1
+   },
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 3,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 2 candidates refutes a draw with replacement (no repeat in 2 touches would have probability below 0.05)",
+    "site": 2
+   },
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 4,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   },
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 5,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 1
+   },
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 6,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 2
+   }
+  ],
+  "ops": 24,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 2,
+    "epochs": [
+     2
+    ],
+    "kind": "set",
+    "note": "names with a hex field, read and never written: a keyed store written elsewhere fits it as well",
+    "order": {
+     "ascending": 0.0,
+     "pairs": 1,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 0.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 2,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 2
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 2 candidates refutes a draw with replacement (no repeat in 2 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 2
+   },
+   {
+    "distinct": 2,
+    "epochs": [
+     2
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 1.0,
+     "pairs": 1,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 1.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 2,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 2
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 2 candidates refutes a draw with replacement (no repeat in 2 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 1,
+    "touches": 2
+   },
+   {
+    "distinct": 2,
+    "epochs": [
+     2
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.0,
+     "pairs": 1,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 0.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 2,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 2
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 2 candidates refutes a draw with replacement (no repeat in 2 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 2,
+    "touches": 2
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 8192,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "hex",
+      "name": "a",
+      "values": 2,
+      "width": 32
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 2
+    },
+    "opens": 2,
+    "ops": {
+     "close": 2,
+     "fstat": 2,
+     "open": 2,
+     "read": 2
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       2
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 2
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       2
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 2
+    },
+    "template": "kv/{a:x32}.bin",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   {
+    "bytes_read": 8192,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 2,
+      "min": 1,
+      "name": "a",
+      "values": 2,
+      "width": 5
+     },
+     {
+      "kind": "int",
+      "max": 3,
+      "min": 3,
+      "name": "b",
+      "values": 1,
+      "width": 5
+     }
+    ],
+    "id": 1,
+    "offsets": {
+     "whole": 2
+    },
+    "opens": 2,
+    "ops": {
+     "close": 2,
+     "fstat": 2,
+     "open": 2,
+     "read": 2
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       2
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 2
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       2
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 2
+    },
+    "template": "model-{a:05}-of-{b:05}.safetensors",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   {
+    "bytes_read": 8192,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 12,
+      "min": 7,
+      "name": "a",
+      "values": 2,
+      "width": null
+     }
+    ],
+    "id": 2,
+    "offsets": {
+     "whole": 2
+    },
+    "opens": 2,
+    "ops": {
+     "close": 2,
+     "fstat": 2,
+     "open": 2,
+     "read": 2
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       2
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 2
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       2
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 2
+    },
+    "template": "idx/{a}.lst",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

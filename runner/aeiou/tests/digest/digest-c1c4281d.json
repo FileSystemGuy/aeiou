@@ -1,0 +1,214 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-23e6a4ed.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 50,
+    "phases": [
+     {
+      "bytes_read": 143360,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 85001946,
+      "motif": "open fstat read+ close",
+      "ops": 50,
+      "repeats": {
+       "read+": {
+        "buckets": [
+         [
+          7,
+          5
+         ]
+        ],
+        "max": 7,
+        "mean": 7.0,
+        "n": 5
+       }
+      },
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         4
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9995043.25,
+       "n": 4
+      },
+      "units": 5
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 5 candidates refutes a draw with replacement (no repeat in 5 touches would have probability below 0.05)",
+    "site": 0
+   },
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 2,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   }
+  ],
+  "ops": 50,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 5,
+    "epochs": [
+     5
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 1.0,
+     "pairs": 4,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 1.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "candidates_for_choose": 5,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 5
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 5 candidates refutes a draw with replacement (no repeat in 5 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "bytes": 28672,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 5
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 143360,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 4,
+      "min": 0,
+      "name": "a",
+      "values": 5,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 5
+    },
+    "opens": 5,
+    "ops": {
+     "close": 5,
+     "fstat": 5,
+     "open": 5,
+     "read": 35
+    },
+    "paths": 5,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       35
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 35
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       5
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 5
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

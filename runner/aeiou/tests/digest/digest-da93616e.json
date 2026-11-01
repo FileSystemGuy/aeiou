@@ -1,0 +1,241 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "answer": "per-path",
+    "question": "size",
+    "template": "s/{a:03}.npz"
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-9674063e.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 12,
+    "phases": [
+     {
+      "bytes_read": 16384,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 29004097,
+      "motif": "open fstat read close",
+      "ops": 12,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         2
+        ]
+       ],
+       "max": 9994984,
+       "mean": 9994983.5,
+       "n": 2
+      },
+      "units": 3
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "rejected_answers": 1
+  },
+  "open": [
+   {
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second full pass: the same length 2 again is a permutation over the set; an earlier repeat, a draw with replacement from about 3 candidates",
+    "site": 0
+   },
+   {
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 2,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   }
+  ],
+  "ops": 12,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [
+   {
+    "answer": "per-path",
+    "question": "size",
+    "template": "s/{a:03}.npz",
+    "why": "the trace decided drawn: 1 of 1 repeated path(s) moved differing bytes"
+   }
+  ],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 2,
+    "epochs": [
+     2,
+     1
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 1.0,
+     "pairs": 1,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 1.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "choose": {
+      "candidates_implied": 3,
+      "top_10pct_share": 0.6666666666666666,
+      "touches_per_path": {
+       "buckets": [
+        [
+         1,
+         1
+        ],
+        [
+         2,
+         1
+        ]
+       ],
+       "max": 2,
+       "mean": 1.5,
+       "n": 2
+      }
+     },
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 2
+     },
+     "refuted": {},
+     "settles": "a second full pass: the same length 2 again is a permutation over the set; an earlier repeat, a draw with replacement from about 3 candidates",
+     "verdict": "undecided"
+    },
+    "size": {
+     "paths_with_differing_bytes": 1,
+     "repeated_paths": 1,
+     "verdict": "drawn"
+    },
+    "template": 0,
+    "touches": 3
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 16384,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 2,
+      "min": 1,
+      "name": "a",
+      "values": 2,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 3
+    },
+    "opens": 3,
+    "ops": {
+     "close": 3,
+     "fstat": 3,
+     "open": 3,
+     "read": 3
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       2
+      ],
+      [
+       8192,
+       1
+      ]
+     ],
+     "max": 8192,
+     "mean": 5461.333333333333,
+     "n": 3
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       3
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 3
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

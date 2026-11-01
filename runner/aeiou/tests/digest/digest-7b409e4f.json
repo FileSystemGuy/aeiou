@@ -1,0 +1,269 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "fact": "size",
+    "template": "sift_disk.index",
+    "value": 1099511627776
+   },
+   {
+    "fact": "requests",
+    "template": "sift_disk.index",
+    "value": 10000
+   },
+   {
+    "answer": "exceeds",
+    "note": "1 TiB index, 256 GiB hosts",
+    "question": "memory",
+    "template": "sift_disk.index"
+   },
+   {
+    "answer": "dependent",
+    "question": "dependency",
+    "template": "sift_disk.index"
+   },
+   {
+    "fact": "size",
+    "template": "sift_disk.index",
+    "value": 4096
+   },
+   {
+    "answer": "skewed",
+    "question": "skew",
+    "template": "sift_disk.index"
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-0eae7f5c.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [
+   {
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "fact": "size",
+    "site": 0,
+    "template": "sift_disk.index",
+    "value": 1099511627776
+   },
+   {
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "fact": "requests",
+    "site": 0,
+    "template": "sift_disk.index",
+    "value": 10000
+   },
+   {
+    "answer": "exceeds",
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "note": "1 TiB index, 256 GiB hosts",
+    "question": "memory",
+    "site": 0,
+    "template": "sift_disk.index"
+   },
+   {
+    "answer": "dependent",
+    "at": "2026-10-29T12:00:00+00:00",
+    "by": "someone@host",
+    "question": "dependency",
+    "site": 0,
+    "template": "sift_disk.index"
+   }
+  ],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 402,
+    "phases": [
+     {
+      "bytes_read": 1638400,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 400975943,
+      "motif": "open read+ close",
+      "ops": 402,
+      "repeats": {
+       "read+": {
+        "buckets": [
+         [
+          384,
+          1
+         ]
+        ],
+        "max": 400,
+        "mean": 400.0,
+        "n": 1
+       }
+      },
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "rejected_answers": 2
+  },
+  "open": [],
+  "ops": 402,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [
+   {
+    "fact": "size",
+    "template": "sift_disk.index",
+    "value": 4096,
+    "why": "the trace read up to byte 819200 of this file; 4096 is smaller"
+   },
+   {
+    "answer": "skewed",
+    "question": "skew",
+    "template": "sift_disk.index",
+    "why": "the trace decided uniform: the top tenth of the offsets took 0.22 of the reads, about 0.22 under a uniform spread, uniform within noise"
+   }
+  ],
+  "root": "/d",
+  "sites": [
+   {
+    "dependency": {
+     "asserted": {
+      "answer": "dependent",
+      "at": "2026-10-29T12:00:00+00:00",
+      "by": "someone@host"
+     },
+     "consistent": [
+      "dependent",
+      "independent"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+     "verdict": "undecided"
+    },
+    "distinct": 1,
+    "distinct_offsets": 174,
+    "kind": "within",
+    "memory": {
+     "asserted": {
+      "answer": "exceeds",
+      "at": "2026-10-29T12:00:00+00:00",
+      "by": "someone@host",
+      "note": "1 TiB index, 256 GiB hosts"
+     },
+     "consistent": [
+      "fits",
+      "exceeds"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [
+      "requests",
+      "size"
+     ],
+     "requests": 10000,
+     "size": 1099511627776
+    },
+    "reads": 400,
+    "reuse_share": 0.565,
+    "runs": {
+     "buckets": [
+      [
+       1,
+       390
+      ],
+      [
+       2,
+       5
+      ]
+     ],
+     "max": 2,
+     "mean": 1.0126582278481013,
+     "n": 395
+    },
+    "skew": {
+     "settles": "decided",
+     "top_10pct_share": 0.2175,
+     "uniform_share": 0.21542042713488804,
+     "verdict": "uniform"
+    },
+    "span": 819200,
+    "template": 0,
+    "touches": 1
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 1638400,
+    "bytes_written": 0,
+    "fields": [],
+    "id": 0,
+    "offsets": {
+     "positioned": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1,
+     "read": 400
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       400
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 400
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       384,
+       1
+      ]
+     ],
+     "max": 395,
+     "mean": 395.0,
+     "n": 1
+    },
+    "template": "sift_disk.index",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

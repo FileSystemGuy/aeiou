@@ -1,0 +1,161 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-a3588754.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 160,
+    "phases": [
+     {
+      "bytes_read": 163840,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 509995938,
+      "motif": "open fstat read close",
+      "ops": 160,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         39
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9994995.717948718,
+       "n": 39
+      },
+      "units": 40
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [],
+  "ops": 160,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 20,
+    "epochs": [
+     20,
+     20
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.5,
+     "pairs": 38,
+     "step_of_one": 0.02631578947368421,
+     "verdict": "permuted"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "consistent": [
+      "consume"
+     ],
+     "consume": {
+      "epoch": 20
+     },
+     "refuted": {
+      "choose": "2 full passes of equal length 20 over 20 paths; a draw with replacement repeats after about sqrt(pi N / 2) touches and its passes have unequal lengths"
+     },
+     "settles": "decided",
+     "verdict": "consume"
+    },
+    "size": {
+     "bytes": 4096,
+     "verdict": "constant"
+    },
+    "template": 0,
+    "touches": 40
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 163840,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 19,
+      "min": 0,
+      "name": "a",
+      "values": 20,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 40
+    },
+    "opens": 40,
+    "ops": {
+     "close": 40,
+     "fstat": 40,
+     "open": 40,
+     "read": 40
+    },
+    "paths": 20,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       40
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 40
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       40
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 40
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

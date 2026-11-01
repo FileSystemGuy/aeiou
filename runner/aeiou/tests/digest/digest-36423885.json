@@ -1,0 +1,377 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-3d8c9838.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 2,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 6,
+    "phases": [
+     {
+      "bytes_read": 0,
+      "bytes_written": 131072,
+      "first": 0,
+      "last": 14004946,
+      "motif": "open write close",
+      "ops": 6,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         1
+        ]
+       ],
+       "max": 9994984,
+       "mean": 9994984.0,
+       "n": 1
+      },
+      "units": 2
+     }
+    ]
+   },
+   {
+    "lane": 1,
+    "ops": 10,
+    "phases": [
+     {
+      "bytes_read": 32768,
+      "bytes_written": 0,
+      "first": 23999929,
+      "last": 33004046,
+      "motif": "open read+ close",
+      "ops": 10,
+      "repeats": {
+       "read+": {
+        "buckets": [
+         [
+          8,
+          1
+         ]
+        ],
+        "max": 8,
+        "mean": 8.0,
+        "n": 1
+       }
+      },
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "threads_without_clone": 1
+  },
+  "open": [
+   {
+    "ask": "Are the offsets read spread evenly over the file, or do a few parts of it take most of the reads?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a skewed spread keeps a hot set in the page cache at scale; a uniform one does not"
+    },
+    "candidates": [
+     "uniform",
+     "skewed"
+    ],
+    "divergence": 0.0,
+    "phase": "read",
+    "question": "skew",
+    "rank": 1,
+    "settles": "50 or more reads (8 seen): the share the top tenth of the offsets takes against a uniform spread's",
+    "site": 0
+   },
+   {
+    "ask": "Does this file fit in memory at the scale the application runs, so that reads after the first hit the page cache, or does it exceed it?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a file that fits is read from storage once; one that exceeds memory is read from storage at every query"
+    },
+    "candidates": [
+     "fits",
+     "exceeds"
+    ],
+    "divergence": 0.0,
+    "phase": "read",
+    "question": "memory",
+    "rank": 2,
+    "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+    "site": 0
+   },
+   {
+    "ask": "Does each read's offset depend on what the previous read returned (a graph walk, a tree descent), or are the offsets independent of one another?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a dependent walk is a chain of reads each waiting on the last; independent offsets can be issued together"
+    },
+    "candidates": [
+     "dependent",
+     "independent"
+    ],
+    "divergence": 0.0,
+    "phase": "read",
+    "question": "dependency",
+    "rank": 3,
+    "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+    "site": 0
+   }
+  ],
+  "ops": 16,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 2,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "a",
+      "values": 2,
+      "verdict": "varies",
+      "width": null
+     }
+    ],
+    "kind": "bulk_write",
+    "label": {
+     "refuted": {
+      "checkpoint": "read after its first write: a checkpoint is read only after a failure, in another trace"
+     },
+     "settles": "decided",
+     "supports": [
+      "one writing lane, as plain DDP's rank 0"
+     ],
+     "verdict": "output"
+    },
+    "phase": "write",
+    "projection": {
+     "asserted": [],
+     "keep": null,
+     "passes": null,
+     "values:a": null,
+     "writers": null
+    },
+    "retention": {
+     "deleted": 0,
+     "unsafe": 0,
+     "verdict": "kept"
+    },
+    "rewrite": {
+     "rewritten_paths": 0,
+     "verdict": "new_names"
+    },
+    "saves": {
+     "count": 2,
+     "duration_ns": {
+      "buckets": [
+       [
+        1835008,
+        2
+       ]
+      ],
+      "max": 2005100,
+      "mean": 2004981.0,
+      "n": 2
+     },
+     "interval_ns": {
+      "buckets": [
+       [
+        10485760,
+        1
+       ]
+      ],
+      "max": 12000084,
+      "mean": 12000084.0,
+      "n": 1
+     },
+     "lanes": {
+      "buckets": [
+       [
+        1,
+        2
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 2
+     },
+     "start_spread_ns": {
+      "buckets": [
+       [
+        0,
+        2
+       ]
+      ],
+      "max": 0,
+      "mean": 0.0,
+      "n": 2
+     },
+     "verdict": "one_writer"
+    },
+    "size": {
+     "bytes": 65536,
+     "verdict": "constant"
+    },
+    "sync": {
+     "fsync_share": 0.0,
+     "opens": 2
+    },
+    "template": 0,
+    "touches": 2
+   },
+   {
+    "dependency": {
+     "consistent": [
+      "dependent",
+      "independent"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+     "verdict": "undecided"
+    },
+    "distinct": 1,
+    "distinct_offsets": 8,
+    "kind": "within",
+    "memory": {
+     "consistent": [
+      "fits",
+      "exceeds"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+     "verdict": "undecided"
+    },
+    "phase": "read",
+    "projection": {
+     "asserted": [],
+     "requests": null,
+     "size": null
+    },
+    "reads": 8,
+    "reuse_share": 0.0,
+    "runs": {
+     "buckets": [
+      [
+       1,
+       8
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 8
+    },
+    "skew": {
+     "consistent": [
+      "uniform",
+      "skewed"
+     ],
+     "refuted": {},
+     "settles": "50 or more reads (8 seen): the share the top tenth of the offsets takes against a uniform spread's",
+     "top_10pct_share": 0.125,
+     "uniform_share": 0.275,
+     "verdict": "undecided"
+    },
+    "span": 40960,
+    "template": 0,
+    "touches": 1
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 32768,
+    "bytes_written": 131072,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "a",
+      "values": 2,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "positioned": 1,
+     "whole": 2
+    },
+    "opens": 3,
+    "ops": {
+     "close": 3,
+     "open": 3,
+     "read": 8,
+     "write": 2
+    },
+    "paths": 2,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       8
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 8
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       2
+      ],
+      [
+       8,
+       1
+      ]
+     ],
+     "max": 8,
+     "mean": 3.3333333333333335,
+     "n": 3
+    },
+    "template": "idx/{a}.bin",
+    "write_size": {
+     "buckets": [
+      [
+       65536,
+       2
+      ]
+     ],
+     "max": 65536,
+     "mean": 65536.0,
+     "n": 2
+    }
+   }
+  ]
+ }
+}

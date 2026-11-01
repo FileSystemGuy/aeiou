@@ -1,0 +1,209 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [
+   {
+    "answer": "drawn",
+    "question": "size",
+    "template": "s/{a:03}.npz"
+   }
+  ],
+  "application": null,
+  "at": "2026-10-29T12:00:00+00:00",
+  "by": "someone@host",
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-aa25823c.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 80,
+    "phases": [
+     {
+      "bytes_read": 450560,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 250000000,
+      "motif": "open fstat read close",
+      "ops": 80,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         19
+        ]
+       ],
+       "max": 9995222,
+       "mean": 9994996.05263158,
+       "n": 19
+      },
+      "units": 20
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "rejected_answers": 1
+  },
+  "open": [],
+  "ops": 80,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [
+   {
+    "answer": "drawn",
+    "question": "size",
+    "template": "s/{a:03}.npz",
+    "why": "the trace decided per-path: 10 repeated path(s) always moved the same bytes"
+   }
+  ],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 10,
+    "epochs": [
+     10,
+     10
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 0.5,
+     "note": "neither a scan (steps of one) nor a permutation (half the pairs ascending): interleaved scans, or a sort the trace does not show",
+     "pairs": 18,
+     "step_of_one": 0.2222222222222222,
+     "verdict": "other"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "consistent": [
+      "consume"
+     ],
+     "consume": {
+      "epoch": 10
+     },
+     "refuted": {
+      "choose": "2 full passes of equal length 10 over 10 paths; a draw with replacement repeats after about sqrt(pi N / 2) touches and its passes have unequal lengths"
+     },
+     "settles": "decided",
+     "verdict": "consume"
+    },
+    "size": {
+     "repeated_paths": 10,
+     "verdict": "per-path"
+    },
+    "template": 0,
+    "touches": 20
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 450560,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 9,
+      "min": 0,
+      "name": "a",
+      "values": 10,
+      "width": 3
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 20
+    },
+    "opens": 20,
+    "ops": {
+     "close": 20,
+     "fstat": 20,
+     "open": 20,
+     "read": 20
+    },
+    "paths": 10,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       2
+      ],
+      [
+       8192,
+       2
+      ],
+      [
+       12288,
+       2
+      ],
+      [
+       16384,
+       2
+      ],
+      [
+       20480,
+       2
+      ],
+      [
+       24576,
+       2
+      ],
+      [
+       28672,
+       2
+      ],
+      [
+       32768,
+       4
+      ],
+      [
+       40960,
+       2
+      ]
+     ],
+     "max": 40960,
+     "mean": 22528.0,
+     "n": 20
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       20
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 20
+    },
+    "template": "s/{a:03}.npz",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

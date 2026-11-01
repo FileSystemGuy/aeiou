@@ -1,0 +1,228 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "document": {
+  "answers": [],
+  "application": null,
+  "at": null,
+  "by": null,
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "input": "trace-51534be7.in",
+ "want": {
+  "aeiou_digest": 1,
+  "application": null,
+  "asserted": [],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 32,
+    "phases": [
+     {
+      "bytes_read": 122880,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 31002999,
+      "motif": "open read+ close",
+      "ops": 32,
+      "repeats": {
+       "read+": {
+        "buckets": [
+         [
+          28,
+          1
+         ]
+        ],
+        "max": 30,
+        "mean": 30.0,
+        "n": 1
+       }
+      },
+      "template": 0,
+      "think": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "units": 1
+     }
+    ]
+   }
+  ],
+  "notes": {},
+  "open": [
+   {
+    "ask": "Are the offsets read spread evenly over the file, or do a few parts of it take most of the reads?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a skewed spread keeps a hot set in the page cache at scale; a uniform one does not"
+    },
+    "candidates": [
+     "uniform",
+     "skewed"
+    ],
+    "divergence": 0.0,
+    "question": "skew",
+    "rank": 1,
+    "settles": "50 or more reads (30 seen): the share the top tenth of the offsets takes against a uniform spread's",
+    "site": 0
+   },
+   {
+    "ask": "Does this file fit in memory at the scale the application runs, so that reads after the first hit the page cache, or does it exceed it?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a file that fits is read from storage once; one that exceeds memory is read from storage at every query"
+    },
+    "candidates": [
+     "fits",
+     "exceeds"
+    ],
+    "divergence": 0.0,
+    "question": "memory",
+    "rank": 2,
+    "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+    "site": 0
+   },
+   {
+    "ask": "Does each read's offset depend on what the previous read returned (a graph walk, a tree descent), or are the offsets independent of one another?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "a dependent walk is a chain of reads each waiting on the last; independent offsets can be issued together"
+    },
+    "candidates": [
+     "dependent",
+     "independent"
+    ],
+    "divergence": 0.0,
+    "question": "dependency",
+    "rank": 3,
+    "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+    "site": 0
+   }
+  ],
+  "ops": 32,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [],
+  "root": "/d",
+  "sites": [
+   {
+    "dependency": {
+     "consistent": [
+      "dependent",
+      "independent"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+     "verdict": "undecided"
+    },
+    "distinct": 1,
+    "distinct_offsets": 29,
+    "kind": "within",
+    "memory": {
+     "consistent": [
+      "fits",
+      "exceeds"
+     ],
+     "refuted": {},
+     "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "requests": null,
+     "size": null
+    },
+    "reads": 30,
+    "reuse_share": 0.033333333333333326,
+    "runs": {
+     "buckets": [
+      [
+       1,
+       28
+      ],
+      [
+       2,
+       1
+      ]
+     ],
+     "max": 2,
+     "mean": 1.0344827586206897,
+     "n": 29
+    },
+    "skew": {
+     "consistent": [
+      "uniform",
+      "skewed"
+     ],
+     "refuted": {},
+     "settles": "50 or more reads (30 seen): the share the top tenth of the offsets takes against a uniform spread's",
+     "top_10pct_share": 0.13333333333333333,
+     "uniform_share": 0.2720586140437806,
+     "verdict": "undecided"
+    },
+    "span": 806912,
+    "template": 0,
+    "touches": 1
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 122880,
+    "bytes_written": 0,
+    "fields": [],
+    "id": 0,
+    "offsets": {
+     "positioned": 1
+    },
+    "opens": 1,
+    "ops": {
+     "close": 1,
+     "open": 1,
+     "read": 30
+    },
+    "paths": 1,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       30
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 30
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       28,
+       1
+      ]
+     ],
+     "max": 29,
+     "mean": 29.0,
+     "n": 1
+    },
+    "template": "sift_disk.index",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ]
+ }
+}

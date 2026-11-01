@@ -1,0 +1,278 @@
+{
+ "doc": {
+  "aeiou_digest": 1,
+  "application": {
+   "blind_spots": [],
+   "display": "PyTorch Distributed Checkpoint",
+   "exact": true,
+   "name": "pytorch-dcp",
+   "options": {
+    "single_file_per_rank": "one file per item",
+    "sync_files": "fsync on"
+   },
+   "record": "2.14",
+   "version": "2.14.1"
+  },
+  "asserted": [
+   {
+    "answer": "per-path",
+    "at": "2026-10-31T23:20:34+00:00",
+    "by": "PyTorch Distributed Checkpoint 2.14 record, read 2026-10-29 (high confidence)",
+    "note": "a rank's shard holds the bytes of its plan's items; the bytes are a property of the file, the same at every load",
+    "question": "size",
+    "site": 0,
+    "source": "workloads/checkpointing/dcp-load/kit/params.py (the plan read from .metadata)",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   },
+   {
+    "answer": "unknown",
+    "at": "2026-10-31T23:20:34+00:00",
+    "by": "curtis@DESKTOP-JS4EFLH",
+    "question": "selection",
+    "site": 0,
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   },
+   {
+    "answer": "unknown",
+    "at": "2026-10-31T23:20:34+00:00",
+    "by": "curtis@DESKTOP-JS4EFLH",
+    "question": "order",
+    "site": 0,
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   }
+  ],
+  "contexts": 1,
+  "lanes": [
+   {
+    "lane": 0,
+    "ops": 16,
+    "phases": [
+     {
+      "bytes_read": 24576,
+      "bytes_written": 0,
+      "first": 0,
+      "last": 42004109,
+      "motif": "open fstat read close",
+      "ops": 16,
+      "repeats": {},
+      "template": 0,
+      "think": {
+       "buckets": [
+        [
+         8388608,
+         3
+        ]
+       ],
+       "max": 9994984,
+       "mean": 9994983.666666666,
+       "n": 3
+      },
+      "units": 4
+     }
+    ]
+   }
+  ],
+  "notes": {
+   "rejected_answers": 1
+  },
+  "open": [
+   {
+    "answered": "unknown",
+    "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+    "at_scale": {
+     "choose": {
+      "never_read_share": 0.36787944117144233,
+      "repeat_share": 0.36787944117144233
+     },
+     "consume": {
+      "never_read_share": 0.0,
+      "repeat_share": 0.0
+     },
+     "epochs": 1,
+     "measure": "share of the set never read; share of touches that re-read a path"
+    },
+    "candidates": [
+     "consume",
+     "choose"
+    ],
+    "divergence": 0.36787944117144233,
+    "question": "selection",
+    "rank": 1,
+    "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 4 candidates refutes a draw with replacement (no repeat in 4 touches would have probability below 0.05)",
+    "site": 0
+   },
+   {
+    "answered": "unknown",
+    "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+    "at_scale": {
+     "epochs": 1,
+     "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+    },
+    "candidates": [
+     "sequential",
+     "permuted"
+    ],
+    "divergence": 0.0,
+    "question": "order",
+    "rank": 2,
+    "settles": "at least 8 consecutive touches within one pass",
+    "site": 0
+   }
+  ],
+  "ops": 16,
+  "projection": {
+   "candidates": null,
+   "epochs": 1
+  },
+  "rejected": [
+   {
+    "answer": "checkpoint",
+    "by": "PyTorch Distributed Checkpoint 2.14 record, read 2026-10-29 (high confidence)",
+    "note": "the shards are a training job's state, saved to survive a failure and loaded to resume",
+    "question": "label",
+    "source": "https://docs.pytorch.org/docs/stable/distributed.checkpoint.html",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+    "why": "no such question for a set site: selection, size, order"
+   }
+  ],
+  "root": "/d",
+  "sites": [
+   {
+    "distinct": 4,
+    "epochs": [
+     4
+    ],
+    "kind": "set",
+    "order": {
+     "ascending": 1.0,
+     "asserted": {
+      "answer": "unknown",
+      "at": "2026-10-31T23:20:34+00:00",
+      "by": "curtis@DESKTOP-JS4EFLH"
+     },
+     "pairs": 3,
+     "settles": "at least 8 consecutive touches within one pass",
+     "step_of_one": 1.0,
+     "verdict": "undecided"
+    },
+    "phase": null,
+    "projection": {
+     "asserted": [],
+     "candidates": null,
+     "passes": 1
+    },
+    "selection": {
+     "asserted": {
+      "answer": "unknown",
+      "at": "2026-10-31T23:20:34+00:00",
+      "by": "curtis@DESKTOP-JS4EFLH"
+     },
+     "candidates_for_choose": 4,
+     "consistent": [
+      "consume",
+      "choose"
+     ],
+     "consume": {
+      "epoch": 4
+     },
+     "refuted": {},
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 4 candidates refutes a draw with replacement (no repeat in 4 touches would have probability below 0.05)",
+     "verdict": "undecided"
+    },
+    "size": {
+     "asserted": {
+      "answer": "per-path",
+      "at": "2026-10-31T23:20:34+00:00",
+      "by": "PyTorch Distributed Checkpoint 2.14 record, read 2026-10-29 (high confidence)",
+      "note": "a rank's shard holds the bytes of its plan's items; the bytes are a property of the file, the same at every load"
+     },
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "verdict": "undecided"
+    },
+    "template": 0,
+    "touches": 4
+   }
+  ],
+  "source": "strace",
+  "templates": [
+   {
+    "bytes_read": 24576,
+    "bytes_written": 0,
+    "fields": [
+     {
+      "kind": "int",
+      "max": 2,
+      "min": 1,
+      "name": "a",
+      "values": 2,
+      "width": 6
+     },
+     {
+      "kind": "int",
+      "max": 1,
+      "min": 0,
+      "name": "b",
+      "values": 2,
+      "width": null
+     },
+     {
+      "kind": "int",
+      "max": 0,
+      "min": 0,
+      "name": "c",
+      "values": 1,
+      "width": null
+     }
+    ],
+    "id": 0,
+    "offsets": {
+     "whole": 4
+    },
+    "opens": 4,
+    "ops": {
+     "close": 4,
+     "fstat": 4,
+     "open": 4,
+     "read": 4
+    },
+    "paths": 4,
+    "read_size": {
+     "buckets": [
+      [
+       4096,
+       2
+      ],
+      [
+       8192,
+       2
+      ]
+     ],
+     "max": 8192,
+     "mean": 6144.0,
+     "n": 4
+    },
+    "runs_per_open": {
+     "buckets": [
+      [
+       1,
+       4
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 4
+    },
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+    "write_size": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  ],
+  "trace": "/tmp/pytest-of-curtis/pytest-98/test_cli_states_the_applicatio0/t.txt",
+  "trace_sha256": "a1c52e89aef29865a39cdee1a7062bb1b5e5060ed16bb91cb1a020025f6f08b2"
+ },
+ "want": "digest of /tmp/pytest-of-curtis/pytest-98/test_cli_states_the_applicatio0/t.txt: 16 ops on 1 lane(s) under /d; 1 path template(s), 1 site(s), 2 open question(s), 3 asserted, 1 rejected\ntemplates:\n    0  ckpt/step_{a:06}/__{b}_{c}.distcp  4 paths, 4 opens; ops open 4, fstat 4, read 4, close 4; read 24.0 KiB (request p50 4.0 KiB); offsets whole 4\n       a: int, width 6, 2 value(s) 1..2\n       b: int, no fixed width, 2 value(s) 0..1\n       c: int, no fixed width, 1 value(s) 0..0\nlanes:\n  lane 0: 16 ops\n    phase 1  open fstat read close x4 on template 0; think p50 8.4 ms; read 24.0 KiB\nsites:\n  site 0 (template 0): 4 touches of 4 paths, passes [4]\n    selection: undecided - consume or choose (a draw needs a corpus of at least 4); settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 4 candidates refutes a draw with replacement (no repeat in 4 touches would have probability below 0.05); asserted unknown\n    order: undecided (ascending 1.00 of 3 pairs, step of one 1.00); asserted unknown\n    size: undecided; settles: a repeat of a path: the same bytes again is a size per path, other bytes a draw per open; asserted per-path\nopen questions (projected over 1 pass(es)):\n  1. site 0 selection: consume | choose; divergence 0.368; answered: unknown\n     ask: Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?\n     settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 4 candidates refutes a draw with replacement (no repeat in 4 touches would have probability below 0.05)\n     at 1 pass(es): never read 0.368 under choose, 0.000 under consume; re-reads 0.368 and 0.000 of the touches\n  2. site 0 order: sequential | permuted; divergence 0.000; answered: unknown\n     ask: Within a pass, does the application take the files in their sorted order, or in a shuffled one?\n     settles: at least 8 consecutive touches within one pass\n     at scale: the op multiset is the same; the order within a pass differs, which read-ahead sees\napplication: PyTorch Distributed Checkpoint 2.14.1; record 2.14\n  single_file_per_rank: one file per item\n  sync_files: fsync on\nasserted:\n  site 0 size: per-path (a rank's shard holds the bytes of its plan's items; the bytes are a property of the file, the same at every load); by PyTorch Distributed Checkpoint 2.14 record, read 2026-10-29 (high confidence), 2026-10-31T23:20:34+00:00\n  site 0 selection: unknown; by curtis@DESKTOP-JS4EFLH, 2026-10-31T23:20:34+00:00\n  site 0 order: unknown; by curtis@DESKTOP-JS4EFLH, 2026-10-31T23:20:34+00:00\nrejected:\n  ckpt/step_{a:06}/__{b}_{c}.distcp label checkpoint: no such question for a set site: selection, size, order\n"
+}

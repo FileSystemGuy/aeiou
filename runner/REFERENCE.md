@@ -85,8 +85,10 @@ aeiou/src/
                positions, instances, the metrics document of a trace (`builder/REFERENCE.md` §7)
   export.rs    `aeiou-trace export`: the trace file in two passes, and the metrics of an exported file
   objectlog.rs a MinIO audit or S3 server access log read as the object engine's calls
-  bin/aeiou_trace.rs  the `aeiou-trace` binary; `compare` and `digest` run the Python package's
-               until ported (`DESIGN_REVIEW.md` §3.89)
+  digest.rs    `aeiou-trace digest`: templates, lanes and phases, sites and their verdicts, the
+               answers applied, the metrics of the same calls, the text report (`aeiou_digest: 2`)
+  bin/aeiou_trace.rs  the `aeiou-trace` binary; `compare`, and the digest's interview and
+               application records, run the Python package's until ported (`DESIGN_REVIEW.md` §3.89)
   options.rs   the option layers (§14)
   usage.rs     the usage-error frame (§15)
   main.rs      the CLI

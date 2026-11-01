@@ -1,0 +1,9 @@
+{
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": null
+ },
+ "error": "not an aeiou_trace: 1 file",
+ "input": "trace-2bf00f0a.in"
+}
