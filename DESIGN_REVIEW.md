@@ -8454,6 +8454,65 @@ read from the values' spans, as Python's dicts kept it. Python keeps `digest.py`
 its tests of the analysis until stage 5. Next, stage 4: `compare` over two version-2
 documents, and `dry-run --emit-trace`.
 
+### 3.90 Two audiences, two tool suites, and the digest between them (the user's reasoning, 2026-10-31)
+
+Raised while placing a trace's phases in the catalog (brief item 51), where the user asked for a
+trace to be described in prose before any abstract is fitted to it, and explained why. Recorded
+as the reason the trace-side tools of items 47 to 52 exist beside the runner, and as the test
+each of them is held to.
+
+**The user's account.** The library of abstracts serves a benchmark engineer, who picks which
+workload to simulate and runs it. The trace work of the last items overlaps it as a Venn
+diagram does: it serves a researcher who wants to understand an application and may have no
+interest in running an abstract. A prose description of a trace, made from the trace, has value
+apart from the runner; transforming a trace into a digest and back with little loss supports
+insight into and characterization of the application; a 2 GB trace turned into a description
+of a few hundred characters is data compression for humans. A digest turned into a fitted
+abstract (an abstract and a parameter file) lets a benchmark engineer recreate the
+application's I/O without the application. Whoever makes a digest gets part of the value,
+perhaps all they want; turning it into an abstract gets more, for whoever wants it. And a digest
+separates interests: an owner who will not publish a trace, since it holds private information
+such as file names, may publish a digest, from which a benchmarking organization recreates the
+I/O pattern of the now anonymous application.
+
+**How the parts line up (this side's assessment, discussed with the user the same day).** The
+digest is the shared document, and what is built already supports both audiences: the stage-4
+comparison (§3.89) reads documents and never traces, so a fit is checked against a published
+digest alone; version 2 carries the metrics of the same calls, under the runner's definitions,
+beside the structure, so one document serves the prose and the fit; what the trace cannot
+decide is marked open and the owner's answers travel in the document with their provenance; the
+application records let an owner answer from a list. Five links are not yet aligned:
+
+1. *The digest is not anonymous.* `trace`, `root`, `by`, the answers' notes, `--paths`, and the
+   literals of every path template survive into it. The publication workflow rests on a
+   redaction that keeps the structure a fit needs and lists what remains: brief item 53, queued.
+2. *"Back" goes through the abstract.* A digest is lossy by design (templates, histograms, open
+   questions); the way back is a fitted abstract and `dry-run --emit-trace`, a trace equivalent
+   under the digest, never the original. "Little loss" has an operational definition: the
+   stage-4 comparison of the emitted trace's digest with the original passes, structure equal
+   and numbers within the tolerance classes. Stage 4 is what makes the round trip real.
+3. *One vocabulary for both descriptions.* The catalog's words for a measured stream ("medium
+   (16 MiB)", "read-only", "uniform (4.1%)") come from the thresholds in
+   `workloads/attributes.toml`; a trace's prose (item 51, part 3) must use the same thresholds,
+   so a researcher can set a trace's description beside a case's and compare them line by line.
+   The binary does not carry that file today; it would be built in as the application records
+   are (§3.89 stage 3).
+4. *Prose does not go back to a digest.* The prose is for people; for them "back" is the digest.
+   In the compression analogy, the digest is the compressed file and the prose its table of
+   contents.
+5. *Two meanings of "phase"*: the catalog's attribute (a system's stage of life) and a regime
+   within one run (item 51, part 2, a rename).
+
+Links beside these, not in the user's account: the data's content, which a trace never shows
+(compressibility and dedupe ratios), so an owner who publishes no data would publish ratios
+measured locally on a sample beside the digest (`aeiou-params` already reads real shards); the
+`trace` node, a third route for whoever holds the trace and needs the traced scale exactly,
+unpublishable since it holds the paths, and the ground truth for a fit at that scale (§3.85);
+provenance, a case fitted from a published digest naming it by hash in its capture records, so
+digest, case, lock, and results chain without the trace (stage 5, when the committed captures
+are rewrapped, could make them digests); and items 52 and 49, all-rank traces and object-store
+logs, both reaching both audiences through the one document.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

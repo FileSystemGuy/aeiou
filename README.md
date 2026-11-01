@@ -14,6 +14,34 @@ in it is named for MLPerf, and what is specific to the working group's process i
 one place (`PROJECT_BRIEF.md` §8) so that any other user, a storage vendor's QA, a
 filesystem developer, a researcher, can ignore it.
 
+## Two audiences, two tool suites
+
+aeiou serves two people, whose needs overlap like a Venn diagram, and has a suite of tools for
+each, with one document between them (`DESIGN_REVIEW.md` §3.90).
+
+- **The benchmark engineer** wants to recreate an application's I/O on a storage system,
+  without the application. The suite is the runner (`aeiou`), the builder (`aeiou-build`,
+  `aeiou-params`), and the catalog of workloads (`aeiou-catalog`, `workloads/CATALOG.md`): pick
+  a workload, set its sizes, generate its dataset, run it, and compare the results across
+  systems.
+- **The researcher** wants to understand an application from a trace of it and may never run
+  anything. The suite is `aeiou-trace`: the trace's locality metrics (`metrics`), and its
+  **digest** (`digest`), which reduces a trace of gigabytes to its path templates, its lanes and
+  their phases, a verdict per site on what the trace decides (a permutation pass or a draw, a
+  keyed store, a checkpoint's saves), the questions the trace cannot decide, asked of its owner
+  and recorded as their answers, and the metrics of the same calls.
+
+The **digest** is where the two meet. A researcher may want nothing more from a trace. A
+benchmark engineer fits an abstract and a parameter file to a digest, and the fit is checked
+against the digest alone, never the trace. That separates interests: an owner who will not
+publish a trace, since it names their files, may publish its digest, and a benchmarking
+organization recreates the I/O of the now anonymous application from it. Built today: the
+digest, its questions, and the application records it answers from. To come: the comparison
+of a fitted abstract's run with a digest, structure and numbers (`DESIGN_REVIEW.md` §3.89 stage
+4); a trace described in prose, in the catalog's own words, before any abstract is fitted
+(`PROJECT_BRIEF.md` §6 item 51); and the redaction that makes a digest safe to publish (item
+53).
+
 ## Where to start
 
 Pick the row that matches what you have; each path is spelled out below.
@@ -24,10 +52,12 @@ Pick the row that matches what you have; each path is spelled out below.
 | A job like a shipped workload, at other sizes | The shipped workload at your job's sizes | **B** | the runner, `aeiou-params` |
 | An application not yet modeled | An abstract of it that scales and compares | **C** | `strace`, the builder, analysis (a person, or Claude) |
 | An application and one capture of it | That capture played back exactly, as soon as possible | **D** | `strace`, `aeiou-trace` |
+| A trace of an application | To understand what it does, without running anything | **E** | `strace`, `aeiou-trace` |
 
 **What the tools do and do not do.** `aeiou-build` does not read traces: it compiles a Python
 builder script, which someone wrote, into an abstract. `aeiou-trace` measures an `strace`
-(`metrics`), judges an abstract against it (`compare --judge`), and exports it for literal
+(`metrics`), digests it into what the trace decides and what its owner must answer (`digest`,
+path E), judges an abstract against it (`compare --judge`), and exports it for literal
 playback (`export`). Nothing in the suite turns a trace into a builder script: recognizing
 the application's loops, its datasets and how it reads them, what it draws at random, and
 which calls depend on which is analysis, done by a person or by asking Claude (Claude Code)
@@ -116,6 +146,22 @@ It is that one capture and nothing more: one process on one host, at the sizes i
 traced at, in the order that day's timing produced, and never CLOSED, so it is not a
 result to compare across systems. It is a quick check of a storage system against an
 application, and a reference to run beside path C's abstract; it does not replace it.
+
+**E. Understand an application from its trace.** Capture the strace as in path C, step 2, then
+digest it:
+
+```
+aeiou-trace digest trace.txt --root /mnt/data -o trace.digest.json
+```
+
+On a terminal the digest first asks what the trace cannot decide: which application it is
+(guessed from its paths and the records under `applications/`), the few options of it that
+change its storage workload, and then, per site, facts such as how many files of a kind exist
+at full scale and questions such as whether a set is read once per pass or drawn at random,
+each with "don't know" among the answers. It prints a report of what it found and writes the
+document, with the answers beside it as `trace.answers.json`, so the same trace and answers
+give the same digest again with no questions asked. The digest is also where path C starts: an
+abstract is fitted to it.
 
 ## Why another benchmark
 
@@ -529,7 +575,9 @@ Not built, in rough order of interest:
   Python and the records built into it, held to every interview the Python's tests ran, recorded
   first. To build next: the comparison over version-2 documents and `dry-run --emit-trace` (stage 4);
   `aeiou-catalog disclose`, every string
-  and number a contribution would publish (item 47); a fitting skill in the open skill format
+  and number a contribution would publish (item 47); a digest redacted for publication, its
+  path literals tokenized and its owner's names dropped (item 53, queued 2026-10-31); a trace's
+  phases in the catalog, measured per phase and described in prose from its digest (item 51); a fitting skill in the open skill format
   over those tools and `aeiou-fit`, evaluated against the committed captures, beside a written
   procedure for the same work without an LLM (item 48).
 - The case for calling aeiou a "scalable trace" (raised by the user 2026-10-28, §3.85): the

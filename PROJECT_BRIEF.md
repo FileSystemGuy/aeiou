@@ -1052,7 +1052,22 @@ numbers; the order is this note's.
     partition passes, shard builds, merge, disk layout) the abstract already models; KV cache:
     warm-up (a drift, so no phase), the local tier filling so every write evicts (abrupt and
     one-way, so sequential), and the model load and engine start; RAG: periodic re-ingestion
-    and re-indexing.
+    and re-indexing. *Phases in the catalog (agreed with the user 2026-10-31):* a phase item 51
+    finds is in the trace's digest; it reaches a case's description (`DESCRIPTION.md`,
+    `CATALOG.md`) through the abstract's `phase` nodes, which `describe` already renders ("in
+    phase `restore`, ..."), once a fit models it. Three parts beside the detection, the first
+    two for the accuracy of the abstract: (1) per-phase measured lines, the bytes, op mix, and
+    request sizes of each phase and a periodic phase's period and duty, where a description
+    today gives one "Measured by dry run" line over the whole run, which averages a training
+    job's epoch reads with its checkpoint bursts; this needs the dry run's metrics split by
+    phase, which the runner does not do yet; (2) the catalog's `phase` attribute
+    (`workloads/attributes.toml`: `training`, `inference`, `indexing`, `preparation`,
+    `production`, when in a system's life a mechanism's I/O happens) renamed (`stage` or
+    `lifecycle`, to choose) before a description puts both on one line, the records and docs
+    that use it with it; (3) a trace described in prose from its digest, in the catalog beside a
+    capture's "Traced: ..." line, before any abstract is fitted to it, since describing a trace
+    has value of its own (the user's reasoning, 2026-10-31: a researcher who wants to understand
+    an application and has no interest in running an abstract gets that from the trace alone).
 
 52. **All-rank traces of a scale-out run (raised by the user 2026-10-30, queued, not started).**
     Ground truth for a distributed application is every rank's trace at once, aligned on
@@ -1084,6 +1099,29 @@ numbers; the order is this note's.
     digests compared; a structural difference (a per-node template, another site kind, other
     counts) shows the application depends on topology, which a single-node trace hides, and
     none supports the rank-only model for that application. Two nodes are enough for it.
+
+53. **A digest redacted for publication (queued by the user 2026-10-31, not started;
+    `DESIGN_REVIEW.md` §3.90).** An owner who will not publish a trace, since it names their
+    files, may publish its digest, from which a benchmarking organization fits an abstract; so
+    a published digest must carry the structure a fit needs and nothing that identifies the
+    owner's data. Today's digest is not that: `trace` (the trace file's path), `root`, `by`
+    (`user@host` by default), every free-text `note` of the answers, the raw paths under
+    `--paths`, and the literal text between the fields of every path template (a project's,
+    a user's, a dataset's name) all survive into it. The item: a redaction mode of `aeiou-trace
+    digest` (or a subcommand over a written digest) that replaces each template's literals with
+    tokens consistent across the document (so two templates that share a directory still share
+    it), keeps the field kinds and widths, the site kinds, every verdict, fact, and number;
+    drops or generalizes `trace`, `root`, `by`, and the notes (the owner's choice per field, a
+    note kept only when asked); keeps `trace_sha256` only on request (it links the digest to a
+    trace the owner holds, which may be wanted); and lists everything that remains, every
+    string and number, as item 47's `aeiou-catalog disclose` does for an abstract. A test holds
+    that no raw path string of the trace survives in a redacted digest and that a fit's inputs
+    (stage 4's `compare` of the digest against a run's) are unchanged by the redaction.
+    Questions to settle: whether a template's literal that names a well-known format or
+    framework (`.distcp`, `.safetensors`, `.npz`) is kept, since the application records match
+    on it and it is not the owner's; whether timings (think time, a save's interval) can
+    identify an owner; and the application's identity, which a record match adds and an owner
+    may still want left out.
 
 ## 7. Environment
 
