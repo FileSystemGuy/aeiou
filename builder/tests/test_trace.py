@@ -21,9 +21,10 @@ BUILDER = HERE.parent
 ROOT = BUILDER.parent
 sys.path.insert(0, str(BUILDER))
 
+import aeiou  # noqa: E402
 from aeiou import catalog, trace  # noqa: E402
 from aeiou.nodes import BuildError  # noqa: E402
-from aeiou.trace import LogHist, compare  # noqa: E402
+from aeiou.trace import LogHist  # noqa: E402
 
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 TRACE_BIN = pathlib.Path(os.environ.get("AEIOU_TRACE") or RUNNER.with_name("aeiou-trace"))
@@ -35,9 +36,8 @@ pytestmark = pytest.mark.skipif(not TRACE_BIN.exists(), reason="needs the runner
 
 
 def tool(args, stdin=None):
-    """`aeiou-trace` with `args`; `compare` and `digest` run this package through it."""
-    env = {**os.environ, "AEIOU_PYTHON": sys.executable, "PYTHONPATH": str(BUILDER)}
-    return subprocess.run([str(TRACE_BIN), *map(str, args)], input=stdin, capture_output=True, text=True, env=env)
+    """`aeiou-trace` with `args`."""
+    return subprocess.run([str(TRACE_BIN), *map(str, args)], input=stdin, capture_output=True, text=True)
 
 
 def cli(args):
@@ -66,6 +66,20 @@ def metrics_of(lines, roots, block=None, exclude=(), cwd=None, instance_roots=()
     d = json.loads(r.stdout)
     d.pop("trace")
     return d
+
+
+def compare(a, b):
+    """The rows of `aeiou-trace compare --json` of two documents' numbers (`total`s, or two actor
+    templates'): `(metric, a, b, distance)`; a refusal as a `BuildError` in the binary's words."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="aeiou-compare-") as d:
+        pa, pb = pathlib.Path(d, "a.json"), pathlib.Path(d, "b.json")
+        pa.write_text(json.dumps({"aeiou_metrics": 2, "total": a}))
+        pb.write_text(json.dumps({"aeiou_metrics": 2, "total": b}))
+        r = tool(["compare", pa, pb, "--json"])
+    if r.returncode:
+        raise BuildError(r.stderr.strip().removeprefix("aeiou-trace compare: "))
+    return [(x["metric"], x["a"], x["b"], x["distance"]) for x in json.loads(r.stdout)["rows"]]
 
 
 def metrics_of_export(lines):
@@ -113,7 +127,7 @@ def test_loghist_is_the_runners():
     h = LogHist()
     for v in range(1, 101):
         h.add(v * 4096)
-    assert trace._quantile(h.out(), 0.5) == 48 * 4096 and h.max == 100 * 4096
+    assert h.max == 100 * 4096
 
 
 # DESIGN_REVIEW.md §3.79, as `tests/metrics.rs`'s `extents_by_hand`: a 1 MiB file read in four
@@ -315,12 +329,11 @@ def test_compare_distances(tmp_path, capsys):
     # two of six requests moved from the 4096 bucket to the 8192 one
     assert rows["request size, read (p50 / p90 / p99)"][3] == pytest.approx(2 / 6)
     assert rows["mix: reads / data ops"][3] == 0.0
-    assert trace._tv_distance({4: 3, 2: 1}, {4: 1, 2: 1}) == pytest.approx(0.25)
     pa, pb = tmp_path / "a.json", tmp_path / "b.json"
     pa.write_text(json.dumps(a))
     pb.write_text(json.dumps(b))
-    assert trace.main(["compare", str(pa), str(pb)]) == 0
-    assert trace.main(["compare", str(pa), str(pb), "--max-distance", "0.1", "--only", "request size"]) == 1
+    assert cli(["compare", str(pa), str(pb)]) == 0
+    assert cli(["compare", str(pa), str(pb), "--max-distance", "0.1", "--only", "request size"]) == 1
     assert "largest distance 0.333" in capsys.readouterr().out
 
 
@@ -337,8 +350,6 @@ def test_compare_takes_the_sections_both_documents_have(tmp_path, capsys):
     assert not any(n.startswith(("reuse", "popularity, blocks")) for n in both)
     legacy = names(old, blk)
     assert "reuse: read after read / block reads" in legacy and not any(n.startswith("extent") or n.startswith("popularity, bytes") for n in legacy)
-    assert trace.tolerance_class("extent reuse distance, read after read (p50 / p90 / p99)") == "extent reuse distance"
-    assert trace.tolerance_class("extent reuse: partial re-reads / bytes read again") == "extent reuse"
     with pytest.raises(BuildError, match="no locality metrics in common"):
         compare(old["total"], ext["total"])
     # two block sizes are refused where only the blocks are in common
@@ -346,9 +357,9 @@ def test_compare_takes_the_sections_both_documents_have(tmp_path, capsys):
     pa.write_text(json.dumps(old))
     pb.write_text(json.dumps(total(BY_HAND, block=8192)))
     pc.write_text(json.dumps({**total(BY_HAND, block=8192), "block": 8192}))
-    assert trace.main(["compare", str(pa), str(pb)]) == 1
+    assert cli(["compare", str(pa), str(pb)]) == 1
     assert "block sizes differ (4096 and 8192)" in capsys.readouterr().err
-    assert trace.main(["compare", str(pb), str(pc)]) == 0
+    assert cli(["compare", str(pb), str(pc)]) == 0
 
 
 def _strace_works():
@@ -482,8 +493,7 @@ def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
     rows = compare(t, d)
     assert max(r[3] for r in rows if r[3] is not None) <= 0.06, rows
 
-    assert subprocess.run([sys.executable, "-m", "aeiou.trace", "compare", str(tmp_path / "absent.json"), str(dry)],
-                          capture_output=True, text=True, cwd=BUILDER).stderr.startswith("aeiou-trace compare: ")
+    assert tool(["compare", tmp_path / "absent.json", dry]).stderr.startswith("aeiou-trace compare: ")
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
@@ -826,47 +836,6 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
 
 
 
-def test_judge_classes_spread_and_the_tolerance_file(tmp_path):
-    """The rule of `compare --judge`: a row is within when its distance is at most its
-    class's tolerance plus what the abstract differs from itself by at other seeds."""
-    assert trace.tolerance_class("reuse distance, read after read (p50 / p90 / p99)") == "reuse distance"
-    assert trace.tolerance_class("reuse: first touches / block reads") == "reuse"
-    assert trace.tolerance_class("ops: read / all ops") == "ops"
-    pop = {"distinct": 5000, "accesses": 1, "max": 1, "top_0_1_pct": 0.001, "top_1_pct": 0.01, "top_10_pct": 0.1, "counts": []}
-    a, b = {"popularity_blocks": pop, "popularity_objects": {**pop, "distinct": 50}}, {"popularity_blocks": pop, "popularity_objects": pop}
-    rows = [
-        ("mix: reads / data ops", "", "", 0.04),
-        ("request size, read (p50 / p90 / p99)", "", "", 0.06),
-        ("reuse distance, read after read (p50 / p90 / p99)", "", "", 0.25),
-        ("popularity, blocks: accesses to the top 0.1 %", "", "", 0.9),    # 5 blocks: says nothing
-        ("popularity, blocks: accesses to the top 1 %", "", "", 0.01),     # 50 blocks
-        ("popularity, objects: accesses to the top 10 %", "", "", 0.9),    # 5 objects on one side
-        ("fan-out", "none", "", 1.0),
-        ("depth", "none", "", 1.0),
-        ("run length, write, ops (p50 / p90 / p99)", "none", "none", None),
-    ]
-    verdicts = lambda j: [r[5] for r in j]
-    j, stale = trace.judge(rows, a, b)
-    assert verdicts(j) == ["ok", "outside", "outside", "not judged", "ok", "not judged", "outside", "outside", "not judged"] and not stale
-    assert j[0][4] == 0.05 and j[2][4] == 0.10
-    # a trace read without --chain-gap-us has no depth to judge
-    j, _ = trace.judge(rows, a, b, docs=[{"source": "strace", "chain_gap_us": None}, {"source": "dry-run"}])
-    assert verdicts(j)[7] == "not judged"
-    spec = {"aeiou_tolerances": 1, "tolerances": {"request size": 0.07},
-            "unseen": [{"metric": "fan-out", "reason": "threads"}, {"metric": "ops: mkdir", "reason": "no such row"}],
-            "outside": [{"metric": "reuse distance, read after read", "reason": "known"}, {"metric": "mix: reads", "reason": "was"}]}
-    j, stale = trace.judge(rows, a, b, spec=spec)
-    assert verdicts(j)[:3] == ["ok", "ok", "outside"] and j[2][6] == "known" and (j[6][5], j[6][6]) == ("unseen", "threads")
-    assert len(stale) == 2 and "ops: mkdir" in stale[0] and "mix: reads" in stale[1]
-    f = tmp_path / "t.json"
-    f.write_text(json.dumps(spec))
-    assert trace.load_tolerances(str(f)) == spec
-    for bad in ({"aeiou_tolerances": 2}, {**spec, "waive": []}, {**spec, "tolerances": {"sizes": 0.1}}, {**spec, "unseen": [{"metric": "x"}]}):
-        f.write_text(json.dumps(bad))
-        with pytest.raises(BuildError):
-            trace.load_tolerances(str(f))
-
-
 # Every traced pair under the default tolerances (`DESIGN_REVIEW.md` §3.55): the trace's
 # metrics, the abstract, the fitted parameters, `--gpus`, and the verdict. A pair's
 # tolerance file, beside its trace document, names the rows the trace cannot show and
@@ -903,7 +872,7 @@ def test_capture_pair_against_the_tolerances(tmp_path, capsys, capture, which, a
         assert p.returncode == 0, err
     spec = capture / f"{which}.tolerances.json"
     args = ["compare", str(capture / f"{which}.metrics.json"), str(docs[0]), *[x for d in docs[1:] for x in ("--self", str(d))]]
-    rc = trace.main(args + (["--tolerances", str(spec)] if spec.exists() else ["--judge"]))
+    rc = cli(args + (["--tolerances", str(spec)] if spec.exists() else ["--judge"]))
     out = capsys.readouterr().out.splitlines()
     assert out[-1].startswith(verdict + ": "), out[-1]
     assert rc == (0 if verdict == "accepted" else 1)
@@ -1208,8 +1177,7 @@ def test_a_cut_iovec_list_takes_the_bytes_the_call_moved():
 # exit 1, never a traceback; two rules for `compare` are a usage error, exit 2, before any
 # work; `-` is UTF-8 whatever the locale, and a message the console cannot spell is escaped
 def _trace_tool(*args, env=None, stdin=None):
-    env = {**(os.environ if env is None else env), "AEIOU_PYTHON": sys.executable, "PYTHONPATH": str(BUILDER)}
-    return subprocess.run([str(TRACE_BIN), *map(str, args)], capture_output=True, cwd=BUILDER, env=env, input=stdin)
+    return subprocess.run([str(TRACE_BIN), *map(str, args)], capture_output=True, cwd=BUILDER, env=os.environ if env is None else env, input=stdin)
 
 
 UNICODE_TRACE = """
@@ -1441,7 +1409,7 @@ def test_compare_describes_the_metrics_of_an_exported_trace(tmp_path, capsys):
     assert cli(["export", str(st), "--root", "/d", "-o", str(exported)]) == 0
     assert cli(["metrics", str(exported), "-o", str(m)]) == 0
     capsys.readouterr()
-    assert trace.main(["compare", str(m), str(m)]) == 0
+    assert cli(["compare", str(m), str(m)]) == 0
     out = capsys.readouterr().out
     assert out.startswith(f"A: {m}: trace file {exported} of /d (order: completion; 1 instance(s), 1 lane(s))\n"), out
     assert "None" not in out
@@ -1453,25 +1421,47 @@ def test_a_bound_that_is_not_a_finite_non_negative_number_is_a_usage_error(tmp_p
     """(RC1 review, R62) `--max-distance nan` passed every row, and a negative bound was taken."""
     st = tmp_path / "t.st"
     st.write_text(SEQUENTIAL.strip() + "\n")
-    cmd = "compare" if flag == "--max-distance" else "metrics"
+    cmd, metavar = ("compare", "X") if flag == "--max-distance" else ("metrics", "US")
     args = [str(st), str(st)] if cmd == "compare" else [str(st), "--root", "/d"]
-    if cmd == "compare":
-        assert trace.main([cmd, *args, f"{flag}={value}"]) == 2
-        err = capsys.readouterr().err
-        assert err.startswith(f"aeiou-trace {cmd}: argument {flag}: invalid non-negative number value: '{value}'\n\nUsage: aeiou-trace {cmd} "), err
-    else:
-        # the binary's parser, in its own words (runner/REFERENCE.md §15)
-        assert cli([cmd, *args, f"{flag}={value}"]) == 2
-        err = capsys.readouterr().err
-        assert err.startswith(f"aeiou-trace {cmd}: invalid value '{value}' for '{flag} <US>': not a finite number at least 0\n\nUsage: aeiou-trace {cmd} "), err
-    assert trace.main(["compare", str(st), str(st), "--max-distance=0"]) == 1   # 0 is a bound (the strace is no metrics document)
+    # the binary's parser, in its own words (runner/REFERENCE.md §15)
+    assert cli([cmd, *args, f"{flag}={value}"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith(f"aeiou-trace {cmd}: invalid value '{value}' for '{flag} <{metavar}>': not a finite number at least 0\n\nUsage: aeiou-trace {cmd} "), err
+    assert cli(["compare", str(st), str(st), "--max-distance=0"]) == 1   # 0 is a bound (the strace is no metrics document)
     assert capsys.readouterr().err.startswith(f"aeiou-trace compare: {st}: ")
+
+
+def test_the_binary_is_found_as_the_tests_say_and_export_takes_its_options(monkeypatch, tmp_path):
+    """`trace.binary`: `$AEIOU_TRACE`, else beside `$AEIOU_RUNNER`, else the `PATH`, else the
+    checkout's release build, else a refusal naming the variable; `export_of` passes `--exclude`
+    and `--cwd` through."""
+    real = trace.binary()
+    monkeypatch.setenv("AEIOU_TRACE", "/x/aeiou-trace")
+    assert trace.binary() == "/x/aeiou-trace"
+    monkeypatch.delenv("AEIOU_TRACE")
+    (tmp_path / "aeiou-trace").write_text("")
+    monkeypatch.setenv("AEIOU_RUNNER", str(tmp_path / "aeiou"))
+    assert trace.binary() == str(tmp_path / "aeiou-trace")
+    monkeypatch.delenv("AEIOU_RUNNER")
+    monkeypatch.setattr(trace.shutil, "which", lambda name: "/on/the/path/" + name)
+    assert trace.binary() == "/on/the/path/aeiou-trace"
+    monkeypatch.setattr(trace.shutil, "which", lambda name: None)
+    monkeypatch.setattr(trace, "__file__", str(tmp_path / "a" / "b" / "trace.py"))
+    with pytest.raises(BuildError, match="AEIOU_TRACE"):
+        trace.binary()
+    monkeypatch.setenv("AEIOU_TRACE", real)
+    lines = ['100 1700000001.000000 openat(AT_FDCWD</d>, "skip/x", O_RDONLY) = 3</d/skip/x> <0.000010>',
+             '100 1700000001.000100 read(3</d/skip/x>, "x"..., 10) = 10 <0.000010>',
+             '100 1700000001.000200 openat(AT_FDCWD, "keep", O_RDONLY) = 4 <0.000010>',
+             '100 1700000001.000300 read(4, "x"..., 10) = 10 <0.000010>']
+    _, events = trace.export_of(lines, "/d", exclude=["skip/*"], cwd="/d")
+    assert [e.get("path") for e in events if e["op"] == "open"] == ["keep"]
 
 
 def test_aeiou_trace_has_a_version_as_every_tool_does():
     """(RC1 review, R63) `-V, --version`, the last row of the help, as in every tool of the suite."""
     r = _trace_tool("--version")
-    assert (r.returncode, r.stdout.decode()) == (0, f"aeiou-trace {trace.__version__}\n"), r.stderr
+    assert (r.returncode, r.stdout.decode()) == (0, f"aeiou-trace {aeiou.__version__}\n"), r.stderr
     assert _trace_tool("-V").stdout == r.stdout
     lines = _trace_tool("--help").stdout.decode().rstrip().splitlines()
     assert lines[-2].startswith("  -h, --help") and lines[-1].startswith("  -V, --version") and lines[-1].endswith("Print version")

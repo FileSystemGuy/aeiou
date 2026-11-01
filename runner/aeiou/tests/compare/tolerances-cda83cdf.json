@@ -1,0 +1,4 @@
+{
+ "error": "{path}: tolerances: `sizes` must be one of mix, ops, request size, run length, reuse, reuse distance, extent reuse, extent reuse distance, popularity, fan-out, depth with a value in [0, 1]",
+ "text": "{\"aeiou_tolerances\": 1, \"tolerances\": {\"sizes\": 0.1}, \"unseen\": [{\"metric\": \"fan-out\", \"reason\": \"threads\"}, {\"metric\": \"ops: mkdir\", \"reason\": \"no such row\"}], \"outside\": [{\"metric\": \"reuse distance, read after read\", \"reason\": \"known\"}, {\"metric\": \"mix: reads\", \"reason\": \"was\"}]}"
+}

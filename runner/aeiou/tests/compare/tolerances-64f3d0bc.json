@@ -1,0 +1,30 @@
+{
+ "spec": {
+  "aeiou_tolerances": 1,
+  "outside": [
+   {
+    "metric": "mix: reads / data ops",
+    "reason": "the abstract reads fewer conversation chunks than the replay (13.5k to 24.4k reads against 33.8k, spread wide over seeds: the long main-agent chains a slot draws carry most of the reads); lifting the context cap brings it within (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+   },
+   {
+    "metric": "mix: read bytes / data bytes",
+    "reason": "the same as the reads' share of data ops: every access is one whole chunk (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+   },
+   {
+    "metric": "reuse distance, read after read",
+    "reason": "the abstract's re-reads come sooner (p50 2.5 GiB against 4); the system prompt is no longer the cause (its reads now follow sys_held), and the conversation reads are short of the replay's (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+   },
+   {
+    "metric": "reuse distance, read after write",
+    "reason": "as read after read: p50 2 GiB against 4 (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+   }
+  ],
+  "unseen": [
+   {
+    "metric": "fan-out",
+    "reason": "the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)"
+   }
+  ]
+ },
+ "text": "{\n  \"aeiou_tolerances\": 1,\n  \"unseen\": [\n    {\n      \"metric\": \"fan-out\",\n      \"reason\": \"the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)\"\n    }\n  ],\n  \"outside\": [\n    {\n      \"metric\": \"mix: reads / data ops\",\n      \"reason\": \"the abstract reads fewer conversation chunks than the replay (13.5k to 24.4k reads against 33.8k, spread wide over seeds: the long main-agent chains a slot draws carry most of the reads); lifting the context cap brings it within (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \\u00a73.63; a checkpoint, not yet examined)\"\n    },\n    {\n      \"metric\": \"mix: read bytes / data bytes\",\n      \"reason\": \"the same as the reads' share of data ops: every access is one whole chunk (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \\u00a73.63; a checkpoint, not yet examined)\"\n    },\n    {\n      \"metric\": \"reuse distance, read after read\",\n      \"reason\": \"the abstract's re-reads come sooner (p50 2.5 GiB against 4); the system prompt is no longer the cause (its reads now follow sys_held), and the conversation reads are short of the replay's (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \\u00a73.63; a checkpoint, not yet examined)\"\n    },\n    {\n      \"metric\": \"reuse distance, read after write\",\n      \"reason\": \"as read after read: p50 2 GiB against 4 (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \\u00a73.63; a checkpoint, not yet examined)\"\n    }\n  ]\n}\n"
+}

@@ -1,0 +1,44 @@
+{
+ "spec": {
+  "aeiou_tolerances": 1,
+  "unseen": [
+   {
+    "metric": "mix",
+    "reason": "r"
+   },
+   {
+    "metric": "ops",
+    "reason": "r"
+   },
+   {
+    "metric": "request",
+    "reason": "r"
+   },
+   {
+    "metric": "run",
+    "reason": "r"
+   },
+   {
+    "metric": "extent",
+    "reason": "r"
+   },
+   {
+    "metric": "reuse",
+    "reason": "r"
+   },
+   {
+    "metric": "popularity",
+    "reason": "r"
+   },
+   {
+    "metric": "fan-out",
+    "reason": "r"
+   },
+   {
+    "metric": "depth",
+    "reason": "r"
+   }
+  ]
+ },
+ "text": "{\"aeiou_tolerances\": 1, \"unseen\": [{\"metric\": \"mix\", \"reason\": \"r\"}, {\"metric\": \"ops\", \"reason\": \"r\"}, {\"metric\": \"request\", \"reason\": \"r\"}, {\"metric\": \"run\", \"reason\": \"r\"}, {\"metric\": \"extent\", \"reason\": \"r\"}, {\"metric\": \"reuse\", \"reason\": \"r\"}, {\"metric\": \"popularity\", \"reason\": \"r\"}, {\"metric\": \"fan-out\", \"reason\": \"r\"}, {\"metric\": \"depth\", \"reason\": \"r\"}]}"
+}

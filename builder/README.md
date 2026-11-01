@@ -1,10 +1,11 @@
 # The builder
 
 The Python half of aeiou: the package `aeiou`, with which a workload is *authored*, and its
-six tools: `aeiou-build` (scripts to abstracts), `aeiou-params` (parameter files),
-`aeiou-trace` (the comparison of two metrics documents; the tool itself is the runner's binary
+~~six~~ five tools: `aeiou-build` (scripts to abstracts), `aeiou-params` (parameter files),
+~~`aeiou-trace` (the comparison of two metrics documents; the tool itself is the runner's binary
 since 2026-10-29, the digest with its interview and records Rust since 2026-10-31, which runs
-`compare` from here until it is ported, `DESIGN_REVIEW.md` §3.89), `aeiou-catalog` (the
+`compare` from here until it is ported, `DESIGN_REVIEW.md` §3.89),~~ (`aeiou-trace` is the runner's
+binary, its `compare` the last part to leave here, 2026-11-01, `DESIGN_REVIEW.md` §3.89), `aeiou-catalog` (the
 workload catalog under `../workloads/`), `aeiou-header` (an HDF5 file's header from
 libhdf5, which `aeiou datagen` runs), and `aeiou-datagen` (container datasets; deprecated,
 since `aeiou datagen` writes every format class). Nothing here runs on a client node
@@ -74,7 +75,7 @@ HDF5, whose header only libhdf5 can lay out, `aeiou datagen` runs `aeiou-header`
 (`header.py`) for the header bytes and writes the rows itself.
 
 **Calibration.** `aeiou-trace` (~~`trace.py`, standard library only~~ the runner's binary since
-2026-10-29, `runner/aeiou/src/strace.rs`; `trace.py` keeps `compare`, the digest and its interview the binary's since 2026-10-31) resolves an `strace`
+2026-10-29, `runner/aeiou/src/strace.rs`; ~~`trace.py` keeps `compare`,~~ the digest and its interview the binary's since 2026-10-31, `compare` since 2026-11-01) resolves an `strace`
 of the real application, descriptor tables through `clone`, `fork`, and `dup`, positions
 through `lseek` and the bytes moved, paths under the storage root, and computes the same
 locality metrics the runner's dry run computes for the abstract, in the same document

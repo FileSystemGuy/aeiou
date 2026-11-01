@@ -8453,8 +8453,74 @@ ask on"); the binary writes the document and no answers file. A TOML error in a 
 line with its line and column (`tomllib` and the `toml` crate word their messages differently;
 the tests match the path and `TOML`). The vocabulary's order (kinds, confidences) is the file's,
 read from the values' spans, as Python's dicts kept it. Python keeps `digest.py`'s handle for
-its tests of the analysis until stage 5. Next, stage 4: `compare` over two version-2
-documents, and `dry-run --emit-trace`.
+its tests of the analysis until stage 5. ~~Next, stage 4: `compare` over two version-2
+documents, and `dry-run --emit-trace`.~~ Built 2026-11-01, below.
+
+**Stage 4 built (2026-11-01).** `aeiou-trace compare` is Rust (`src/compare.rs`), the last of the
+tool that ran Python, and `aeiou dry-run --emit-trace` writes the run side (`src/emit.rs`). The
+numbers first, by stage 1's method: every comparison the Python's tests made, recorded before the
+Python was cut, with written cases for the rare refusals (`tests/compare/`: 75 row sets, 25
+judgements, 25 tolerance files, 63 command lines with their files, output, and exit status, the
+capture pairs among them), reproduced by `tests/compare_corpus.rs`, every string exactly. Five
+differences are chosen: a file that is not JSON is refused in serde's words; a bound the parser
+refuses (`--max-distance nan`) in the binary parser's; a total-variation distance is summed over
+the values in order where the Python summed a set in hash order, which can differ in the last bit
+(the corpus holds distances to 1e-12; one row of 75 sets differs, at 2e-16); a document of neither
+kind is refused naming both, since digests are read now; an object log's metrics are described as
+one, where the Python described them as a dry run's with every field `None` (a bug of the kind
+R52 fixed for trace files).
+
+The structure is as designed above, with these choices made while building. Pairing: identical
+text, then `--pair` (applied before the shape, so a hand-made pair is never taken by a guess),
+then shape, only where exactly one template of each side has it. A site pairs by phase; each
+top-level verdict object of a site is compared, and a `fields` list's by field name. A side's
+undecided verdict is replaced by its owner's asserted answer where there is one (not `unknown`),
+and the aspect is labelled `assertion`; with neither, `not compared`. The peak of lanes is
+computed from the phases on the template, each an interval `[first, last]` of its lane, a start
+before an end at one instant (a phase of one call has its first equal to its last). B's own I/O
+is set aside on B only: names with a component beginning `.aeiou`, and a root template whose ops
+are only stats, since an application may stat its own root. A difference of structure exits 1
+and, under `--judge`, makes the last line `not accepted: the structure differs (N); ...`, so a
+capture's verdict cannot be accepted with a different shape. `--json` prints the whole
+comparison (`aeiou_compare: 1`), which the Python tests now read their rows from.
+
+`--emit-trace`: a lane is a context of the metrics walk (main line, `parallel` sub-actor, `loader`
+worker, a `trace` node's lane), a `parallel` sub-actor keeping its lane across forks as a pool
+thread does; the instances are walked in turn, one op each per round (`metrics::interleave`),
+so they interleave as instances at once would, where the metrics walk takes each alone; the clock
+is the line's ordinal (1 µs a line, `dur` 0, no compute). Two changes elsewhere make the file
+exact. The VM's `lseek` now carries the position it sets in `Op.bytes` (not hashed: no
+fingerprint moves), written as the line's `ret`, since the trace loader takes a sequential op's
+position from the last `lseek`'s result; the first sweep without it put every read after an
+`lseek` at 0. And the header names the dry run (`source: dry-run`, `abstract`, `sha256`, `seed`,
+`gpus`, `fingerprint`, `order`) with `aeiou_trace` its first key, which the tools look for; the
+digest keeps `dry-run` as its source and copies the rest into its `metrics`, so `--self` checks
+an emitted digest as a dry run's metrics document. Checked on every example and unsettled case
+at its first GPU count (all but three full-scale LMCache cases, which emit gigabytes): at one
+instance the digest's numbers are the dry run's own except fan-out and depth (no forks in a
+file) and, for `faiss_ivf_ondisk`, one run of 2,561 that the end of a `parallel` closes in the
+walk and the same lane continues at the next fork; at two instances the reuse distances differ,
+as the trace of two instances would. The emitted file loads as a `trace` node whose dry run
+measures the same (`tests/emit.rs`).
+
+The spike again, now with both tools: `npy_per_sample` run under `strace` against its emitted
+digest. At the dry run's default `st_blksize` the two differ in request size and read count,
+which is the parameter, not the tools: the run takes the storage's 4 KiB (ext4 here) and the
+dry run its fallback, so a run side is emitted with the `--st-blksize` the run reports. At 4
+KiB: every verdict the same, every row within tolerance but the reuse distance (the threads'
+completion order against the walk's round-robin), and two differences of structure, both one
+`stat` of a sample file, the runner's dataset check before the gate, which the strace of a run
+shows as an op kind and a motif and the emitted file does not have. The set-aside found the
+dataset manifest and the root's stat. Not done in stage 4, left for stage 5 or a decision:
+`aeiou-trace metrics` is not retired (its strace-only options, `--instance-root`,
+`--chain-gap-us`, `--metrics-block`, have no place in the digest yet, and the committed captures
+are metrics documents until stage 5 rewraps them), and `dry-run --metrics-json` still writes a
+metrics document, which `compare` reads as numbers only. One test fixed on the way: stage 2's
+memory test (`tests/trace_tool.rs`) read its digest child's `ru_maxrss`, which on Linux counts
+the peak of the process the child was forked from; under coverage the test process, running
+every test of the crate, reached 9.7 GB, and the new tests moved the schedule so that both
+digests reported 2.8 GB of it. The child is now measured from a fresh process (the test binary
+run again for a helper alone).
 
 ### 3.90 Two audiences, two tool suites, and the digest between them (the user's reasoning, 2026-10-31)
 

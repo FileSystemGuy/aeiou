@@ -1865,7 +1865,9 @@ pub fn analyze(open: &Opener, first: &str, root: Option<&str>, exclude: &[String
         if r.d.ops == 0 {
             bail!("a trace file with no call in it");
         }
-        source = "trace".to_string();
+        // an exported file is a trace's, except the one a dry run emits (`emit.rs`), which stays
+        // the dry run's: `aeiou-trace compare` judges it as the abstract's side
+        source = if header.get("source").and_then(Value::as_str) == Some("dry-run") { "dry-run" } else { "trace" }.to_string();
         root_out = hroot;
     } else {
         let Some(root) = root else {

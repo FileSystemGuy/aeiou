@@ -961,7 +961,14 @@ numbers; the order is this note's.
     site's `facts`; ~~the interview and the records stay Python until stage 3 (§3.89).~~ *Stage 3
     built the same day:* the interview, the records (built into the binary), and the answers file
     in Rust (`interview.rs`, `applications.rs`), the Python's `applications.py` and interview gone;
-    next, stage 4, `compare` over two version-2 documents and `dry-run --emit-trace`.
+    ~~next, stage 4, `compare` over two version-2 documents and `dry-run --emit-trace`.~~ *Stage 4
+    built 2026-11-01:* `aeiou-trace compare` in Rust (`compare.rs`), the numbers held to every
+    comparison the Python's tests made and two digests' structure compared as designed, `--pair`
+    and `--json` added; `aeiou dry-run --emit-trace` (`emit.rs`). Not done in stage 4:
+    `aeiou-trace metrics` is not retired, since its strace-only options (`--instance-root`,
+    `--chain-gap-us`, `--metrics-block`) have no place in the digest yet and the committed
+    captures are metrics documents until stage 5 rewraps them; nor does `dry-run --metrics-json`
+    write a digest (its numbers are compared as a metrics document's). Next, stage 5.
 
 48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
     2026-10-28).** A skill in the open skill format (`skills/fit-abstract/SKILL.md` and its
@@ -998,7 +1005,8 @@ numbers; the order is this note's.
     the abstract at N, their merged locality metrics side by side, which needs `aeiou-trace
     metrics` over several traces as one stream), a scale-invariance check in `aeiou-catalog`
     (a case's per-GPU metrics at G and at 8G agree), and `dry-run --emit-trace FILE` in the
-    `aeiou_trace` format so the scaled trace is an inspectable file. The gaps the note must
+    `aeiou_trace` format so the scaled trace is an inspectable file (*built 2026-11-01*,
+    `DESIGN_REVIEW.md` §3.89 stage 4: the instances interleaved, a lane per context). The gaps the note must
     state: every fit is validated at one scale (a trace of one application at two scales,
     fitted at one and predicted at the other, has never been taken); shared structure (a
     search index's hot nodes, a KV cache's shared prefixes, the step barrier) is amplified
@@ -1227,8 +1235,8 @@ line says:
   `aeiou-build` (the builder; renamed from `abstract-build`), `aeiou-params` (parameter files,
   2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01; a
   binary of the runner's crate since 2026-10-29, `DESIGN_REVIEW.md` §3.89, its name kept, its
-  digest and its interview Rust since 2026-10-31, its `compare` the Python package's until
-  ported),
+  digest and its interview Rust since 2026-10-31, its `compare` ~~the Python package's until
+  ported~~ since 2026-11-01),
   `aeiou-catalog` (the workload catalog's records, shapes, and `CATALOG.md`, 2026-10-10),
   `aeiou-header` (a container header from the format's own library, run by `aeiou datagen`
   from beside its binary, 2026-10-12), and later

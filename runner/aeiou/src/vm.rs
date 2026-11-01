@@ -99,7 +99,8 @@ pub struct Op<'c> {
     /// Bytes the op is expected to transfer: the returned count of a read, `len` of a write
     /// (a `trace` node's write: its traced count, 0 when it failed, which its metrics and the
     /// position it leaves move by; it is still checked as `len` when it runs); for `readdir`,
-    /// the entries expected (−1 when not computable).
+    /// the entries expected (−1 when not computable); for `lseek`, the position it sets (what
+    /// the call returns, which a trace file's `ret` holds, `emit.rs`).
     pub bytes: i64,
     /// Open flags and mode, `lseek` whence, `ioctl` request, `mkdir` mode.
     pub aux: u64,
@@ -1801,7 +1802,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     return other(format!("lseek to {pos} on `{}`", t.path));
                 }
                 self.open.get_mut(&t.path).unwrap().pos = pos;
-                self.emit(OpKind::Lseek, t, None, off, 0, 0, *whence as u64, &None, false)
+                self.emit(OpKind::Lseek, t, None, off, 0, pos, *whence as u64, &None, false)
             }
             Node::Ioctl { file, request, expect } => {
                 let t = self.target(file)?;

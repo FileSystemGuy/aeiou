@@ -130,7 +130,7 @@ def test_every_tool_warns_from_a_checkout_of_another_pin_and_not_from_a_wheel(tm
     (clone / ".python-version").write_text("3.0.1\n")
     now = "%d.%d.%d" % sys.version_info[:3]
     for module, prog in [("cli", "aeiou-build"), ("params", "aeiou-params"), ("datagen", "aeiou-datagen"),
-                         ("trace", "aeiou-trace"), ("catalog", "aeiou-catalog"), ("header", "aeiou-header")]:
+                         ("catalog", "aeiou-catalog"), ("header", "aeiou-header")]:
         for where, warns in ((clone, True), (wheel, False)):
             r = subprocess.run([sys.executable, "-m", f"aeiou.{module}", "--help"], capture_output=True, text=True,
                                env={"PYTHONPATH": str(where), "PATH": "/usr/bin:/bin"}, cwd=tmp_path)   # `-m` puts the cwd first

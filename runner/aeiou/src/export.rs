@@ -714,7 +714,7 @@ impl FileMetrics {
     /// The `aeiou_metrics: 2` document, the file's header giving its source, root, and notes.
     pub fn document(mut self, header: &Value) -> Result<Value> {
         self.m.finish()?;
-        Ok(json!({
+        let mut d = json!({
             "aeiou_metrics": strace::METRICS_FORMAT,
             "source": header.get("source").and_then(Value::as_str).unwrap_or("trace"),
             "roots": [header.get("root").and_then(Value::as_str).unwrap_or("")],
@@ -725,7 +725,15 @@ impl FileMetrics {
             "chain_gap_us": null,
             "notes": header.get("notes").cloned().unwrap_or(json!({})),
             "total": self.m.total(false),
-        }))
+        });
+        // a dry run's emitted file (`emit.rs`) names the abstract it walked, as its metrics
+        // document does: `aeiou-trace compare --self` checks them
+        for k in ["abstract", "sha256", "seed", "gpus", "fingerprint", "order"] {
+            if let Some(v) = header.get(k) {
+                d[k] = v.clone();
+            }
+        }
+        Ok(d)
     }
 }
 

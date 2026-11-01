@@ -1,0 +1,1570 @@
+{
+ "a": {
+  "bytes_read": 0,
+  "bytes_written": 304138284,
+  "counts": {
+   "close": 6,
+   "fstat": 6,
+   "fsync": 6,
+   "ioctl": 6,
+   "lseek": 54,
+   "mkdir": 6,
+   "open": 6,
+   "rename": 2,
+   "stat": 14,
+   "write": 58
+  },
+  "depth": {},
+  "fan_out": {},
+  "ops": 164,
+  "popularity_blocks": {
+   "accesses": 74306,
+   "counts": [
+    [
+     4,
+     8
+    ],
+    [
+     3,
+     8
+    ],
+    [
+     2,
+     12
+    ],
+    [
+     1,
+     74226
+    ]
+   ],
+   "distinct": 74254,
+   "max": 4,
+   "top_0_1_pct": 0.0016991090894409604,
+   "top_10_pct": 0.10062982800850538,
+   "top_1_pct": 0.010692810809355906
+  },
+  "popularity_objects": {
+   "accesses": 58,
+   "counts": [
+    [
+     14,
+     4
+    ],
+    [
+     1,
+     2
+    ]
+   ],
+   "distinct": 6,
+   "max": 14,
+   "top_0_1_pct": 0.0014482758620689656,
+   "top_10_pct": 0.1448275862068966,
+   "top_1_pct": 0.014482758620689654
+  },
+  "request_size": {
+   "read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write": {
+    "buckets": [
+     [
+      640,
+      16
+     ],
+     [
+      768,
+      16
+     ],
+     [
+      2560,
+      2
+     ],
+     [
+      3584,
+      4
+     ],
+     [
+      524288,
+      4
+     ],
+     [
+      8388608,
+      4
+     ],
+     [
+      16777216,
+      8
+     ],
+     [
+      33554432,
+      4
+     ]
+    ],
+    "max": 33554432,
+    "mean": 5243763.517241379,
+    "n": 58
+   }
+  },
+  "reuse_distance_bytes": {
+   "first_touch": {
+    "read": 0,
+    "write": 74254
+   },
+   "read_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "read_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_write": {
+    "buckets": [
+     [
+      4096,
+      52
+     ]
+    ],
+    "max": 4096,
+    "mean": 4096.0,
+    "n": 52
+   }
+  },
+  "run_length": {
+   "read": {
+    "bytes": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "multi_op_bytes": 0,
+    "ops": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "write": {
+    "bytes": {
+     "buckets": [
+      [
+       2560,
+       2
+      ],
+      [
+       67108864,
+       4
+      ]
+     ],
+     "max": 76033270,
+     "mean": 50689714.0,
+     "n": 6
+    },
+    "multi_op_bytes": 304133080,
+    "ops": {
+     "buckets": [
+      [
+       1,
+       2
+      ],
+      [
+       14,
+       4
+      ]
+     ],
+     "max": 14,
+     "mean": 9.666666666666666,
+     "n": 6
+    }
+   }
+  }
+ },
+ "b": {
+  "bytes_read": 0,
+  "bytes_written": 304138284,
+  "counts": {
+   "close": 6,
+   "fstat": 6,
+   "fsync": 6,
+   "ioctl": 6,
+   "lseek": 54,
+   "mkdir": 4,
+   "open": 6,
+   "rename": 2,
+   "stat": 6,
+   "write": 58
+  },
+  "depth": {},
+  "fan_out": {},
+  "ops": 154,
+  "popularity_blocks": {
+   "accesses": 74306,
+   "counts": [
+    [
+     4,
+     8
+    ],
+    [
+     3,
+     8
+    ],
+    [
+     2,
+     12
+    ],
+    [
+     1,
+     74226
+    ]
+   ],
+   "distinct": 74254,
+   "max": 4,
+   "top_0_1_pct": 0.0016991090894409604,
+   "top_10_pct": 0.10062982800850538,
+   "top_1_pct": 0.010692810809355906
+  },
+  "popularity_bytes": {
+   "accesses": 304138284,
+   "counts": [
+    [
+     1,
+     304138284
+    ]
+   ],
+   "distinct": 304138284,
+   "max": 1,
+   "top_0_1_pct": 0.001,
+   "top_10_pct": 0.1,
+   "top_1_pct": 0.01
+  },
+  "popularity_objects": {
+   "accesses": 58,
+   "counts": [
+    [
+     14,
+     4
+    ],
+    [
+     1,
+     2
+    ]
+   ],
+   "distinct": 6,
+   "max": 14,
+   "top_0_1_pct": 0.0014482758620689656,
+   "top_10_pct": 0.1448275862068966,
+   "top_1_pct": 0.014482758620689654
+  },
+  "request_size": {
+   "read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write": {
+    "buckets": [
+     [
+      640,
+      16
+     ],
+     [
+      768,
+      16
+     ],
+     [
+      2560,
+      2
+     ],
+     [
+      3584,
+      4
+     ],
+     [
+      524288,
+      4
+     ],
+     [
+      8388608,
+      4
+     ],
+     [
+      16777216,
+      8
+     ],
+     [
+      33554432,
+      4
+     ]
+    ],
+    "max": 33554432,
+    "mean": 5243763.517241379,
+    "n": 58
+   }
+  },
+  "reuse_distance_bytes": {
+   "first_touch": {
+    "read": 0,
+    "write": 74254
+   },
+   "read_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "read_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_write": {
+    "buckets": [
+     [
+      4096,
+      52
+     ]
+    ],
+    "max": 4096,
+    "mean": 4096.0,
+    "n": 52
+   }
+  },
+  "reuse_extents": {
+   "first_touch": {
+    "read": 0,
+    "write": 304138284
+   },
+   "partial": 0,
+   "read_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "read_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "whole": 0,
+   "write_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   }
+  },
+  "run_length": {
+   "read": {
+    "bytes": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "multi_op_bytes": 0,
+    "ops": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "write": {
+    "bytes": {
+     "buckets": [
+      [
+       2560,
+       2
+      ],
+      [
+       67108864,
+       4
+      ]
+     ],
+     "max": 76033270,
+     "mean": 50689714.0,
+     "n": 6
+    },
+    "multi_op_bytes": 304133080,
+    "ops": {
+     "buckets": [
+      [
+       1,
+       2
+      ],
+      [
+       14,
+       4
+      ]
+     ],
+     "max": 14,
+     "mean": 9.666666666666666,
+     "n": 6
+    }
+   }
+  }
+ },
+ "docs": [
+  {
+   "chain_gap_us": null,
+   "source": "strace"
+  },
+  {
+   "source": "dry-run"
+  }
+ ],
+ "rows": [
+  [
+   "mix: data ops / all ops",
+   "35.4 %",
+   "37.7 %",
+   0.022964840038010803
+  ],
+  [
+   "mix: reads / data ops",
+   "0.0 %",
+   "0.0 %",
+   0.0
+  ],
+  [
+   "mix: read bytes / data bytes",
+   "0.0 %",
+   "0.0 %",
+   0.0
+  ],
+  [
+   "ops: close / all ops",
+   "3.7 %",
+   "3.9 %",
+   0.0023756731073804258
+  ],
+  [
+   "ops: fstat / all ops",
+   "3.7 %",
+   "3.9 %",
+   0.0023756731073804258
+  ],
+  [
+   "ops: fsync / all ops",
+   "3.7 %",
+   "3.9 %",
+   0.0023756731073804258
+  ],
+  [
+   "ops: ioctl / all ops",
+   "3.7 %",
+   "3.9 %",
+   0.0023756731073804258
+  ],
+  [
+   "ops: lseek / all ops",
+   "32.9 %",
+   "35.1 %",
+   0.02138105796642381
+  ],
+  [
+   "ops: mkdir / all ops",
+   "3.7 %",
+   "2.6 %",
+   0.010611339879632559
+  ],
+  [
+   "ops: open / all ops",
+   "3.7 %",
+   "3.9 %",
+   0.0023756731073804258
+  ],
+  [
+   "ops: rename / all ops",
+   "1.2 %",
+   "1.3 %",
+   0.0007918910357934753
+  ],
+  [
+   "ops: stat / all ops",
+   "8.5 %",
+   "3.9 %",
+   0.04640481469749763
+  ],
+  [
+   "ops: write / all ops",
+   "35.4 %",
+   "37.7 %",
+   0.022964840038010803
+  ],
+  [
+   "request size, write (p50 / p90 / p99)",
+   "768 B / 16 MiB / 32 MiB",
+   "768 B / 16 MiB / 32 MiB",
+   0.0
+  ],
+  [
+   "run length, write, bytes (p50 / p90 / p99)",
+   "64 MiB / 64 MiB / 64 MiB",
+   "64 MiB / 64 MiB / 64 MiB",
+   0.0
+  ],
+  [
+   "run length, write, ops (p50 / p90 / p99)",
+   "14 / 14 / 14",
+   "14 / 14 / 14",
+   0.0
+  ],
+  [
+   "run length, write: bytes in multi-op runs",
+   "100.0 %",
+   "100.0 %",
+   0.0
+  ],
+  [
+   "reuse: first touches / block writes",
+   "99.9 %",
+   "99.9 %",
+   0.0
+  ],
+  [
+   "reuse: write after write / block writes",
+   "0.1 %",
+   "0.1 %",
+   0.0
+  ],
+  [
+   "reuse distance, write after write (p50 / p90 / p99)",
+   "4 KiB / 4 KiB / 4 KiB",
+   "4 KiB / 4 KiB / 4 KiB",
+   0.0
+  ],
+  [
+   "popularity, blocks: accesses to the top 0.1 %",
+   "0.2 %",
+   "0.2 %",
+   0.0
+  ],
+  [
+   "popularity, blocks: accesses to the top 1 %",
+   "1.1 %",
+   "1.1 %",
+   0.0
+  ],
+  [
+   "popularity, blocks: accesses to the top 10 %",
+   "10.1 %",
+   "10.1 %",
+   0.0
+  ],
+  [
+   "popularity, objects: accesses to the top 0.1 %",
+   "0.1 %",
+   "0.1 %",
+   0.0
+  ],
+  [
+   "popularity, objects: accesses to the top 1 %",
+   "1.4 %",
+   "1.4 %",
+   0.0
+  ],
+  [
+   "popularity, objects: accesses to the top 10 %",
+   "14.5 %",
+   "14.5 %",
+   0.0
+  ]
+ ],
+ "selfs": [
+  {
+   "bytes_read": 0,
+   "bytes_written": 304138284,
+   "counts": {
+    "close": 6,
+    "fstat": 6,
+    "fsync": 6,
+    "ioctl": 6,
+    "lseek": 54,
+    "mkdir": 4,
+    "open": 6,
+    "rename": 2,
+    "stat": 6,
+    "write": 58
+   },
+   "depth": {},
+   "fan_out": {},
+   "ops": 154,
+   "popularity_blocks": {
+    "accesses": 74306,
+    "counts": [
+     [
+      4,
+      8
+     ],
+     [
+      3,
+      8
+     ],
+     [
+      2,
+      12
+     ],
+     [
+      1,
+      74226
+     ]
+    ],
+    "distinct": 74254,
+    "max": 4,
+    "top_0_1_pct": 0.0016991090894409604,
+    "top_10_pct": 0.10062982800850538,
+    "top_1_pct": 0.010692810809355906
+   },
+   "popularity_bytes": {
+    "accesses": 304138284,
+    "counts": [
+     [
+      1,
+      304138284
+     ]
+    ],
+    "distinct": 304138284,
+    "max": 1,
+    "top_0_1_pct": 0.001,
+    "top_10_pct": 0.1,
+    "top_1_pct": 0.01
+   },
+   "popularity_objects": {
+    "accesses": 58,
+    "counts": [
+     [
+      14,
+      4
+     ],
+     [
+      1,
+      2
+     ]
+    ],
+    "distinct": 6,
+    "max": 14,
+    "top_0_1_pct": 0.0014482758620689656,
+    "top_10_pct": 0.1448275862068966,
+    "top_1_pct": 0.014482758620689654
+   },
+   "request_size": {
+    "read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write": {
+     "buckets": [
+      [
+       640,
+       16
+      ],
+      [
+       768,
+       16
+      ],
+      [
+       2560,
+       2
+      ],
+      [
+       3584,
+       4
+      ],
+      [
+       524288,
+       4
+      ],
+      [
+       8388608,
+       4
+      ],
+      [
+       16777216,
+       8
+      ],
+      [
+       33554432,
+       4
+      ]
+     ],
+     "max": 33554432,
+     "mean": 5243763.517241379,
+     "n": 58
+    }
+   },
+   "reuse_distance_bytes": {
+    "first_touch": {
+     "read": 0,
+     "write": 74254
+    },
+    "read_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [
+      [
+       4096,
+       52
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 52
+    }
+   },
+   "reuse_extents": {
+    "first_touch": {
+     "read": 0,
+     "write": 304138284
+    },
+    "partial": 0,
+    "read_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "whole": 0,
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "run_length": {
+    "read": {
+     "bytes": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "multi_op_bytes": 0,
+     "ops": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    },
+    "write": {
+     "bytes": {
+      "buckets": [
+       [
+        2560,
+        2
+       ],
+       [
+        67108864,
+        4
+       ]
+      ],
+      "max": 76033270,
+      "mean": 50689714.0,
+      "n": 6
+     },
+     "multi_op_bytes": 304133080,
+     "ops": {
+      "buckets": [
+       [
+        1,
+        2
+       ],
+       [
+        14,
+        4
+       ]
+      ],
+      "max": 14,
+      "mean": 9.666666666666666,
+      "n": 6
+     }
+    }
+   }
+  },
+  {
+   "bytes_read": 0,
+   "bytes_written": 304138284,
+   "counts": {
+    "close": 6,
+    "fstat": 6,
+    "fsync": 6,
+    "ioctl": 6,
+    "lseek": 54,
+    "mkdir": 4,
+    "open": 6,
+    "rename": 2,
+    "stat": 6,
+    "write": 58
+   },
+   "depth": {},
+   "fan_out": {},
+   "ops": 154,
+   "popularity_blocks": {
+    "accesses": 74306,
+    "counts": [
+     [
+      4,
+      8
+     ],
+     [
+      3,
+      8
+     ],
+     [
+      2,
+      12
+     ],
+     [
+      1,
+      74226
+     ]
+    ],
+    "distinct": 74254,
+    "max": 4,
+    "top_0_1_pct": 0.0016991090894409604,
+    "top_10_pct": 0.10062982800850538,
+    "top_1_pct": 0.010692810809355906
+   },
+   "popularity_bytes": {
+    "accesses": 304138284,
+    "counts": [
+     [
+      1,
+      304138284
+     ]
+    ],
+    "distinct": 304138284,
+    "max": 1,
+    "top_0_1_pct": 0.001,
+    "top_10_pct": 0.1,
+    "top_1_pct": 0.01
+   },
+   "popularity_objects": {
+    "accesses": 58,
+    "counts": [
+     [
+      14,
+      4
+     ],
+     [
+      1,
+      2
+     ]
+    ],
+    "distinct": 6,
+    "max": 14,
+    "top_0_1_pct": 0.0014482758620689656,
+    "top_10_pct": 0.1448275862068966,
+    "top_1_pct": 0.014482758620689654
+   },
+   "request_size": {
+    "read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write": {
+     "buckets": [
+      [
+       640,
+       16
+      ],
+      [
+       768,
+       16
+      ],
+      [
+       2560,
+       2
+      ],
+      [
+       3584,
+       4
+      ],
+      [
+       524288,
+       4
+      ],
+      [
+       8388608,
+       4
+      ],
+      [
+       16777216,
+       8
+      ],
+      [
+       33554432,
+       4
+      ]
+     ],
+     "max": 33554432,
+     "mean": 5243763.517241379,
+     "n": 58
+    }
+   },
+   "reuse_distance_bytes": {
+    "first_touch": {
+     "read": 0,
+     "write": 74254
+    },
+    "read_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [
+      [
+       4096,
+       52
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 52
+    }
+   },
+   "reuse_extents": {
+    "first_touch": {
+     "read": 0,
+     "write": 304138284
+    },
+    "partial": 0,
+    "read_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "whole": 0,
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "run_length": {
+    "read": {
+     "bytes": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "multi_op_bytes": 0,
+     "ops": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    },
+    "write": {
+     "bytes": {
+      "buckets": [
+       [
+        2560,
+        2
+       ],
+       [
+        67108864,
+        4
+       ]
+      ],
+      "max": 76033270,
+      "mean": 50689714.0,
+      "n": 6
+     },
+     "multi_op_bytes": 304133080,
+     "ops": {
+      "buckets": [
+       [
+        1,
+        2
+       ],
+       [
+        14,
+        4
+       ]
+      ],
+      "max": 14,
+      "mean": 9.666666666666666,
+      "n": 6
+     }
+    }
+   }
+  },
+  {
+   "bytes_read": 0,
+   "bytes_written": 304138284,
+   "counts": {
+    "close": 6,
+    "fstat": 6,
+    "fsync": 6,
+    "ioctl": 6,
+    "lseek": 54,
+    "mkdir": 4,
+    "open": 6,
+    "rename": 2,
+    "stat": 6,
+    "write": 58
+   },
+   "depth": {},
+   "fan_out": {},
+   "ops": 154,
+   "popularity_blocks": {
+    "accesses": 74306,
+    "counts": [
+     [
+      4,
+      8
+     ],
+     [
+      3,
+      8
+     ],
+     [
+      2,
+      12
+     ],
+     [
+      1,
+      74226
+     ]
+    ],
+    "distinct": 74254,
+    "max": 4,
+    "top_0_1_pct": 0.0016991090894409604,
+    "top_10_pct": 0.10062982800850538,
+    "top_1_pct": 0.010692810809355906
+   },
+   "popularity_bytes": {
+    "accesses": 304138284,
+    "counts": [
+     [
+      1,
+      304138284
+     ]
+    ],
+    "distinct": 304138284,
+    "max": 1,
+    "top_0_1_pct": 0.001,
+    "top_10_pct": 0.1,
+    "top_1_pct": 0.01
+   },
+   "popularity_objects": {
+    "accesses": 58,
+    "counts": [
+     [
+      14,
+      4
+     ],
+     [
+      1,
+      2
+     ]
+    ],
+    "distinct": 6,
+    "max": 14,
+    "top_0_1_pct": 0.0014482758620689656,
+    "top_10_pct": 0.1448275862068966,
+    "top_1_pct": 0.014482758620689654
+   },
+   "request_size": {
+    "read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write": {
+     "buckets": [
+      [
+       640,
+       16
+      ],
+      [
+       768,
+       16
+      ],
+      [
+       2560,
+       2
+      ],
+      [
+       3584,
+       4
+      ],
+      [
+       524288,
+       4
+      ],
+      [
+       8388608,
+       4
+      ],
+      [
+       16777216,
+       8
+      ],
+      [
+       33554432,
+       4
+      ]
+     ],
+     "max": 33554432,
+     "mean": 5243763.517241379,
+     "n": 58
+    }
+   },
+   "reuse_distance_bytes": {
+    "first_touch": {
+     "read": 0,
+     "write": 74254
+    },
+    "read_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [
+      [
+       4096,
+       52
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 52
+    }
+   },
+   "reuse_extents": {
+    "first_touch": {
+     "read": 0,
+     "write": 304138284
+    },
+    "partial": 0,
+    "read_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "whole": 0,
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "run_length": {
+    "read": {
+     "bytes": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "multi_op_bytes": 0,
+     "ops": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    },
+    "write": {
+     "bytes": {
+      "buckets": [
+       [
+        2560,
+        2
+       ],
+       [
+        67108864,
+        4
+       ]
+      ],
+      "max": 76033270,
+      "mean": 50689714.0,
+      "n": 6
+     },
+     "multi_op_bytes": 304133080,
+     "ops": {
+      "buckets": [
+       [
+        1,
+        2
+       ],
+       [
+        14,
+        4
+       ]
+      ],
+      "max": 14,
+      "mean": 9.666666666666666,
+      "n": 6
+     }
+    }
+   }
+  }
+ ],
+ "spec": null,
+ "want": {
+  "rows": [
+   [
+    "mix: data ops / all ops",
+    "35.4 %",
+    "37.7 %",
+    0.022964840038010803,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "mix: reads / data ops",
+    "0.0 %",
+    "0.0 %",
+    0.0,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "mix: read bytes / data bytes",
+    "0.0 %",
+    "0.0 %",
+    0.0,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: close / all ops",
+    "3.7 %",
+    "3.9 %",
+    0.0023756731073804258,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: fstat / all ops",
+    "3.7 %",
+    "3.9 %",
+    0.0023756731073804258,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: fsync / all ops",
+    "3.7 %",
+    "3.9 %",
+    0.0023756731073804258,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: ioctl / all ops",
+    "3.7 %",
+    "3.9 %",
+    0.0023756731073804258,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: lseek / all ops",
+    "32.9 %",
+    "35.1 %",
+    0.02138105796642381,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: mkdir / all ops",
+    "3.7 %",
+    "2.6 %",
+    0.010611339879632559,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: open / all ops",
+    "3.7 %",
+    "3.9 %",
+    0.0023756731073804258,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: rename / all ops",
+    "1.2 %",
+    "1.3 %",
+    0.0007918910357934753,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: stat / all ops",
+    "8.5 %",
+    "3.9 %",
+    0.04640481469749763,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "ops: write / all ops",
+    "35.4 %",
+    "37.7 %",
+    0.022964840038010803,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "request size, write (p50 / p90 / p99)",
+    "768 B / 16 MiB / 32 MiB",
+    "768 B / 16 MiB / 32 MiB",
+    0.0,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "run length, write, bytes (p50 / p90 / p99)",
+    "64 MiB / 64 MiB / 64 MiB",
+    "64 MiB / 64 MiB / 64 MiB",
+    0.0,
+    0.1,
+    "ok",
+    ""
+   ],
+   [
+    "run length, write, ops (p50 / p90 / p99)",
+    "14 / 14 / 14",
+    "14 / 14 / 14",
+    0.0,
+    0.1,
+    "ok",
+    ""
+   ],
+   [
+    "run length, write: bytes in multi-op runs",
+    "100.0 %",
+    "100.0 %",
+    0.0,
+    0.1,
+    "ok",
+    ""
+   ],
+   [
+    "reuse: first touches / block writes",
+    "99.9 %",
+    "99.9 %",
+    0.0,
+    0.1,
+    "ok",
+    ""
+   ],
+   [
+    "reuse: write after write / block writes",
+    "0.1 %",
+    "0.1 %",
+    0.0,
+    0.1,
+    "ok",
+    ""
+   ],
+   [
+    "reuse distance, write after write (p50 / p90 / p99)",
+    "4 KiB / 4 KiB / 4 KiB",
+    "4 KiB / 4 KiB / 4 KiB",
+    0.0,
+    0.1,
+    "ok",
+    ""
+   ],
+   [
+    "popularity, blocks: accesses to the top 0.1 %",
+    "0.2 %",
+    "0.2 %",
+    0.0,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "popularity, blocks: accesses to the top 1 %",
+    "1.1 %",
+    "1.1 %",
+    0.0,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "popularity, blocks: accesses to the top 10 %",
+    "10.1 %",
+    "10.1 %",
+    0.0,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "popularity, objects: accesses to the top 0.1 %",
+    "0.1 %",
+    "0.1 %",
+    0.0,
+    null,
+    "not judged",
+    "the top 0.1 % of 6 objects is fewer than 10"
+   ],
+   [
+    "popularity, objects: accesses to the top 1 %",
+    "1.4 %",
+    "1.4 %",
+    0.0,
+    null,
+    "not judged",
+    "the top 1 % of 6 objects is fewer than 10"
+   ],
+   [
+    "popularity, objects: accesses to the top 10 %",
+    "14.5 %",
+    "14.5 %",
+    0.0,
+    null,
+    "not judged",
+    "the top 10 % of 6 objects is fewer than 10"
+   ]
+  ],
+  "stale": []
+ }
+}

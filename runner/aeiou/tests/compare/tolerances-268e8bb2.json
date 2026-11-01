@@ -1,0 +1,4 @@
+{
+ "error": "{path}: outside: each entry is {\"metric\": prefix, \"reason\": text}",
+ "text": "{\"aeiou_tolerances\": 1, \"outside\": [\"x\"]}"
+}

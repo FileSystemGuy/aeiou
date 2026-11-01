@@ -1,0 +1,4 @@
+{
+ "error": "{path}: not an aeiou_tolerances: 1 document",
+ "text": "{\"aeiou_tolerances\": 2}"
+}

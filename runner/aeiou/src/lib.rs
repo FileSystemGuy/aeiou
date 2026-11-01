@@ -12,10 +12,12 @@ pub mod aio;
 pub mod backend;
 pub mod canon;
 pub mod case;
+pub mod compare;
 pub mod cold;
 pub mod coord;
 pub mod counters;
 pub mod datagen;
+pub mod emit;
 pub mod endpoint;
 #[cfg(feature = "formats")]
 pub mod formats;

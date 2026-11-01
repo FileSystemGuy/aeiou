@@ -278,7 +278,7 @@ An abstract goes through five stages, each a tool of the suite.
 | `aeiou-build` | Python | builder scripts to abstracts, hermetically | [aeiou-build(1)](man/aeiou-build.1.md) |
 | `aeiou-params` | Python | parameter files: defaults, check, from real shards and archives | [aeiou-params(1)](man/aeiou-params.1.md) |
 | `aeiou-datagen` | Python | container datasets through their format classes; deprecated, since `aeiou datagen` writes every format | [aeiou-datagen(1)](man/aeiou-datagen.1.md) |
-| `aeiou-trace` | Rust (its `compare` still Python) | metrics of an strace or an object-store log, comparison, the `trace` node's file, the digest a fit is made from | [aeiou-trace(1)](man/aeiou-trace.1.md) |
+| `aeiou-trace` | Rust | metrics of an strace or an object-store log, the `trace` node's file, the digest a fit is made from, and the comparison of the application's digest with the abstract's | [aeiou-trace(1)](man/aeiou-trace.1.md) |
 | `aeiou-catalog` | Python | the workload catalog: records against their dictionary, each case's shape, `CATALOG.md`, each case's description in prose, and `describe` for any abstract | [aeiou-catalog(1)](man/aeiou-catalog.1.md) |
 | `aeiou-header` | Python | the header bytes of an HDF5 file from libhdf5, run by `aeiou datagen` beside it | [aeiou-header(1)](man/aeiou-header.1.md) |
 | `aeiou-launch` | sh | one `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh | [aeiou-launch(1)](man/aeiou-launch.1.md) |
@@ -326,7 +326,7 @@ builds it and `uv` locks it. The `formats` extra brings the libraries of the for
 classes, `pyarrow`, `h5py`, `numpy` (whose `SFC64` makes the payload, the Rust writer's
 bytes), `crc32c`, and `xxhash`; the `s3` extra brings `obstore`, Python's binding of
 Apache `object_store`, for `aeiou-datagen` into a bucket. PEP 578 audit hooks make the
-hermetic build. `aeiou-catalog` and the Python half of `aeiou-trace` are standard library only; `aeiou-header`
+hermetic build. `aeiou-catalog` ~~and the Python half of `aeiou-trace`~~ (`aeiou-trace` has none since 2026-11-01) is standard library only; `aeiou-header`
 needs h5py, and the release ships it as one PyInstaller file carrying Python, numpy, and h5py.
 
 **Contract.** JSON Schema draft 2020-12 for the AST and the parameter file; canonical JSON
@@ -393,7 +393,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-31)
+## Status (2026-11-01)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -573,7 +573,14 @@ Not built, in rough order of interest:
   1.7 GB. Built the same day (stage 3): the interview, the application records, and the answers
   file in Rust (`interview.rs`, `applications.rs`), the binary asking itself with no hand-off to
   Python and the records built into it, held to every interview the Python's tests ran, recorded
-  first. To build next: the comparison over version-2 documents and `dry-run --emit-trace` (stage 4);
+  first. Built 2026-11-01 (stage 4): `aeiou-trace compare` in Rust (`compare.rs`), the last of
+  the tool that was Python, its numbers held to every comparison the Python's tests made,
+  recorded first, and two digests' structure compared by equality (templates paired by text,
+  by hand, or by shape; each pair's verdicts, the owner's asserted answers in place of
+  undecided ones, op kinds, motifs, and peak of lanes; the runner's own I/O set aside); and
+  `aeiou dry-run --emit-trace`, the abstract's op stream as a trace file, a lane per context
+  and the instances interleaved, whose digest at one instance has the dry run's own numbers. To
+  build next: stage 5, the Python's remains retired and the committed captures rewrapped;
   `aeiou-catalog disclose`, every string
   and number a contribution would publish (item 47); a digest redacted for publication, its
   path literals tokenized and its owner's names dropped (item 53, queued 2026-10-31); a trace's
@@ -584,8 +591,8 @@ Not built, in rough order of interest:
   procedure for the same work without an LLM (item 48).
 - The case for calling aeiou a "scalable trace" (raised by the user 2026-10-28, §3.85): the
   definition, the measured comparison of the `trace` node replicated against the abstract at
-  scale, a scale-invariance check in the catalog, `dry-run --emit-trace`, and the gaps stated
-  (item 49).
+  scale, a scale-invariance check in the catalog, ~~`dry-run --emit-trace`,~~ (built 2026-11-01,
+  §3.89 stage 4) and the gaps stated (item 49).
 
 ## License
 

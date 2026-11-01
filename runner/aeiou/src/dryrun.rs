@@ -71,6 +71,12 @@ pub struct DryRun {
     filter: Option<Filter>,
     printed: usize,
     lines: Vec<String>,
+    /// The lane of the context whose op comes next (`metrics.rs` sets it), and the next one
+    /// to give out: an instance's contexts, numbered as the walk meets them.
+    pub lane: usize,
+    next_lane: usize,
+    /// Under `--emit-trace`: the ops walked since the emitter last took them, with their lanes.
+    pub emitted: Option<Vec<crate::emit::Walked>>,
 }
 
 impl DryRun {
@@ -105,6 +111,12 @@ impl DryRun {
         }
     }
 
+    /// A new context's lane.
+    pub fn new_lane(&mut self) -> usize {
+        self.next_lane += 1;
+        self.next_lane - 1
+    }
+
     pub fn take_lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.lines)
     }
@@ -127,6 +139,9 @@ impl DryRun {
 impl<'m, 'a> Sink<'m, 'a> for DryRun {
     fn op(&mut self, op: &Op, ctx: &OpCtx) -> Result<()> {
         self.total.add(op);
+        if let Some(e) = &mut self.emitted {
+            e.push(crate::emit::Walked::of(self.lane, op));
+        }
         if let Some(p) = ctx.phase {
             self.phases.entry(p.to_string()).or_default().add(op);
         }

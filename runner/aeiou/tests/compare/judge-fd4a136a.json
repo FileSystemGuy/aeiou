@@ -1,0 +1,1745 @@
+{
+ "a": {
+  "bytes_read": 6736,
+  "bytes_written": 0,
+  "counts": {
+   "close": 13,
+   "fadvise": 5,
+   "fstat": 16,
+   "ioctl": 3,
+   "lseek": 6,
+   "open": 13,
+   "read": 6,
+   "stat": 33
+  },
+  "depth": {},
+  "fan_out": {},
+  "ops": 95,
+  "popularity_blocks": {
+   "accesses": 4,
+   "counts": [
+    [
+     1,
+     4
+    ]
+   ],
+   "distinct": 4,
+   "max": 1,
+   "top_0_1_pct": 0.001,
+   "top_10_pct": 0.1,
+   "top_1_pct": 0.01
+  },
+  "popularity_objects": {
+   "accesses": 6,
+   "counts": [
+    [
+     2,
+     3
+    ]
+   ],
+   "distinct": 3,
+   "max": 2,
+   "top_0_1_pct": 0.001,
+   "top_10_pct": 0.10000000000000002,
+   "top_1_pct": 0.01
+  },
+  "request_size": {
+   "read": {
+    "buckets": [
+     [
+      1,
+      3
+     ],
+     [
+      192,
+      1
+     ],
+     [
+      768,
+      1
+     ],
+     [
+      5120,
+      1
+     ]
+    ],
+    "max": 5702,
+    "mean": 1123.6666666666667,
+    "n": 6
+   },
+   "write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   }
+  },
+  "reuse_distance_bytes": {
+   "first_touch": {
+    "read": 4,
+    "write": 0
+   },
+   "read_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "read_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   }
+  },
+  "run_length": {
+   "read": {
+    "bytes": {
+     "buckets": [
+      [
+       192,
+       1
+      ],
+      [
+       768,
+       1
+      ],
+      [
+       5120,
+       1
+      ]
+     ],
+     "max": 5701,
+     "mean": 2245.3333333333335,
+     "n": 3
+    },
+    "multi_op_bytes": 0,
+    "ops": {
+     "buckets": [
+      [
+       1,
+       3
+      ]
+     ],
+     "max": 1,
+     "mean": 1.0,
+     "n": 3
+    }
+   },
+   "write": {
+    "bytes": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "multi_op_bytes": 0,
+    "ops": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  }
+ },
+ "b": {
+  "bytes_read": 437603928,
+  "bytes_written": 0,
+  "counts": {
+   "close": 13,
+   "fadvise": 5,
+   "fstat": 16,
+   "ioctl": 3,
+   "lseek": 6,
+   "open": 13,
+   "read": 92,
+   "stat": 8
+  },
+  "depth": {},
+  "fan_out": {},
+  "ops": 156,
+  "popularity_blocks": {
+   "accesses": 106921,
+   "counts": [
+    [
+     3,
+     5
+    ],
+    [
+     2,
+     71
+    ],
+    [
+     1,
+     106764
+    ]
+   ],
+   "distinct": 106840,
+   "max": 3,
+   "top_0_1_pct": 0.0017568111035250326,
+   "top_10_pct": 0.10068181180497751,
+   "top_1_pct": 0.010749992985475259
+  },
+  "popularity_bytes": {
+   "accesses": 437603928,
+   "counts": [
+    [
+     1,
+     437603928
+    ]
+   ],
+   "distinct": 437603928,
+   "max": 1,
+   "top_0_1_pct": 0.001,
+   "top_10_pct": 0.1,
+   "top_1_pct": 0.01
+  },
+  "popularity_objects": {
+   "accesses": 92,
+   "counts": [
+    [
+     25,
+     1
+    ],
+    [
+     24,
+     1
+    ],
+    [
+     22,
+     1
+    ],
+    [
+     12,
+     1
+    ],
+    [
+     3,
+     1
+    ],
+    [
+     2,
+     3
+    ]
+   ],
+   "distinct": 8,
+   "max": 25,
+   "top_0_1_pct": 0.002173913043478261,
+   "top_10_pct": 0.21739130434782608,
+   "top_1_pct": 0.021739130434782608
+  },
+  "request_size": {
+   "read": {
+    "buckets": [
+     [
+      8,
+      5
+     ],
+     [
+      128,
+      1
+     ],
+     [
+      896,
+      1
+     ],
+     [
+      1792,
+      1
+     ],
+     [
+      2048,
+      2
+     ],
+     [
+      4096,
+      44
+     ],
+     [
+      12288,
+      6
+     ],
+     [
+      16384,
+      6
+     ],
+     [
+      4194304,
+      7
+     ],
+     [
+      12582912,
+      6
+     ],
+     [
+      16777216,
+      12
+     ],
+     [
+      117440512,
+      1
+     ]
+    ],
+    "max": 131072000,
+    "mean": 4756698.065217392,
+    "n": 92
+   },
+   "write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   }
+  },
+  "reuse_distance_bytes": {
+   "first_touch": {
+    "read": 106840,
+    "write": 0
+   },
+   "read_after_read": {
+    "buckets": [
+     [
+      4096,
+      81
+     ]
+    ],
+    "max": 4096,
+    "mean": 4096.0,
+    "n": 81
+   },
+   "read_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   }
+  },
+  "reuse_extents": {
+   "first_touch": {
+    "read": 437603928,
+    "write": 0
+   },
+   "partial": 0,
+   "read_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "read_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "whole": 0,
+   "write_after_read": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   },
+   "write_after_write": {
+    "buckets": [],
+    "max": 0,
+    "mean": 0.0,
+    "n": 0
+   }
+  },
+  "run_length": {
+   "read": {
+    "bytes": {
+     "buckets": [
+      [
+       128,
+       1
+      ],
+      [
+       896,
+       1
+      ],
+      [
+       2048,
+       3
+      ],
+      [
+       4096,
+       3
+      ],
+      [
+       33554432,
+       1
+      ],
+      [
+       83886080,
+       3
+      ],
+      [
+       117440512,
+       1
+      ]
+     ],
+     "max": 131072000,
+     "mean": 33661840.615384616,
+     "n": 13
+    },
+    "multi_op_bytes": 306519640,
+    "ops": {
+     "buckets": [
+      [
+       1,
+       4
+      ],
+      [
+       2,
+       5
+      ],
+      [
+       10,
+       1
+      ],
+      [
+       20,
+       3
+      ]
+     ],
+     "max": 23,
+     "mean": 6.846153846153846,
+     "n": 13
+    }
+   },
+   "write": {
+    "bytes": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "multi_op_bytes": 0,
+    "ops": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   }
+  }
+ },
+ "docs": [
+  {
+   "chain_gap_us": null,
+   "source": "strace"
+  },
+  {
+   "source": "dry-run"
+  }
+ ],
+ "rows": [
+  [
+   "mix: data ops / all ops",
+   "6.3 %",
+   "59.0 %",
+   0.5265856950067477
+  ],
+  [
+   "mix: reads / data ops",
+   "100.0 %",
+   "100.0 %",
+   0.0
+  ],
+  [
+   "mix: read bytes / data bytes",
+   "100.0 %",
+   "100.0 %",
+   0.0
+  ],
+  [
+   "ops: close / all ops",
+   "13.7 %",
+   "8.3 %",
+   0.053508771929824575
+  ],
+  [
+   "ops: fadvise / all ops",
+   "5.3 %",
+   "3.2 %",
+   0.02058029689608637
+  ],
+  [
+   "ops: fstat / all ops",
+   "16.8 %",
+   "10.3 %",
+   0.06585695006747638
+  ],
+  [
+   "ops: ioctl / all ops",
+   "3.2 %",
+   "1.9 %",
+   0.012348178137651822
+  ],
+  [
+   "ops: lseek / all ops",
+   "6.3 %",
+   "3.8 %",
+   0.024696356275303644
+  ],
+  [
+   "ops: open / all ops",
+   "13.7 %",
+   "8.3 %",
+   0.053508771929824575
+  ],
+  [
+   "ops: read / all ops",
+   "6.3 %",
+   "59.0 %",
+   0.5265856950067477
+  ],
+  [
+   "ops: stat / all ops",
+   "34.7 %",
+   "5.1 %",
+   0.29608636977058034
+  ],
+  [
+   "request size, read (p50 / p90 / p99)",
+   "1 B / 5 KiB / 5 KiB",
+   "4 KiB / 16 MiB / 112 MiB",
+   0.7681159420289856
+  ],
+  [
+   "run length, read, bytes (p50 / p90 / p99)",
+   "768 B / 5 KiB / 5 KiB",
+   "4 KiB / 80 MiB / 112 MiB",
+   0.5897435897435896
+  ],
+  [
+   "run length, read, ops (p50 / p90 / p99)",
+   "1 / 1 / 1",
+   "2 / 20 / 20",
+   0.6923076923076923
+  ],
+  [
+   "run length, read: bytes in multi-op runs",
+   "0.0 %",
+   "70.0 %",
+   0.7004499283196562
+  ],
+  [
+   "reuse: first touches / block reads",
+   "100.0 %",
+   "99.9 %",
+   0.0007575686721972286
+  ],
+  [
+   "reuse: read after read / block reads",
+   "0.0 %",
+   "0.1 %",
+   0.0007575686721972298
+  ],
+  [
+   "reuse distance, read after read (p50 / p90 / p99)",
+   "none",
+   "4 KiB / 4 KiB / 4 KiB",
+   1.0
+  ],
+  [
+   "popularity, blocks: accesses to the top 0.1 %",
+   "0.1 %",
+   "0.2 %",
+   0.0007568111035250325
+  ],
+  [
+   "popularity, blocks: accesses to the top 1 %",
+   "1.0 %",
+   "1.1 %",
+   0.0007499929854752584
+  ],
+  [
+   "popularity, blocks: accesses to the top 10 %",
+   "10.0 %",
+   "10.1 %",
+   0.0006818118049775057
+  ],
+  [
+   "popularity, objects: accesses to the top 0.1 %",
+   "0.1 %",
+   "0.2 %",
+   0.0011739130434782609
+  ],
+  [
+   "popularity, objects: accesses to the top 1 %",
+   "1.0 %",
+   "2.2 %",
+   0.011739130434782608
+  ],
+  [
+   "popularity, objects: accesses to the top 10 %",
+   "10.0 %",
+   "21.7 %",
+   0.11739130434782606
+  ]
+ ],
+ "selfs": [
+  {
+   "bytes_read": 437603928,
+   "bytes_written": 0,
+   "counts": {
+    "close": 13,
+    "fadvise": 5,
+    "fstat": 16,
+    "ioctl": 3,
+    "lseek": 6,
+    "open": 13,
+    "read": 92,
+    "stat": 8
+   },
+   "depth": {},
+   "fan_out": {},
+   "ops": 156,
+   "popularity_blocks": {
+    "accesses": 106921,
+    "counts": [
+     [
+      3,
+      5
+     ],
+     [
+      2,
+      71
+     ],
+     [
+      1,
+      106764
+     ]
+    ],
+    "distinct": 106840,
+    "max": 3,
+    "top_0_1_pct": 0.0017568111035250326,
+    "top_10_pct": 0.10068181180497751,
+    "top_1_pct": 0.010749992985475259
+   },
+   "popularity_bytes": {
+    "accesses": 437603928,
+    "counts": [
+     [
+      1,
+      437603928
+     ]
+    ],
+    "distinct": 437603928,
+    "max": 1,
+    "top_0_1_pct": 0.001,
+    "top_10_pct": 0.1,
+    "top_1_pct": 0.01
+   },
+   "popularity_objects": {
+    "accesses": 92,
+    "counts": [
+     [
+      25,
+      1
+     ],
+     [
+      24,
+      1
+     ],
+     [
+      22,
+      1
+     ],
+     [
+      12,
+      1
+     ],
+     [
+      3,
+      1
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "distinct": 8,
+    "max": 25,
+    "top_0_1_pct": 0.002173913043478261,
+    "top_10_pct": 0.21739130434782608,
+    "top_1_pct": 0.021739130434782608
+   },
+   "request_size": {
+    "read": {
+     "buckets": [
+      [
+       8,
+       5
+      ],
+      [
+       128,
+       1
+      ],
+      [
+       896,
+       1
+      ],
+      [
+       1792,
+       1
+      ],
+      [
+       2048,
+       2
+      ],
+      [
+       4096,
+       44
+      ],
+      [
+       12288,
+       6
+      ],
+      [
+       16384,
+       6
+      ],
+      [
+       4194304,
+       7
+      ],
+      [
+       12582912,
+       6
+      ],
+      [
+       16777216,
+       12
+      ],
+      [
+       117440512,
+       1
+      ]
+     ],
+     "max": 131072000,
+     "mean": 4756698.065217392,
+     "n": 92
+    },
+    "write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "reuse_distance_bytes": {
+    "first_touch": {
+     "read": 106840,
+     "write": 0
+    },
+    "read_after_read": {
+     "buckets": [
+      [
+       4096,
+       81
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 81
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "reuse_extents": {
+    "first_touch": {
+     "read": 437603928,
+     "write": 0
+    },
+    "partial": 0,
+    "read_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "whole": 0,
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "run_length": {
+    "read": {
+     "bytes": {
+      "buckets": [
+       [
+        128,
+        1
+       ],
+       [
+        896,
+        1
+       ],
+       [
+        2048,
+        3
+       ],
+       [
+        4096,
+        3
+       ],
+       [
+        33554432,
+        1
+       ],
+       [
+        83886080,
+        3
+       ],
+       [
+        117440512,
+        1
+       ]
+      ],
+      "max": 131072000,
+      "mean": 33661840.615384616,
+      "n": 13
+     },
+     "multi_op_bytes": 306519640,
+     "ops": {
+      "buckets": [
+       [
+        1,
+        4
+       ],
+       [
+        2,
+        5
+       ],
+       [
+        10,
+        1
+       ],
+       [
+        20,
+        3
+       ]
+      ],
+      "max": 23,
+      "mean": 6.846153846153846,
+      "n": 13
+     }
+    },
+    "write": {
+     "bytes": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "multi_op_bytes": 0,
+     "ops": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    }
+   }
+  },
+  {
+   "bytes_read": 437603928,
+   "bytes_written": 0,
+   "counts": {
+    "close": 13,
+    "fadvise": 5,
+    "fstat": 16,
+    "ioctl": 3,
+    "lseek": 6,
+    "open": 13,
+    "read": 92,
+    "stat": 8
+   },
+   "depth": {},
+   "fan_out": {},
+   "ops": 156,
+   "popularity_blocks": {
+    "accesses": 106921,
+    "counts": [
+     [
+      3,
+      5
+     ],
+     [
+      2,
+      71
+     ],
+     [
+      1,
+      106764
+     ]
+    ],
+    "distinct": 106840,
+    "max": 3,
+    "top_0_1_pct": 0.0017568111035250326,
+    "top_10_pct": 0.10068181180497751,
+    "top_1_pct": 0.010749992985475259
+   },
+   "popularity_bytes": {
+    "accesses": 437603928,
+    "counts": [
+     [
+      1,
+      437603928
+     ]
+    ],
+    "distinct": 437603928,
+    "max": 1,
+    "top_0_1_pct": 0.001,
+    "top_10_pct": 0.1,
+    "top_1_pct": 0.01
+   },
+   "popularity_objects": {
+    "accesses": 92,
+    "counts": [
+     [
+      25,
+      1
+     ],
+     [
+      24,
+      1
+     ],
+     [
+      22,
+      1
+     ],
+     [
+      12,
+      1
+     ],
+     [
+      3,
+      1
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "distinct": 8,
+    "max": 25,
+    "top_0_1_pct": 0.002173913043478261,
+    "top_10_pct": 0.21739130434782608,
+    "top_1_pct": 0.021739130434782608
+   },
+   "request_size": {
+    "read": {
+     "buckets": [
+      [
+       8,
+       5
+      ],
+      [
+       128,
+       1
+      ],
+      [
+       896,
+       1
+      ],
+      [
+       1792,
+       1
+      ],
+      [
+       2048,
+       2
+      ],
+      [
+       4096,
+       44
+      ],
+      [
+       12288,
+       6
+      ],
+      [
+       16384,
+       6
+      ],
+      [
+       4194304,
+       7
+      ],
+      [
+       12582912,
+       6
+      ],
+      [
+       16777216,
+       12
+      ],
+      [
+       117440512,
+       1
+      ]
+     ],
+     "max": 131072000,
+     "mean": 4756698.065217392,
+     "n": 92
+    },
+    "write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "reuse_distance_bytes": {
+    "first_touch": {
+     "read": 106840,
+     "write": 0
+    },
+    "read_after_read": {
+     "buckets": [
+      [
+       4096,
+       81
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 81
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "reuse_extents": {
+    "first_touch": {
+     "read": 437603928,
+     "write": 0
+    },
+    "partial": 0,
+    "read_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "whole": 0,
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "run_length": {
+    "read": {
+     "bytes": {
+      "buckets": [
+       [
+        128,
+        1
+       ],
+       [
+        896,
+        1
+       ],
+       [
+        2048,
+        3
+       ],
+       [
+        4096,
+        3
+       ],
+       [
+        33554432,
+        1
+       ],
+       [
+        83886080,
+        3
+       ],
+       [
+        117440512,
+        1
+       ]
+      ],
+      "max": 131072000,
+      "mean": 33661840.615384616,
+      "n": 13
+     },
+     "multi_op_bytes": 306519640,
+     "ops": {
+      "buckets": [
+       [
+        1,
+        4
+       ],
+       [
+        2,
+        5
+       ],
+       [
+        10,
+        1
+       ],
+       [
+        20,
+        3
+       ]
+      ],
+      "max": 23,
+      "mean": 6.846153846153846,
+      "n": 13
+     }
+    },
+    "write": {
+     "bytes": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "multi_op_bytes": 0,
+     "ops": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    }
+   }
+  },
+  {
+   "bytes_read": 437603928,
+   "bytes_written": 0,
+   "counts": {
+    "close": 13,
+    "fadvise": 5,
+    "fstat": 16,
+    "ioctl": 3,
+    "lseek": 6,
+    "open": 13,
+    "read": 92,
+    "stat": 8
+   },
+   "depth": {},
+   "fan_out": {},
+   "ops": 156,
+   "popularity_blocks": {
+    "accesses": 106921,
+    "counts": [
+     [
+      3,
+      5
+     ],
+     [
+      2,
+      71
+     ],
+     [
+      1,
+      106764
+     ]
+    ],
+    "distinct": 106840,
+    "max": 3,
+    "top_0_1_pct": 0.0017568111035250326,
+    "top_10_pct": 0.10068181180497751,
+    "top_1_pct": 0.010749992985475259
+   },
+   "popularity_bytes": {
+    "accesses": 437603928,
+    "counts": [
+     [
+      1,
+      437603928
+     ]
+    ],
+    "distinct": 437603928,
+    "max": 1,
+    "top_0_1_pct": 0.001,
+    "top_10_pct": 0.1,
+    "top_1_pct": 0.01
+   },
+   "popularity_objects": {
+    "accesses": 92,
+    "counts": [
+     [
+      25,
+      1
+     ],
+     [
+      24,
+      1
+     ],
+     [
+      22,
+      1
+     ],
+     [
+      12,
+      1
+     ],
+     [
+      3,
+      1
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "distinct": 8,
+    "max": 25,
+    "top_0_1_pct": 0.002173913043478261,
+    "top_10_pct": 0.21739130434782608,
+    "top_1_pct": 0.021739130434782608
+   },
+   "request_size": {
+    "read": {
+     "buckets": [
+      [
+       8,
+       5
+      ],
+      [
+       128,
+       1
+      ],
+      [
+       896,
+       1
+      ],
+      [
+       1792,
+       1
+      ],
+      [
+       2048,
+       2
+      ],
+      [
+       4096,
+       44
+      ],
+      [
+       12288,
+       6
+      ],
+      [
+       16384,
+       6
+      ],
+      [
+       4194304,
+       7
+      ],
+      [
+       12582912,
+       6
+      ],
+      [
+       16777216,
+       12
+      ],
+      [
+       117440512,
+       1
+      ]
+     ],
+     "max": 131072000,
+     "mean": 4756698.065217392,
+     "n": 92
+    },
+    "write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "reuse_distance_bytes": {
+    "first_touch": {
+     "read": 106840,
+     "write": 0
+    },
+    "read_after_read": {
+     "buckets": [
+      [
+       4096,
+       81
+      ]
+     ],
+     "max": 4096,
+     "mean": 4096.0,
+     "n": 81
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "reuse_extents": {
+    "first_touch": {
+     "read": 437603928,
+     "write": 0
+    },
+    "partial": 0,
+    "read_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "read_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "whole": 0,
+    "write_after_read": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    },
+    "write_after_write": {
+     "buckets": [],
+     "max": 0,
+     "mean": 0.0,
+     "n": 0
+    }
+   },
+   "run_length": {
+    "read": {
+     "bytes": {
+      "buckets": [
+       [
+        128,
+        1
+       ],
+       [
+        896,
+        1
+       ],
+       [
+        2048,
+        3
+       ],
+       [
+        4096,
+        3
+       ],
+       [
+        33554432,
+        1
+       ],
+       [
+        83886080,
+        3
+       ],
+       [
+        117440512,
+        1
+       ]
+      ],
+      "max": 131072000,
+      "mean": 33661840.615384616,
+      "n": 13
+     },
+     "multi_op_bytes": 306519640,
+     "ops": {
+      "buckets": [
+       [
+        1,
+        4
+       ],
+       [
+        2,
+        5
+       ],
+       [
+        10,
+        1
+       ],
+       [
+        20,
+        3
+       ]
+      ],
+      "max": 23,
+      "mean": 6.846153846153846,
+      "n": 13
+     }
+    },
+    "write": {
+     "bytes": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "multi_op_bytes": 0,
+     "ops": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    }
+   }
+  }
+ ],
+ "spec": {
+  "aeiou_tolerances": 1,
+  "unseen": [
+   {
+    "metric": "mix",
+    "reason": "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   },
+   {
+    "metric": "ops",
+    "reason": "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   },
+   {
+    "metric": "request size, read",
+    "reason": "the application reads through a mapping, and strace does not show page faults"
+   },
+   {
+    "metric": "run length, read",
+    "reason": "the application reads through a mapping, and strace does not show page faults"
+   },
+   {
+    "metric": "reuse",
+    "reason": "the application reads through a mapping, and strace does not show page faults"
+   },
+   {
+    "metric": "popularity",
+    "reason": "the application reads through a mapping, and strace does not show page faults"
+   }
+  ]
+ },
+ "want": {
+  "rows": [
+   [
+    "mix: data ops / all ops",
+    "6.3 %",
+    "59.0 %",
+    0.5265856950067477,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "mix: reads / data ops",
+    "100.0 %",
+    "100.0 %",
+    0.0,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "mix: read bytes / data bytes",
+    "100.0 %",
+    "100.0 %",
+    0.0,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "ops: close / all ops",
+    "13.7 %",
+    "8.3 %",
+    0.053508771929824575,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "ops: fadvise / all ops",
+    "5.3 %",
+    "3.2 %",
+    0.02058029689608637,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "ops: fstat / all ops",
+    "16.8 %",
+    "10.3 %",
+    0.06585695006747638,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "ops: ioctl / all ops",
+    "3.2 %",
+    "1.9 %",
+    0.012348178137651822,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "ops: lseek / all ops",
+    "6.3 %",
+    "3.8 %",
+    0.024696356275303644,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "ops: open / all ops",
+    "13.7 %",
+    "8.3 %",
+    0.053508771929824575,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "ops: read / all ops",
+    "6.3 %",
+    "59.0 %",
+    0.5265856950067477,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "ops: stat / all ops",
+    "34.7 %",
+    "5.1 %",
+    0.29608636977058034,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+   ],
+   [
+    "request size, read (p50 / p90 / p99)",
+    "1 B / 5 KiB / 5 KiB",
+    "4 KiB / 16 MiB / 112 MiB",
+    0.7681159420289856,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "run length, read, bytes (p50 / p90 / p99)",
+    "768 B / 5 KiB / 5 KiB",
+    "4 KiB / 80 MiB / 112 MiB",
+    0.5897435897435896,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "run length, read, ops (p50 / p90 / p99)",
+    "1 / 1 / 1",
+    "2 / 20 / 20",
+    0.6923076923076923,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "run length, read: bytes in multi-op runs",
+    "0.0 %",
+    "70.0 %",
+    0.7004499283196562,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "reuse: first touches / block reads",
+    "100.0 %",
+    "99.9 %",
+    0.0007575686721972286,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "reuse: read after read / block reads",
+    "0.0 %",
+    "0.1 %",
+    0.0007575686721972298,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "reuse distance, read after read (p50 / p90 / p99)",
+    "none",
+    "4 KiB / 4 KiB / 4 KiB",
+    1.0,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "popularity, blocks: accesses to the top 0.1 %",
+    "0.1 %",
+    "0.2 %",
+    0.0007568111035250325,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "popularity, blocks: accesses to the top 1 %",
+    "1.0 %",
+    "1.1 %",
+    0.0007499929854752584,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "popularity, blocks: accesses to the top 10 %",
+    "10.0 %",
+    "10.1 %",
+    0.0006818118049775057,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "popularity, objects: accesses to the top 0.1 %",
+    "0.1 %",
+    "0.2 %",
+    0.0011739130434782609,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "popularity, objects: accesses to the top 1 %",
+    "1.0 %",
+    "2.2 %",
+    0.011739130434782608,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ],
+   [
+    "popularity, objects: accesses to the top 10 %",
+    "10.0 %",
+    "21.7 %",
+    0.11739130434782606,
+    null,
+    "unseen",
+    "the application reads through a mapping, and strace does not show page faults"
+   ]
+  ],
+  "stale": []
+ }
+}

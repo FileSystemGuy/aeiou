@@ -1,0 +1,22 @@
+{
+ "spec": {
+  "aeiou_tolerances": 1,
+  "outside": [
+   {
+    "metric": "reuse distance, write after write",
+    "reason": "370 samples, a file's chunk write after its header write; in 231 of them another thread's call completed in between (two store threads and the load pool, against the dry run's one request after another)"
+   }
+  ],
+  "unseen": [
+   {
+    "metric": "run length, read",
+    "reason": "a run belongs to a thread, and the two reads of a load are issued by different threads of the pool on one descriptor (checked in the raw trace)"
+   },
+   {
+    "metric": "fan-out",
+    "reason": "the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)"
+   }
+  ]
+ },
+ "text": "{\n  \"aeiou_tolerances\": 1,\n  \"unseen\": [\n    {\n      \"metric\": \"run length, read\",\n      \"reason\": \"a run belongs to a thread, and the two reads of a load are issued by different threads of the pool on one descriptor (checked in the raw trace)\"\n    },\n    {\n      \"metric\": \"fan-out\",\n      \"reason\": \"the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)\"\n    }\n  ],\n  \"outside\": [\n    {\n      \"metric\": \"reuse distance, write after write\",\n      \"reason\": \"370 samples, a file's chunk write after its header write; in 231 of them another thread's call completed in between (two store threads and the load pool, against the dry run's one request after another)\"\n    }\n  ]\n}\n"
+}

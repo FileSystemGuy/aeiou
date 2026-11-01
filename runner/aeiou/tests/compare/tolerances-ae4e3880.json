@@ -1,0 +1,17 @@
+{
+ "spec": {
+  "aeiou_tolerances": 1,
+  "comment": "c",
+  "outside": [
+   {
+    "metric": "mix",
+    "reason": "why"
+   }
+  ],
+  "tolerances": {
+   "mix": 1,
+   "reuse": 0
+  }
+ },
+ "text": "{\"aeiou_tolerances\": 1, \"tolerances\": {\"mix\": 1, \"reuse\": 0}, \"comment\": \"c\", \"outside\": [{\"metric\": \"mix\", \"reason\": \"why\"}]}"
+}

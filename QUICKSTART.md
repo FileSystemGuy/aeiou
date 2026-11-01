@@ -17,12 +17,13 @@ A clone of the repository is for changing aeiou, not for running it: its README'
 | Path | What |
 |---|---|
 | `bin/aeiou` | The runner: `check`, `dry-run`, `datagen`, `run`. x86_64 or aarch64 Linux (one tarball each, `-x86_64-linux` and `-aarch64-linux`), glibc 2.34 or newer (RHEL 9, Ubuntu 22.04, Debian 12 and later). Links nothing but libc. Reads and writes S3 object stores as well as directories (**aeiou**(1), OBJECT STORES). |
+| `bin/aeiou-trace` | The trace side, for the owner of a real application's trace: its metrics, the digest a fit is made from (with its questions and the application records built in), the `trace` node's file, and the comparison of the application's digest with an abstract's (`aeiou dry-run --emit-trace`). No Python. |
 | `bin/aeiou-header` | Made by `aeiou datagen`, never by you: the header of an HDF5 file, from libhdf5 (one file carrying Python, numpy, h5py). It must stay beside `bin/aeiou`; only the host of rank 0 runs it, so client hosts need `aeiou` alone. |
 | `bin/aeiou-launch` | One `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh. A POSIX shell script. |
 | `share/man/` | The manual pages as roff: `man -l share/man/man1/aeiou.1`, or `MANPATH=$PWD/share/man man aeiou`. |
 | `man/` | The same pages as Markdown. |
 | `workloads/` | The committed abstracts (`*.ast.json`), the only thing the runner executes, one directory per I/O mechanism under its category (`input-pipeline/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …), each with its README and catalog record (`mechanism.toml`), its cases (`cases/<case>/params.json`: a parameter set describing one workload, with its records, its description in prose (`DESCRIPTION.md`), measured `shape.json`, and, where fitted, the parameters fitted to its captures), and, for some, test-sized parameter files in `params/`; the catalog, `CATALOG.md`, and its vocabulary, `attributes.toml`. The authoring scripts, capture kits, and trace metrics stay in the repository. |
-| `wheel/` | The Python builder, for those who want to author workloads, describe one in prose, or compare an `strace` of a real application with an abstract, with `requirements.txt` (the versions and hashes of what it needs, from the lock it was tested with) and `python-version` (that Python); installed below. |
+| `wheel/` | The Python builder, for those who want to author workloads or describe one in prose, with `requirements.txt` (the versions and hashes of what it needs, from the lock it was tested with) and `python-version` (that Python); installed below. |
 | `QUICKSTART.md`, `LICENSE` | This guide; the Apache License 2.0. |
 
 ## First run

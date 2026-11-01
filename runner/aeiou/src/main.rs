@@ -862,6 +862,9 @@ struct DryRunArgs {
     /// Write the metrics, with their histograms, to FILE as JSON (implies --metrics).
     #[arg(long, value_name = "FILE", help_heading = "Metrics")]
     metrics_json: Option<PathBuf>,
+    /// Write the op stream to FILE as the runner's trace file (aeiou_trace: 1), for aeiou-trace digest and compare: a lane per context of each instance, the instances interleaved, one microsecond per line.
+    #[arg(long, value_name = "FILE", help_heading = "Output")]
+    emit_trace: Option<PathBuf>,
 }
 
 fn main() {
@@ -2317,6 +2320,7 @@ fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     l.fixed("metrics", &(a.metrics || a.metrics_json.is_some()), a.metrics || a.no_metrics)?;
     l.fixed("metrics-block", &a.metrics_block, a.metrics_block.is_some())?;
     l.fixed("metrics-json", &a.metrics_json, a.metrics_json.is_some())?;
+    l.fixed("emit-trace", &a.emit_trace, a.emit_trace.is_some())?;
     let ranks = l.layered::<i64>("ranks", a.ranks, None)?;
     let threads = l.layered::<usize>("threads", a.threads, None)?;
     // an option that only narrows another is never ignored in silence: what it needs joins
@@ -2409,6 +2413,20 @@ fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         });
         std::fs::write(path, serde_json::to_string_pretty(&doc)? + "\n").with_context(|| format!("{}", path.display()))?;
     }
+    let emitted = match &a.emit_trace {
+        Some(path) => {
+            let identity = serde_json::json!({
+                "abstract": loaded.ast.name,
+                "sha256": loaded.sha256,
+                "seed": cfg.seed,
+                "gpus": cfg.gpus,
+                "fingerprint": format!("{:016x}", report.total.fingerprint),
+                "order": "round-robin",
+            });
+            Some((path, aeiou::emit::write(&model, path, identity.as_object().expect("an object"))?))
+        }
+        None => None,
+    };
 
     let mut out = std::io::BufWriter::new(stdout());
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
@@ -2456,6 +2474,9 @@ fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     dryrun::write_report(&mut out, &report, ranks, cfg.gpus)?;
     for p in &projections {
         dryrun::write_projection(&mut out, p)?;
+    }
+    if let Some((path, e)) = &emitted {
+        writeln!(out, "emitted trace {}: {} line(s) on {} lane(s), {} open(s)", path.display(), e.lines, e.lanes, e.opens)?;
     }
     writeln!(out, "dry-run took {:.2?} on {} thread(s)", elapsed, threads)?;
     out.flush()?;

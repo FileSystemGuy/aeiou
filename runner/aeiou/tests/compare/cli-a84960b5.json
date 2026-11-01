@@ -1,0 +1,17 @@
+{
+ "args": [
+  "compare",
+  "{p0}",
+  "{p1}",
+  "--max-distance",
+  "0.1",
+  "--judge"
+ ],
+ "exit": 2,
+ "files": {
+  "p0": null,
+  "p1": null
+ },
+ "stderr": "aeiou-trace compare: --max-distance cannot be used with --judge: they are two rules; give one\n\nUsage: aeiou-trace compare [OPTIONS] <A> <B>\n\nFor more information, try 'aeiou-trace compare --help'.\n",
+ "stdout": ""
+}

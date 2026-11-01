@@ -2,7 +2,7 @@
 
 ## NAME
 
-aeiou-trace - locality metrics of a real application from an strace of it, their comparison with an abstract's, the trace file of the runner's `trace` node, and the structural digest a fit is made from
+aeiou-trace - locality metrics of a real application from an strace of it, the trace file of the runner's `trace` node, the structural digest a fit is made from, and the comparison of the application's with its abstract's
 
 ## SYNOPSIS
 
@@ -21,15 +21,15 @@ proving it is the *right* stream, by comparison with the same numbers taken from
 the real application the abstract models. `aeiou dry-run --metrics-json` (**aeiou**(1))
 gives the abstract's numbers; **aeiou-trace** gives the same numbers, by the same
 definitions and in the same document (`aeiou_metrics: 2`, with `"source": "strace"`),
-from an `strace` of the application, and compares two such documents. It also exports an
-strace as the file the runner's `trace` node executes literally, and digests one into the
-structural summary an abstract is fitted from.
+from an `strace` of the application. It also exports an strace as the file the runner's
+`trace` node executes literally, digests one into the structural summary an abstract is
+fitted from, and compares the application's document with the abstract's: two digests'
+structure by equality and the numbers of any two documents by distance.
 
 **aeiou-trace** is a binary of the runner's crate, built and shipped beside **aeiou**(1).
 `metrics` and `export` are its own (Rust, since 2026-10-29), and so is `digest`: its
 document and report, its questions, the application records, and the answers file
-(since 2026-10-31). `compare` is still the Python package's, which the binary runs
-as `python3 -m aeiou.trace` (or with the interpreter `AEIOU_PYTHON` names) until it is ported
+(since 2026-10-31); and `compare` (since 2026-11-01): no Python is needed for any of it
 (`DESIGN_REVIEW.md` §3.89). The trace is read in a stream, and the state kept is per open, per
 thread, and per path under the root, never per call, so a trace of several gigabytes is read
 in the time it takes to read it.
@@ -94,7 +94,27 @@ file; the trace file is written beside *FILE* and renamed into place, so a failu
 
 ### compare
 
-Compares two metrics documents, *A* the trace's and *B* the abstract's, one row per metric
+Compares two observation documents, *A* the application's and *B* the abstract's. Each is a
+digest (`aeiou_digest: 2`) or a metrics document (`aeiou_metrics: 2`, or 1, a capture's from
+before 2026-10-22), which has numbers and no structure; the abstract's digest is the digest of
+`aeiou dry-run --emit-trace` (**aeiou**(1)), or of an strace of `aeiou run`, which checks that
+a backend issues the abstract's calls.
+
+**Structure**, when both are digests, by equality. *B*'s own I/O is set aside first and
+listed: a name beginning `.aeiou` (no workload name may, V13) and a template of the root that
+is only stats; the runner's checks before the gate (a `stat` of a dataset's file) are not, and
+show on an strace of `aeiou run`. Templates pair by identical text, then by `--pair`, then by
+shape (the same fields with the same kinds and widths, and the same kinds of site) where one
+template of each side has it. A template of *A* that nothing pairs is a difference; one of *B*
+is listed. Per pair, each aspect is `same`, `DIFFERENT`, `not compared`, or `shown`: the fields
+(kind and width); per site, by phase, its kind and each verdict, a side's undecided verdict
+not compared and its owner's asserted answer compared in its place (labelled `assertion`);
+the set of op kinds; the set of motifs (a motif that depends on file size is structure, so the
+run takes the trace's sizes); the peak of lanes at once on the template (each phase an
+interval of its lane); and the lanes on it and in all, shown and never judged. A difference
+of structure exits 1, and under `--judge` it decides the verdict whatever the rows.
+
+**Numbers**, one row per metric
 with both values and a distance in [0, 1]: the difference of two shares (mix, ops by kind,
 first touches, bytes in multi-op runs, popularity of the top 0.1 %, 1 %, 10 %), the largest
 difference between two histograms' cumulative shares (request size, run length, reuse
@@ -290,10 +310,12 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
 - *A*
 
-  A metrics document (`aeiou_metrics: 2`, or 1 from before 2026-10-22), the trace's.
+  The application's document: a digest (`aeiou_digest: 2`), or a metrics document
+  (`aeiou_metrics: 2`, or 1 from before 2026-10-22: numbers only).
 - *B*
 
-  The metrics document *A* is compared with, the abstract's.
+  The document *A* is compared with, the abstract's: the digest of its `aeiou dry-run
+  --emit-trace`, or its `aeiou dry-run --metrics-json`.
 - **--template-a** *NAME*
 
   Use this actor template's metrics of *A* instead of its total.
@@ -316,13 +338,27 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
   Implies `--judge`.
 - **--self** *FILE*
 
-  A metrics document of *B*'s abstract at the same parameters and `--gpus` and another seed.
-  Repeatable; a row's tolerance is raised by its largest distance between *B* and these.
-  The abstract's hash, `--gpus`, block, and sample are checked; the parameters cannot be.
-  Implies `--judge`.
+  A metrics document (or digest) of *B*'s abstract at the same parameters and `--gpus` and
+  another seed. Repeatable; a row's tolerance is raised by its largest distance between *B*
+  and these. The abstract's hash, `--gpus`, block, and source are checked; the parameters
+  cannot be. A digest of an emitted file names its dry run, so its numbers are checked as a
+  dry run's. Implies `--judge`.
 - **--only** *PREFIX*
 
   Only the rows whose metric name starts with *PREFIX*. Repeatable.
+- **--pair** *A*`=`*B*
+
+  Pair *A*'s template *A* with *B*'s template *B*, written as the digests write them
+  (`train/{a:05}.npz`), when neither their text nor their shape pairs them. Repeatable; two
+  digests only.
+- **--json**
+
+  Print the comparison as one JSON document (`aeiou_compare: 1`): `a` and `b` (path and
+  description), `structure` (`pairs` with their `aspects`, `unpaired_a`, `unpaired_b`,
+  `set_aside`, `lanes`, `differences`; null unless both are digests), `rows` (`metric`, `a`,
+  `b`, `distance`, and under `--judge` `allowed`, `verdict`, `note`), `selfs`, `notes`, and
+  `verdict` (`same` or `different`; under `--judge` `accepted`, `not accepted`, or `nothing
+  judged`). The exit status is the text's.
 
 ### aeiou-trace digest
 
@@ -404,10 +440,6 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
 ## ENVIRONMENT
 
-- **AEIOU_PYTHON**
-
-  The interpreter that runs `compare`, which must be able to import the `aeiou` package (the
-  wheel's); default `python3`.
 - **AEIOU_TRACE**
 
   Read by the Python package's tests, which run the binary for every digest document: the
@@ -462,6 +494,9 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
   earliest start of an exported call, `fd` an open id (the ordinal of the `open` line),
   `ret` the traced result (a count, or an errno name that becomes the op's `expect`), and
   `submit` lines holding the members of one `io_submit`. Defined in `runner/REFERENCE.md` §13.
+  The file `aeiou dry-run --emit-trace` writes is one too, its header with `source: dry-run`
+  and the dry run's `abstract`, `sha256`, `seed`, `gpus`, `fingerprint`, and `order`, which
+  `digest` keeps as the source of its document and copies into its `metrics`.
 - `workloads/<category>/…/<mechanism>/kit/`, `…/cases/<case>/captures/<capture>/`
 
   The capture kit of each real application traced so far (the traced script, the corpus
@@ -472,11 +507,11 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
 - **0**
 
-  Success. For `compare` with `--judge`, at least one row was judged and none is outside;
-  with `--max-distance`, no row exceeds it.
+  Success. For `compare`, the structure of two digests is the same; with `--judge`, at
+  least one row was judged and none is outside; with `--max-distance`, no row exceeds it.
 - **1**
 
-  A row outside its bound, a document the tool cannot read, a `--self` document for
+  A difference of structure, a row outside its bound, a document the tool cannot read, a `--self` document for
   another abstract or shape, a trace with no counted call (a `--root` that none of its
   paths is under, or an input that is not an strace; `export` then writes no file).
 - **2**
@@ -504,6 +539,17 @@ measures as the strace did:
 aeiou-trace export trace.txt --root /mnt/data -o app.jsonl       # prints the sha256
 aeiou-trace metrics app.jsonl -o app.metrics.json
 aeiou-trace compare trace.metrics.json app.metrics.json --max-distance 0
+```
+
+Hold an abstract fitted to a digest against it: emit the abstract's operations at the trace's
+scale, digest them like a trace, and compare structure and numbers, the abstract's dry run at
+three other seeds its own spread:
+
+```
+aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed 1 --emit-trace abstract.jsonl
+aeiou-trace digest abstract.jsonl --no-questions -o abstract.digest.json
+for s in 2 3 4; do aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed $s --metrics-json self$s.json; done
+aeiou-trace compare trace.digest.json abstract.digest.json --judge --self self2.json --self self3.json --self self4.json
 ```
 
 Digest a trace for a fit, projecting its open questions over the four passes the benchmark

@@ -752,11 +752,13 @@ struct Stream<'m, 'a> {
     /// Open runs by `(path hash, kind)`.
     runs: HashMap<(u64, usize), Run>,
     chain: u64,
+    /// The context's lane in an emitted trace (`DryRun::new_lane`), unique within its instance.
+    lane: usize,
 }
 
 impl<'m, 'a: 'm> Stream<'m, 'a> {
-    fn new(vm: Vm<'m, 'a>, role: Role) -> Self {
-        Stream { vm, role, par: Vec::new(), par_n: 0, par_at: 0, bg: Vec::new(), at: 0, own_done: false, done: false, runs: HashMap::new(), chain: 0 }
+    fn new(vm: Vm<'m, 'a>, role: Role, lane: usize) -> Self {
+        Stream { vm, role, par: Vec::new(), par_n: 0, par_at: 0, bg: Vec::new(), at: 0, own_done: false, done: false, runs: HashMap::new(), chain: 0, lane }
     }
 
     fn end_chain(&mut self, m: &mut Metrics) {
@@ -886,6 +888,7 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
                     _ => return Ok(false),
                 },
                 Some(Event::Op(op, ctx)) => {
+                    sink.lane = self.lane;
                     sink.op(&op, &ctx)?;
                     Self::record(&mut self.runs, m, &op)?;
                     self.end_chain(m);
@@ -920,7 +923,8 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
                                     kid.done = false;
                                     kid.chain = 0;
                                 } else {
-                                    self.par.push(Stream::new(Vm::resume(snap.clone()), Role::Parallel));
+                                    let lane = sink.new_lane();
+                                    self.par.push(Stream::new(Vm::resume(snap.clone()), Role::Parallel, lane));
                                 }
                                 self.par[k].vm.start_sub(k as i64);
                             }
@@ -929,7 +933,8 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
                         }
                         ForkKind::Loader { workers, batches, .. } => {
                             for w in 0..workers.min(batches) {
-                                let mut kid = Stream::new(Vm::resume(snap.clone()), Role::Worker { b: w, workers, batches });
+                                let lane = sink.new_lane();
+                                let mut kid = Stream::new(Vm::resume(snap.clone()), Role::Worker { b: w, workers, batches }, lane);
                                 kid.vm.start_sub(w);
                                 self.bg.push(kid);
                             }
@@ -948,6 +953,7 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
 fn trace_walk(tf: &crate::trace::TraceFile, base: &crate::trace::OwnedCtx, sink: &mut DryRun, m: &mut Metrics) -> Result<()> {
     use crate::trace::Step;
     let mut runs: Vec<HashMap<(u64, usize), Run>> = (0..tf.lanes()).map(|_| HashMap::new()).collect();
+    let lanes: Vec<usize> = (0..tf.lanes()).map(|_| sink.new_lane()).collect();
     crate::trace::walk(tf, &base.indices, |step| match step {
         Step::Gap { ns, .. } => {
             sink.compute_ns += ns as i128;
@@ -958,6 +964,7 @@ fn trace_walk(tf: &crate::trace::TraceFile, base: &crate::trace::OwnedCtx, sink:
             Ok(())
         }
         Step::Op { lane, op, indices } => {
+            sink.lane = lanes[lane];
             sink.op(&op, &base.ctx(indices))?;
             Stream::record(&mut runs[lane], m, &op)
         }
@@ -978,7 +985,8 @@ pub fn walk<'m, 'a: 'm>(model: &'m Model<'a>, template: &'a str, actor: i64, cou
     let mut m = sink.metrics.take().ok_or_else(|| anyhow!("metrics walk without metrics"))?;
     let mut vm = Vm::new(model, template, actor, count);
     vm.start(&a.body);
-    let mut main = Stream::new(vm, Role::Main);
+    let lane = sink.new_lane();
+    let mut main = Stream::new(vm, Role::Main, lane);
     (|| -> Result<()> {
         while main.turn(&mut sink, &mut m)? {}
         m.end_instance()
@@ -986,6 +994,38 @@ pub fn walk<'m, 'a: 'm>(model: &'m Model<'a>, template: &'a str, actor: i64, cou
     .with_context(|| format!("actor `{template}` instance {actor}"))?;
     sink.metrics = Some(m);
     Ok(sink)
+}
+
+/// Every instance of every template walked as `walk` walks one, the instances in turn, one op
+/// of each per round (`--emit-trace`, `emit.rs`): the order instances that run at once would
+/// interleave in, where `walk` takes each alone. After each turn `each` gets the instance's
+/// ordinal and its sink, whose `emitted` holds what the turn walked.
+pub fn interleave<'m, 'a: 'm>(model: &'m Model<'a>, mut each: impl FnMut(usize, &mut DryRun) -> Result<()>) -> Result<()> {
+    let mut live = Vec::new();
+    for (template, count) in crate::vm::actor_counts(model)? {
+        let a = model.ast.actors.get(template).ok_or_else(|| anyhow!("no actor `{template}`"))?;
+        for actor in 0..count {
+            let mut sink = DryRun::new(None);
+            sink.emitted = Some(Vec::new());
+            let mut vm = Vm::new(model, template, actor, count);
+            vm.start(&a.body);
+            let lane = sink.new_lane();
+            let m = Metrics::new(Opts { block: None });
+            live.push((Stream::new(vm, Role::Main, lane), sink, m, template, actor));
+        }
+    }
+    let mut done = vec![false; live.len()];
+    while done.iter().any(|d| !d) {
+        for (i, (main, sink, m, template, actor)) in live.iter_mut().enumerate() {
+            if done[i] {
+                continue;
+            }
+            let more = main.turn(sink, m).with_context(|| format!("actor `{template}` instance {actor}"))?;
+            each(i, sink)?;
+            done[i] = !more;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- a trace's calls

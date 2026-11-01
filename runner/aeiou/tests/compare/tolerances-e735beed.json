@@ -1,0 +1,29 @@
+{
+ "spec": {
+  "aeiou_tolerances": 1,
+  "outside": [
+   {
+    "metric": "reuse distance, read after read",
+    "reason": "known"
+   },
+   {
+    "metric": "mix: reads",
+    "reason": "was"
+   }
+  ],
+  "tolerances": {
+   "request size": 0.07
+  },
+  "unseen": [
+   {
+    "metric": "fan-out",
+    "reason": "threads"
+   },
+   {
+    "metric": "ops: mkdir",
+    "reason": "no such row"
+   }
+  ]
+ },
+ "text": "{\"aeiou_tolerances\": 1, \"tolerances\": {\"request size\": 0.07}, \"unseen\": [{\"metric\": \"fan-out\", \"reason\": \"threads\"}, {\"metric\": \"ops: mkdir\", \"reason\": \"no such row\"}], \"outside\": [{\"metric\": \"reuse distance, read after read\", \"reason\": \"known\"}, {\"metric\": \"mix: reads\", \"reason\": \"was\"}]}"
+}

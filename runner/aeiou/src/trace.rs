@@ -457,7 +457,7 @@ impl TraceFile {
                 Op { kind: OpKind::Write, path: path(fd), path2: None, offset: off, len: *len, bytes: ret.count().max(0), aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0, capped: false }
             }
             LineOp::Lseek { fd, offset, whence, ret } => {
-                Op { kind: OpKind::Lseek, path: path(fd), path2: None, offset: *offset, len: 0, bytes: 0, aux: *whence as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false }
+                Op { kind: OpKind::Lseek, path: path(fd), path2: None, offset: *offset, len: 0, bytes: ret.count(), aux: *whence as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false }
             }
             LineOp::Fstat { fd, ret } => Op { kind: OpKind::Fstat, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Fsync { fd, ret } => Op { kind: OpKind::Fsync, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },

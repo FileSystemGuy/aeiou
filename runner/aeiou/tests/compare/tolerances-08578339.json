@@ -1,0 +1,4 @@
+{
+ "error": "{path}: tolerances: `mix` must be one of mix, ops, request size, run length, reuse, reuse distance, extent reuse, extent reuse distance, popularity, fan-out, depth with a value in [0, 1]",
+ "text": "{\"aeiou_tolerances\": 1, \"tolerances\": {\"mix\": 2}}"
+}

@@ -2,9 +2,9 @@
 //! §3.42, §3.89): the locality metrics of a real application from an strace of it, an exported
 //! trace file, or an object-store request log; the runner's trace file for a `trace` node; the
 //! structural digest a fit is made from (`aeiou::digest`), with its interview, the application
-//! records, and the answers file (`aeiou::interview`, `aeiou::applications`); and, until it is
-//! ported (§3.89 build order, stage 4), the comparison of two metrics documents, which runs the
-//! Python package's (`python3 -m aeiou.trace`, or the interpreter `$AEIOU_PYTHON` names).
+//! records, and the answers file (`aeiou::interview`, `aeiou::applications`); and the comparison
+//! of the application's document with the abstract's, two digests' structure and any two
+//! documents' numbers (`aeiou::compare`, §3.89 stage 4).
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
@@ -15,9 +15,9 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{json, Value};
 
 use aeiou::usage::{self, Missing, UsageError};
-use aeiou::{applications, digest, export, interview, objectlog, strace};
+use aeiou::{applications, compare, digest, export, interview, objectlog, strace};
 
-const ABOUT: &str = "Locality metrics of a real application from an strace of it, their comparison with an abstract's (aeiou dry-run --metrics-json), the runner's trace file, and the structural digest a fit is made from";
+const ABOUT: &str = "Locality metrics of a real application from an strace of it, the runner's trace file, the structural digest a fit is made from, and the comparison of the application's with its abstract's (the digest of aeiou dry-run --emit-trace, or aeiou dry-run --metrics-json)";
 const EXIT_PIPE: i32 = 141;
 
 #[derive(Parser)]
@@ -35,9 +35,9 @@ enum Cmd {
     /// Write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root
     #[command(override_usage = "aeiou-trace export [OPTIONS] --root <DIR> -o <FILE> <TRACE>")]
     Export(ExportArgs),
-    /// Compare two metrics documents, from a trace or from aeiou dry-run --metrics-json
-    #[command(disable_help_flag = true, override_usage = "aeiou-trace compare [OPTIONS] <A> <B>")]
-    Compare(Passed),
+    /// Compare the application's digest or metrics with the abstract's: structure, then numbers
+    #[command(override_usage = "aeiou-trace compare [OPTIONS] <A> <B>")]
+    Compare(CompareArgs),
     /// Write the structural digest of a trace: path templates, lanes and their phases, a verdict per site on what the trace decides (permutation or draw, order, size), and the open questions ranked by their divergence at scale
     #[command(override_usage = "aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>")]
     Digest(DigestArgs),
@@ -133,11 +133,39 @@ struct DigestArgs {
     application: Option<String>,
 }
 
-/// A subcommand the Python package still runs: its arguments, untouched.
 #[derive(clap::Args)]
-struct Passed {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
-    args: Vec<String>,
+struct CompareArgs {
+    /// The application's document: a digest (aeiou_digest: 2), or a metrics document (aeiou_metrics: 2, or 1 from before 2026-10-22: numbers only)
+    a: Option<String>,
+    /// The document A is compared with, the abstract's: the digest of its aeiou dry-run --emit-trace, or its aeiou dry-run --metrics-json
+    b: Option<String>,
+    /// Use this actor template's metrics of A instead of its total
+    #[arg(long, value_name = "NAME")]
+    template_a: Option<String>,
+    /// Use this actor template's metrics of B instead of its total
+    #[arg(long, value_name = "NAME")]
+    template_b: Option<String>,
+    /// Exit 1 if any distance exceeds X (one number for every row; --judge is the rule by class)
+    #[arg(long, value_name = "X", value_parser = non_negative)]
+    max_distance: Option<f64>,
+    /// Judge each row against the tolerance of its class (A the trace, B the abstract) and exit 1 if any is outside
+    #[arg(long)]
+    judge: bool,
+    /// A tolerance file (aeiou_tolerances: 1): class tolerances that replace the defaults, the rows the trace cannot show, the rows recorded as outside; implies --judge
+    #[arg(long, value_name = "FILE")]
+    tolerances: Option<String>,
+    /// A metrics document of B's abstract at the same parameters and another seed (repeatable): a row's tolerance is raised by its largest distance between B and these; implies --judge
+    #[arg(long = "self", value_name = "FILE")]
+    selfs: Vec<String>,
+    /// Only the rows whose metric starts with PREFIX (repeatable)
+    #[arg(long, value_name = "PREFIX")]
+    only: Vec<String>,
+    /// Pair A's template A with B's template B, written as the digests write them, when neither their text nor their shape pairs them (repeatable)
+    #[arg(long, value_name = "A=B")]
+    pair: Vec<String>,
+    /// Print the comparison as one JSON document (aeiou_compare: 1) instead of the text
+    #[arg(long)]
+    json: bool,
 }
 
 /// A finite number at least 0 (`usage.non_negative` of the Python tools).
@@ -518,19 +546,38 @@ fn digest_cmd(a: DigestArgs) -> Result<()> {
     Ok(())
 }
 
-/// Run a subcommand the Python package still holds, with its arguments as given; `what` says
-/// what of it is still the package's.
-fn passed(sub: &str, args: &[String], what: &str) -> Result<()> {
-    let python = std::env::var("AEIOU_PYTHON").unwrap_or_else(|_| "python3".into());
-    let probe = std::process::Command::new(&python).args(["-c", "import aeiou.trace"]).stderr(std::process::Stdio::null()).stdout(std::process::Stdio::null()).status();
-    if !probe.is_ok_and(|s| s.success()) {
-        return Err(anyhow!(
-            "{what} the Python package's until {} ported (DESIGN_REVIEW.md §3.89), and {python} cannot import aeiou: install the aeiou wheel, or set AEIOU_PYTHON to an interpreter that has it",
-            if what.ends_with(" is") { "it is" } else { "they are" }
-        ));
+fn compare_cmd(a: CompareArgs) -> Result<()> {
+    let mut m = Missing::new();
+    let first = m.want(a.a, "<A>", "the application's document: a digest, or a metrics document", None);
+    let second = m.want(a.b, "<B>", "the document A is compared with, the abstract's", None);
+    m.check()?;
+    let mut pairs = Vec::new();
+    for p in &a.pair {
+        match p.split_once('=') {
+            Some((x, y)) if !x.is_empty() && !y.is_empty() => pairs.push((x.to_string(), y.to_string())),
+            _ => return Err(usage::err(format!("--pair {p}: give A's template and B's as A=B"))),
+        }
     }
-    let status = std::process::Command::new(&python).args(["-m", "aeiou.trace", sub]).args(args).status().map_err(|e| anyhow!("{python}: {}", cause(&e)))?;
-    std::process::exit(status.code().unwrap_or(1));
+    let o = compare::Opts {
+        a: first.unwrap(),
+        b: second.unwrap(),
+        template_a: a.template_a,
+        template_b: a.template_b,
+        max_distance: a.max_distance,
+        judge: a.judge,
+        tolerances: a.tolerances,
+        selfs: a.selfs,
+        only: a.only,
+        pairs,
+        json: a.json,
+    };
+    let mut out = String::new();
+    let status = compare::run(&o, &mut out);
+    print_out(&out);
+    match status? {
+        0 => Ok(()),
+        n => std::process::exit(n),
+    }
 }
 
 fn main() {
@@ -571,7 +618,7 @@ fn main() {
         }
         Some(Cmd::Metrics(a)) => metrics(a),
         Some(Cmd::Export(a)) => export_cmd(a),
-        Some(Cmd::Compare(p)) => passed("compare", &p.args, "compare is"),
+        Some(Cmd::Compare(a)) => compare_cmd(a),
         Some(Cmd::Digest(a)) => digest_cmd(a),
     };
     if let Err(e) = result {

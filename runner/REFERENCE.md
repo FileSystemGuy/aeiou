@@ -89,8 +89,10 @@ aeiou/src/
                answers applied, the metrics of the same calls, the text report (`aeiou_digest: 2`)
   interview.rs the digest's questions on a terminal and the answers file (`aeiou_answers: 1`)
   applications.rs  the application records (`applications/`), built into the crate by `build.rs`
-  bin/aeiou_trace.rs  the `aeiou-trace` binary; `compare` runs the Python package's until
-               ported (`DESIGN_REVIEW.md` §3.89)
+  compare.rs   `aeiou-trace compare`: two digests' structure (templates paired, verdicts, op
+               kinds, motifs, peak lanes) and any two documents' numbers, the tolerances
+  emit.rs      `aeiou dry-run --emit-trace`: the op stream as a trace file (§13)
+  bin/aeiou_trace.rs  the `aeiou-trace` binary (`DESIGN_REVIEW.md` §3.89)
   options.rs   the option layers (§14)
   usage.rs     the usage-error frame (§15)
   main.rs      the CLI
@@ -1940,6 +1942,30 @@ one with no creates may run in `G` instances, which is `G` clients replaying one
 application's sequence against the same files, not a model of `G` ranks. The limits of §11
 count a trace's lanes as threads and its peak of open ids as files. The JSON report (§12)
 carries `traces: [{file, sha256, lanes, lines, ops, opens, creates, notes}]`.
+
+**Emitted by the dry run (2026-11-01, `DESIGN_REVIEW.md` §3.89 stage 4).** `aeiou dry-run
+--emit-trace FILE` (`emit.rs`) writes an abstract's op stream as this file, the run side of
+`aeiou-trace compare`: no strace, none of the runner's own I/O, no dataset on disk. A lane is a
+context of the metrics walk (§10): an instance's main line, each `parallel` sub-actor (the same
+lane at every fork, as a pool thread), each `loader` worker, each lane of a `trace` node,
+numbered as their first lines are written. The instances are walked in turn, one op of each per
+round (`metrics::interleave`), where the metrics walk takes each instance alone, so the lanes of
+instances interleave as instances that run at once would. The clock is the line's ordinal, one
+microsecond a line, `dur` 0: compute is not in it. An open is numbered as it is written; an op
+on a path names the latest open of it on its own lane, else in its instance. A read or write
+that names its offset is written with it, one that does not without, and an `lseek` with the
+position it sets as its `ret` (the VM's `Op.bytes` of an `lseek`, not hashed, since this),
+so the file's positions are the VM's. Every op is written as succeeding. The header is the
+file's with `source: dry-run` and the dry run's `abstract`, `sha256`, `seed`, `gpus`,
+`fingerprint`, and `order`, `aeiou_trace` its first key (the tools know a trace file by it);
+the digest keeps `dry-run` as its source and copies the rest into its `metrics`, so `compare
+--self` checks it as a dry run's metrics document. At one instance the digest's numbers are
+`dry-run --metrics-json`'s except fan-out and depth (a file has no forks) and a run the end
+of a `parallel` closes in the walk and the next fork continues on its lane (`faiss_ivf_ondisk`:
+one of 2,561); checked 2026-11-01 on every example and unsettled case at its first GPU count
+but three full-scale LMCache ones (gigabytes of lines), and loaded as a `trace` node whose dry
+run measures the same (`tests/emit.rs`). At more instances the order differs from the walk's
+and so does the reuse distance, as the trace of instances at once would.
 
 **Not built.** ~~Traces under the event-loop backends;~~ (built 2026-10-03) a recorded wait
 time per lane; a cap on the file (a million lines is about 64 MiB of parsed ops, held in

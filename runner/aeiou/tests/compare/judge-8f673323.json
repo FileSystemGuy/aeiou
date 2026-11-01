@@ -1,0 +1,215 @@
+{
+ "a": {
+  "popularity_blocks": {
+   "accesses": 1,
+   "counts": [],
+   "distinct": 5000,
+   "max": 1,
+   "top_0_1_pct": 0.001,
+   "top_10_pct": 0.1,
+   "top_1_pct": 0.01
+  },
+  "popularity_objects": {
+   "accesses": 1,
+   "counts": [],
+   "distinct": 50,
+   "max": 1,
+   "top_0_1_pct": 0.001,
+   "top_10_pct": 0.1,
+   "top_1_pct": 0.01
+  }
+ },
+ "b": {
+  "popularity_blocks": {
+   "accesses": 1,
+   "counts": [],
+   "distinct": 5000,
+   "max": 1,
+   "top_0_1_pct": 0.001,
+   "top_10_pct": 0.1,
+   "top_1_pct": 0.01
+  },
+  "popularity_objects": {
+   "accesses": 1,
+   "counts": [],
+   "distinct": 5000,
+   "max": 1,
+   "top_0_1_pct": 0.001,
+   "top_10_pct": 0.1,
+   "top_1_pct": 0.01
+  }
+ },
+ "docs": [],
+ "rows": [
+  [
+   "mix: reads / data ops",
+   "",
+   "",
+   0.04
+  ],
+  [
+   "request size, read (p50 / p90 / p99)",
+   "",
+   "",
+   0.06
+  ],
+  [
+   "reuse distance, read after read (p50 / p90 / p99)",
+   "",
+   "",
+   0.25
+  ],
+  [
+   "popularity, blocks: accesses to the top 0.1 %",
+   "",
+   "",
+   0.9
+  ],
+  [
+   "popularity, blocks: accesses to the top 1 %",
+   "",
+   "",
+   0.01
+  ],
+  [
+   "popularity, objects: accesses to the top 10 %",
+   "",
+   "",
+   0.9
+  ],
+  [
+   "fan-out",
+   "none",
+   "",
+   1.0
+  ],
+  [
+   "depth",
+   "none",
+   "",
+   1.0
+  ],
+  [
+   "run length, write, ops (p50 / p90 / p99)",
+   "none",
+   "none",
+   null
+  ]
+ ],
+ "selfs": [],
+ "spec": {
+  "aeiou_tolerances": 1,
+  "outside": [
+   {
+    "metric": "reuse distance, read after read",
+    "reason": "known"
+   },
+   {
+    "metric": "mix: reads",
+    "reason": "was"
+   }
+  ],
+  "tolerances": {
+   "request size": 0.07
+  },
+  "unseen": [
+   {
+    "metric": "fan-out",
+    "reason": "threads"
+   },
+   {
+    "metric": "ops: mkdir",
+    "reason": "no such row"
+   }
+  ]
+ },
+ "want": {
+  "rows": [
+   [
+    "mix: reads / data ops",
+    "",
+    "",
+    0.04,
+    0.05,
+    "ok",
+    "recorded as outside, now within"
+   ],
+   [
+    "request size, read (p50 / p90 / p99)",
+    "",
+    "",
+    0.06,
+    0.07,
+    "ok",
+    ""
+   ],
+   [
+    "reuse distance, read after read (p50 / p90 / p99)",
+    "",
+    "",
+    0.25,
+    0.1,
+    "outside",
+    "known"
+   ],
+   [
+    "popularity, blocks: accesses to the top 0.1 %",
+    "",
+    "",
+    0.9,
+    null,
+    "not judged",
+    "the top 0.1 % of 5000 blocks is fewer than 10"
+   ],
+   [
+    "popularity, blocks: accesses to the top 1 %",
+    "",
+    "",
+    0.01,
+    0.05,
+    "ok",
+    ""
+   ],
+   [
+    "popularity, objects: accesses to the top 10 %",
+    "",
+    "",
+    0.9,
+    null,
+    "not judged",
+    "the top 10 % of 50 objects is fewer than 10"
+   ],
+   [
+    "fan-out",
+    "none",
+    "",
+    1.0,
+    null,
+    "unseen",
+    "threads"
+   ],
+   [
+    "depth",
+    "none",
+    "",
+    1.0,
+    0.1,
+    "outside",
+    ""
+   ],
+   [
+    "run length, write, ops (p50 / p90 / p99)",
+    "none",
+    "none",
+    null,
+    null,
+    "not judged",
+    "nothing on either side"
+   ]
+  ],
+  "stale": [
+   "unseen: `ops: mkdir` matches no row",
+   "outside: `mix: reads / data ops` is recorded as outside and is within"
+  ]
+ }
+}

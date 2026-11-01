@@ -410,9 +410,10 @@ The Python parser, metrics, exporter, and object-log reader that this section de
 ported line for line and deleted; their behavior is kept as the golden corpus
 `runner/aeiou/tests/strace/` (every trace the Python tests fed them, with what they made of it,
 reproduced exactly by `tests/strace_corpus.rs`), and the Python tests drive the binary as its
-acceptance tests. `compare` and `digest` stay in `aeiou/trace.py` and `aeiou/digest.py` until
-their stages of §3.89 (the digest's document and report Rust since 2026-10-31, stage 2, below), run by the binary as `python3 -m aeiou.trace` (or `$AEIOU_PYTHON`); the
-digest takes a trace's calls from `aeiou-trace export` (`trace.export_of`, which finds the binary
+acceptance tests. ~~`compare` and `digest` stay in `aeiou/trace.py` and `aeiou/digest.py` until
+their stages of §3.89 (the digest's document and report Rust since 2026-10-31, stage 2, below), run by the binary as `python3 -m aeiou.trace` (or `$AEIOU_PYTHON`);~~
+(the digest Rust since 2026-10-31, stages 2 and 3; `compare` since 2026-11-01, stage 4, both
+below); the digest takes a trace's calls from `aeiou-trace export` (`trace.export_of`, which finds the binary
 through `$AEIOU_TRACE`, beside `$AEIOU_RUNNER`, on the `PATH`, or in the checkout's build). The
 export reads its input twice, the first pass learning what only the end of the trace says, so
 its memory is per open and per path, never per call; on a synthetic strace of 211 MB the port
@@ -797,6 +798,41 @@ does not exist and nothing answered, the Python failed when it handed the empty 
 binary ("no such answers file, and no terminal to ask on"); the binary writes the document and
 no answers file. `digest.py` keeps only the handle the Python tests of the analysis use
 (`Trace`, `analyze`, `document`, `report`, `digest_of`, `write_answers`), until stage 5.
+
+*2026-11-01 (§3.89, stage 4):* `compare` is Rust, `runner/aeiou/src/compare.rs`, and the
+binary runs no Python at all (`AEIOU_PYTHON` is gone). It compares observation documents, A
+the application's and B the abstract's: a digest (`aeiou_digest: 2`) or a metrics document,
+numbers only. **The numbers** are the rows, distances, tolerances, `--self`, and tolerance
+file described in this section, ported first: every comparison the Python's tests made was
+recorded before the Python was cut (`runner/aeiou/tests/compare/`: 75 row sets, 25
+judgements, 25 tolerance files, 63 command lines with the files they named and what they
+printed and returned, the capture pairs of `workloads/` among them, and written cases for the
+rare refusals) and `tests/compare_corpus.rs` reproduces them, every string exactly. Chosen
+differences: a file that is not JSON is refused in serde's words; a bound the parser refuses
+(`--max-distance nan`) in the binary parser's; a total-variation distance (fan-out, depth) is
+summed over the values in order, where the Python summed over a set in its hash order, so the
+two can differ in the last bit (held to 1e-12); a document of neither kind is refused naming
+both; and an object log's metrics are described as one (`minio-audit log of BUCKET/PREFIX`),
+where the Python described them as a dry run's with every field `None`. **The structure**, when
+both are digests, is new (§3.89's design, built as designed): templates paired by identical
+text, then `--pair A=B`, then shape (fields' kinds and widths, and the kinds of site) where
+one template of each side has it; per pair the fields, per site and phase its kind and every
+verdict (a side's undecided verdict not compared, its owner's asserted answer compared in its
+place and labelled an assertion), the op kinds, the motifs, and the peak of lanes at once (the
+phases on the template as intervals of their lanes); lanes shown, not judged. B's own I/O is
+set aside and listed: names beginning `.aeiou`, and a template of the root that is only stats;
+B only, since an application's root stat is its own. A template of A with no partner is a
+difference, one of B listed; a difference exits 1 and, under `--judge`, makes the verdict `not
+accepted` whatever the rows. `--json` prints the comparison as one document (`aeiou_compare:
+1`), which the Python tests read rows from. B is the digest of `aeiou dry-run --emit-trace`
+(`runner/REFERENCE.md` §13), whose header names the dry run, so its digest's `metrics` are
+checked by `--self` as a dry run's metrics document. On the spike of §3.89, `npy_per_sample`
+run under `strace` against its emitted digest at the same `--st-blksize`: every verdict and
+every row the same but reuse distance (the threads' completion order against the walk's
+round-robin), and one `stat` of a sample file, the runner's check before the gate, which shows
+on an strace of `aeiou run` as an op kind and a motif. `aeiou/trace.py` keeps `LogHist`,
+`binary`, and `export_of` for the tests; its `compare`, `judge`, and CLI were deleted, and its
+tests drive the binary.
 
 **Object-store request logs (~~`aeiou/objectlog.py`~~ `runner/aeiou/src/objectlog.rs` since the port
 the same day, §3.89; built 2026-10-29, §3.88):** a MinIO audit log

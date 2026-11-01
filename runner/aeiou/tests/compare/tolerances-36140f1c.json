@@ -1,0 +1,13 @@
+{
+ "spec": {
+  "aeiou_tolerances": 1,
+  "outside": [],
+  "unseen": [
+   {
+    "metric": "fan-out",
+    "reason": "the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)"
+   }
+  ]
+ },
+ "text": "{\n  \"aeiou_tolerances\": 1,\n  \"unseen\": [\n    {\n      \"metric\": \"fan-out\",\n      \"reason\": \"the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)\"\n    }\n  ],\n  \"outside\": []\n}\n"
+}

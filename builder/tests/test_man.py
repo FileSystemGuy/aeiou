@@ -38,13 +38,12 @@ MENTION = re.compile(r"(?<!-)--(\[no-\])?([a-z][a-z0-9-]*)")
 
 
 def help_text(module, *sub):
-    """A Python tool's help by its module; `trace` is the runner's `aeiou-trace` binary, which runs
-    this package's `compare` and `digest` (DESIGN_REVIEW.md §3.89)."""
+    """A Python tool's help by its module; `trace` is the runner's `aeiou-trace` binary (DESIGN_REVIEW.md §3.89)."""
     env = {"PYTHONPATH": str(BUILDER), "PATH": "/usr/bin:/bin"}
     if module == "trace":
         if not TRACE_BIN.exists():
             pytest.skip("needs the runner binary aeiou-trace")
-        r = subprocess.run([str(TRACE_BIN), *sub, "--help"], capture_output=True, text=True, cwd=str(BUILDER), env={**env, "AEIOU_PYTHON": sys.executable})
+        r = subprocess.run([str(TRACE_BIN), *sub, "--help"], capture_output=True, text=True, cwd=str(BUILDER), env=env)
         assert r.returncode == 0, r.stderr
         return r.stdout
     r = subprocess.run([sys.executable, "-m", f"aeiou.{module}", *sub, "--help"], capture_output=True, text=True, cwd=str(BUILDER), env=env)

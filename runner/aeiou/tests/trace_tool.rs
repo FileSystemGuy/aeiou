@@ -1,6 +1,6 @@
 //! The `aeiou-trace` binary (`DESIGN_REVIEW.md` §3.89): its usage errors in the suite's frame
 //! (`runner/REFERENCE.md` §15), what `metrics` and `export` print and write, standard input, the
-//! failures that name the file, and the subcommands the Python package still runs. What the
+//! failures that name the file, and `compare`'s command line. What the
 //! calls become is `strace_corpus.rs`'s; these are the command line's.
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -210,19 +210,17 @@ fn object_logs_take_one_bucket_root() {
 }
 
 #[test]
-fn the_unported_subcommands_say_what_they_need() {
-    let o = Command::new(bin()).args(["compare", "a.json", "b.json"]).env("AEIOU_PYTHON", "/no/such/python").output().unwrap();
-    assert_eq!(o.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.starts_with("aeiou-trace compare: compare is the Python package's until it is ported"), "{err}");
-    assert!(err.contains("AEIOU_PYTHON"), "{err}");
-    // with an interpreter that has the package, its own messages and exit status come through
-    let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builder/.venv/bin/python");
-    if venv.exists() {
-        let o = Command::new(bin()).args(["compare", "--max-distance", "x"]).env("AEIOU_PYTHON", &venv).output().unwrap();
-        assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
-        assert!(String::from_utf8_lossy(&o.stderr).starts_with("aeiou-trace compare: "), "{}", String::from_utf8_lossy(&o.stderr));
-    }
+fn compare_needs_no_python_and_lists_what_it_lacks() {
+    // ported (DESIGN_REVIEW.md §3.89, stage 4): no interpreter is asked for
+    let o = Command::new(bin()).args(["compare"]).env("AEIOU_PYTHON", "/no/such/python").output().unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    let err = text(&o).1;
+    assert!(err.starts_with("aeiou-trace compare: the following required arguments were not provided:\n  <A>  the application's document: a digest, or a metrics document\n  <B>  the document A is compared with, the abstract's\n\nUsage: aeiou-trace compare [OPTIONS] <A> <B>"), "{err}");
+    let o = tool(&["compare", "a.json", "b.json", "--max-distance", "x"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o).1.starts_with("aeiou-trace compare: invalid value 'x' for '--max-distance <X>': not a finite number at least 0\n\nUsage: aeiou-trace compare "), "{}", text(&o).1);
+    let o = tool(&["compare", "/no/such/a.json", "b.json"]);
+    assert_eq!(text(&o).1, "aeiou-trace compare: /no/such/a.json: No such file or directory (os error 2)\n");
 }
 
 /// An strace of `np.load`-shaped opens, one line per call, 1 ms apart.
@@ -495,15 +493,32 @@ fn digest_replays_an_answers_file_and_says_when_it_is_another_traces() {
     }
 }
 
-/// The child's peak resident set, in KiB.
+/// The peak resident set of `aeiou-trace args`, in KiB, measured from a fresh process (this test
+/// binary run again for `peak_of_a_child` alone): a child's `ru_maxrss` counts the peak of the
+/// process it was forked from, and this one, running every test of the crate, reaches gigabytes
+/// under coverage, which the child would report as its own.
 fn peak_kib(args: &[&str]) -> i64 {
-    let child = Command::new(bin()).args(args).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+    let o = Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "trace_tool::peak_of_a_child", "--nocapture", "--test-threads=1"])
+        .env("AEIOU_TEST_PEAK_ARGS", args.join("\x1f"))
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    let n = out.split("peak_kib=").nth(1).and_then(|r| r.split_whitespace().next());
+    n.unwrap_or_else(|| panic!("no peak: {out}{}", String::from_utf8_lossy(&o.stderr))).parse().unwrap()
+}
+
+#[test]
+#[ignore = "a helper: run by peak_kib in a fresh process, never alone"]
+fn peak_of_a_child() {
+    let args = std::env::var("AEIOU_TEST_PEAK_ARGS").unwrap();
+    let child = Command::new(bin()).args(args.split('\x1f')).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
     let mut status = 0;
     let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
     let pid = unsafe { libc::wait4(child.id() as libc::pid_t, &mut status, 0, &mut ru) };
     assert_eq!(pid, child.id() as libc::pid_t);
     assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0);
-    ru.ru_maxrss
+    println!("peak_kib={}", ru.ru_maxrss);
 }
 
 #[test]

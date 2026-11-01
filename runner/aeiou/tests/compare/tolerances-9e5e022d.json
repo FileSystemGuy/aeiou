@@ -1,0 +1,4 @@
+{
+ "error": "{path}: unknown key(s) a, b",
+ "text": "{\"aeiou_tolerances\": 1, \"a\": 1, \"b\": 2}"
+}

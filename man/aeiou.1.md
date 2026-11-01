@@ -88,7 +88,9 @@ included, summed exactly from the size expressions and the framing. With `--gpu`
 prints one instance's operation stream, one line per operation, in the round-robin order
 of that instance's concurrent sub-actors. With `--metrics` it computes the locality
 metrics of the stream (see METRICS below) for comparison with a trace of the real
-application through **aeiou-trace**(1).
+application through **aeiou-trace**(1). With `--emit-trace` it writes the stream as the
+runner's trace file, which `aeiou-trace digest` digests like the trace of an application and
+`aeiou-trace compare` sets against the application's digest, structure and numbers.
 
 ### datagen
 
@@ -331,6 +333,21 @@ turns it off, and the last one on the line wins.
 
   With `--gpu`: stop printing after *N* operations. `--steps` or `--limit` without `--gpu`
   is a usage error.
+- **--emit-trace** *FILE*
+
+  Write the operation stream to *FILE* as the runner's trace file (`aeiou_trace: 1`, the
+  file of the `trace` node; FILES in **aeiou-trace**(1)), the run side of `aeiou-trace
+  compare` (`DESIGN_REVIEW.md` §3.89): no strace, none of the runner's own I/O, no dataset on
+  disk. A lane is one context of the metrics walk: an instance's main line, each `parallel`
+  sub-actor (carried over to the next fork, as a pool thread is), each `loader` worker, each
+  lane of a `trace` node. The instances are walked in turn, one operation of each per round,
+  so they interleave as instances that run at once would; the clock is that order, one
+  microsecond per line, every `dur` 0, compute not in it. The header names the dry run
+  (`source: dry-run`, `abstract`, `sha256`, `seed`, `gpus`, `fingerprint`), which the digest's
+  `metrics` carry. At one instance the digest's numbers are `--metrics-json`'s but fan-out and
+  depth (a file has no forks) and a run that the end of a `parallel` closes in the walk and the
+  next fork continues on its lane. Every operation of the stream is written, so a full-scale
+  case is a large file: emit at the scale of the trace it is compared with.
 
 **Metrics**
 
