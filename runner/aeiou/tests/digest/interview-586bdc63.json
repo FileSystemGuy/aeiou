@@ -1,0 +1,536 @@
+{
+ "application": null,
+ "apps": "apps-3579f7e9.json",
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "at": "2026-11-01T02:45:37+00:00",
+ "by": "tester",
+ "input": "trace-1b35ac0c.in",
+ "lines": [
+  "8",
+  "7",
+  "4",
+  "1",
+  "shuffle=True",
+  "3",
+  ""
+ ],
+ "options": {
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "want": {
+  "answers": [
+   {
+    "fact": "candidates",
+    "template": "s/{a:03}.npz",
+    "value": 7
+   },
+   {
+    "fact": "passes",
+    "template": "s/{a:03}.npz",
+    "value": 4
+   },
+   {
+    "answer": "per-path",
+    "note": "shuffle=True",
+    "question": "size",
+    "template": "s/{a:03}.npz"
+   },
+   {
+    "answer": "unknown",
+    "question": "order",
+    "template": "s/{a:03}.npz"
+   }
+  ],
+  "asked": [
+   "answer [1-8]: ",
+   "number (Enter for don't know): ",
+   "number (Enter for don't know): ",
+   "answer [1-3]: ",
+   "how do you know? (Enter to skip): ",
+   "answer [1-3]: ",
+   "how do you know? (Enter to skip): "
+  ],
+  "document": {
+   "aeiou_digest": 2,
+   "application": null,
+   "asserted": [
+    {
+     "at": "2026-11-01T02:45:37+00:00",
+     "by": "tester",
+     "fact": "candidates",
+     "site": 0,
+     "template": "s/{a:03}.npz",
+     "value": 7
+    },
+    {
+     "at": "2026-11-01T02:45:37+00:00",
+     "by": "tester",
+     "fact": "passes",
+     "site": 0,
+     "template": "s/{a:03}.npz",
+     "value": 4
+    },
+    {
+     "answer": "per-path",
+     "at": "2026-11-01T02:45:37+00:00",
+     "by": "tester",
+     "note": "shuffle=True",
+     "question": "size",
+     "site": 0,
+     "template": "s/{a:03}.npz"
+    },
+    {
+     "answer": "unknown",
+     "at": "2026-11-01T02:45:37+00:00",
+     "by": "tester",
+     "question": "order",
+     "site": 0,
+     "template": "s/{a:03}.npz"
+    }
+   ],
+   "contexts": 1,
+   "lanes": [
+    {
+     "lane": 0,
+     "ops": 28,
+     "phases": [
+      {
+       "bytes_read": 114688,
+       "bytes_written": 0,
+       "first": 0,
+       "last": 81002951,
+       "motif": "open fstat read close",
+       "ops": 28,
+       "repeats": {},
+       "template": 0,
+       "think": {
+        "buckets": [
+         [
+          8388608,
+          6
+         ]
+        ],
+        "max": 9995222,
+        "mean": 9995023.333333334,
+        "n": 6
+       },
+       "units": 7
+      }
+     ]
+    }
+   ],
+   "metrics": {
+    "aeiou_metrics": 2,
+    "block": null,
+    "chain_gap_us": null,
+    "contexts": 1,
+    "instances": 1,
+    "notes": {},
+    "order": "completion",
+    "roots": [
+     "/d"
+    ],
+    "source": "strace",
+    "total": {
+     "bytes_read": 114688,
+     "bytes_written": 0,
+     "counts": {
+      "close": 7,
+      "fstat": 7,
+      "open": 7,
+      "read": 7
+     },
+     "depth": {},
+     "fan_out": {},
+     "ops": 28,
+     "popularity_bytes": {
+      "accesses": 114688,
+      "counts": [
+       [
+        1,
+        114688
+       ]
+      ],
+      "distinct": 114688,
+      "max": 1,
+      "top_0_1_pct": 0.001,
+      "top_10_pct": 0.1,
+      "top_1_pct": 0.01
+     },
+     "popularity_objects": {
+      "accesses": 7,
+      "counts": [
+       [
+        1,
+        7
+       ]
+      ],
+      "distinct": 7,
+      "max": 1,
+      "top_0_1_pct": 0.001,
+      "top_10_pct": 0.1,
+      "top_1_pct": 0.01
+     },
+     "request_size": {
+      "read": {
+       "buckets": [
+        [
+         4096,
+         1
+        ],
+        [
+         8192,
+         1
+        ],
+        [
+         12288,
+         1
+        ],
+        [
+         16384,
+         1
+        ],
+        [
+         20480,
+         1
+        ],
+        [
+         24576,
+         1
+        ],
+        [
+         28672,
+         1
+        ]
+       ],
+       "max": 28672,
+       "mean": 16384.0,
+       "n": 7
+      },
+      "write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "reuse_extents": {
+      "first_touch": {
+       "read": 114688,
+       "write": 0
+      },
+      "partial": 0,
+      "read_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "read_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "whole": 0,
+      "write_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "write_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "run_length": {
+      "read": {
+       "bytes": {
+        "buckets": [
+         [
+          4096,
+          1
+         ],
+         [
+          8192,
+          1
+         ],
+         [
+          12288,
+          1
+         ],
+         [
+          16384,
+          1
+         ],
+         [
+          20480,
+          1
+         ],
+         [
+          24576,
+          1
+         ],
+         [
+          28672,
+          1
+         ]
+        ],
+        "max": 28672,
+        "mean": 16384.0,
+        "n": 7
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [
+         [
+          1,
+          7
+         ]
+        ],
+        "max": 1,
+        "mean": 1.0,
+        "n": 7
+       }
+      },
+      "write": {
+       "bytes": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       }
+      }
+     }
+    }
+   },
+   "notes": {},
+   "open": [
+    {
+     "answered": "unknown",
+     "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+     "at_scale": {
+      "epochs": 4,
+      "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+     },
+     "candidates": [
+      "sequential",
+      "permuted"
+     ],
+     "divergence": 0.0,
+     "question": "order",
+     "rank": 1,
+     "settles": "at least 8 consecutive touches within one pass",
+     "site": 0
+    }
+   ],
+   "ops": 28,
+   "projection": {
+    "candidates": null,
+    "epochs": 1
+   },
+   "rejected": [],
+   "root": "/d",
+   "sites": [
+    {
+     "distinct": 7,
+     "epochs": [
+      7
+     ],
+     "facts": [
+      {
+       "ask": "How many files of this kind does the application have at the scale it runs?",
+       "least": 7,
+       "name": "candidates",
+       "why": "the trace touched 7 distinct paths of this template"
+      },
+      {
+       "ask": "How many passes over them will the benchmark run?",
+       "name": "passes"
+      }
+     ],
+     "kind": "set",
+     "order": {
+      "ascending": 0.3333333333333333,
+      "asserted": {
+       "answer": "unknown",
+       "at": "2026-11-01T02:45:37+00:00",
+       "by": "tester"
+      },
+      "pairs": 6,
+      "settles": "at least 8 consecutive touches within one pass",
+      "step_of_one": 0.0,
+      "verdict": "undecided"
+     },
+     "phase": null,
+     "projection": {
+      "asserted": [
+       "candidates",
+       "passes"
+      ],
+      "candidates": 7,
+      "passes": 4
+     },
+     "selection": {
+      "candidates_for_choose": 8,
+      "consistent": [
+       "consume"
+      ],
+      "consume": {
+       "epoch": 7
+      },
+      "p_no_repeat_under_choose": 0.049787068367863944,
+      "refuted": {
+       "choose": "no repeat in 7 touches of 7 candidates has probability 0.05 under a draw with replacement"
+      },
+      "settles": "decided",
+      "verdict": "consume"
+     },
+     "size": {
+      "asserted": {
+       "answer": "per-path",
+       "at": "2026-11-01T02:45:37+00:00",
+       "by": "tester",
+       "note": "shuffle=True"
+      },
+      "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+      "verdict": "undecided"
+     },
+     "template": 0,
+     "touches": 7
+    }
+   ],
+   "source": "strace",
+   "templates": [
+    {
+     "bytes_read": 114688,
+     "bytes_written": 0,
+     "fields": [
+      {
+       "kind": "int",
+       "max": 6,
+       "min": 0,
+       "name": "a",
+       "values": 7,
+       "width": 3
+      }
+     ],
+     "id": 0,
+     "offsets": {
+      "whole": 7
+     },
+     "opens": 7,
+     "ops": {
+      "close": 7,
+      "fstat": 7,
+      "open": 7,
+      "read": 7
+     },
+     "paths": 7,
+     "read_size": {
+      "buckets": [
+       [
+        4096,
+        1
+       ],
+       [
+        8192,
+        1
+       ],
+       [
+        12288,
+        1
+       ],
+       [
+        16384,
+        1
+       ],
+       [
+        20480,
+        1
+       ],
+       [
+        24576,
+        1
+       ],
+       [
+        28672,
+        1
+       ]
+      ],
+      "max": 28672,
+      "mean": 16384.0,
+      "n": 7
+     },
+     "runs_per_open": {
+      "buckets": [
+       [
+        1,
+        7
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 7
+     },
+     "template": "s/{a:03}.npz",
+     "write_size": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    }
+   ]
+  },
+  "said": [
+   "",
+   "No path in the trace identifies the application.",
+   "Which application produced this trace?",
+   "    1. DiskANN: Microsoft's disk-resident graph index (Vamana): a build writes the graph with the vectors inline in 4 KiB sectors plus the PQ tables; a search walks the graph with a beam of positioned reads",
+   "    2. FAISS: Meta's vector-search library; its on-disk inverted lists (OnDiskInvertedLists) are a file the index maps, under names the application chooses, so no path identifies it",
+   "    3. LMCache: the KV-cache layer of vLLM: a prefix's KV chunks stored once under a hashed key and loaded on a prefix hit, to a local disk or a shared file system",
+   "    4. Milvus: a vector database service: segments of vectors, scalar fields, and indexes persisted on an object store (MinIO, S3, Azure Blob), loaded by query nodes into memory, memory-mapped files, or a local disk index (DISKANN) under its local storage path",
+   "    5. PyTorch Distributed Checkpoint: torch.distributed.checkpoint: every rank writes its shard of the model and optimizer state per checkpoint; rank 0 writes the plan as .metadata; a load reads each rank's items from the shards",
+   "    6. Qdrant: a vector database service: collections in segments, each with its vector storage (always a memory-mapped file), its payload storage (Gridstore), and its HNSW index, written through a write-ahead log",
+   "    7. safetensors: the tensor file format of Hugging Face model loading: a loader maps each shard and copies tensors out of the mapping",
+   "    8. none of these, or don't know",
+   "",
+   "site 0  s/{a:03}.npz: 7 touches of 7 paths, passes [7]",
+   "  How many files of this kind does the application have at the scale it runs?",
+   "  How many passes over them will the benchmark run?",
+   "",
+   "site 0  s/{a:03}.npz: 7 touches of 7 paths, passes [7]; size undecided",
+   "  Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+   "    1. per-path: the bytes are a property of the file (its size)",
+   "    2. drawn: the bytes are chosen per access",
+   "    3. don't know",
+   "  at 4 pass(es): the op multiset is the same in distribution; which file gets which bytes differs",
+   "  settles: a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+   "",
+   "site 0  s/{a:03}.npz: 7 touches of 7 paths, passes [7]; order undecided",
+   "  Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+   "    1. sequential: in their sorted order",
+   "    2. permuted: in a shuffled order",
+   "    3. don't know",
+   "  at 4 pass(es): the op multiset is the same; the order within a pass differs, which read-ahead sees",
+   "  settles: at least 8 consecutive touches within one pass"
+  ]
+ }
+}

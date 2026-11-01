@@ -4,8 +4,8 @@ The Rust half of aeiou: the binary `aeiou`, which loads, validates, and executes
 contract of `../schema/`; the binary `aeiou-trace`, the trace side (an strace's or an
 object-store log's metrics and the runner's trace file, [aeiou-trace(1)](../man/aeiou-trace.1.md),
 `DESIGN_REVIEW.md` §3.89); and `aeiou-launch`, the ssh loop that starts one rank per host.
-Nothing here depends on Python but `aeiou-trace compare` and the digest's interview and
-application records, which run the Python package's until they are ported. The manual is [aeiou(1)](../man/aeiou.1.md) and
+Nothing here depends on Python but `aeiou-trace compare`, which runs the Python package's
+until it is ported. The manual is [aeiou(1)](../man/aeiou.1.md) and
 [aeiou-launch(1)](../man/aeiou-launch.1.md); the reference, every definition the runner
 fixes and every choice made in building it, is [REFERENCE.md](REFERENCE.md).
 

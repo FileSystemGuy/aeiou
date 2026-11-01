@@ -1,10 +1,10 @@
 //! `aeiou-trace`: the trace side of the suite (`builder/REFERENCE.md` §7, `DESIGN_REVIEW.md`
 //! §3.42, §3.89): the locality metrics of a real application from an strace of it, an exported
 //! trace file, or an object-store request log; the runner's trace file for a `trace` node; the
-//! structural digest a fit is made from (`aeiou::digest`); and, until they are ported (§3.89
-//! build order), the comparison of two metrics documents and the digest's interview and
-//! application records, which run the Python package's (`python3 -m aeiou.trace`, or the
-//! interpreter `$AEIOU_PYTHON` names).
+//! structural digest a fit is made from (`aeiou::digest`), with its interview, the application
+//! records, and the answers file (`aeiou::interview`, `aeiou::applications`); and, until it is
+//! ported (§3.89 build order, stage 4), the comparison of two metrics documents, which runs the
+//! Python package's (`python3 -m aeiou.trace`, or the interpreter `$AEIOU_PYTHON` names).
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
@@ -15,7 +15,7 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{json, Value};
 
 use aeiou::usage::{self, Missing, UsageError};
-use aeiou::{digest, export, objectlog, strace};
+use aeiou::{applications, digest, export, interview, objectlog, strace};
 
 const ABOUT: &str = "Locality metrics of a real application from an strace of it, their comparison with an abstract's (aeiou dry-run --metrics-json), the runner's trace file, and the structural digest a fit is made from";
 const EXIT_PIPE: i32 = 141;
@@ -125,7 +125,7 @@ struct DigestArgs {
     /// Record NAME as the one who answered (default: user@host)
     #[arg(long, value_name = "NAME")]
     answered_by: Option<String>,
-    /// The application records (default: the ones shipped with the tool, or the checkout's applications/)
+    /// The application records (default: the ones built into the tool, the checkout's applications/ it was built from)
     #[arg(long, value_name = "DIR")]
     applications: Option<String>,
     /// State the traced application instead of being asked: its record's defaults and assertions apply, with the record as their provenance
@@ -376,20 +376,25 @@ fn sha256_of(path: &str) -> Result<String> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// The answers file: its header and its answers.
-fn read_answers(path: &str) -> Result<(Value, Vec<Value>)> {
-    let text = std::fs::read_to_string(path).map_err(|e| anyhow!("{path}: {}", cause(&e)))?;
-    let doc: Value = serde_json::from_str(&text).map_err(|e| anyhow!("{path}: {e}"))?;
-    if doc.get("aeiou_answers").and_then(Value::as_u64) != Some(1) {
-        return Err(anyhow!("{path}: not an aeiou_answers: 1 file"));
-    }
-    match doc.get("answers").and_then(Value::as_array) {
-        Some(a) if a.iter().all(Value::is_object) => Ok((doc.clone(), a.clone())),
-        _ => Err(anyhow!("{path}: answers must be a list of objects")),
+/// `--application NAME[@VERSION]` checked against the records: the application as the document
+/// records it, no record resolved yet.
+fn stated_application(records: &applications::Records, stated: &str) -> Result<Value> {
+    let (name, version) = stated.split_once('@').unwrap_or((stated, ""));
+    let Some(app) = records.apps.get(name) else {
+        return Err(usage::err(&format!("--application {name}: no such application record; one of {}", records.apps.keys().cloned().collect::<Vec<_>>().join(", "))));
+    };
+    Ok(json!({"name": app.name, "display": app.display, "version": Some(version).filter(|v| !v.is_empty()), "record": null, "exact": false, "options": {}, "blind_spots": []}))
+}
+
+/// The answers file an interactive run leaves beside the document it wrote.
+fn answers_beside(out: &str) -> String {
+    match out.strip_suffix(".digest.json") {
+        Some(stem) => format!("{stem}.answers.json"),
+        None => format!("{out}.answers.json"),
     }
 }
 
-fn digest_cmd(a: DigestArgs, raw: &[String]) -> Result<()> {
+fn digest_cmd(a: DigestArgs) -> Result<()> {
     let mut m = Missing::new();
     let trace = m.want(a.trace.clone(), "<TRACE>", "the strace output file, or an exported trace file", None);
     m.check()?;
@@ -405,12 +410,15 @@ fn digest_cmd(a: DigestArgs, raw: &[String]) -> Result<()> {
         return Err(usage::err("the digest reads the trace as a file, never stdin: the comparison after the fit and a re-run with answers read it again"));
     }
     let answers_exist = a.answers.as_deref().is_some_and(|p| std::path::Path::new(p).exists());
-    let terminal = unsafe { libc::isatty(0) } == 1;
-    // the records, and the asking, are the Python package's until stage 3 (its own answers file
-    // given back here with --no-questions)
-    if a.application.is_some() || a.applications.is_some() || (!a.no_questions && terminal && !answers_exist) {
-        return passed("digest", raw, "the interview and the application records are");
-    }
+    let asking = !a.no_questions && unsafe { libc::isatty(0) } == 1 && !answers_exist;
+    let records = if asking || a.application.is_some() || a.applications.is_some() {
+        Some(match &a.applications {
+            Some(dir) => applications::load(std::path::Path::new(dir))?,
+            None => applications::shipped(),
+        })
+    } else {
+        None
+    };
     let input = Input::open(&trace)?;
     let first = input.first_line()?;
     let exported = first.starts_with("{\"aeiou_trace\"");
@@ -424,23 +432,74 @@ fn digest_cmd(a: DigestArgs, raw: &[String]) -> Result<()> {
     let sha = sha256_of(&trace)?;
     let (mut by, mut at) = (a.answered_by.clone().unwrap_or_else(who), now());
     let o = digest::Opts { epochs, candidates: a.candidates, paths: a.paths };
+    let stated = match (&records, &a.application) {
+        (Some(r), Some(name)) => Some(stated_application(r, name)?),
+        _ => None,
+    };
+    let mut said = vec![];
     let mut doc = if answers_exist {
         let path = a.answers.as_deref().unwrap();
-        let (header, answers) = read_answers(path)?;
-        let said = |k: &str| header.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
-        by = said("by").unwrap_or(by);
-        at = said("at").unwrap_or(at);
+        let (header, answers) = interview::read_answers(path)?;
+        let given = |k: &str| header.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+        by = given("by").unwrap_or(by);
+        at = given("at").unwrap_or(at);
         let mut doc = an.document(&o, &answers, Some(&by), Some(&at), header.get("application").unwrap_or(&Value::Null));
         if header.get("trace_sha256").and_then(Value::as_str) != Some(sha.as_str()) {
             let named = header.get("trace").and_then(Value::as_str).unwrap_or("None");
             doc["notes"]["answers_trace"] = json!(format!("{path} was answered on another trace ({named}); its answers were checked against this one"));
         }
         doc
+    } else if asking {
+        let (doc, answers) = interview::interview(&an, &mut interview::Terminal, &o, &by, &at, records.as_ref(), stated);
+        if !answers.is_empty() || !doc["application"].is_null() {
+            let path = a.answers.clone().or_else(|| a.out.as_ref().map(|p| answers_beside(&p.to_string_lossy())));
+            match path {
+                Some(path) => {
+                    interview::write_answers(&path, &answers, &trace, &sha, &by, &at, &doc["application"])?;
+                    let mut replay = format!("aeiou-trace digest {trace}");
+                    if let Some(root) = &a.root {
+                        replay += &format!(" --root {root}");
+                    }
+                    replay += &format!(" --answers {path}");
+                    if let Some(out) = &a.out {
+                        replay += &format!(" -o {}", out.display());
+                    }
+                    said.push(format!("answers: {path}"));
+                    said.push(format!("replay without questions: {replay}"));
+                }
+                None => said.push("answers: in the document only (give -o or --answers FILE to keep them as a file)".into()),
+            }
+        }
+        doc
     } else {
         if let Some(path) = &a.answers {
             return Err(anyhow!("{path}: no such answers file, and no terminal to ask on"));
         }
-        an.document(&o, &[], Some(&by), Some(&at), &Value::Null)
+        let mut answers = vec![];
+        let mut application = Value::Null;
+        if let (Some(records), Some(mut app)) = (&records, stated) {
+            let known = &records.apps[app["name"].as_str().unwrap()];
+            let (record, exact) = known.resolve(app["version"].as_str());
+            if let Some(record) = record {
+                let options: serde_json::Map<String, Value> = record.options.iter().filter_map(|o| Some((o.name.clone(), json!(o.default.as_ref()?)))).collect();
+                app["record"] = json!(record.version);
+                app["exact"] = json!(exact);
+                app["blind_spots"] = json!(records.blind_spots(record, &options));
+                app["options"] = json!(options);
+                if exact {
+                    let all = an.document(&digest::Opts { epochs: 1, candidates: None, paths: true }, &[], None, None, &Value::Null);
+                    let templates: Vec<(String, Vec<String>)> = all["templates"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|t| (t["template"].as_str().unwrap_or("").to_string(), t["raw_paths"].as_array().map(|p| p.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()))
+                        .collect();
+                    answers = record.assertions(&options, &templates);
+                }
+            }
+            application = app;
+        }
+        an.document(&o, &answers, Some(&by), Some(&at), &application)
     };
     doc["trace"] = json!(trace);
     doc["trace_sha256"] = json!(sha);
@@ -452,6 +511,9 @@ fn digest_cmd(a: DigestArgs, raw: &[String]) -> Result<()> {
         print_out(&report);
     } else {
         print_out(&(serde_json::to_string_pretty(&doc)? + "\n"));
+    }
+    for line in said {
+        eprintln!("{line}");
     }
     Ok(())
 }
@@ -510,10 +572,7 @@ fn main() {
         Some(Cmd::Metrics(a)) => metrics(a),
         Some(Cmd::Export(a)) => export_cmd(a),
         Some(Cmd::Compare(p)) => passed("compare", &p.args, "compare is"),
-        Some(Cmd::Digest(a)) => {
-            let at = args.iter().skip(1).position(|a| a == "digest").map_or(args.len(), |i| i + 2);
-            digest_cmd(a, &args[at..])
-        }
+        Some(Cmd::Digest(a)) => digest_cmd(a),
     };
     if let Err(e) = result {
         if e.downcast_ref::<UsageError>().is_some() {

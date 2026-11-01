@@ -943,7 +943,7 @@ numbers; the order is this note's.
     assertions weaker than the owner's, dated sources), so a user of a product answers from a
     list. *Built the same day:* the asking (`--answers`, `--no-questions`, `--answered-by`,
     `asserted` and `rejected` in the document, the answers file) and `applications/` with seven
-    records (`--applications`, `--application`; `aeiou/applications.py`), and the three site
+    records (`--applications`, `--application`; `aeiou/applications.py`, Rust since 2026-10-31), and the three site
     kinds beside the set, keyed, bulk write, and within one open, each with its facts (keys and
     requests; values per field, ranks and steps; size and queries) and questions, and the
     object-log readers of item 49. *Revised 2026-10-30 and built 2026-10-31 (§3.88):* keyed is
@@ -958,7 +958,10 @@ numbers; the order is this note's.
     in Rust as the binary `aeiou-trace`, streaming, since a real trace runs to several GiB and the
     Python parser holds every event. Build order in §3.89. *Stage 2 built 2026-10-31:* the digest
     in Rust (`runner/aeiou/src/digest.rs`), `aeiou_digest: 2` with its `metrics` section and each
-    site's `facts`; the interview and the records stay Python until stage 3 (§3.89).
+    site's `facts`; ~~the interview and the records stay Python until stage 3 (§3.89).~~ *Stage 3
+    built the same day:* the interview, the records (built into the binary), and the answers file
+    in Rust (`interview.rs`, `applications.rs`), the Python's `applications.py` and interview gone;
+    next, stage 4, `compare` over two version-2 documents and `dry-run --emit-trace`.
 
 48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
     2026-10-28).** A skill in the open skill format (`skills/fit-abstract/SKILL.md` and its
@@ -1119,8 +1122,8 @@ line says:
   `aeiou-build` (the builder; renamed from `abstract-build`), `aeiou-params` (parameter files,
   2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01; a
   binary of the runner's crate since 2026-10-29, `DESIGN_REVIEW.md` §3.89, its name kept, its
-  digest Rust since 2026-10-31, its `compare` and the digest's interview the Python package's
-  until ported),
+  digest and its interview Rust since 2026-10-31, its `compare` the Python package's until
+  ported),
   `aeiou-catalog` (the workload catalog's records, shapes, and `CATALOG.md`, 2026-10-10),
   `aeiou-header` (a container header from the format's own library, run by `aeiou datagen`
   from beside its binary, 2026-10-12), and later

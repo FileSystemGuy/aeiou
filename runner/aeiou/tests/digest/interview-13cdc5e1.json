@@ -1,0 +1,552 @@
+{
+ "application": null,
+ "apps": null,
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "at": "2026-10-29T12:00:00+00:00",
+ "by": "someone@host",
+ "input": "trace-09870f8d.in",
+ "lines": [
+  "1000",
+  "",
+  "1",
+  "warm"
+ ],
+ "options": {
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "want": {
+  "answers": [
+   {
+    "fact": "keys",
+    "template": "kv/{a:x32}.pt",
+    "value": 1000
+   },
+   {
+    "answer": "earlier_run",
+    "note": "warm",
+    "question": "origin",
+    "template": "kv/{a:x32}.pt"
+   }
+  ],
+  "asked": [
+   "number (Enter for don't know): ",
+   "number (Enter for don't know): ",
+   "answer [1-3]: ",
+   "how do you know? (Enter to skip): "
+  ],
+  "document": {
+   "aeiou_digest": 2,
+   "application": null,
+   "asserted": [
+    {
+     "at": "2026-10-29T12:00:00+00:00",
+     "by": "someone@host",
+     "fact": "keys",
+     "site": 0,
+     "template": "kv/{a:x32}.pt",
+     "value": 1000
+    },
+    {
+     "answer": "earlier_run",
+     "at": "2026-10-29T12:00:00+00:00",
+     "by": "someone@host",
+     "note": "warm",
+     "question": "origin",
+     "site": 0,
+     "template": "kv/{a:x32}.pt"
+    }
+   ],
+   "contexts": 2,
+   "lanes": [
+    {
+     "lane": 0,
+     "ops": 12,
+     "phases": [
+      {
+       "bytes_read": 0,
+       "bytes_written": 32768,
+       "first": 0,
+       "last": 74003935,
+       "motif": "open write close",
+       "ops": 12,
+       "repeats": {},
+       "template": 0,
+       "think": {
+        "buckets": [
+         [
+          8388608,
+          1
+         ],
+         [
+          20971520,
+          1
+         ],
+         [
+          33554432,
+          1
+         ]
+        ],
+        "max": 33995151,
+        "mean": 21995067.333333332,
+        "n": 3
+       },
+       "units": 4
+      }
+     ]
+    },
+    {
+     "lane": 1,
+     "ops": 15,
+     "phases": [
+      {
+       "bytes_read": 40960,
+       "bytes_written": 0,
+       "first": 23999929,
+       "last": 98004103,
+       "motif": "open read close",
+       "ops": 15,
+       "repeats": {},
+       "template": 0,
+       "think": {
+        "buckets": [
+         [
+          8388608,
+          2
+         ],
+         [
+          20971520,
+          2
+         ]
+        ],
+        "max": 21994829,
+        "mean": 15994667.5,
+        "n": 4
+       },
+       "units": 5
+      }
+     ]
+    }
+   ],
+   "metrics": {
+    "aeiou_metrics": 2,
+    "block": null,
+    "chain_gap_us": null,
+    "contexts": 2,
+    "instances": 1,
+    "notes": {
+     "threads_without_clone": 1
+    },
+    "order": "completion",
+    "roots": [
+     "/d"
+    ],
+    "source": "strace",
+    "total": {
+     "bytes_read": 40960,
+     "bytes_written": 32768,
+     "counts": {
+      "close": 9,
+      "open": 9,
+      "read": 5,
+      "write": 4
+     },
+     "depth": {},
+     "fan_out": {},
+     "ops": 27,
+     "popularity_bytes": {
+      "accesses": 73728,
+      "counts": [
+       [
+        3,
+        8192
+       ],
+       [
+        2,
+        16384
+       ],
+       [
+        1,
+        16384
+       ]
+      ],
+      "distinct": 40960,
+      "max": 3,
+      "top_0_1_pct": 0.0016666666666666666,
+      "top_10_pct": 0.16666666666666666,
+      "top_1_pct": 0.01666666666666667
+     },
+     "popularity_objects": {
+      "accesses": 9,
+      "counts": [
+       [
+        3,
+        1
+       ],
+       [
+        2,
+        2
+       ],
+       [
+        1,
+        2
+       ]
+      ],
+      "distinct": 5,
+      "max": 3,
+      "top_0_1_pct": 0.0016666666666666666,
+      "top_10_pct": 0.16666666666666666,
+      "top_1_pct": 0.01666666666666667
+     },
+     "request_size": {
+      "read": {
+       "buckets": [
+        [
+         8192,
+         5
+        ]
+       ],
+       "max": 8192,
+       "mean": 8192.0,
+       "n": 5
+      },
+      "write": {
+       "buckets": [
+        [
+         8192,
+         4
+        ]
+       ],
+       "max": 8192,
+       "mean": 8192.0,
+       "n": 4
+      }
+     },
+     "reuse_extents": {
+      "first_touch": {
+       "read": 8192,
+       "write": 32768
+      },
+      "partial": 0,
+      "read_after_read": {
+       "buckets": [
+        [
+         40960,
+         8192
+        ]
+       ],
+       "max": 40960,
+       "mean": 40960.0,
+       "n": 8192
+      },
+      "read_after_write": {
+       "buckets": [
+        [
+         16384,
+         8192
+        ],
+        [
+         24576,
+         8192
+        ],
+        [
+         40960,
+         8192
+        ]
+       ],
+       "max": 40960,
+       "mean": 27306.666666666668,
+       "n": 24576
+      },
+      "whole": 32768,
+      "write_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "write_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "run_length": {
+      "read": {
+       "bytes": {
+        "buckets": [
+         [
+          8192,
+          5
+         ]
+        ],
+        "max": 8192,
+        "mean": 8192.0,
+        "n": 5
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [
+         [
+          1,
+          5
+         ]
+        ],
+        "max": 1,
+        "mean": 1.0,
+        "n": 5
+       }
+      },
+      "write": {
+       "bytes": {
+        "buckets": [
+         [
+          8192,
+          4
+         ]
+        ],
+        "max": 8192,
+        "mean": 8192.0,
+        "n": 4
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [
+         [
+          1,
+          4
+         ]
+        ],
+        "max": 1,
+        "mean": 1.0,
+        "n": 4
+       }
+      }
+     }
+    }
+   },
+   "notes": {
+    "threads_without_clone": 1
+   },
+   "open": [],
+   "ops": 27,
+   "projection": {
+    "candidates": null,
+    "epochs": 1
+   },
+   "rejected": [],
+   "root": "/d",
+   "sites": [
+    {
+     "access": {
+      "keys": 5,
+      "read": 4,
+      "read_after_write": 4,
+      "read_before_write": 1,
+      "reads": 5,
+      "reads_per_key": {
+       "buckets": [
+        [
+         1,
+         3
+        ],
+        [
+         2,
+         1
+        ]
+       ],
+       "max": 2,
+       "mean": 1.25,
+       "n": 4
+      },
+      "reread_share": 0.2,
+      "rereads": 1,
+      "top_10pct_share": 0.4,
+      "writes": 4,
+      "written": 4,
+      "written_once_share": 1.0
+     },
+     "distinct": 5,
+     "facts": [
+      {
+       "ask": "How many distinct keys does the application hold at the scale it runs (its pool)?",
+       "least": 5,
+       "name": "keys",
+       "why": "the trace touched 5 distinct keys of this template"
+      },
+      {
+       "ask": "How many requests will the benchmark serve?",
+       "name": "requests"
+      }
+     ],
+     "hex_name": true,
+     "kind": "keyed",
+     "lag": {
+      "ns": {
+       "buckets": [
+        [
+         20971520,
+         1
+        ],
+        [
+         33554432,
+         1
+        ],
+        [
+         58720256,
+         1
+        ],
+        [
+         83886080,
+         1
+        ]
+       ],
+       "max": 83998919,
+       "mean": 50999164.5,
+       "n": 4
+      },
+      "touches": {
+       "buckets": [
+        [
+         2,
+         1
+        ],
+        [
+         3,
+         1
+        ],
+        [
+         5,
+         1
+        ],
+        [
+         7,
+         1
+        ]
+       ],
+       "max": 7,
+       "mean": 4.25,
+       "n": 4
+      },
+      "verdict": "write_then_read"
+     },
+     "origin": {
+      "asserted": {
+       "answer": "earlier_run",
+       "at": "2026-10-29T12:00:00+00:00",
+       "by": "someone@host",
+       "note": "warm"
+      },
+      "consistent": [
+       "earlier_run",
+       "other_writer"
+      ],
+      "refuted": {},
+      "settles": "a trace from the application's start, or of every process that writes this kind of file: a key read before any write is then a miss or another writer's",
+      "verdict": "undecided"
+     },
+     "phase": null,
+     "projection": {
+      "asserted": [
+       "keys"
+      ],
+      "keys": 1000,
+      "requests": null
+     },
+     "reuse": {
+      "keys_reread": 1,
+      "settles": "decided",
+      "verdict": "repeated"
+     },
+     "size": {
+      "bytes": 8192,
+      "verdict": "constant"
+     },
+     "template": 0,
+     "touches": 9
+    }
+   ],
+   "source": "strace",
+   "templates": [
+    {
+     "bytes_read": 40960,
+     "bytes_written": 32768,
+     "fields": [
+      {
+       "kind": "hex",
+       "name": "a",
+       "values": 5,
+       "width": 32
+      }
+     ],
+     "id": 0,
+     "offsets": {
+      "whole": 9
+     },
+     "opens": 9,
+     "ops": {
+      "close": 9,
+      "open": 9,
+      "read": 5,
+      "write": 4
+     },
+     "paths": 5,
+     "read_size": {
+      "buckets": [
+       [
+        8192,
+        5
+       ]
+      ],
+      "max": 8192,
+      "mean": 8192.0,
+      "n": 5
+     },
+     "runs_per_open": {
+      "buckets": [
+       [
+        1,
+        9
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 9
+     },
+     "template": "kv/{a:x32}.pt",
+     "write_size": {
+      "buckets": [
+       [
+        8192,
+        4
+       ]
+      ],
+      "max": 8192,
+      "mean": 8192.0,
+      "n": 4
+     }
+    }
+   ]
+  },
+  "said": [
+   "",
+   "site 0  kv/{a:x32}.pt: keyed: 5 keys, 4 written, 5 reads (4 after a write, 1 re-reads)",
+   "  How many distinct keys does the application hold at the scale it runs (its pool)?",
+   "  How many requests will the benchmark serve?",
+   "",
+   "site 0  kv/{a:x32}.pt: keyed: 5 keys, 4 written, 5 reads (4 after a write, 1 re-reads); origin undecided",
+   "  The trace reads keys it never wrote. Were they written by an earlier run of the application (a warm cache), or by another process the trace does not cover?",
+   "    1. earlier_run: an earlier run of the application wrote them (a warm cache)",
+   "    2. other_writer: another process the trace does not cover writes them",
+   "    3. don't know",
+   "  at 1 pass(es): a warm cache serves hits the benchmark must first write; another writer is a second actor the abstract must model",
+   "  settles: a trace from the application's start, or of every process that writes this kind of file: a key read before any write is then a miss or another writer's"
+  ]
+ }
+}

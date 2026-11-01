@@ -1,0 +1,544 @@
+{
+ "application": null,
+ "apps": "apps-3579f7e9.json",
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "at": "2026-10-29T12:00:00+00:00",
+ "by": "someone@host",
+ "input": "trace-66119f16.in",
+ "lines": [
+  "1",
+  "3.0.3",
+  "1",
+  "2",
+  "1",
+  "1",
+  "",
+  "",
+  "3",
+  "",
+  "3",
+  "",
+  "3",
+  ""
+ ],
+ "options": {
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "want": {
+  "answers": [
+   {
+    "answer": "unknown",
+    "question": "selection",
+    "template": "files/insert_log/{a}/{b}/{c}/{d:03}/{e}"
+   },
+   {
+    "answer": "unknown",
+    "question": "order",
+    "template": "files/insert_log/{a}/{b}/{c}/{d:03}/{e}"
+   }
+  ],
+  "asked": [
+   "answer [1-3]: ",
+   "which version of Milvus? (Enter for don't know): ",
+   "answer [1-3]: ",
+   "answer [1-3]: ",
+   "answer [1-3]: ",
+   "answer [1-3]: ",
+   "number (Enter for don't know): ",
+   "number (Enter for don't know): ",
+   "answer [1-3]: ",
+   "how do you know? (Enter to skip): ",
+   "answer [1-3]: ",
+   "how do you know? (Enter to skip): "
+  ],
+  "document": {
+   "aeiou_digest": 2,
+   "application": {
+    "blind_spots": [
+     {
+      "kind": "object",
+      "note": "segments and index files persist on the object store (minio.rootPath 'files' in the bucket); an strace of a query node shows only what it pulls to local storage and memory, never the object requests",
+      "source": "https://milvus.io/docs/architecture_overview.md"
+     },
+     {
+      "choice": "memory-mapped",
+      "kind": "mmap",
+      "note": "the application maps its files and reads them through page faults; the trace shows the mmap and none of the reads, so the digest undercounts",
+      "option": "mmap_vector_field",
+      "source": "https://github.com/milvus-io/milvus/blob/master/configs/milvus.yaml says vectorField: true; https://milvus.io/docs/mmap.md says the four keys default to false after 2.4.10; the configuration file is taken as the newer source"
+     }
+    ],
+    "display": "Milvus",
+    "exact": true,
+    "name": "milvus",
+    "options": {
+     "index": "in-memory index",
+     "mmap_vector_field": "memory-mapped",
+     "mmap_vector_index": "loaded into memory",
+     "tiered_storage": "eviction off"
+    },
+    "record": "3.0",
+    "version": "3.0.3"
+   },
+   "asserted": [
+    {
+     "answer": "unknown",
+     "at": "2026-10-29T12:00:00+00:00",
+     "by": "someone@host",
+     "question": "selection",
+     "site": 0,
+     "template": "files/insert_log/{a}/{b}/{c}/{d:03}/{e}"
+    },
+    {
+     "answer": "unknown",
+     "at": "2026-10-29T12:00:00+00:00",
+     "by": "someone@host",
+     "question": "order",
+     "site": 0,
+     "template": "files/insert_log/{a}/{b}/{c}/{d:03}/{e}"
+    }
+   ],
+   "contexts": 1,
+   "lanes": [
+    {
+     "lane": 0,
+     "ops": 12,
+     "phases": [
+      {
+       "bytes_read": 12288,
+       "bytes_written": 0,
+       "first": 0,
+       "last": 29004097,
+       "motif": "open fstat read close",
+       "ops": 12,
+       "repeats": {},
+       "template": 0,
+       "think": {
+        "buckets": [
+         [
+          8388608,
+          2
+         ]
+        ],
+        "max": 9994984,
+        "mean": 9994983.5,
+        "n": 2
+       },
+       "units": 3
+      }
+     ]
+    }
+   ],
+   "metrics": {
+    "aeiou_metrics": 2,
+    "block": null,
+    "chain_gap_us": null,
+    "contexts": 1,
+    "instances": 1,
+    "notes": {},
+    "order": "completion",
+    "roots": [
+     "/d"
+    ],
+    "source": "strace",
+    "total": {
+     "bytes_read": 12288,
+     "bytes_written": 0,
+     "counts": {
+      "close": 3,
+      "fstat": 3,
+      "open": 3,
+      "read": 3
+     },
+     "depth": {},
+     "fan_out": {},
+     "ops": 12,
+     "popularity_bytes": {
+      "accesses": 12288,
+      "counts": [
+       [
+        1,
+        12288
+       ]
+      ],
+      "distinct": 12288,
+      "max": 1,
+      "top_0_1_pct": 0.001,
+      "top_10_pct": 0.10000000000000002,
+      "top_1_pct": 0.01
+     },
+     "popularity_objects": {
+      "accesses": 3,
+      "counts": [
+       [
+        1,
+        3
+       ]
+      ],
+      "distinct": 3,
+      "max": 1,
+      "top_0_1_pct": 0.001,
+      "top_10_pct": 0.10000000000000002,
+      "top_1_pct": 0.01
+     },
+     "request_size": {
+      "read": {
+       "buckets": [
+        [
+         4096,
+         3
+        ]
+       ],
+       "max": 4096,
+       "mean": 4096.0,
+       "n": 3
+      },
+      "write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "reuse_extents": {
+      "first_touch": {
+       "read": 12288,
+       "write": 0
+      },
+      "partial": 0,
+      "read_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "read_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "whole": 0,
+      "write_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "write_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "run_length": {
+      "read": {
+       "bytes": {
+        "buckets": [
+         [
+          4096,
+          3
+         ]
+        ],
+        "max": 4096,
+        "mean": 4096.0,
+        "n": 3
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [
+         [
+          1,
+          3
+         ]
+        ],
+        "max": 1,
+        "mean": 1.0,
+        "n": 3
+       }
+      },
+      "write": {
+       "bytes": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       }
+      }
+     }
+    }
+   },
+   "notes": {
+    "blind_spot_mmap": "the application maps its files and reads them through page faults; the trace shows the mmap and none of the reads, so the digest undercounts",
+    "blind_spot_object": "segments and index files persist on the object store (minio.rootPath 'files' in the bucket); an strace of a query node shows only what it pulls to local storage and memory, never the object requests"
+   },
+   "open": [
+    {
+     "answered": "unknown",
+     "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+     "at_scale": {
+      "choose": {
+       "never_read_share": 0.36787944117144233,
+       "repeat_share": 0.36787944117144233
+      },
+      "consume": {
+       "never_read_share": 0.0,
+       "repeat_share": 0.0
+      },
+      "epochs": 1,
+      "measure": "share of the set never read; share of touches that re-read a path"
+     },
+     "candidates": [
+      "consume",
+      "choose"
+     ],
+     "divergence": 0.36787944117144233,
+     "question": "selection",
+     "rank": 1,
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 3 candidates refutes a draw with replacement (no repeat in 3 touches would have probability below 0.05)",
+     "site": 0
+    },
+    {
+     "answered": "unknown",
+     "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+     "at_scale": {
+      "epochs": 1,
+      "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+     },
+     "candidates": [
+      "sequential",
+      "permuted"
+     ],
+     "divergence": 0.0,
+     "question": "order",
+     "rank": 2,
+     "settles": "at least 8 consecutive touches within one pass",
+     "site": 0
+    }
+   ],
+   "ops": 12,
+   "projection": {
+    "candidates": null,
+    "epochs": 1
+   },
+   "rejected": [],
+   "root": "/d",
+   "sites": [
+    {
+     "distinct": 3,
+     "epochs": [
+      3
+     ],
+     "facts": [
+      {
+       "ask": "How many files of this kind does the application have at the scale it runs?",
+       "least": 3,
+       "name": "candidates",
+       "why": "the trace touched 3 distinct paths of this template"
+      },
+      {
+       "ask": "How many passes over them will the benchmark run?",
+       "name": "passes"
+      }
+     ],
+     "kind": "set",
+     "order": {
+      "ascending": 1.0,
+      "asserted": {
+       "answer": "unknown",
+       "at": "2026-10-29T12:00:00+00:00",
+       "by": "someone@host"
+      },
+      "pairs": 2,
+      "settles": "at least 8 consecutive touches within one pass",
+      "step_of_one": 1.0,
+      "verdict": "undecided"
+     },
+     "phase": null,
+     "projection": {
+      "asserted": [],
+      "candidates": null,
+      "passes": 1
+     },
+     "selection": {
+      "asserted": {
+       "answer": "unknown",
+       "at": "2026-10-29T12:00:00+00:00",
+       "by": "someone@host"
+      },
+      "candidates_for_choose": 3,
+      "consistent": [
+       "consume",
+       "choose"
+      ],
+      "consume": {
+       "epoch": 3
+      },
+      "refuted": {},
+      "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 3 candidates refutes a draw with replacement (no repeat in 3 touches would have probability below 0.05)",
+      "verdict": "undecided"
+     },
+     "size": {
+      "bytes": 4096,
+      "verdict": "constant"
+     },
+     "template": 0,
+     "touches": 3
+    }
+   ],
+   "source": "strace",
+   "templates": [
+    {
+     "bytes_read": 12288,
+     "bytes_written": 0,
+     "fields": [
+      {
+       "kind": "int",
+       "max": 1,
+       "min": 1,
+       "name": "a",
+       "values": 1,
+       "width": null
+      },
+      {
+       "kind": "int",
+       "max": 2,
+       "min": 2,
+       "name": "b",
+       "values": 1,
+       "width": null
+      },
+      {
+       "kind": "int",
+       "max": 5,
+       "min": 3,
+       "name": "c",
+       "values": 3,
+       "width": null
+      },
+      {
+       "kind": "int",
+       "max": 100,
+       "min": 100,
+       "name": "d",
+       "values": 1,
+       "width": 3
+      },
+      {
+       "kind": "int",
+       "max": 5,
+       "min": 3,
+       "name": "e",
+       "values": 3,
+       "width": null
+      }
+     ],
+     "id": 0,
+     "offsets": {
+      "whole": 3
+     },
+     "opens": 3,
+     "ops": {
+      "close": 3,
+      "fstat": 3,
+      "open": 3,
+      "read": 3
+     },
+     "paths": 3,
+     "read_size": {
+      "buckets": [
+       [
+        4096,
+        3
+       ]
+      ],
+      "max": 4096,
+      "mean": 4096.0,
+      "n": 3
+     },
+     "runs_per_open": {
+      "buckets": [
+       [
+        1,
+        3
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 3
+     },
+     "template": "files/insert_log/{a}/{b}/{c}/{d:03}/{e}",
+     "write_size": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    }
+   ]
+  },
+  "said": [
+   "",
+   "This trace looks like Milvus (a path matched insert_log/*).",
+   "    1. yes",
+   "    2. another application",
+   "    3. none of these, or don't know",
+   "",
+   "  Which index type serves the collection: an in-memory index (HNSW, IVF, AUTOINDEX) loaded whole, or DISKANN on the query node's local disk?",
+   "    1. in-memory index (the default)",
+   "    2. DISKANN on local disk",
+   "    3. don't know",
+   "",
+   "  Is memory-mapped loading on for the raw vector data (queryNode.mmap.vectorField, or mmap.enabled on the collection)?",
+   "    1. loaded into memory",
+   "    2. memory-mapped (the default)",
+   "    3. don't know",
+   "",
+   "  Is memory-mapped loading on for the vector index (queryNode.mmap.vectorIndex, or mmap.enabled on the index)?",
+   "    1. loaded into memory (the default)",
+   "    2. memory-mapped",
+   "    3. don't know",
+   "",
+   "  Is tiered storage eviction on (queryNode.segcore.tieredStorage.evictionEnabled), so that evicted field data and indexes are fetched again from the object store on demand?",
+   "    1. eviction off (the default)",
+   "    2. eviction on",
+   "    3. don't know",
+   "  blind spot (object): segments and index files persist on the object store (minio.rootPath 'files' in the bucket); an strace of a query node shows only what it pulls to local storage and memory, never the object requests",
+   "  blind spot (mmap): the application maps its files and reads them through page faults; the trace shows the mmap and none of the reads, so the digest undercounts",
+   "",
+   "site 0  files/insert_log/{a}/{b}/{c}/{d:03}/{e}: 3 touches of 3 paths, passes [3]",
+   "  How many files of this kind does the application have at the scale it runs?",
+   "  How many passes over them will the benchmark run?",
+   "",
+   "site 0  files/insert_log/{a}/{b}/{c}/{d:03}/{e}: 3 touches of 3 paths, passes [3]; selection undecided",
+   "  Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+   "    1. consume: each file exactly once per pass (a permutation over the set)",
+   "    2. choose: a draw with replacement: a file may come up again within a pass",
+   "    3. don't know",
+   "  at 1 pass(es): a draw with replacement never reads 36.8% of the set and re-reads 36.8% of what it touches; a permutation reads every file each pass",
+   "  settles: a second pass over the set (a repeat decides it), or the corpus size: fewer than 3 candidates refutes a draw with replacement (no repeat in 3 touches would have probability below 0.05)",
+   "",
+   "site 0  files/insert_log/{a}/{b}/{c}/{d:03}/{e}: 3 touches of 3 paths, passes [3]; order undecided",
+   "  Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+   "    1. sequential: in their sorted order",
+   "    2. permuted: in a shuffled order",
+   "    3. don't know",
+   "  at 1 pass(es): the op multiset is the same; the order within a pass differs, which read-ahead sees",
+   "  settles: at least 8 consecutive touches within one pass"
+  ]
+ }
+}

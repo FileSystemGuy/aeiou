@@ -26,12 +26,11 @@ strace as the file the runner's `trace` node executes literally, and digests one
 structural summary an abstract is fitted from.
 
 **aeiou-trace** is a binary of the runner's crate, built and shipped beside **aeiou**(1).
-`metrics` and `export` are its own (Rust, since 2026-10-29), and so is `digest`'s document
-and report (since 2026-10-31); `compare`, and a `digest` that asks on a terminal or is told
-the application (`--application`, `--applications`), are still the Python package's, which
-the binary runs as `python3 -m aeiou.trace` (or with the interpreter `AEIOU_PYTHON` names)
-until they are ported (`DESIGN_REVIEW.md` §3.89); the Python asks, and every document it shows
-or writes is the binary's. The trace is read in a stream, and the state kept is per open, per
+`metrics` and `export` are its own (Rust, since 2026-10-29), and so is `digest`: its
+document and report, its questions, the application records, and the answers file
+(since 2026-10-31). `compare` is still the Python package's, which the binary runs
+as `python3 -m aeiou.trace` (or with the interpreter `AEIOU_PYTHON` names) until it is ported
+(`DESIGN_REVIEW.md` §3.89). The trace is read in a stream, and the state kept is per open, per
 thread, and per path under the root, never per call, so a trace of several gigabytes is read
 in the time it takes to read it.
 
@@ -385,8 +384,8 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
   Record *NAME* as the one who answered. Default: `user@host`.
 - **--applications** *DIR*
 
-  The application records, `applications/` (see FILES). Default: the records shipped with
-  the tool, or a checkout's.
+  The application records, `applications/` (see FILES). Default: the records built into the
+  tool, the checkout's `applications/` it was built from.
 - **--application** *NAME*[@*VERSION*]
 
   State the traced application instead of being asked, by the name of its record directory
@@ -407,13 +406,12 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
 - **AEIOU_PYTHON**
 
-  The interpreter that runs `compare` and the digest's asking (a terminal, `--application`,
-  `--applications`), which must be able to import the `aeiou` package (the wheel's); default
-  `python3`.
+  The interpreter that runs `compare`, which must be able to import the `aeiou` package (the
+  wheel's); default `python3`.
 - **AEIOU_TRACE**
 
-  Read by the Python package, which asks the binary for every digest document it shows or
-  writes: the path of **aeiou-trace**. Default: the one beside `AEIOU_RUNNER`, else the one on
+  Read by the Python package's tests, which run the binary for every digest document: the
+  path of **aeiou-trace**. Default: the one beside `AEIOU_RUNNER`, else the one on
   the `PATH`, else the checkout's release build.
 
 ## FILES
@@ -440,7 +438,8 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
   `application.toml` with its kind, path signatures, and catalog mechanisms, and
   `<version>.toml` per version range read, with the options that change its storage
   workload, the blind spots, and the assertions it makes, each with its source and
-  confidence. Shipped in the wheel; `--applications DIR` points elsewhere.
+  confidence. Built into the binary from the checkout it was built from; `--applications DIR`
+  reads another tree, which is how a record is tried before it is committed.
 - `*.answers.json`
 
   An answers file, `aeiou_answers: 1`: `trace`, `trace_sha256`, `by`, `at`, `application`

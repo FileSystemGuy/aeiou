@@ -1,13 +1,14 @@
 """`aeiou-trace digest` (`PROJECT_BRIEF.md` item 47, `DESIGN_REVIEW.md` §3.86, §3.87): the
 structural summary a fit is made from, with a verdict per site on what the trace decides and an
-`open` list, ranked by projected divergence, of what it does not; and the questions it asks
-(§3.88): facts first, then the open items, every answer checked against the trace and recorded
-under `asserted` with provenance, never as a measurement."""
+`open` list, ranked by projected divergence, of what it does not; and the answers given to it
+(§3.88), every answer checked against the trace and recorded under `asserted` with provenance,
+never as a measurement. The questions themselves, the interview, are the binary's since
+`DESIGN_REVIEW.md` §3.89 stage 3 and tested in Rust (`runner/aeiou/tests/digest_corpus.rs`
+holds every interview these tests made, `trace_tool.rs` the terminal)."""
 import json
 import os
 import math
 import pathlib
-import shutil
 import subprocess
 import sys
 
@@ -342,7 +343,7 @@ def test_text_report_reads_like_a_summary():
 
 def run(*args, stdin=None):
     # stdin is always a pipe here, never the terminal pytest may run on: the digest asks nothing
-    return subprocess.run([sys.executable, "-m", "aeiou.trace", "digest", *args], capture_output=True, text=True, cwd=BUILDER, input=stdin or "")
+    return subprocess.run([str(TRACE_BIN), "digest", *args], capture_output=True, text=True, cwd=BUILDER, input=stdin or "")
 
 
 def test_cli_writes_json_or_text(tmp_path):
@@ -482,7 +483,7 @@ def test_fewer_candidates_than_paths_seen_is_noted_and_the_seen_count_used():
     assert d["sites"][0]["selection"]["p_no_repeat_under_choose"] == pytest.approx(math.exp(-12 * 11 / 24))
 
 
-# ---------------------------------------------------------------- the questions (§3.88)
+# ---------------------------------------------------------------- the answers (§3.88)
 
 
 BY, AT = "someone@host", "2026-10-29T12:00:00+00:00"
@@ -587,77 +588,6 @@ def test_a_site_the_trace_decides_takes_no_facts_either():
     assert d["sites"][0]["projection"]["candidates"] == 500   # recorded; the verdict needed no help
 
 
-class Scripted:
-    """A console with the answers scripted: `None` for end of input."""
-
-    def __init__(self, *lines):
-        self.lines = list(lines)
-        self.said = []
-        self.asked = []
-
-    def say(self, text):
-        self.said.append(text)
-
-    def ask(self, prompt):
-        self.asked.append(prompt)
-        return self.lines.pop(0) if self.lines else None
-
-
-def interview(text, *lines, **kw):
-    an = digest.analyze(text.splitlines(True), "/d")
-    io = Scripted(*lines)
-    doc, answers = digest.interview(an, io, by=BY, at=AT, **kw)
-    return doc, answers, io
-
-
-def test_the_interview_asks_facts_first_then_the_open_items_by_rank():
-    doc, answers, io = interview(open_all(), "", "4", "1", "the loader is a DataLoader with shuffle=True", "3", "", "2", "")
-    # facts: candidates (don't know), passes 4; then selection (1: consume) with a note, size (3: don't know), order (2: permuted)
-    assert [a for a in answers if "fact" in a] == [{"template": "s/{a:03}.npz", "fact": "passes", "value": 4}]
-    assert [(a["question"], a["answer"]) for a in answers if "question" in a] == [("selection", "consume"), ("size", "unknown"), ("order", "permuted")]
-    assert answers[1]["note"] == "the loader is a DataLoader with shuffle=True" and "note" not in answers[2]
-    assert doc["sites"][0]["projection"]["passes"] == 4
-    assert [it["question"] for it in doc["open"]] == ["size"] and doc["open"][0]["answered"] == "unknown"
-    assert len(doc["asserted"]) == 4
-    screen = "\n".join(io.said)
-    assert "How many files of this kind" in screen and "How many passes" in screen
-    assert "1. consume" in screen and "2. choose" in screen and "3. don't know" in screen
-    assert "at 4 pass(es)" in screen   # the divergence line uses the fact just given
-    assert all(p.startswith("answer") or p.startswith("how do you know") or p.startswith("number") for p in io.asked)
-
-
-def test_the_interview_re_asks_on_nonsense_and_on_a_contradiction_and_stops_at_end_of_input():
-    doc, answers, io = interview(open_all(), "lots", "5", "2000", "", "9", "x", "2", "")
-    # candidates: "lots" re-asked, 5 contradicts the 7 seen (re-asked with the evidence), 2000 taken; passes: don't know
-    # selection: 9 and x re-asked, 2 = choose, no note; then end of input: size and order stay open, unasked
-    assert [a for a in answers if "fact" in a] == [{"template": "s/{a:03}.npz", "fact": "candidates", "value": 2000}]
-    assert [(a["question"], a["answer"]) for a in answers if "question" in a] == [("selection", "choose")]
-    said = "\n".join(io.said)
-    assert "7 distinct" in said and "a whole number" in said
-    assert doc["rejected"] == []   # a rejected interactive answer is re-asked, never recorded
-    assert [it["question"] for it in doc["open"]] == ["size", "order"] and "answered" not in doc["open"][0]
-    assert doc["sites"][0]["selection"]["verdict"] == "undecided"   # 2000 candidates do not refute a draw after 7 touches at 5 %
-
-
-def test_the_interview_asks_nothing_when_the_trace_decides_everything():
-    doc, answers, io = interview(two_passes())
-    assert answers == [] and io.asked == [] and doc["asserted"] == []
-
-
-def test_answers_file_round_trip(tmp_path):
-    f = tmp_path / "t.answers.json"
-    answers = [{"template": "s/{a:03}.npz", "fact": "passes", "value": 4}, {"template": "s/{a:03}.npz", "question": "selection", "answer": "consume", "note": "n"}]
-    digest.write_answers(str(f), answers, trace="t.txt", trace_sha256="ab" * 32, by=BY, at=AT)
-    header, back = digest.read_answers(str(f))
-    assert back == answers and header["aeiou_answers"] == 1 and header["trace"] == "t.txt" and header["by"] == BY and header["at"] == AT
-    (tmp_path / "bad.json").write_text("{}")
-    with pytest.raises(BuildError, match="not an aeiou_answers"):
-        digest.read_answers(str(tmp_path / "bad.json"))
-    (tmp_path / "junk.json").write_text("[")
-    with pytest.raises(BuildError):
-        digest.read_answers(str(tmp_path / "junk.json"))
-
-
 ANSWERS_SHOWN = [
     {"template": "s/{a:03}.npz", "fact": "passes", "value": 4},
     {"template": "s/{a:03}.npz", "question": "selection", "answer": "consume", "note": "shuffle=True"},
@@ -676,89 +606,6 @@ def test_render_shows_the_assertions_and_the_rejections():
     assert "answered: unknown" in text
 
 
-class Tty:
-    """A stdin that says it is a terminal and holds the lines typed."""
-
-    def __init__(self, *lines):
-        self.text = "".join(line + "\n" for line in lines)
-        self.pos = 0
-
-    def isatty(self):
-        return True
-
-    def readline(self):
-        nl = self.text.find("\n", self.pos)
-        if nl < 0:
-            return ""
-        line, self.pos = self.text[self.pos:nl + 1], nl + 1
-        return line
-
-
-def test_cli_asks_on_a_terminal_and_writes_the_answers_beside_the_document(tmp_path, monkeypatch, capsys):
-    tr = tmp_path / "t.txt"
-    tr.write_text(open_all())
-    out = tmp_path / "t.digest.json"
-    monkeypatch.setattr(sys, "stdin", Tty("8", "7", "4", "1", "shuffle=True", "3", "", "2", "because"))
-    assert trace.main(["digest", str(tr), "--root", "/d", "-o", str(out), "--answered-by", "tester"]) == 0
-    err = capsys.readouterr().err
-    doc = json.loads(out.read_text())
-    assert doc["sites"][0]["selection"]["verdict"] == "consume"   # 7 candidates refute a draw after 7 touches without a repeat (e^-3 < 0.05)
-    assert [a.get("fact") or a["question"] for a in doc["asserted"]] == ["candidates", "passes", "size", "order"]
-    assert all(a["by"] == "tester" for a in doc["asserted"]) and doc["asserted"][0]["at"].endswith("+00:00")
-    assert len(doc["trace_sha256"]) == 64
-    af = tmp_path / "t.answers.json"
-    header, answers = digest.read_answers(str(af))
-    assert header["trace"] == str(tr) and header["trace_sha256"] == doc["trace_sha256"] and header["by"] == "tester"
-    assert len(answers) == 4 and header["application"] is None
-    assert f"answers: {af}" in err and f"--answers {af}" in err and "aeiou-trace digest" in err
-    # the file replays without a terminal and produces the same assertions
-    monkeypatch.setattr(sys, "stdin", Tty())
-    out2 = tmp_path / "again.json"
-    assert trace.main(["digest", str(tr), "--root", "/d", "-o", str(out2), "--answers", str(af)]) == 0
-    doc2 = json.loads(out2.read_text())
-    assert doc2["asserted"] == doc["asserted"] and doc2["sites"] == doc["sites"]
-
-
-def test_cli_asks_nothing_without_a_terminal_or_with_no_questions(tmp_path, monkeypatch, capsys):
-    tr = tmp_path / "t.txt"
-    tr.write_text(open_all())
-    r = run(str(tr), "--root", "/d")
-    assert r.returncode == 0 and r.stderr == ""
-    doc = json.loads(r.stdout)
-    assert doc["asserted"] == [] and len(doc["open"]) == 3 and not list(tmp_path.glob("*.answers.json"))
-    monkeypatch.setattr(sys, "stdin", Tty("100"))
-    assert trace.main(["digest", str(tr), "--root", "/d", "--no-questions"]) == 0
-    cap = capsys.readouterr()
-    assert cap.err == "" and json.loads(cap.out)["asserted"] == []
-    # a terminal, no -o and no --answers: the answers live in the document only, and the report says so
-    monkeypatch.setattr(sys, "stdin", Tty("8", "", "", "1", "", "3", "", "3", ""))
-    assert trace.main(["digest", str(tr), "--root", "/d", "--text"]) == 0
-    cap = capsys.readouterr()
-    assert "asserted" in cap.out and "in the document only" in cap.err and not list(tmp_path.glob("*.answers.json"))
-
-
-def test_cli_answers_file_refusals(tmp_path, monkeypatch):
-    tr = tmp_path / "t.txt"
-    tr.write_text(one_pass())
-    r = run(str(tr), "--root", "/d", "--answers", str(tmp_path / "absent.json"))
-    assert r.returncode == 1 and "absent.json" in r.stderr and "no terminal to ask on" in r.stderr
-    (tmp_path / "bad.json").write_text("{}")
-    r = run(str(tr), "--root", "/d", "--answers", str(tmp_path / "bad.json"))
-    assert r.returncode == 1 and "not an aeiou_answers" in r.stderr
-    # a file given on another trace is applied, and noted
-    af = tmp_path / "other.answers.json"
-    digest.write_answers(str(af), [{"template": "s/{a:03}.npz", "question": "selection", "answer": "consume"}], trace="elsewhere.txt", trace_sha256="00" * 32, by=BY, at=AT)
-    r = run(str(tr), "--root", "/d", "--answers", str(af))
-    assert r.returncode == 0, r.stderr
-    doc = json.loads(r.stdout)
-    assert doc["asserted"][0]["by"] == BY and "another trace" in doc["notes"]["answers_trace"]
-    # a terminal and an --answers path that does not exist yet: asked, then written there
-    monkeypatch.setattr(sys, "stdin", Tty("8", "", "", "1", "", "3", "", "3", ""))
-    new = tmp_path / "new.json"
-    assert trace.main(["digest", str(tr), "--root", "/d", "--answers", str(new)]) == 0
-    assert digest.read_answers(str(new))[1][0]["answer"] == "consume"
-
-
 def test_the_rest_of_the_answer_branches(tmp_path):
     # a question about a template opened once: not a site
     d = answered(one_pass() + strace_of(["solo.bin"], tid=101), [{"template": "solo.bin", "question": "size", "answer": "drawn"}])
@@ -773,41 +620,9 @@ def test_the_rest_of_the_answer_branches(tmp_path):
     drawn = strace_of([], per_open=[("s/001.npz", 4096), ("s/002.npz", 4096), ("s/001.npz", 8192)])
     d = answered(drawn, [{"template": "s/{a:03}.npz", "question": "size", "answer": "per-path"}])
     assert d["rejected"][0]["why"] == "the trace decided drawn: 1 of 1 repeated path(s) moved differing bytes"
-    # end of input while a fact is asked, and at the note
-    doc, answers, io = interview(open_all(), "lots")
-    assert answers == [] and doc["asserted"] == []
-    doc, answers, io = interview(open_all(), "", "", "1")
-    assert [(a["question"], a["answer"]) for a in answers] == [("selection", "consume")] and "note" not in answers[0]
-    assert doc["asserted"][0]["answer"] == "consume"
-    # an answers file that cannot be read, and one whose answers are not a list
-    with pytest.raises(BuildError, match="answers.json"):
-        digest.read_answers(str(tmp_path / "absent" / "x.answers.json"))
-    (tmp_path / "s.json").write_text('{"aeiou_answers": 1, "answers": "consume"}')
-    with pytest.raises(BuildError, match="a list of objects"):
-        digest.read_answers(str(tmp_path / "s.json"))
-    assert trace._answers_beside("a/t.digest.json") == "a/t.answers.json" and trace._answers_beside("a/t.json") == "a/t.json.answers.json"
-    assert "@" in trace._who() and trace._now().endswith("+00:00")
 
 
-# ---------------------------------------------------------------- the application records (§3.88)
-
-
-from aeiou import applications as ap  # noqa: E402
-
-APPS = ap.load(ap.default_dir())
-
-
-def dcp_load():
-    """Two ranks' shards read at two checkpoint steps: the shard template is a site of four opens."""
-    return strace_of([], per_open=[("ckpt/step_000001/__0_0.distcp", 4096), ("ckpt/step_000001/__1_0.distcp", 8192),
-                                   ("ckpt/step_000002/__0_0.distcp", 4096), ("ckpt/step_000002/__1_0.distcp", 8192)])
-
-
-def interview_with(text, *lines, apps=APPS, **kw):
-    an = digest.analyze(text.splitlines(True), "/d")
-    io = Scripted(*lines)
-    doc, answers = digest.interview(an, io, by=BY, at=AT, apps=apps, **kw)
-    return doc, answers, io
+# ---------------------------------------------------------------- the application in the document (§3.88)
 
 
 def test_the_document_carries_the_application_and_its_blind_spots_as_notes():
@@ -817,135 +632,6 @@ def test_the_document_carries_the_application_and_its_blind_spots_as_notes():
     assert d["application"] == app and d["notes"]["blind_spot_mmap"] == "vectors are mapped"
     text = digest.report(digest.analyze(open_all().splitlines(True), "/d"), application=app, by=BY, at=AT)
     assert "application: Qdrant 1.20; record 1.19" in text and "  vectors_memory: cold" in text and "blind spot (mmap): vectors are mapped" in text
-
-
-def test_the_interview_confirms_the_application_its_signatures_found_and_applies_its_record():
-    # yes it is DCP; version 2.14.1; option 1 (one file per rank), option: don't know; then facts and the open items
-    doc, answers, io = interview_with(dcp_load(), "1", "2.14.1", "1", "3", "", "", "3", "", "3", "")
-    said = "\n".join(io.said)
-    assert "This trace looks like PyTorch Distributed Checkpoint (a path matched __*_*.distcp)." in said
-    assert "Does each rank write one shard file per checkpoint" in said and "(the default)" in said
-    app = doc["application"]
-    assert app["name"] == "pytorch-dcp" and app["version"] == "2.14.1" and app["record"] == "2.14" and app["exact"]
-    assert app["options"] == {"single_file_per_rank": "one file per rank"} and app["blind_spots"] == []
-    (rec,) = [a for a in doc["asserted"] if "record" in a["by"]]
-    assert rec["question"] == "size" and rec["answer"] == "per-path" and rec["by"].startswith("PyTorch Distributed Checkpoint 2.14 record, read 2026-10-29 (high confidence)")
-    assert rec["source"].startswith("workloads/checkpointing/dcp-load/kit/params.py") and rec["at"] == AT
-    assert doc["sites"][0]["size"]["asserted"]["answer"] == "per-path" and doc["sites"][0]["size"]["verdict"] == "undecided"
-    assert [it["question"] for it in doc["open"]] == ["selection", "order"]   # both answered don't know, so both stay, marked
-    assert all(it["answered"] == "unknown" for it in doc["open"])
-    assert answers[0]["by"].startswith("PyTorch Distributed Checkpoint 2.14 record")   # the record's assertion travels in the answers list
-    assert "record" in answers[0]["by"] and "size" == answers[0]["question"]
-
-
-def test_the_interview_lists_the_applications_when_the_guess_is_wrong_or_nothing_matches():
-    names = sorted(APPS)
-    n = names.index("pytorch-dcp") + 1
-    # 2 = another application; the list; DCP at a version below every record: nothing assumed
-    doc, answers, io = interview_with(dcp_load(), "2", str(n), "2.9", "", "", "3", "", "3", "", "3", "")
-    said = "\n".join(io.said)
-    assert "Which application produced this trace?" in said and f"{n}. PyTorch Distributed Checkpoint:" in said
-    assert "no record of PyTorch Distributed Checkpoint at 2.9 or below; nothing is assumed" in said
-    assert doc["application"] == {"name": "pytorch-dcp", "display": "PyTorch Distributed Checkpoint", "version": "2.9", "record": None, "exact": False, "options": {}, "blind_spots": []}
-    assert not [a for a in doc["asserted"] if "record" in a["by"]]
-    # nothing matches: the list, and none of these
-    doc, answers, io = interview_with(open_all(), str(len(names) + 1), "", "", "3", "", "3", "", "3", "")
-    said = "\n".join(io.said)
-    assert "No path in the trace identifies the application." in said
-    assert doc["application"] is None and answers == [] or all("question" in a for a in answers)
-    # a wrong number is re-asked
-    doc, answers, io = interview_with(open_all(), "99", str(len(names) + 1))
-    assert "a number from 1 to 8" in "\n".join(io.said) and doc["application"] is None
-
-
-def test_a_version_no_record_claims_makes_the_record_a_suggestion_to_confirm(tmp_path):
-    shutil.copytree(ap.default_dir(), tmp_path / "apps")
-    f = tmp_path / "apps" / "pytorch-dcp" / "2.14.toml"
-    f.write_text(f.read_text().replace('from = "2.14"\n', 'from = "2.14"\nuntil = "2.15"\n'))
-    apps = ap.load(tmp_path / "apps")
-    # yes DCP; 2.15.2 is between records; options: 1, 3; the record's size per-path offered: 1 = yes
-    doc, answers, io = interview_with(dcp_load(), "1", "2.15.2", "1", "3", "1", apps=apps)
-    said = "\n".join(io.said)
-    assert "no record claims PyTorch Distributed Checkpoint 2.15.2; the nearest is 2.14, read 2026-10-29: its answers are suggestions you confirm" in said
-    assert "the PyTorch Distributed Checkpoint 2.14 record says, for ckpt/step_{a:06}/__{b}_{c}.distcp: size per-path" in said
-    app = doc["application"]
-    assert app["record"] == "2.14" and not app["exact"]
-    (a,) = [a for a in doc["asserted"] if a.get("question") == "size"]
-    assert a["by"] == BY and a["note"].startswith("confirmed from the PyTorch Distributed Checkpoint 2.14 record: a rank's shard")
-    # 2 = no: nothing recorded
-    doc, answers, io = interview_with(dcp_load(), "1", "2.15.2", "1", "3", "2", apps=apps)
-    assert not [a for a in doc["asserted"] if a.get("question") == "size"]
-    # end of input at the confirmation
-    doc, answers, io = interview_with(dcp_load(), "1", "2.15.2", "1", "3", apps=apps)
-    assert doc["application"]["record"] == "2.14" and not [a for a in doc["asserted"] if a.get("question") == "size"]
-    # version unknown: the newest record, as suggestions
-    doc, answers, io = interview_with(dcp_load(), "1", "", "1", "3", "3", apps=apps)
-    assert "no record claims PyTorch Distributed Checkpoint of unknown version; the nearest is 2.14" in "\n".join(io.said)
-    assert doc["application"]["version"] is None and doc["application"]["record"] == "2.14"
-
-
-def test_a_choice_with_a_blind_spot_is_said_and_noted():
-    milvus = strace_of([], per_open=[(f"files/insert_log/1/2/{i}/100/{i}", 4096) for i in (3, 4, 5)])
-    # yes Milvus; 3.0.3; in-memory index; vector field memory-mapped; index loaded; eviction off; then the facts and items, all don't know
-    doc, answers, io = interview_with(milvus, "1", "3.0.3", "1", "2", "1", "1", "", "", "3", "", "3", "", "3", "")
-    said = "\n".join(io.said)
-    assert "blind spot (object): segments and index files persist on the object store" in said
-    assert "blind spot (mmap): the application maps its files" in said
-    app = doc["application"]
-    assert app["record"] == "3.0" and app["exact"] and [b["kind"] for b in app["blind_spots"]] == ["object", "mmap"]
-    assert doc["notes"]["blind_spot_mmap"].startswith("the application maps") and "blind_spot_object" in doc["notes"]
-    text = digest.report(digest.analyze(milvus.splitlines(True), "/d"), application=app, answers=answers, by=BY, at=AT)
-    assert "application: Milvus 3.0.3; record 3.0" in text and "  mmap_vector_field: memory-mapped" in text
-    text = digest.report(digest.analyze(milvus.splitlines(True), "/d"), application={**app, "record": None}, by=BY, at=AT)
-    assert "application: Milvus 3.0.3; no record" in text
-
-
-def test_the_identification_stops_at_end_of_input_wherever_it_is():
-    for lines in [(), ("1",), ("1", "2.14.1"), ("2",), ("2", "1")]:
-        doc, answers, io = interview_with(dcp_load(), *lines)
-        assert doc["aeiou_digest"] == 2
-    assert interview_with(dcp_load())[0]["application"] is None
-    assert interview_with(dcp_load(), "1", "2.14.1")[0]["application"]["record"] == "2.14"
-
-
-def test_a_stated_application_skips_the_identification_and_keeps_its_options():
-    preset = {"name": "pytorch-dcp", "display": "PyTorch Distributed Checkpoint", "version": "2.14.1", "record": None, "exact": False, "options": {"sync_files": "fsync off"}, "blind_spots": []}
-    doc, answers, io = interview_with(dcp_load(), "2", "", "", "3", "", "3", "", application=preset)
-    said = "\n".join(io.said)
-    assert "This trace looks like" not in said and "fsync each shard" not in said and "one shard file per checkpoint" in said
-    assert doc["application"]["options"] == {"sync_files": "fsync off", "single_file_per_rank": "one file per item"} and doc["application"]["record"] == "2.14"
-    preset = {"name": "nobody", "display": "Nobody", "version": None, "record": None, "exact": False, "options": {}, "blind_spots": []}
-    doc, answers, io = interview_with(dcp_load(), application=preset)
-    assert doc["application"] == preset   # unknown to the records: kept as stated, nothing assumed
-
-
-def test_cli_states_the_application_and_replays_it(tmp_path, monkeypatch):
-    tr = tmp_path / "t.txt"
-    tr.write_text(dcp_load())
-    r = run(str(tr), "--root", "/d", "--application", "pytorch-dcp@2.14.1")
-    assert r.returncode == 0, r.stderr
-    doc = json.loads(r.stdout)
-    app = doc["application"]
-    assert app["record"] == "2.14" and app["exact"] and app["options"] == {"single_file_per_rank": "one file per rank", "sync_files": "fsync on"} and "app" not in app
-    assert [a["question"] for a in doc["asserted"]] == ["size"] and "record" in doc["asserted"][0]["by"]
-    r = run(str(tr), "--root", "/d", "--application", "pytorch-dcp@2.9")
-    assert r.returncode == 0 and json.loads(r.stdout)["application"]["record"] is None
-    r = run(str(tr), "--root", "/d", "--application", "nope")
-    assert r.returncode == 2 and "no such application record" in r.stderr and "pytorch-dcp" in r.stderr
-    r = run(str(tr), "--root", "/d", "--applications", str(tmp_path / "absent"))
-    assert r.returncode == 1 and "no such directory of application records" in r.stderr
-    # an interactive run with the application stated: the options are asked, the answers file carries the application, the replay restores it
-    out = tmp_path / "t.digest.json"
-    monkeypatch.setattr(sys, "stdin", Tty("2", "1", "", "", "3", "", "3", ""))
-    assert trace.main(["digest", str(tr), "--root", "/d", "-o", str(out), "--application", "pytorch-dcp@2.14.1"]) == 0
-    doc = json.loads(out.read_text())
-    assert doc["application"]["options"] == {"single_file_per_rank": "one file per item", "sync_files": "fsync on"}
-    header, answers = digest.read_answers(str(tmp_path / "t.answers.json"))
-    assert header["application"] == doc["application"]
-    monkeypatch.setattr(sys, "stdin", Tty())
-    assert trace.main(["digest", str(tr), "--root", "/d", "-o", str(tmp_path / "again.json"), "--answers", str(tmp_path / "t.answers.json")]) == 0
-    again = json.loads((tmp_path / "again.json").read_text())
-    assert again["application"] == doc["application"] and again["asserted"] == doc["asserted"]
 
 
 # ---------------------------------------------------------------- the site kinds (§3.88 step 4, revised 2026-10-30)
@@ -1067,11 +753,6 @@ def test_keyed_facts_and_answers():
         "no such fact for a keyed site: keys, requests",
         "no such question for a keyed site: origin, reuse, size",
     ]
-    doc, answers, io = interview(kv_trace(), "1000", "", "1", "warm")
-    said = "\n".join(io.said)
-    assert "How many distinct keys does the application hold at the scale it runs" in said and "How many requests will the benchmark serve" in said
-    assert "keyed: 5 keys, 4 written, 5 reads" in said
-    assert [(a.get("fact") or a["question"]) for a in answers] == ["keys", "origin"]
 
 
 def build_search():
@@ -1237,16 +918,6 @@ def test_bulk_write_facts_and_answers():
     assert [r["why"] for r in d["rejected"]] == ["the trace kept 2 saves at once; 1 is fewer"]
     d = answered(dcp_save(rewrite=True), [{"template": t, "question": "label", "answer": "checkpoint"}])
     assert d["rejected"][0]["why"] == "the trace decided output: 1 path(s) written again: a checkpoint is never overwritten"
-    doc, answers, io = interview(dcp_save(), "", "512", "", "", "", "1", "", "3", "")
-    said = "\n".join(io.said)
-    assert "How many values does field b (0..1 in the trace) take at the scale the application runs?" in said
-    assert "How many times will the benchmark write this kind of file" in said and "How many saves of this kind does the application keep" in said
-    assert "bulk write: 2 files in 1 save(s), 0 rewritten, fsync on 100%" in said
-    assert "1. checkpoint: a checkpoint: the application's state, read back only after a failure" in said
-    assert [(a.get("fact") or a["question"]) for a in answers] == ["values:b", "label", "size"]
-    # the interview names a site of a split template by its phase, and its answers carry it
-    doc, answers, io = interview(build_search(), "", "", "", "", "", "", "2", "")
-    assert any(line.startswith("site 0/write  leaves/{a}.bin") for line in io.said) and answers[0] == {"template": "leaves/{a}.bin", "question": "selection", "answer": "choose", "phase": "read"}
 
 
 def index_trace(reads, seed=1, hot=0):
@@ -1292,11 +963,6 @@ def test_within_facts_and_answers():
         f"the trace read up to byte {200 * 4096} of this file; 4096 is smaller",
         f"the trace decided uniform: the top tenth of the offsets took {sk['top_10pct_share']:.2f} of the reads, about {sk['uniform_share']:.2f} under a uniform spread, uniform within noise",
     ]
-    doc, answers, io = interview(index_trace(400), "", "", "2", "", "1", "the graph walk")
-    said = "\n".join(io.said)
-    assert "How large is this file at the scale the application runs" in said and "How many queries will the benchmark run" in said
-    assert "within one open: 400 reads at" in said
-    assert [(a["question"], a["answer"]) for a in answers] == [("memory", "exceeds"), ("dependency", "dependent")]
 
 
 def test_render_shows_every_kind():

@@ -125,7 +125,7 @@ pub fn fmt_g(x: f64, p: usize) -> String {
 }
 
 /// `format(x, ".P%")`.
-fn pct(x: f64, p: usize) -> String {
+pub(crate) fn pct(x: f64, p: usize) -> String {
     format!("{:.*}%", p, x * 100.0)
 }
 
@@ -136,7 +136,7 @@ fn py_float(x: f64) -> String {
 }
 
 /// A value as the Python's f-string writes it.
-fn py(v: &Value) -> String {
+pub(crate) fn py(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Null => "None".into(),

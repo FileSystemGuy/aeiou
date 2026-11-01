@@ -1,12 +1,14 @@
-//! The digest of `aeiou-trace` (`DESIGN_REVIEW.md` §3.89, stage 2) against the golden corpus in
+//! The digest of `aeiou-trace` (`DESIGN_REVIEW.md` §3.89, stages 2 and 3) against the golden corpus in
 //! `tests/digest/`: every trace the Python digest's tests fed it on 2026-10-31
 //! (`builder/tests/test_digest.py`, `test_objectlog.py`, `test_applications.py`,
 //! `test_trace.py`), with every set of answers and options its document was made with and what
 //! it made, and every document its text report was rendered from with the text. A
 //! `digest-<hash>.json` names its input, a `trace-<hash>.in` (an strace, an exported trace
 //! file, or an object-store log), and holds the arguments and the document or the refusal; a
-//! `render-<hash>.json` holds a document and its report. The Python digest was the
-//! specification until the port; these files keep it.
+//! `render-<hash>.json` holds a document and its report; an `interview-<hash>.json` (stage 3)
+//! holds the lines typed, the records asked with (an `apps-<hash>.json`, the tree's files), and
+//! what the interview said, asked, and made. The Python digest was the specification until the
+//! port; these files keep it.
 //!
 //! What the port adds is not in the goldens and is set aside before the comparison: the
 //! version (`aeiou_digest: 2`), the `metrics` section, and each site's `facts`. One thing the
@@ -16,7 +18,7 @@
 use std::io::BufRead;
 use std::path::PathBuf;
 
-use aeiou::digest;
+use aeiou::{applications, digest, interview};
 use serde_json::{json, Value};
 
 fn dir() -> PathBuf {
@@ -130,22 +132,59 @@ fn every_golden_report_is_reproduced() {
     }
 }
 
-/// The application records may assert only what the digest asks (`builder/aeiou/applications.py`
-/// keeps their vocabulary, `FACTS` and `QUESTIONS`, until stage 3 moves the records here).
+/// A console with the answers scripted, end of input once they run out.
+struct Scripted {
+    lines: std::collections::VecDeque<String>,
+    said: Vec<String>,
+    asked: Vec<String>,
+}
+
+impl interview::Console for Scripted {
+    fn say(&mut self, text: &str) {
+        self.said.push(text.to_string());
+    }
+    fn ask(&mut self, prompt: &str) -> Option<String> {
+        self.asked.push(prompt.to_string());
+        self.lines.pop_front()
+    }
+}
+
+/// The application records a golden was asked with, written out as the tree they were.
+fn records_of(name: &str, tag: &str) -> (crate::common::TempDir, applications::Records) {
+    let files: std::collections::BTreeMap<String, String> = serde_json::from_str(&std::fs::read_to_string(dir().join(name)).unwrap()).unwrap();
+    let d = crate::common::tmpdir("interview", tag);
+    for (rel, text) in &files {
+        let p = d.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    let r = applications::load(&d).unwrap();
+    (d, r)
+}
+
+/// Every interview the Python's tests held (`builder/tests/test_digest.py`, recorded 2026-10-31
+/// before the Python interview was cut): the lines typed, the records and the stated
+/// application, and what it said, what it asked, the answers, and the document.
 #[test]
-fn the_application_records_vocabulary_is_the_digests() {
-    let src = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builder/aeiou/applications.py")).unwrap();
-    let quoted = |text: &str| -> Vec<String> { text.split('"').skip(1).step_by(2).map(str::to_string).collect() };
-    // a statement: from its name to the line that closes it
-    let statement = |name: &str, close: &str| -> String {
-        let at = src.find(&format!("\n{name} = ")).unwrap_or_else(|| panic!("{name} in applications.py")) + 1;
-        let end = src[at..].find(close).unwrap() + close.len();
-        src[at..at + end].to_string()
-    };
-    assert_eq!(quoted(&statement("FACTS", ")\n")), digest::FACT_NAMES.to_vec());
-    let q = quoted(&statement("QUESTIONS", "}\n"));
-    let want: Vec<String> = digest::QUESTIONS.iter().flat_map(|q| std::iter::once(q.to_string()).chain(digest::candidates_of(q).unwrap().into_iter().map(str::to_string))).collect();
-    assert_eq!(q, want);
-    assert_eq!(digest::candidates_of("label"), Some(["checkpoint", "output"]));
-    assert!(digest::candidates_of("field:step").is_none() && digest::candidates_of("nothing").is_none());
+fn every_golden_interview_is_reproduced() {
+    let cases = cases("interview");
+    assert!(cases.len() >= 25, "the corpus is there");
+    for (name, want) in &cases {
+        let text = std::fs::read_to_string(dir().join(want["input"].as_str().unwrap())).unwrap();
+        let args = &want["args"];
+        let first = text.lines().next().map(|l| format!("{l}\n")).unwrap_or_default();
+        let opener = || -> std::io::Result<Box<dyn BufRead + '_>> { Ok(Box::new(text.as_bytes())) };
+        let an = digest::analyze(&opener, &first, args["root"].as_str(), &strs(&args["exclude"]), args["cwd"].as_str()).unwrap();
+        let held = want["apps"].as_str().map(|f| records_of(f, name));
+        let o = &want["options"];
+        let o = digest::Opts { epochs: o["epochs"].as_i64().unwrap(), candidates: o["candidates"].as_i64(), paths: o["paths"].as_bool().unwrap() };
+        let mut io = Scripted { lines: strs(&want["lines"]).into(), said: vec![], asked: vec![] };
+        let application = Some(want["application"].clone()).filter(|a| !a.is_null());
+        let (doc, answers) = interview::interview(&an, &mut io, &o, want["by"].as_str().unwrap(), want["at"].as_str().unwrap(), held.as_ref().map(|(_, r)| r), application);
+        let w = &want["want"];
+        assert_eq!(io.said, strs(&w["said"]), "{name}: said");
+        assert_eq!(io.asked, strs(&w["asked"]), "{name}: asked");
+        assert_eq!(Value::Array(answers), w["answers"], "{name}: answers");
+        assert!(doc == w["document"], "{name}: the document differs from the golden {}", first_difference(&doc, &w["document"]));
+    }
 }

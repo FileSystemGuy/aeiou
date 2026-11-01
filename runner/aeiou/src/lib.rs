@@ -6,6 +6,7 @@
 //! (`aeiou run`), the payload generator and dataset manifest (`aeiou datagen`), and the
 //! in-process coordinator.
 
+pub mod applications;
 pub mod ast;
 pub mod aio;
 pub mod backend;
@@ -21,6 +22,7 @@ pub mod formats;
 pub mod digest;
 pub mod dryrun;
 pub mod eval;
+pub mod interview;
 pub mod export;
 pub mod limits;
 pub mod listing;

@@ -32,6 +32,7 @@ hyphenated. Inside:
 
 The digest picks the record whose range contains the version the person names; with none, it
 takes the nearest lower record and every one of its assertions becomes a suggestion the person
-confirms rather than a fact it records. `builder/tests/test_applications.py` walks every record.
-The directory ships in the wheel (`builder/pyproject.toml`), and `--applications DIR` points the
-digest at a checkout or at extra records.
+confirms rather than a fact it records. `runner/aeiou/tests/applications.rs` walks every record.
+The directory is built into `aeiou-trace` (`runner/aeiou/build.rs`, since 2026-10-31), so a
+record added here is in the next build; `--applications DIR` points the digest at another tree,
+to try a record before it is built in.

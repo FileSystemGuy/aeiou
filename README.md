@@ -232,7 +232,7 @@ An abstract goes through five stages, each a tool of the suite.
 | `aeiou-build` | Python | builder scripts to abstracts, hermetically | [aeiou-build(1)](man/aeiou-build.1.md) |
 | `aeiou-params` | Python | parameter files: defaults, check, from real shards and archives | [aeiou-params(1)](man/aeiou-params.1.md) |
 | `aeiou-datagen` | Python | container datasets through their format classes; deprecated, since `aeiou datagen` writes every format | [aeiou-datagen(1)](man/aeiou-datagen.1.md) |
-| `aeiou-trace` | Rust (its `compare` and the digest's interview still Python) | metrics of an strace or an object-store log, comparison, the `trace` node's file, the digest a fit is made from | [aeiou-trace(1)](man/aeiou-trace.1.md) |
+| `aeiou-trace` | Rust (its `compare` still Python) | metrics of an strace or an object-store log, comparison, the `trace` node's file, the digest a fit is made from | [aeiou-trace(1)](man/aeiou-trace.1.md) |
 | `aeiou-catalog` | Python | the workload catalog: records against their dictionary, each case's shape, `CATALOG.md`, each case's description in prose, and `describe` for any abstract | [aeiou-catalog(1)](man/aeiou-catalog.1.md) |
 | `aeiou-header` | Python | the header bytes of an HDF5 file from libhdf5, run by `aeiou datagen` beside it | [aeiou-header(1)](man/aeiou-header.1.md) |
 | `aeiou-launch` | sh | one `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh | [aeiou-launch(1)](man/aeiou-launch.1.md) |
@@ -524,8 +524,10 @@ Not built, in rough order of interest:
   trace, answer set, and report the Python digest's tests made; its document is version 2, the
   metrics of the same calls beside the structure and each site's facts with the least value the
   trace allows; on an strace of 200 MB it takes 7.8 s and 0.21 GB where the Python took 14.5 s and
-  1.7 GB; the interview and the application records stay Python until stage 3, every document
-  they show the binary's. To build next: the interview and the records in Rust, then the comparison;
+  1.7 GB. Built the same day (stage 3): the interview, the application records, and the answers
+  file in Rust (`interview.rs`, `applications.rs`), the binary asking itself with no hand-off to
+  Python and the records built into it, held to every interview the Python's tests ran, recorded
+  first. To build next: the comparison over version-2 documents and `dry-run --emit-trace` (stage 4);
   `aeiou-catalog disclose`, every string
   and number a contribution would publish (item 47); a fitting skill in the open skill format
   over those tools and `aeiou-fit`, evaluated against the committed captures, beside a written

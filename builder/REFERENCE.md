@@ -713,8 +713,9 @@ are the answers file (`aeiou_answers: 1`), the list `interview` returns, replaye
 `document`. The console is an object with `say` and `ask` (end of input stops the asking), so
 the tests script it; the command asks only when stdin is a terminal, no `--answers` file
 exists, and `--no-questions` is absent, and it refuses `-` as the trace. `tests/test_digest.py`
-holds the verdicts to constructed sequences, the answers to their checks, the interview to a
-scripted console, and the command to its refusals.
+holds the verdicts to constructed sequences, the answers to their checks~~, the interview to a
+scripted console, and the command to its refusals~~ (the interview and the command in Rust since
+§3.89 stage 3, below).
 
 **The site kinds (built 2026-10-29, revised 2026-10-30, §3.88):** `parts_of` turns a
 template into its sites, each a `Part` (the template, its kind, its `phase`, its opens):
@@ -771,7 +772,7 @@ made, counted in its `notes` as `lines_not_counted`), and each site's `facts`, `
 and, where the trace bounds it, `least` and `why`, the value below which `fact_check` rejects
 it. On a synthetic strace of 200 MB (npz-shaped opens, four threads, two shuffled passes) the
 port takes 7.8 s and 0.21 GB, the metrics included, against the Python's 14.5 s and 1.7 GB over
-the same export; the documents are equal. What asks stays Python until stage 3: the binary hands
+the same export; the documents are equal. ~~What asks stays Python until stage 3: the binary hands
 a digest that would ask (on a terminal, no `--answers` file there, no `--no-questions`) or that
 names the application (`--application`, `--applications`) to `python3 -m aeiou.trace`, whose
 `interview` and records run as above and get every document from the binary (`digest.Trace`,
@@ -779,7 +780,23 @@ which runs `aeiou-trace digest --no-questions` with the answers so far as an ans
 trace read again each time; `analyze`, `document`, `report`, `digest_of`), checking a fact
 against the site's `facts`; the final document and report are the binary's, given the answers
 file the interview wrote. The records' vocabulary (`applications.FACTS`, `QUESTIONS`) is held
-to the Rust digest's by `tests/digest_corpus.rs`.
+to the Rust digest's by `tests/digest_corpus.rs`.~~ (Stage 3, below.)
+
+*Later the same day (§3.89, stage 3):* the interview, the records, and the answers file are
+Rust too, `runner/aeiou/src/interview.rs` (`interview`, the `Console` it asks on, `Terminal`,
+`fact_check`, `label`, `write_answers`, `read_answers`) and `applications.rs` (below), and the
+binary asks itself, the hand-off to Python gone: one analysis, every document the interview
+shows remade from it in process, the trace read once. The method was stage 2's: every
+interview the Python's tests ran, scripted and on the terminal, was recorded before the Python
+was cut, with the lines typed, the records and stated application it was given, and what it
+said, asked, answered, and made (`tests/digest/`, 29 `interview-*.json` and the two record
+trees they used as `apps-*.json`), and `tests/digest_corpus.rs` reproduces each exactly, red
+against a stub first. The command's terminal tests run the binary on a pseudo-terminal
+(`tests/trace_tool.rs`). One difference is chosen: on a terminal with an `--answers` path that
+does not exist and nothing answered, the Python failed when it handed the empty run back to the
+binary ("no such answers file, and no terminal to ask on"); the binary writes the document and
+no answers file. `digest.py` keeps only the handle the Python tests of the analysis use
+(`Trace`, `analyze`, `document`, `report`, `digest_of`, `write_answers`), until stage 5.
 
 **Object-store request logs (~~`aeiou/objectlog.py`~~ `runner/aeiou/src/objectlog.rs` since the port
 the same day, §3.89; built 2026-10-29, §3.88):** a MinIO audit log
@@ -801,7 +818,7 @@ alike, and `digest.analyze` takes a log's calls from `aeiou-trace export` as it 
 strace's. `tests/test_objectlog.py` holds both formats to constructed logs and the commands to
 them, through the binary.
 
-**The application records (`applications/`, `aeiou/applications.py`, built 2026-10-29, §3.88):**
+**The application records (`applications/`, ~~`aeiou/applications.py`~~ `runner/aeiou/src/applications.rs` since 2026-10-31, §3.89 stage 3; built 2026-10-29, §3.88):**
 what the digest knows about the applications whose traces it reads, as data a person extends by
 adding a file: one directory per application with `application.toml` (name, display, kind,
 summary, path signatures, catalog mechanisms) and `<version>.toml` per version range read
@@ -821,9 +838,14 @@ assertions or, for a version no record claims, offers them one by one to confirm
 carries `application` and the blind spots as notes, and the answers file carries the
 application and the record's assertions with their provenance, so a replay needs no records.
 `--application NAME[@VERSION]` states it for the non-interactive path, with the record's defaults.
-The directory ships in the wheel (`pyproject.toml`, force-include) and `default_dir` finds it
+~~The directory ships in the wheel (`pyproject.toml`, force-include) and `default_dir` finds it
 there or in the checkout; `tests/test_applications.py` walks every committed record and holds
-the loader to its refusals.
+the loader to its refusals.~~ Since stage 3 the records are built into the binary (the crate's
+`build.rs` embeds every file of the checkout's `applications/`, `shipped`), so the tool carries
+them wherever it is copied, and `--applications DIR` reads another tree with the same checks
+(`load`); the wheel no longer carries them. `runner/aeiou/tests/applications.rs`, the Python
+tests ported, walks every committed record, holds the built-in records to the checkout's, and
+holds the loader to its refusals (a TOML error on one line, with its line and column).
 
 ## 8. `aeiou-catalog`: the workload catalog (2026-10-10)
 

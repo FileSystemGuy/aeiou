@@ -1,0 +1,437 @@
+{
+ "application": null,
+ "apps": "apps-3579f7e9.json",
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "at": "2026-10-29T12:00:00+00:00",
+ "by": "someone@host",
+ "input": "trace-a1c52e89.in",
+ "lines": [
+  "1",
+  "2.14.1"
+ ],
+ "options": {
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "want": {
+  "answers": [],
+  "asked": [
+   "answer [1-3]: ",
+   "which version of PyTorch Distributed Checkpoint? (Enter for don't know): ",
+   "answer [1-3]: "
+  ],
+  "document": {
+   "aeiou_digest": 2,
+   "application": {
+    "blind_spots": [],
+    "display": "PyTorch Distributed Checkpoint",
+    "exact": true,
+    "name": "pytorch-dcp",
+    "options": {},
+    "record": "2.14",
+    "version": "2.14.1"
+   },
+   "asserted": [],
+   "contexts": 1,
+   "lanes": [
+    {
+     "lane": 0,
+     "ops": 16,
+     "phases": [
+      {
+       "bytes_read": 24576,
+       "bytes_written": 0,
+       "first": 0,
+       "last": 42004109,
+       "motif": "open fstat read close",
+       "ops": 16,
+       "repeats": {},
+       "template": 0,
+       "think": {
+        "buckets": [
+         [
+          8388608,
+          3
+         ]
+        ],
+        "max": 9994984,
+        "mean": 9994983.666666666,
+        "n": 3
+       },
+       "units": 4
+      }
+     ]
+    }
+   ],
+   "metrics": {
+    "aeiou_metrics": 2,
+    "block": null,
+    "chain_gap_us": null,
+    "contexts": 1,
+    "instances": 1,
+    "notes": {},
+    "order": "completion",
+    "roots": [
+     "/d"
+    ],
+    "source": "strace",
+    "total": {
+     "bytes_read": 24576,
+     "bytes_written": 0,
+     "counts": {
+      "close": 4,
+      "fstat": 4,
+      "open": 4,
+      "read": 4
+     },
+     "depth": {},
+     "fan_out": {},
+     "ops": 16,
+     "popularity_bytes": {
+      "accesses": 24576,
+      "counts": [
+       [
+        1,
+        24576
+       ]
+      ],
+      "distinct": 24576,
+      "max": 1,
+      "top_0_1_pct": 0.001,
+      "top_10_pct": 0.10000000000000002,
+      "top_1_pct": 0.01
+     },
+     "popularity_objects": {
+      "accesses": 4,
+      "counts": [
+       [
+        1,
+        4
+       ]
+      ],
+      "distinct": 4,
+      "max": 1,
+      "top_0_1_pct": 0.001,
+      "top_10_pct": 0.1,
+      "top_1_pct": 0.01
+     },
+     "request_size": {
+      "read": {
+       "buckets": [
+        [
+         4096,
+         2
+        ],
+        [
+         8192,
+         2
+        ]
+       ],
+       "max": 8192,
+       "mean": 6144.0,
+       "n": 4
+      },
+      "write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "reuse_extents": {
+      "first_touch": {
+       "read": 24576,
+       "write": 0
+      },
+      "partial": 0,
+      "read_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "read_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "whole": 0,
+      "write_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "write_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "run_length": {
+      "read": {
+       "bytes": {
+        "buckets": [
+         [
+          4096,
+          2
+         ],
+         [
+          8192,
+          2
+         ]
+        ],
+        "max": 8192,
+        "mean": 6144.0,
+        "n": 4
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [
+         [
+          1,
+          4
+         ]
+        ],
+        "max": 1,
+        "mean": 1.0,
+        "n": 4
+       }
+      },
+      "write": {
+       "bytes": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       }
+      }
+     }
+    }
+   },
+   "notes": {},
+   "open": [
+    {
+     "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",
+     "at_scale": {
+      "choose": {
+       "never_read_share": 0.36787944117144233,
+       "repeat_share": 0.36787944117144233
+      },
+      "consume": {
+       "never_read_share": 0.0,
+       "repeat_share": 0.0
+      },
+      "epochs": 1,
+      "measure": "share of the set never read; share of touches that re-read a path"
+     },
+     "candidates": [
+      "consume",
+      "choose"
+     ],
+     "divergence": 0.36787944117144233,
+     "question": "selection",
+     "rank": 1,
+     "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 4 candidates refutes a draw with replacement (no repeat in 4 touches would have probability below 0.05)",
+     "site": 0
+    },
+    {
+     "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+     "at_scale": {
+      "epochs": 1,
+      "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+     },
+     "candidates": [
+      "per-path",
+      "drawn"
+     ],
+     "divergence": 0.0,
+     "question": "size",
+     "rank": 2,
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "site": 0
+    },
+    {
+     "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",
+     "at_scale": {
+      "epochs": 1,
+      "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"
+     },
+     "candidates": [
+      "sequential",
+      "permuted"
+     ],
+     "divergence": 0.0,
+     "question": "order",
+     "rank": 3,
+     "settles": "at least 8 consecutive touches within one pass",
+     "site": 0
+    }
+   ],
+   "ops": 16,
+   "projection": {
+    "candidates": null,
+    "epochs": 1
+   },
+   "rejected": [],
+   "root": "/d",
+   "sites": [
+    {
+     "distinct": 4,
+     "epochs": [
+      4
+     ],
+     "facts": [
+      {
+       "ask": "How many files of this kind does the application have at the scale it runs?",
+       "least": 4,
+       "name": "candidates",
+       "why": "the trace touched 4 distinct paths of this template"
+      },
+      {
+       "ask": "How many passes over them will the benchmark run?",
+       "name": "passes"
+      }
+     ],
+     "kind": "set",
+     "order": {
+      "ascending": 1.0,
+      "pairs": 3,
+      "settles": "at least 8 consecutive touches within one pass",
+      "step_of_one": 1.0,
+      "verdict": "undecided"
+     },
+     "phase": null,
+     "projection": {
+      "asserted": [],
+      "candidates": null,
+      "passes": 1
+     },
+     "selection": {
+      "candidates_for_choose": 4,
+      "consistent": [
+       "consume",
+       "choose"
+      ],
+      "consume": {
+       "epoch": 4
+      },
+      "refuted": {},
+      "settles": "a second pass over the set (a repeat decides it), or the corpus size: fewer than 4 candidates refutes a draw with replacement (no repeat in 4 touches would have probability below 0.05)",
+      "verdict": "undecided"
+     },
+     "size": {
+      "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+      "verdict": "undecided"
+     },
+     "template": 0,
+     "touches": 4
+    }
+   ],
+   "source": "strace",
+   "templates": [
+    {
+     "bytes_read": 24576,
+     "bytes_written": 0,
+     "fields": [
+      {
+       "kind": "int",
+       "max": 2,
+       "min": 1,
+       "name": "a",
+       "values": 2,
+       "width": 6
+      },
+      {
+       "kind": "int",
+       "max": 1,
+       "min": 0,
+       "name": "b",
+       "values": 2,
+       "width": null
+      },
+      {
+       "kind": "int",
+       "max": 0,
+       "min": 0,
+       "name": "c",
+       "values": 1,
+       "width": null
+      }
+     ],
+     "id": 0,
+     "offsets": {
+      "whole": 4
+     },
+     "opens": 4,
+     "ops": {
+      "close": 4,
+      "fstat": 4,
+      "open": 4,
+      "read": 4
+     },
+     "paths": 4,
+     "read_size": {
+      "buckets": [
+       [
+        4096,
+        2
+       ],
+       [
+        8192,
+        2
+       ]
+      ],
+      "max": 8192,
+      "mean": 6144.0,
+      "n": 4
+     },
+     "runs_per_open": {
+      "buckets": [
+       [
+        1,
+        4
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 4
+     },
+     "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+     "write_size": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    }
+   ]
+  },
+  "said": [
+   "",
+   "This trace looks like PyTorch Distributed Checkpoint (a path matched __*_*.distcp).",
+   "    1. yes",
+   "    2. another application",
+   "    3. none of these, or don't know",
+   "",
+   "  Does each rank write one shard file per checkpoint (FileSystemWriter's single_file_per_rank), or one file per item?",
+   "    1. one file per rank (the default)",
+   "    2. one file per item",
+   "    3. don't know"
+  ]
+ }
+}

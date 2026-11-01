@@ -2,8 +2,8 @@
 # knows about the applications whose traces it reads, so that a person who uses a product and
 # does not know its storage design can answer from a list. One directory per application,
 # `application.toml` for what does not change across versions and `<version>.toml` per version
-# range the facts were read for; `builder/aeiou/applications.py` refuses a record that uses a
-# word not defined here. The three rules: the trace always wins (a record fills what a short
+# range the facts were read for; `aeiou-trace` (`runner/aeiou/src/applications.rs`) refuses a
+# record that uses a word not defined here. The three rules: the trace always wins (a record fills what a short
 # trace cannot show and never overrides what it does); a record's facts are assertions weaker
 # than the owner's, with their own provenance; a record never claims a version it was not read
 # for. Adding a product or a version is a new file.

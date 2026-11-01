@@ -1,10 +1,10 @@
-"""`aeiou-trace compare` and the questions of `aeiou-trace digest`, what of the trace-side tool is still
-Python (`DESIGN_REVIEW.md` §3.89). The tool is the runner's binary `aeiou-trace` (`runner/aeiou/src/
-bin/aeiou_trace.rs`): `metrics` and `export` are Rust since 2026-10-29 (`strace.rs`, `export.rs`,
-`objectlog.rs`), the digest's document and report since 2026-10-31 (`digest.rs`), and the binary runs
-`compare`, and a digest that asks (on a terminal) or states the application (`--application`), through
-`python3 -m aeiou.trace` (or `$AEIOU_PYTHON`) until their stages of §3.89 port them; every document
-the interview shows or writes is the binary's. `export_of` and `LogHist` remain for the tests.
+"""`aeiou-trace compare`, what of the trace-side tool is still Python (`DESIGN_REVIEW.md` §3.89). The
+tool is the runner's binary `aeiou-trace` (`runner/aeiou/src/bin/aeiou_trace.rs`): `metrics` and
+`export` are Rust since 2026-10-29 (`strace.rs`, `export.rs`, `objectlog.rs`), the digest's document
+and report (`digest.rs`), its interview, the application records, and the answers file (`interview.rs`,
+`applications.rs`), all since 2026-10-31; the binary runs `compare` through
+`python3 -m aeiou.trace` (or `$AEIOU_PYTHON`) until stage 4 of §3.89 ports it. `export_of` and
+`LogHist` remain for the tests.
 
 `compare` holds two metrics documents (`aeiou_metrics: 2`, from `aeiou-trace metrics` or `aeiou dry-run
 --metrics-json`; version 1, a capture's from before 2026-10-22) row by row, and `--judge` holds each row
@@ -14,7 +14,6 @@ abstract differs from itself by at other seeds.
 
 from __future__ import annotations
 
-import io
 import itertools
 import json
 import os
@@ -369,7 +368,7 @@ def _describe(doc: dict) -> str:
 
 def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     """The parser and its subcommands' parsers by name (the usage a `Missing` list shows)."""
-    ap = usage.Parser(prog="aeiou-trace", description="The comparison of two metrics documents and the structural digest a fit is made from: the subcommands of aeiou-trace still in Python, which the runner's aeiou-trace binary runs (DESIGN_REVIEW.md §3.89)",
+    ap = usage.Parser(prog="aeiou-trace", description="The comparison of two metrics documents: the subcommand of aeiou-trace still in Python, which the runner's aeiou-trace binary runs (DESIGN_REVIEW.md §3.89)",
                       usage="aeiou-trace <COMMAND> [ARGS]...")
     sub = ap.add_subparsers(dest="cmd")
     cp = sub.add_parser("compare", help="Compare two metrics documents, from a trace or from aeiou dry-run --metrics-json", usage="aeiou-trace compare [OPTIONS] <A> <B>")
@@ -382,23 +381,8 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     cp.add_argument("--tolerances", metavar="FILE", help="A tolerance file (aeiou_tolerances: 1): class tolerances that replace the defaults, the rows the trace cannot show, the rows recorded as outside; implies --judge")
     cp.add_argument("--self", dest="selfs", action="append", default=[], metavar="FILE", help="A metrics document of B's abstract at the same parameters and another seed (repeatable): a row's tolerance is raised by its largest distance between B and these; implies --judge")
     cp.add_argument("--only", action="append", default=[], metavar="PREFIX", help="Only the rows whose metric starts with PREFIX (repeatable)")
-    dp = sub.add_parser("digest", help="Write the structural digest of a trace: path templates, lanes and their phases, a verdict per site on what the trace decides (permutation or draw, order, size), and the open questions ranked by their divergence at scale", usage="aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>")
-    dp.add_argument("trace", nargs="?", help="The strace output file, an exported trace file, or an object-store request log (MinIO audit, S3 server access); a file, never stdin: the comparison after the fit and a re-run with answers read it again")
-    dp.add_argument("--root", metavar="DIR", help="Digest only calls on paths under DIR, written relative to it (required for an strace, not for an exported trace file)")
-    dp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
-    dp.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
-    dp.add_argument("--epochs", type=int, default=1, metavar="N", help="Project the open questions over N passes over the set (default 1): the share a draw with replacement never reads is e^-N")
-    dp.add_argument("--candidates", type=int, metavar="N", help="The files the application could have chosen among (the corpus); default: the distinct paths the trace touched. Decides a pass from a draw when no path repeats")
-    dp.add_argument("--paths", action="store_true", help="Include every raw path under each template (the digest otherwise carries templates and counts only)")
-    dp.add_argument("--text", action="store_true", help="Print the text report instead of the JSON document (with -o, the report is printed beside the file anyway)")
-    dp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_digest: 2) to FILE and print the text report")
-    dp.add_argument("--answers", metavar="FILE", help="The answers file (aeiou_answers: 1): replayed when it exists, so the questions are not asked; written there after an interactive run. Default after an interactive run with -o: the document's name with .answers.json")
-    dp.add_argument("--no-questions", action="store_true", help="Ask nothing even on a terminal: every undecided verdict stays open")
-    dp.add_argument("--answered-by", metavar="NAME", help="Record NAME as the one who answered (default: user@host)")
-    dp.add_argument("--applications", metavar="DIR", help="The application records (default: the ones shipped with the tool, or the checkout's applications/)")
-    dp.add_argument("--application", metavar="NAME[@VERSION]", help="State the traced application instead of being asked: its record's defaults and assertions apply, with the record as their provenance")
     ap.version(f"aeiou-trace {__version__}")
-    return ap, {"compare": cp, "digest": dp}
+    return ap, {"compare": cp}
 
 
 @usage.tool
@@ -409,12 +393,10 @@ def main(argv=None) -> int:
     try:
         args = ap.parse_args(argv)
         missing = usage.Missing(ap)
-        missing.want(args.cmd, "<COMMAND>", "one of compare, digest (metrics and export are the binary's)")
+        missing.want(args.cmd, "<COMMAND>", "compare (metrics, export, and digest are the binary's)")
         missing.check()
         sp = subs[args.cmd]
         missing = usage.Missing(sp)
-        if args.cmd == "digest":
-            missing.want(args.trace, "<TRACE>", "the strace output file, or an exported trace file")
         if args.cmd == "compare":
             missing.want(args.a, "<A>", "a metrics document (aeiou_metrics: 2, or 1 from before 2026-10-22), the trace's")
             missing.want(args.b, "<B>", "the metrics document A is compared with, the abstract's")
@@ -430,9 +412,6 @@ def main(argv=None) -> int:
 
 
 def _main(args, subs: dict[str, usage.Parser]) -> int:
-    if args.cmd == "digest":
-        return _digest(args, subs["digest"])
-
     docs = []
     for path in (args.a, args.b):
         try:
@@ -466,139 +445,6 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
         print(f"aeiou-trace compare: exceeds --max-distance {args.max_distance}", file=sys.stderr)
         return 1
     return 0
-
-
-def _digest(args, dp: usage.Parser) -> int:
-    """The interview and a stated application (`--application`), which the binary hands here;
-    every document, and the report, is the binary's (`DESIGN_REVIEW.md` §3.89, stage 2)."""
-    import pathlib
-    import tempfile
-    from . import applications as ap
-    from . import digest as dg
-    if args.epochs < 1:
-        dp.error("--epochs must be at least 1")
-    if args.candidates is not None and args.candidates < 1:
-        dp.error("--candidates must be at least 1")
-    if args.trace == "-":
-        dp.error("the digest reads the trace as a file, never stdin: the comparison after the fit and a re-run with answers read it again")
-    answers_exist = bool(args.answers) and os.path.exists(args.answers)
-    asking = not (args.no_questions or not sys.stdin.isatty())
-    apps = ap.load(pathlib.Path(args.applications) if args.applications else ap.default_dir())
-    if answers_exist or (not asking and not args.application):
-        return _digest_binary(args)
-    f = _open_trace(args.trace)
-    with f:
-        first = f.readline()
-    if not first.startswith('{"aeiou_trace"') and not args.root:
-        missing = usage.Missing(dp)
-        missing.need(False, "--root <DIR>", "digest only calls on paths under DIR", "needed for an strace; an exported trace file carries its root")
-        missing.check()
-    try:
-        an = dg.analyze_file(args.trace, args.root, exclude=args.exclude, cwd=args.cwd)
-    except BuildError as e:
-        raise BuildError(f"{args.trace}: {e}") from None
-    by = args.answered_by or _who()
-    at = _now()
-    kw = dict(epochs=args.epochs, candidates=args.candidates, paths=args.paths)
-    said = []
-    stated = _stated_application(apps, args.application, dp) if args.application else None
-    with tempfile.TemporaryDirectory(prefix="aeiou-digest-") as d:
-        path = None
-        if not asking:
-            if args.answers:
-                raise BuildError(f"{args.answers}: no such answers file, and no terminal to ask on")
-            answers = []
-            record, exact = ap.resolve(stated["app"], stated["version"])
-            if record is not None:
-                stated["record"], stated["exact"] = record.version, exact
-                stated["options"] = {o["name"]: o["default"] for o in record.options if "default" in o}
-                stated["blind_spots"] = ap.blind_spots(record, stated["options"])
-                if exact:
-                    templates = [(t["template"], t["raw_paths"]) for t in dg.document(an, paths=True)["templates"]]
-                    answers = ap.assertions(record, stated["options"], templates)
-            del stated["app"]
-            path = os.path.join(d, "answers.json")
-            dg.write_answers(path, answers, trace=args.trace, trace_sha256=an.sha256, by=by, at=at, application=stated)
-        else:
-            preset = {k: v for k, v in stated.items() if k != "app"} if stated else None
-            doc, answers = dg.interview(an, dg.Console(), by=by, at=at, apps=apps, application=preset, **kw)
-            if answers or doc.get("application"):
-                path = args.answers or (_answers_beside(args.out) if args.out else None)
-                if path:
-                    try:
-                        dg.write_answers(path, answers, trace=args.trace, trace_sha256=an.sha256, by=by, at=at, application=doc.get("application"))
-                    except OSError as e:
-                        raise BuildError(f"{path}: {_cause(e)}")
-                    replay = ["aeiou-trace", "digest", args.trace] + (["--root", args.root] if args.root else []) + ["--answers", path] + (["-o", args.out] if args.out else [])
-                    said.append(f"answers: {path}")
-                    said.append("replay without questions: " + " ".join(replay))
-                else:
-                    path = os.path.join(d, "answers.json")
-                    dg.write_answers(path, answers, trace=args.trace, trace_sha256=an.sha256, by=by, at=at, application=doc.get("application"))
-                    said.append("answers: in the document only (give -o or --answers FILE to keep them as a file)")
-        code = _digest_binary(args, answers=path)
-    for line in said:
-        print(line, file=sys.stderr)
-    return code
-
-
-def _digest_binary(args, answers: str | None = None) -> int:
-    """The binary's digest of the same trace with the same options, asking nothing; its output
-    and its refusal written here as it wrote them."""
-    cmd = [binary(), "digest", args.trace] + (["--root", args.root] if args.root else [])
-    for g in args.exclude:
-        cmd += ["--exclude", g]
-    if args.cwd:
-        cmd += ["--cwd", args.cwd]
-    cmd += ["--epochs", str(args.epochs)] + (["--candidates", str(args.candidates)] if args.candidates is not None else [])
-    cmd += (["--paths"] if args.paths else []) + (["--text"] if args.text else []) + (["-o", args.out] if args.out else [])
-    cmd += ["--no-questions"] + (["--answers", answers or args.answers] if (answers or args.answers) else [])
-    cmd += ["--answered-by", args.answered_by] if args.answered_by else []
-    r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    sys.stdout.write(r.stdout)
-    sys.stderr.write(r.stderr)
-    return r.returncode
-
-
-def _stated_application(apps: dict, stated: str, dp: usage.Parser) -> dict:
-    """`--application NAME[@VERSION]` checked against the records."""
-    name, _, version = stated.partition("@")
-    if name not in apps:
-        dp.error(f"--application {name}: no such application record; one of {', '.join(sorted(apps))}")
-    app = apps[name]
-    return {"app": app, "name": app.name, "display": app.display, "version": version or None, "record": None, "exact": False, "options": {}, "blind_spots": []}
-
-
-def _answers_beside(out: str) -> str:
-    """The answers file an interactive run leaves beside the document it wrote."""
-    return out[: -len(".digest.json")] + ".answers.json" if out.endswith(".digest.json") else out + ".answers.json"
-
-
-def _who() -> str:
-    import getpass
-    import socket
-    try:
-        user = getpass.getuser()
-    except (KeyError, OSError):   # no passwd entry for the uid (a container)
-        user = str(os.getuid())
-    return f"{user}@{socket.gethostname()}"
-
-
-def _now() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _open_trace(path: str):
-    """The trace to read, `-` for stdin: UTF-8 whatever the locale, an undecodable byte
-    replaced (strace escapes what it prints of buffers; a path in a foreign encoding is still
-    a path to count)."""
-    if path == "-":
-        return io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
-    try:
-        return open(path, encoding="utf-8", errors="replace")
-    except OSError as e:
-        raise BuildError(f"{path}: {_cause(e)}")
 
 
 def _judged(args, rows, a, b, docs) -> int:

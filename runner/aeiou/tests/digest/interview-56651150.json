@@ -1,0 +1,662 @@
+{
+ "application": null,
+ "apps": null,
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "at": "2026-10-29T12:00:00+00:00",
+ "by": "someone@host",
+ "input": "trace-3df24f6e.in",
+ "lines": [
+  "",
+  "512",
+  "",
+  "",
+  "",
+  "1",
+  "",
+  "3",
+  ""
+ ],
+ "options": {
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "want": {
+  "answers": [
+   {
+    "fact": "values:b",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+    "value": 512
+   },
+   {
+    "answer": "checkpoint",
+    "question": "label",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   },
+   {
+    "answer": "unknown",
+    "question": "size",
+    "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+   }
+  ],
+  "asked": [
+   "number (Enter for don't know): ",
+   "number (Enter for don't know): ",
+   "number (Enter for don't know): ",
+   "number (Enter for don't know): ",
+   "number (Enter for don't know): ",
+   "answer [1-3]: ",
+   "how do you know? (Enter to skip): ",
+   "answer [1-3]: ",
+   "how do you know? (Enter to skip): "
+  ],
+  "document": {
+   "aeiou_digest": 2,
+   "application": null,
+   "asserted": [
+    {
+     "at": "2026-10-29T12:00:00+00:00",
+     "by": "someone@host",
+     "fact": "values:b",
+     "site": 0,
+     "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+     "value": 512
+    },
+    {
+     "answer": "checkpoint",
+     "at": "2026-10-29T12:00:00+00:00",
+     "by": "someone@host",
+     "question": "label",
+     "site": 0,
+     "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+    },
+    {
+     "answer": "unknown",
+     "at": "2026-10-29T12:00:00+00:00",
+     "by": "someone@host",
+     "question": "size",
+     "site": 0,
+     "template": "ckpt/step_{a:06}/__{b}_{c}.distcp"
+    }
+   ],
+   "contexts": 2,
+   "lanes": [
+    {
+     "lane": 0,
+     "ops": 7,
+     "phases": [
+      {
+       "bytes_read": 0,
+       "bytes_written": 4096,
+       "first": 0,
+       "last": 3005028,
+       "motif": "open write fsync close",
+       "ops": 4,
+       "repeats": {},
+       "template": 0,
+       "think": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       },
+       "units": 1
+      },
+      {
+       "bytes_read": 0,
+       "bytes_written": 512,
+       "first": 9999990,
+       "last": 12005091,
+       "motif": "open write close",
+       "ops": 3,
+       "repeats": {},
+       "template": 1,
+       "think": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       },
+       "units": 1
+      }
+     ]
+    },
+    {
+     "lane": 1,
+     "ops": 4,
+     "phases": [
+      {
+       "bytes_read": 0,
+       "bytes_written": 8192,
+       "first": 99897,
+       "last": 3104925,
+       "motif": "open write fsync close",
+       "ops": 4,
+       "repeats": {},
+       "template": 0,
+       "think": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       },
+       "units": 1
+      }
+     ]
+    }
+   ],
+   "metrics": {
+    "aeiou_metrics": 2,
+    "block": null,
+    "chain_gap_us": null,
+    "contexts": 2,
+    "instances": 1,
+    "notes": {
+     "threads_without_clone": 1
+    },
+    "order": "completion",
+    "roots": [
+     "/d"
+    ],
+    "source": "strace",
+    "total": {
+     "bytes_read": 0,
+     "bytes_written": 12800,
+     "counts": {
+      "close": 3,
+      "fsync": 2,
+      "open": 3,
+      "write": 3
+     },
+     "depth": {},
+     "fan_out": {},
+     "ops": 11,
+     "popularity_bytes": {
+      "accesses": 12800,
+      "counts": [
+       [
+        1,
+        12800
+       ]
+      ],
+      "distinct": 12800,
+      "max": 1,
+      "top_0_1_pct": 0.001,
+      "top_10_pct": 0.1,
+      "top_1_pct": 0.01
+     },
+     "popularity_objects": {
+      "accesses": 3,
+      "counts": [
+       [
+        1,
+        3
+       ]
+      ],
+      "distinct": 3,
+      "max": 1,
+      "top_0_1_pct": 0.001,
+      "top_10_pct": 0.10000000000000002,
+      "top_1_pct": 0.01
+     },
+     "request_size": {
+      "read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "write": {
+       "buckets": [
+        [
+         512,
+         1
+        ],
+        [
+         4096,
+         1
+        ],
+        [
+         8192,
+         1
+        ]
+       ],
+       "max": 8192,
+       "mean": 4266.666666666667,
+       "n": 3
+      }
+     },
+     "reuse_extents": {
+      "first_touch": {
+       "read": 0,
+       "write": 12800
+      },
+      "partial": 0,
+      "read_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "read_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "whole": 0,
+      "write_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "write_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "run_length": {
+      "read": {
+       "bytes": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       }
+      },
+      "write": {
+       "bytes": {
+        "buckets": [
+         [
+          512,
+          1
+         ],
+         [
+          4096,
+          1
+         ],
+         [
+          8192,
+          1
+         ]
+        ],
+        "max": 8192,
+        "mean": 4266.666666666667,
+        "n": 3
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [
+         [
+          1,
+          3
+         ]
+        ],
+        "max": 1,
+        "mean": 1.0,
+        "n": 3
+       }
+      }
+     }
+    }
+   },
+   "notes": {
+    "threads_without_clone": 1
+   },
+   "open": [
+    {
+     "answered": "unknown",
+     "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+     "at_scale": {
+      "epochs": 1,
+      "note": "the op multiset is the same in distribution; which file gets which bytes differs"
+     },
+     "candidates": [
+      "per-path",
+      "drawn"
+     ],
+     "divergence": 0.0,
+     "question": "size",
+     "rank": 1,
+     "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+     "site": 0
+    }
+   ],
+   "ops": 11,
+   "projection": {
+    "candidates": null,
+    "epochs": 1
+   },
+   "rejected": [],
+   "root": "/d",
+   "sites": [
+    {
+     "distinct": 2,
+     "facts": [
+      {
+       "ask": "How many values does field a (1..1 in the trace) take at the scale the application runs?",
+       "name": "values:a"
+      },
+      {
+       "ask": "How many values does field b (0..1 in the trace) take at the scale the application runs?",
+       "least": 2,
+       "name": "values:b",
+       "why": "field b took 2 values in the trace"
+      },
+      {
+       "ask": "How many values does field c (0..0 in the trace) take at the scale the application runs?",
+       "name": "values:c"
+      },
+      {
+       "ask": "How many times will the benchmark write this kind of file (checkpoints, builds)?",
+       "name": "passes"
+      },
+      {
+       "ask": "How many saves of this kind does the application keep (its retention policy)?",
+       "name": "keep"
+      }
+     ],
+     "fields": [
+      {
+       "kind": "int",
+       "max": 1,
+       "min": 1,
+       "name": "a",
+       "settles": "a second save: a field keeping its one value over the saves is the same in every save's name; how many values it takes at scale is the fact values:a",
+       "values": 1,
+       "verdict": "undecided",
+       "width": 6
+      },
+      {
+       "kind": "int",
+       "max": 1,
+       "min": 0,
+       "name": "b",
+       "values": 2,
+       "verdict": "varies",
+       "width": null
+      },
+      {
+       "kind": "int",
+       "max": 0,
+       "min": 0,
+       "name": "c",
+       "settles": "a second save: a field keeping its one value over the saves is the same in every save's name; how many values it takes at scale is the fact values:c",
+       "values": 1,
+       "verdict": "undecided",
+       "width": null
+      }
+     ],
+     "kind": "bulk_write",
+     "label": {
+      "asserted": {
+       "answer": "checkpoint",
+       "at": "2026-10-29T12:00:00+00:00",
+       "by": "someone@host"
+      },
+      "consistent": [
+       "checkpoint",
+       "output"
+      ],
+      "refuted": {},
+      "settles": "not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+      "supports": [
+       "every save starts on all its lanes together",
+       "every file fsynced"
+      ],
+      "verdict": "undecided"
+     },
+     "phase": null,
+     "projection": {
+      "asserted": [
+       "values:b"
+      ],
+      "keep": null,
+      "passes": null,
+      "values:a": null,
+      "values:b": 512,
+      "values:c": null
+     },
+     "retention": {
+      "deleted": 0,
+      "unsafe": 0,
+      "verdict": "kept"
+     },
+     "rewrite": {
+      "rewritten_paths": 0,
+      "verdict": "new_names"
+     },
+     "saves": {
+      "count": 1,
+      "duration_ns": {
+       "buckets": [
+        [
+         2621440,
+         1
+        ]
+       ],
+       "max": 3104925,
+       "mean": 3104925.0,
+       "n": 1
+      },
+      "interval_ns": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "lanes": {
+       "buckets": [
+        [
+         2,
+         1
+        ]
+       ],
+       "max": 2,
+       "mean": 2.0,
+       "n": 1
+      },
+      "start_spread_ns": {
+       "buckets": [
+        [
+         98304,
+         1
+        ]
+       ],
+       "max": 99897,
+       "mean": 99897.0,
+       "n": 1
+      },
+      "verdict": "simultaneous"
+     },
+     "size": {
+      "asserted": {
+       "answer": "unknown",
+       "at": "2026-10-29T12:00:00+00:00",
+       "by": "someone@host"
+      },
+      "settles": "a repeat of a path: the same bytes again is a size per path, other bytes a draw per open",
+      "verdict": "undecided"
+     },
+     "sync": {
+      "fsync_share": 1.0,
+      "opens": 2
+     },
+     "template": 0,
+     "touches": 2
+    }
+   ],
+   "source": "strace",
+   "templates": [
+    {
+     "bytes_read": 0,
+     "bytes_written": 12288,
+     "fields": [
+      {
+       "kind": "int",
+       "max": 1,
+       "min": 1,
+       "name": "a",
+       "values": 1,
+       "width": 6
+      },
+      {
+       "kind": "int",
+       "max": 1,
+       "min": 0,
+       "name": "b",
+       "values": 2,
+       "width": null
+      },
+      {
+       "kind": "int",
+       "max": 0,
+       "min": 0,
+       "name": "c",
+       "values": 1,
+       "width": null
+      }
+     ],
+     "id": 0,
+     "offsets": {
+      "whole": 2
+     },
+     "opens": 2,
+     "ops": {
+      "close": 2,
+      "fsync": 2,
+      "open": 2,
+      "write": 2
+     },
+     "paths": 2,
+     "read_size": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "runs_per_open": {
+      "buckets": [
+       [
+        1,
+        2
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 2
+     },
+     "template": "ckpt/step_{a:06}/__{b}_{c}.distcp",
+     "write_size": {
+      "buckets": [
+       [
+        4096,
+        1
+       ],
+       [
+        8192,
+        1
+       ]
+      ],
+      "max": 8192,
+      "mean": 6144.0,
+      "n": 2
+     }
+    },
+    {
+     "bytes_read": 0,
+     "bytes_written": 512,
+     "fields": [
+      {
+       "kind": "int",
+       "max": 1,
+       "min": 1,
+       "name": "a",
+       "values": 1,
+       "width": 6
+      }
+     ],
+     "id": 1,
+     "offsets": {
+      "whole": 1
+     },
+     "opens": 1,
+     "ops": {
+      "close": 1,
+      "open": 1,
+      "write": 1
+     },
+     "paths": 1,
+     "read_size": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     },
+     "runs_per_open": {
+      "buckets": [
+       [
+        1,
+        1
+       ]
+      ],
+      "max": 1,
+      "mean": 1.0,
+      "n": 1
+     },
+     "template": "ckpt/step_{a:06}/.metadata",
+     "write_size": {
+      "buckets": [
+       [
+        512,
+        1
+       ]
+      ],
+      "max": 512,
+      "mean": 512.0,
+      "n": 1
+     }
+    }
+   ]
+  },
+  "said": [
+   "",
+   "site 0  ckpt/step_{a:06}/__{b}_{c}.distcp: bulk write: 2 files in 1 save(s), 0 rewritten, fsync on 100%",
+   "  How many values does field a (1..1 in the trace) take at the scale the application runs?",
+   "  How many values does field b (0..1 in the trace) take at the scale the application runs?",
+   "  How many values does field c (0..0 in the trace) take at the scale the application runs?",
+   "  How many times will the benchmark write this kind of file (checkpoints, builds)?",
+   "  How many saves of this kind does the application keep (its retention policy)?",
+   "",
+   "site 0  ckpt/step_{a:06}/__{b}_{c}.distcp: bulk write: 2 files in 1 save(s), 0 rewritten, fsync on 100%; label undecided",
+   "  Is this kind of file a checkpoint (the application's state, written to survive a failure and read back only after one), or output (an index build, a dataset, results)?",
+   "    1. checkpoint: a checkpoint: the application's state, read back only after a failure",
+   "    2. output: output: an index build, a dataset, results",
+   "    3. don't know",
+   "  at 1 pass(es): a checkpoint is saved at an interval, its saves kept or deleted by a retention policy, and read only after a failure; output is written once per build",
+   "  settles: not from a trace: the application's documentation or its record (a checkpoint holds its state and is read back only after a failure)",
+   "",
+   "site 0  ckpt/step_{a:06}/__{b}_{c}.distcp: bulk write: 2 files in 1 save(s), 0 rewritten, fsync on 100%; size undecided",
+   "  Is the number of bytes read from a file a property of the file (its size), or chosen per access?",
+   "    1. per-path: the bytes are a property of the file (its size)",
+   "    2. drawn: the bytes are chosen per access",
+   "    3. don't know",
+   "  at 1 pass(es): the op multiset is the same in distribution; which file gets which bytes differs",
+   "  settles: a repeat of a path: the same bytes again is a size per path, other bytes a draw per open"
+  ]
+ }
+}

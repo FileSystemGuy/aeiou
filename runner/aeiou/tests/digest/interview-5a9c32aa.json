@@ -1,0 +1,539 @@
+{
+ "application": null,
+ "apps": null,
+ "args": {
+  "cwd": null,
+  "exclude": [],
+  "root": "/d"
+ },
+ "at": "2026-10-29T12:00:00+00:00",
+ "by": "someone@host",
+ "input": "trace-0eae7f5c.in",
+ "lines": [
+  "",
+  "",
+  "2",
+  "",
+  "1",
+  "the graph walk"
+ ],
+ "options": {
+  "candidates": null,
+  "epochs": 1,
+  "paths": false
+ },
+ "want": {
+  "answers": [
+   {
+    "answer": "exceeds",
+    "question": "memory",
+    "template": "sift_disk.index"
+   },
+   {
+    "answer": "dependent",
+    "note": "the graph walk",
+    "question": "dependency",
+    "template": "sift_disk.index"
+   }
+  ],
+  "asked": [
+   "number (Enter for don't know): ",
+   "number (Enter for don't know): ",
+   "answer [1-3]: ",
+   "how do you know? (Enter to skip): ",
+   "answer [1-3]: ",
+   "how do you know? (Enter to skip): "
+  ],
+  "document": {
+   "aeiou_digest": 2,
+   "application": null,
+   "asserted": [
+    {
+     "answer": "exceeds",
+     "at": "2026-10-29T12:00:00+00:00",
+     "by": "someone@host",
+     "question": "memory",
+     "site": 0,
+     "template": "sift_disk.index"
+    },
+    {
+     "answer": "dependent",
+     "at": "2026-10-29T12:00:00+00:00",
+     "by": "someone@host",
+     "note": "the graph walk",
+     "question": "dependency",
+     "site": 0,
+     "template": "sift_disk.index"
+    }
+   ],
+   "contexts": 1,
+   "lanes": [
+    {
+     "lane": 0,
+     "ops": 402,
+     "phases": [
+      {
+       "bytes_read": 1638400,
+       "bytes_written": 0,
+       "first": 0,
+       "last": 400975943,
+       "motif": "open read+ close",
+       "ops": 402,
+       "repeats": {
+        "read+": {
+         "buckets": [
+          [
+           384,
+           1
+          ]
+         ],
+         "max": 400,
+         "mean": 400.0,
+         "n": 1
+        }
+       },
+       "template": 0,
+       "think": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       },
+       "units": 1
+      }
+     ]
+    }
+   ],
+   "metrics": {
+    "aeiou_metrics": 2,
+    "block": null,
+    "chain_gap_us": null,
+    "contexts": 1,
+    "instances": 1,
+    "notes": {},
+    "order": "completion",
+    "roots": [
+     "/d"
+    ],
+    "source": "strace",
+    "total": {
+     "bytes_read": 1638400,
+     "bytes_written": 0,
+     "counts": {
+      "close": 1,
+      "open": 1,
+      "read": 400
+     },
+     "depth": {},
+     "fan_out": {},
+     "ops": 402,
+     "popularity_bytes": {
+      "accesses": 1638400,
+      "counts": [
+       [
+        6,
+        20480
+       ],
+       [
+        5,
+        20480
+       ],
+       [
+        4,
+        49152
+       ],
+       [
+        3,
+        163840
+       ],
+       [
+        2,
+        266240
+       ],
+       [
+        1,
+        192512
+       ]
+      ],
+      "distinct": 712704,
+      "max": 6,
+      "top_0_1_pct": 0.00261,
+      "top_10_pct": 0.21150000000000002,
+      "top_1_pct": 0.026099999999999998
+     },
+     "popularity_objects": {
+      "accesses": 400,
+      "counts": [
+       [
+        400,
+        1
+       ]
+      ],
+      "distinct": 1,
+      "max": 400,
+      "top_0_1_pct": 0.001,
+      "top_10_pct": 0.1,
+      "top_1_pct": 0.01
+     },
+     "request_size": {
+      "read": {
+       "buckets": [
+        [
+         4096,
+         400
+        ]
+       ],
+       "max": 4096,
+       "mean": 4096.0,
+       "n": 400
+      },
+      "write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "reuse_extents": {
+      "first_touch": {
+       "read": 712704,
+       "write": 0
+      },
+      "partial": 20480,
+      "read_after_read": {
+       "buckets": [
+        [
+         4096,
+         8192
+        ],
+        [
+         8192,
+         4096
+        ],
+        [
+         12288,
+         8192
+        ],
+        [
+         16384,
+         4096
+        ],
+        [
+         20480,
+         8192
+        ],
+        [
+         28672,
+         8192
+        ],
+        [
+         32768,
+         12288
+        ],
+        [
+         40960,
+         16384
+        ],
+        [
+         49152,
+         12288
+        ],
+        [
+         57344,
+         8192
+        ],
+        [
+         65536,
+         28672
+        ],
+        [
+         81920,
+         49152
+        ],
+        [
+         98304,
+         28672
+        ],
+        [
+         114688,
+         28672
+        ],
+        [
+         131072,
+         53248
+        ],
+        [
+         163840,
+         53248
+        ],
+        [
+         196608,
+         49152
+        ],
+        [
+         229376,
+         36864
+        ],
+        [
+         262144,
+         102400
+        ],
+        [
+         327680,
+         69632
+        ],
+        [
+         393216,
+         114688
+        ],
+        [
+         458752,
+         65536
+        ],
+        [
+         524288,
+         110592
+        ],
+        [
+         655360,
+         45056
+        ]
+       ],
+       "max": 684032,
+       "mean": 306583.78761061945,
+       "n": 925696
+      },
+      "read_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "whole": 905216,
+      "write_after_read": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      },
+      "write_after_write": {
+       "buckets": [],
+       "max": 0,
+       "mean": 0.0,
+       "n": 0
+      }
+     },
+     "run_length": {
+      "read": {
+       "bytes": {
+        "buckets": [
+         [
+          4096,
+          390
+         ],
+         [
+          8192,
+          5
+         ]
+        ],
+        "max": 8192,
+        "mean": 4147.848101265823,
+        "n": 395
+       },
+       "multi_op_bytes": 40960,
+       "ops": {
+        "buckets": [
+         [
+          1,
+          390
+         ],
+         [
+          2,
+          5
+         ]
+        ],
+        "max": 2,
+        "mean": 1.0126582278481013,
+        "n": 395
+       }
+      },
+      "write": {
+       "bytes": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       },
+       "multi_op_bytes": 0,
+       "ops": {
+        "buckets": [],
+        "max": 0,
+        "mean": 0.0,
+        "n": 0
+       }
+      }
+     }
+    }
+   },
+   "notes": {},
+   "open": [],
+   "ops": 402,
+   "projection": {
+    "candidates": null,
+    "epochs": 1
+   },
+   "rejected": [],
+   "root": "/d",
+   "sites": [
+    {
+     "dependency": {
+      "asserted": {
+       "answer": "dependent",
+       "at": "2026-10-29T12:00:00+00:00",
+       "by": "someone@host",
+       "note": "the graph walk"
+      },
+      "consistent": [
+       "dependent",
+       "independent"
+      ],
+      "refuted": {},
+      "settles": "not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)",
+      "verdict": "undecided"
+     },
+     "distinct": 1,
+     "distinct_offsets": 174,
+     "facts": [
+      {
+       "ask": "How large is this file at the scale the application runs, in bytes?",
+       "least": 819200,
+       "name": "size",
+       "why": "the trace read up to byte 819200 of this file"
+      },
+      {
+       "ask": "How many queries will the benchmark run?",
+       "name": "requests"
+      }
+     ],
+     "kind": "within",
+     "memory": {
+      "asserted": {
+       "answer": "exceeds",
+       "at": "2026-10-29T12:00:00+00:00",
+       "by": "someone@host"
+      },
+      "consistent": [
+       "fits",
+       "exceeds"
+      ],
+      "refuted": {},
+      "settles": "not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+      "verdict": "undecided"
+     },
+     "phase": null,
+     "projection": {
+      "asserted": [],
+      "requests": null,
+      "size": null
+     },
+     "reads": 400,
+     "reuse_share": 0.565,
+     "runs": {
+      "buckets": [
+       [
+        1,
+        390
+       ],
+       [
+        2,
+        5
+       ]
+      ],
+      "max": 2,
+      "mean": 1.0126582278481013,
+      "n": 395
+     },
+     "skew": {
+      "settles": "decided",
+      "top_10pct_share": 0.2175,
+      "uniform_share": 0.21542042713488804,
+      "verdict": "uniform"
+     },
+     "span": 819200,
+     "template": 0,
+     "touches": 1
+    }
+   ],
+   "source": "strace",
+   "templates": [
+    {
+     "bytes_read": 1638400,
+     "bytes_written": 0,
+     "fields": [],
+     "id": 0,
+     "offsets": {
+      "positioned": 1
+     },
+     "opens": 1,
+     "ops": {
+      "close": 1,
+      "open": 1,
+      "read": 400
+     },
+     "paths": 1,
+     "read_size": {
+      "buckets": [
+       [
+        4096,
+        400
+       ]
+      ],
+      "max": 4096,
+      "mean": 4096.0,
+      "n": 400
+     },
+     "runs_per_open": {
+      "buckets": [
+       [
+        384,
+        1
+       ]
+      ],
+      "max": 395,
+      "mean": 395.0,
+      "n": 1
+     },
+     "template": "sift_disk.index",
+     "write_size": {
+      "buckets": [],
+      "max": 0,
+      "mean": 0.0,
+      "n": 0
+     }
+    }
+   ]
+  },
+  "said": [
+   "",
+   "site 0  sift_disk.index: within one open: 400 reads at 174 offsets over 800.0 KiB, top tenth 0.22",
+   "  How large is this file at the scale the application runs, in bytes?",
+   "  How many queries will the benchmark run?",
+   "",
+   "site 0  sift_disk.index: within one open: 400 reads at 174 offsets over 800.0 KiB, top tenth 0.22; memory undecided",
+   "  Does this file fit in memory at the scale the application runs, so that reads after the first hit the page cache, or does it exceed it?",
+   "    1. fits: the file fits in memory at scale",
+   "    2. exceeds: the file exceeds memory at scale",
+   "    3. don't know",
+   "  at 1 pass(es): a file that fits is read from storage once; one that exceeds memory is read from storage at every query",
+   "  settles: not from a trace: the file's size at scale against the hosts' memory (the facts `size` and the host's memory)",
+   "",
+   "site 0  sift_disk.index: within one open: 400 reads at 174 offsets over 800.0 KiB, top tenth 0.22; dependency undecided",
+   "  Does each read's offset depend on what the previous read returned (a graph walk, a tree descent), or are the offsets independent of one another?",
+   "    1. dependent: each offset depends on what the previous read returned",
+   "    2. independent: the offsets are independent of one another",
+   "    3. don't know",
+   "  at 1 pass(es): a dependent walk is a chain of reads each waiting on the last; independent offsets can be issued together",
+   "  settles: not from a trace: the application's source, or a trace with the same query twice (a dependent walk repeats its offsets exactly)"
+  ]
+ }
+}

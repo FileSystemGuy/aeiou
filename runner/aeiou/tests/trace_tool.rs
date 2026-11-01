@@ -327,10 +327,144 @@ fn digest_usage_errors_and_failures() {
     let o = Command::new(bin()).args(["digest", s(&trace), "--root", "/d", "--answers", s(&missing)]).stdin(Stdio::null()).output().unwrap();
     assert_eq!(o.status.code(), Some(1));
     assert!(text(&o).1.contains("no such answers file, and no terminal to ask on"), "{}", text(&o).1);
-    // what the Python package still asks needs its interpreter
-    let o = Command::new(bin()).args(["digest", s(&trace), "--root", "/d", "--application", "x"]).env("AEIOU_PYTHON", "/no/such/python").output().unwrap();
+    // an application the records do not have, and records that are not there
+    let o = tool(&["digest", s(&trace), "--root", "/d", "--application", "nope"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o).1.starts_with("aeiou-trace digest: --application nope: no such application record; one of diskann, faiss, lmcache, milvus, pytorch-dcp"), "{}", text(&o).1);
+    let o = tool(&["digest", s(&trace), "--root", "/d", "--applications", s(&d.join("absent"))]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(text(&o).1.starts_with("aeiou-trace digest: the interview and the application records are the Python package's until they are ported"), "{}", text(&o).1);
+    assert!(text(&o).1.contains("absent: no such directory of application records"), "{}", text(&o).1);
+}
+
+/// A trace of the golden corpus (`tests/digest/`), copied to `to`.
+fn corpus_trace(name: &str, to: &Path) {
+    std::fs::copy(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/digest").join(name), to).unwrap();
+}
+
+/// `aeiou-trace` with its standard input a terminal (a pseudo-terminal, echo off) on which the
+/// lines `typed` are typed, then end of input.
+fn on_terminal(args: &[&str], typed: &[&str]) -> Output {
+    use std::os::fd::FromRawFd;
+    unsafe {
+        let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        assert!(m >= 0 && libc::grantpt(m) == 0 && libc::unlockpt(m) == 0);
+        let slave = libc::open(libc::ptsname(m), libc::O_RDWR | libc::O_NOCTTY);
+        assert!(slave >= 0);
+        let mut t: libc::termios = std::mem::zeroed();
+        assert_eq!(libc::tcgetattr(slave, &mut t), 0);
+        t.c_lflag &= !libc::ECHO;
+        assert_eq!(libc::tcsetattr(slave, libc::TCSANOW, &t), 0);
+        let mut input: String = typed.iter().map(|l| format!("{l}\n")).collect();
+        input.push('\x04'); // VEOF at the start of a line: end of input
+        assert_eq!(libc::write(m, input.as_ptr().cast(), input.len()), input.len() as isize);
+        let o = Command::new(bin()).args(args).env_remove("AEIOU_PYTHON").stdin(Stdio::from(std::os::fd::OwnedFd::from_raw_fd(slave))).output().unwrap();
+        libc::close(m);
+        o
+    }
+}
+
+fn read_json(p: &Path) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+}
+
+#[test]
+fn digest_asks_on_a_terminal_and_writes_the_answers_beside_the_document() {
+    let d = tmp("digest-ask");
+    let tr = d.join("t.txt");
+    corpus_trace("trace-1b35ac0c.in", &tr);
+    let out = d.join("t.digest.json");
+    let o = on_terminal(&["digest", s(&tr), "--root", "/d", "-o", s(&out), "--answered-by", "tester"], &["8", "7", "4", "1", "shuffle=True", "3", "", "2", "because"]);
+    let (stdout, err) = text(&o);
+    assert_eq!(o.status.code(), Some(0), "{err}");
+    let doc = read_json(&out);
+    assert_eq!(doc["sites"][0]["selection"]["verdict"], "consume"); // 7 candidates refute a draw after 7 touches without a repeat
+    let asked: Vec<&str> = doc["asserted"].as_array().unwrap().iter().map(|a| a.get("fact").unwrap_or(&a["question"]).as_str().unwrap()).collect();
+    assert_eq!(asked, ["candidates", "passes", "size", "order"]);
+    assert!(doc["asserted"].as_array().unwrap().iter().all(|a| a["by"] == "tester" && a["at"].as_str().unwrap().ends_with("+00:00")));
+    assert_eq!(doc["trace_sha256"], sha256_of(&tr));
+    let af = d.join("t.answers.json");
+    let header = read_json(&af);
+    assert_eq!((&header["trace"], &header["trace_sha256"], &header["by"]), (&Value::from(s(&tr)), &doc["trace_sha256"], &Value::from("tester")));
+    assert_eq!(header["answers"].as_array().unwrap().len(), 4);
+    assert!(header["application"].is_null());
+    // the questions on stderr, the report on stdout, and what was kept said after it
+    assert!(err.contains("How many files of this kind") && err.contains("number (Enter for don't know): "), "{err}");
+    assert!(stdout.starts_with("digest of ") && stdout.contains(&format!("written: {}", s(&out))), "{stdout}");
+    assert!(err.ends_with(&format!("answers: {}\nreplay without questions: aeiou-trace digest {} --root /d --answers {} -o {}\n", s(&af), s(&tr), s(&af), s(&out))), "{err}");
+    // the file replays without a terminal, the same assertions
+    let again = d.join("again.json");
+    let o = tool(&["digest", s(&tr), "--root", "/d", "-o", s(&again), "--answers", s(&af)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let doc2 = read_json(&again);
+    assert_eq!((&doc2["asserted"], &doc2["sites"]), (&doc["asserted"], &doc["sites"]));
+}
+
+#[test]
+fn digest_asks_nothing_with_no_questions_and_keeps_answers_where_it_is_told() {
+    let d = tmp("digest-ask-not");
+    let tr = d.join("t.txt");
+    corpus_trace("trace-1b35ac0c.in", &tr);
+    let o = on_terminal(&["digest", s(&tr), "--root", "/d", "--no-questions"], &["100"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(text(&o).1, "");
+    assert_eq!(serde_json::from_slice::<Value>(&o.stdout).unwrap()["asserted"], serde_json::json!([]));
+    // a terminal, no -o and no --answers: the answers are in the document only, and it says so
+    let o = on_terminal(&["digest", s(&tr), "--root", "/d", "--text"], &["8", "", "", "1", "", "3", "", "3", ""]);
+    let (out, err) = text(&o);
+    assert_eq!(o.status.code(), Some(0), "{err}");
+    assert!(out.contains("asserted") && err.ends_with("answers: in the document only (give -o or --answers FILE to keep them as a file)\n"), "{err}");
+    assert!(!std::fs::read_dir(&*d).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().ends_with(".answers.json")));
+    // a terminal and an --answers path that does not exist yet: asked, then written there
+    let new = d.join("new.json");
+    let o = on_terminal(&["digest", s(&tr), "--root", "/d", "--answers", s(&new)], &["8", "", "", "1", "", "3", "", "3", ""]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    assert_eq!(read_json(&new)["answers"][0]["answer"], "consume");
+    // nothing answered: no file, and the document as without questions
+    let none = d.join("none.json");
+    let o = on_terminal(&["digest", s(&tr), "--root", "/d", "--answers", s(&none)], &[]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    assert!(!none.exists());
+    assert_eq!(serde_json::from_slice::<Value>(&o.stdout).unwrap()["asserted"], serde_json::json!([]));
+}
+
+#[test]
+fn digest_states_the_application_and_replays_it() {
+    let d = tmp("digest-app");
+    let tr = d.join("t.txt");
+    corpus_trace("trace-a1c52e89.in", &tr);
+    let o = tool(&["digest", s(&tr), "--root", "/d", "--application", "pytorch-dcp@2.14.1"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let app = &doc["application"];
+    assert_eq!((&app["record"], &app["exact"]), (&Value::from("2.14"), &Value::from(true)));
+    assert_eq!(app["options"], serde_json::json!({"single_file_per_rank": "one file per rank", "sync_files": "fsync on"}));
+    assert!(app.get("app").is_none());
+    let asserted: Vec<&str> = doc["asserted"].as_array().unwrap().iter().map(|a| a["question"].as_str().unwrap()).collect();
+    assert_eq!(asserted, ["size"]); // the record's label is about a bulk write, and this template is read
+    assert!(doc["asserted"][0]["by"].as_str().unwrap().contains("record"));
+    let o = tool(&["digest", s(&tr), "--root", "/d", "--application", "pytorch-dcp@2.9"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(serde_json::from_slice::<Value>(&o.stdout).unwrap()["application"]["record"].is_null());
+    // stated, with an --answers file named that is not there and no terminal to ask on
+    let o = Command::new(bin()).args(["digest", s(&tr), "--root", "/d", "--application", "pytorch-dcp", "--answers", s(&d.join("x.json"))]).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).1.contains("x.json: no such answers file, and no terminal to ask on"), "{}", text(&o).1);
+    // on a terminal with the application stated: the options are asked, the answers file carries the application, the replay restores it
+    let out = d.join("t.digest.json");
+    let o = on_terminal(&["digest", s(&tr), "--root", "/d", "-o", s(&out), "--application", "pytorch-dcp@2.14.1"], &["2", "1", "", "", "3", "", "3", ""]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let doc = read_json(&out);
+    assert_eq!(doc["application"]["options"], serde_json::json!({"single_file_per_rank": "one file per item", "sync_files": "fsync on"}));
+    let af = d.join("t.answers.json");
+    assert_eq!(read_json(&af)["application"], doc["application"]);
+    let again = d.join("again.json");
+    assert_eq!(tool(&["digest", s(&tr), "--root", "/d", "-o", s(&again), "--answers", s(&af)]).status.code(), Some(0));
+    let again = read_json(&again);
+    assert_eq!((&again["application"], &again["asserted"]), (&doc["application"], &doc["asserted"]));
+    // the records of another tree
+    let o = tool(&["digest", s(&tr), "--root", "/d", "--applications", s(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../applications")), "--application", "pytorch-dcp@2.14"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    assert_eq!(serde_json::from_slice::<Value>(&o.stdout).unwrap()["application"]["record"], "2.14");
 }
 
 #[test]

@@ -87,8 +87,10 @@ aeiou/src/
   objectlog.rs a MinIO audit or S3 server access log read as the object engine's calls
   digest.rs    `aeiou-trace digest`: templates, lanes and phases, sites and their verdicts, the
                answers applied, the metrics of the same calls, the text report (`aeiou_digest: 2`)
-  bin/aeiou_trace.rs  the `aeiou-trace` binary; `compare`, and the digest's interview and
-               application records, run the Python package's until ported (`DESIGN_REVIEW.md` §3.89)
+  interview.rs the digest's questions on a terminal and the answers file (`aeiou_answers: 1`)
+  applications.rs  the application records (`applications/`), built into the crate by `build.rs`
+  bin/aeiou_trace.rs  the `aeiou-trace` binary; `compare` runs the Python package's until
+               ported (`DESIGN_REVIEW.md` §3.89)
   options.rs   the option layers (§14)
   usage.rs     the usage-error frame (§15)
   main.rs      the CLI

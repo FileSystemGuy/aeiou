@@ -8428,8 +8428,31 @@ and counted out of the numbers (`lines_not_counted`). `aeiou-trace metrics` stay
 the Python digest's 14.5 s and 1.7 GB over the same Rust export, the documents equal; half the
 time is the export's two passes, and of the rest the metrics and the structure take about half
 each. The peak memory of 960,000 reads equals that of 3,200 over the same 200 opens within a
-few MiB (`tests/trace_tool.rs`). Next, stage 3: the interview, the records, and the answers
-file in Rust.
+few MiB (`tests/trace_tool.rs`). ~~Next, stage 3: the interview, the records, and the answers
+file in Rust.~~ Built the same day, below.
+
+**Stage 3 built (2026-10-31).** The interview, the application records, and the answers file
+are Rust (`src/interview.rs`, `src/applications.rs`), and `aeiou-trace digest` asks itself: the
+hand-off to `python3 -m aeiou.trace` for a terminal, `--application`, or `--applications` is
+gone, and with it the four reads of the trace an interview cost, every document it shows
+remade from the one analysis. The golden corpus once more: every interview the Python's tests
+ran, scripted and on the console, recorded before the Python was cut, with the lines typed, the
+record tree and stated application, and what it said, what it asked, the answers, and the
+document (`tests/digest/`, 29 interviews over 9 traces, 2 record trees), reproduced exactly by
+`tests/digest_corpus.rs`, red against a stub and then green with no difference; the loader's
+tests ported to `tests/applications.rs`; the command's on a pseudo-terminal (`tests/trace_tool.rs`).
+Two choices made while building. The records are built into the binary (`build.rs` embeds the
+checkout's `applications/`), not shipped beside it: the release tarball's `aeiou-trace` carries
+them with no Python and no data directory, `--applications DIR` still reads another tree under
+the same checks, and the wheel no longer carries them, since nothing in Python reads them now.
+And one behaviour differs: on a terminal with an `--answers` path not yet there and nothing
+answered, the Python's hand-back to the binary failed ("no such answers file, and no terminal to
+ask on"); the binary writes the document and no answers file. A TOML error in a record is one
+line with its line and column (`tomllib` and the `toml` crate word their messages differently;
+the tests match the path and `TOML`). The vocabulary's order (kinds, confidences) is the file's,
+read from the values' spans, as Python's dicts kept it. Python keeps `digest.py`'s handle for
+its tests of the analysis until stage 5. Next, stage 4: `compare` over two version-2
+documents, and `dry-run --emit-trace`.
 
 ## 4. Plan changes
 
