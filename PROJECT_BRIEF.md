@@ -1064,7 +1064,26 @@ numbers; the order is this note's.
     simultaneity it must resolve; an anchor event every node performs, such as a stat of an
     agreed path, to align on beside the clock), and the reading (`aeiou-trace` over several
     traces as one stream, a lane per host and process, which item 49 also needs, and the merge
-    of an object log with an strace on the clock).
+    of an object log with an strace on the clock). *What one node can and cannot stand in for
+    (discussed with the user 2026-10-31):* merging the per-process traces of a scale-out run on
+    the clock gives the same operations, each process's in the same order, as the same
+    processes on one node only for an application that splits work by global rank alone and
+    decides nothing by timing (the rank-only model the runner assumes). It differs where the
+    application acts once per node (`local_rank == 0` work such as a dataset or model download,
+    a node-local cache in `/dev/shm` or on local NVMe; MosaicML Streaming partitions samples by
+    node; checkpoint layouts that depend on ranks per node, from memory, medium confidence, to
+    be read from source), where work goes to whoever asks first (shared queues, elastic
+    sharding), and in node-local paths and PIDs, which repeat across hosts, so a merge names a
+    lane by host and process and a local path by host. And one node distorts timing, the point
+    of the item: its processes share the CPUs, memory bandwidth, NIC, and storage client, so a
+    burst's start spread and length and the ranks' interleaving all shift; a GPU job often
+    cannot run at its rank count on one node at all. So the tooling (several traces read as one
+    stream, host-qualified lanes and local paths, alignment on an anchor) is built and tested on
+    one node, a trace split into hosts its fixture; the capture is multi-node. A topology check
+    beside it: the same small job traced as 1 node of 8 processes and as 2 nodes of 4, the
+    digests compared; a structural difference (a per-node template, another site kind, other
+    counts) shows the application depends on topology, which a single-node trace hides, and
+    none supports the rank-only model for that application. Two nodes are enough for it.
 
 ## 7. Environment
 
