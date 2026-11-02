@@ -1208,12 +1208,21 @@ impl Tracer {
                     self.resolve(tid, dir, c_string(&a[pi]))
                 }
             };
-            let flags = a.get(pi + 1).cloned().unwrap_or_default();
+            // `openat2` holds them in its `{flags=…, mode=…, resolve=…}`, `creat` has a mode only
+            let (flags, mode, resolve) = match name {
+                "openat2" => {
+                    let how: Vec<String> = a.get(2).and_then(|h| h.strip_prefix('{')).and_then(|h| h.strip_suffix('}')).map(split_args).unwrap_or_default();
+                    let field = |k: &str| how.iter().find_map(|f| f.strip_prefix(k).and_then(|v| v.strip_prefix('=')).map(str::to_string));
+                    (field("flags").unwrap_or_default(), field("mode"), field("resolve").filter(|r| r != "0"))
+                }
+                "creat" => ("O_WRONLY|O_CREAT|O_TRUNC".to_string(), a.get(1).cloned(), None),
+                _ => (a.get(pi + 1).cloned().unwrap_or_default(), a.get(pi + 2).cloned(), None),
+            };
             let p = self.under(path.as_deref());
             let mut f = None;
             if ret >= 0 {
                 if let Some(p) = &p {
-                    if flags.contains("O_TRUNC") || (flags.contains("O_CREAT") && flags.contains("O_EXCL")) || name == "creat" {
+                    if flags.contains("O_TRUNC") || (flags.contains("O_CREAT") && flags.contains("O_EXCL")) {
                         self.extent.insert(p.clone(), 0);
                     }
                     if flags.contains("O_APPEND") && !self.extent.contains_key(p) {
@@ -1227,9 +1236,11 @@ impl Tracer {
             if let (Some(_), Some(p)) = (inst, &p) {
                 self.count(tid, "open");
                 if let Some(ex) = self.export.as_mut() {
-                    let mode = a.get(pi + 2).map(String::as_str);
-                    let fl = if name != "creat" { flags.as_str() } else { "O_WRONLY|O_CREAT|O_TRUNC" };
-                    let oid = ex.open(when, p, fl, mode, err)?;
+                    if let Some(r) = &resolve {
+                        // how the path was resolved, never what the open does to the file
+                        ex.note(&format!("not_exported:openat2:resolve {r}"), 1);
+                    }
+                    let oid = ex.open(when, p, &flags, mode.as_deref(), err)?;
                     if let Some(f) = &f {
                         f.borrow_mut().oid = oid;
                     }

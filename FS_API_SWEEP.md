@@ -100,8 +100,11 @@ work item of its own.
   (S-40).*
 - **S-7** (A) `openat2`: the `{flags=…, mode=…, resolve=…}` struct is read as the flags and the
   size as the mode: `WRONLY|CREAT|TRUNC` exported `["RDONLY","CREAT"]`, mode 020; the run fails
-  with EBADF. `RESOLVE_*` lost. *Status: open.*
-- **S-8** (A) `creat` loses its mode (read from `a[pi+2]`; creat's is `a[1]`). *Status: open.*
+  with EBADF. `RESOLVE_*` lost. *Status: fixed 2026-11-02: flags and mode read from the struct,
+  a `resolve` other than 0 noted by value (`not_exported:openat2:resolve …`); test
+  `export_reads_openat2_and_creat`, the lines probed under strace 6.8.*
+- **S-8** (A) `creat` loses its mode (read from `a[pi+2]`; creat's is `a[1]`). *Status: fixed
+  2026-11-02, with S-7 (same test).*
 - **S-9** (A) `pwritev2`/`preadv2` `RWF_*` (`a[4]`) never read: an `RWF_APPEND` write is
   exported at its given offset (0) instead of the end of the file. *Status: open.* (`RWF_DSYNC`,
   `RWF_SYNC`, `RWF_NOWAIT`, `RWF_HIPRI` carried: B, S-40.)

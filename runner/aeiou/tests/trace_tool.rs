@@ -684,6 +684,47 @@ fn export_reads_every_aio_request_as_strace_prints_it() {
     assert!(lines[0].get("missing_opens").is_none(), "{}", lines[0]);
 }
 
+/// `openat2` is read from its `open_how` struct and `creat` keeps its mode (`FS_API_SWEEP.md`
+/// S-7, S-8), as strace 6.8 prints them; a `resolve` other than 0 is left out and noted.
+#[test]
+fn export_reads_openat2_and_creat() {
+    let d = tmp("openat2");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 openat2(AT_FDCWD</d>, "a", {flags=O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, mode=0640, resolve=RESOLVE_NO_SYMLINKS|RESOLVE_BENEATH}, 24) = 3</d/a> <0.000010>"#,
+            r#"100 1700000000.000100 write(3</d/a>, "x", 1) = 1 <0.000010>"#,
+            r#"100 1700000000.000200 close(3</d/a>) = 0 <0.000010>"#,
+            r#"100 1700000000.000300 openat2(AT_FDCWD</d>, "a", {flags=O_RDONLY, resolve=0}, 24) = 3</d/a> <0.000010>"#,
+            r#"100 1700000000.000400 close(3</d/a>) = 0 <0.000010>"#,
+            r#"100 1700000000.000500 openat2(AT_FDCWD</d>, "nope", {flags=O_RDONLY, resolve=0}, 24) = -1 ENOENT (No such file or directory) <0.000010>"#,
+            r#"100 1700000000.000600 creat("/d/b", 0600) = 3</d/b> <0.000010>"#,
+            r#"100 1700000000.000700 write(3</d/b>, "y", 1) = 1 <0.000010>"#,
+            r#"100 1700000000.000800 close(3</d/b>) = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let opens: Vec<(&Value, &Value, Option<&Value>)> = lines[1..].iter().filter(|l| l["op"] == "open").map(|l| (&l["path"], &l["flags"], l.get("mode"))).collect();
+    use serde_json::json as j;
+    assert_eq!(
+        opens,
+        [
+            (&j!("a"), &j!(["WRONLY", "CREAT", "TRUNC", "CLOEXEC"]), Some(&j!(0o640))),
+            (&j!("a"), &j!(["RDONLY"]), None),
+            (&j!("nope"), &j!(["RDONLY"]), None),
+            (&j!("b"), &j!(["WRONLY", "CREAT", "TRUNC"]), Some(&j!(0o600))),
+        ]
+    );
+    assert_eq!(lines[0]["notes"]["not_exported:openat2:resolve RESOLVE_NO_SYMLINKS|RESOLVE_BENEATH"], 1, "{}", lines[0]);
+}
+
 /// The digest records per template what its calls did to the space its files hold
 /// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
 /// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the
