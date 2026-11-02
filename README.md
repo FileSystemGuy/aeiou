@@ -585,7 +585,9 @@ Not built, in rough order of interest:
   drops a truncate (item 56, §3.92): `truncate(2)` exported, run by the `trace` node, and an op
   of the abstract (contract 0.14), `fallocate`'s mode carried end to end under rule V29 (a hole
   punched is never replayed as an allocation), and the digest's `space`, what each template's
-  calls did to the space its files hold. To
+  calls did to the space its files hold, with the bytes its truncates discarded, compared by
+  kind in `compare`; and every call the export leaves out for want of an open, now named
+  (it was left out silently). To
   build next: stage 5, the Python's
   remains retired and the committed captures rewrapped; a storage-reported value used only with
   evidence that the application derives from it, the digest recording the `st_blksize` a trace

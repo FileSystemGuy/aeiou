@@ -354,9 +354,31 @@ struct Space {
     freed_ranges: i64,
     /// Paths an open has written, and has not unlinked or truncated to 0 since.
     written: HashSet<u32>,
+    /// The bytes truncates discarded from files whose size the trace shows, and the truncates of
+    /// one it does not: a size is known once a truncate set it (an open with `TRUNC`, a
+    /// `truncate`, an `ftruncate`), and moved by every write and allocation after it, never
+    /// guessed for a file the trace found already there.
+    truncated_bytes: i64,
+    unknown_size: u64,
+    size: HashMap<u32, i64>,
 }
 
 impl Space {
+    /// Path `p` truncated to `len`: what it discarded, when its size was known.
+    fn truncated(&mut self, p: u32, len: i64) {
+        match self.size.insert(p, len) {
+            Some(was) => self.truncated_bytes += (was - len).max(0),
+            None => self.unknown_size += 1,
+        }
+    }
+
+    /// A write to path `p` that ended at `end`.
+    fn wrote(&mut self, p: u32, end: i64) {
+        if let Some(s) = self.size.get_mut(&p) {
+            *s = (*s).max(end);
+        }
+    }
+
     /// A `truncate`, `ftruncate`, or `fallocate` that succeeded, on path `p` of the template.
     fn changed(&mut self, op: &str, p: u32, e: &Ev) {
         let len = e.len.unwrap_or(0);
@@ -371,11 +393,25 @@ impl Space {
                     self.to_zero += 1;
                     self.written.remove(&p);
                 }
+                self.truncated(p, len);
             }
             "fallocate" => {
                 let mode: Vec<&str> = e.mode.as_ref().and_then(Value::as_array).map(|m| m.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
                 if mode.iter().any(|f| *f == "PUNCH_HOLE" || *f == "COLLAPSE_RANGE") {
                     self.freed_ranges += len.max(0);
+                }
+                let has = |f: &str| mode.contains(&f);
+                let end = e.offset.unwrap_or(0) + len;
+                if let Some(s) = self.size.get_mut(&p) {
+                    // the size a mode leaves (`ast::FallocFlag`): extended by an allocation or a
+                    // zeroed range without KEEP_SIZE, moved by a range collapsed or inserted
+                    if has("COLLAPSE_RANGE") {
+                        *s = (*s - len).max(0);
+                    } else if has("INSERT_RANGE") {
+                        *s += len;
+                    } else if !has("KEEP_SIZE") && !has("PUNCH_HOLE") && !has("UNSHARE_RANGE") {
+                        *s = (*s).max(end);
+                    }
                 }
                 let key = if mode.is_empty() { "allocate".to_string() } else { mode.join("|") };
                 *self.fallocate.entry(key).or_insert(0) += 1;
@@ -398,6 +434,8 @@ impl Space {
             "to_zero": self.to_zero,
             "fallocate": self.fallocate.iter().map(|(k, n)| (k.clone(), json!(n))).collect::<Map<_, _>>(),
             "freed_ranges_bytes": self.freed_ranges,
+            "truncated_bytes": self.truncated_bytes,
+            "truncates_of_unknown_size": self.unknown_size,
         })
     }
 }
@@ -798,6 +836,7 @@ impl Digester {
         tp.size[kind].add(len.max(0) as u64, 1);
         if kind == 1 && n > 0 {
             tp.space.written.insert(path);
+            tp.space.wrote(path, off + n);
         }
     }
 
@@ -818,6 +857,7 @@ impl Digester {
                     if sp.written.remove(&p) {
                         sp.trunc_written += 1;
                     }
+                    sp.truncated(p, 0);
                 }
                 let open = self.op_id("open");
                 let slot = self.slot(lane);
@@ -901,14 +941,28 @@ impl Digester {
                 if op == "unlink" && e.ret.as_ref().map_or(true, |r| r.as_i64() == Some(0)) {
                     self.by_id[tpl].removes.push((t, p));
                     self.by_id[tpl].space.written.remove(&p);
+                    self.by_id[tpl].space.size.remove(&p);
                 }
                 if op == "truncate" && e.ret.as_ref().map_or(true, |r| !r.is_string()) {
                     self.by_id[tpl].space.changed(op, p, e);
                 }
                 if op == "rename" {
                     if let Some(to) = e.to.as_deref() {
-                        let (t2, _) = self.template(to);
+                        let (t2, p2) = self.template(to);
                         self.by_id[t2].count("renamed_to");
+                        if e.ret.as_ref().map_or(true, |r| !r.is_string()) {
+                            // the file keeps its size and its writes under its new name
+                            let (size, written) = (self.by_id[tpl].space.size.remove(&p), self.by_id[tpl].space.written.remove(&p));
+                            let sp = &mut self.by_id[t2].space;
+                            sp.size.remove(&p2);
+                            sp.written.remove(&p2);
+                            if let Some(n) = size {
+                                sp.size.insert(p2, n);
+                            }
+                            if written {
+                                sp.written.insert(p2);
+                            }
+                        }
                     }
                 }
             }
@@ -2425,6 +2479,9 @@ fn space_text(sp: &Value) -> String {
     }
     if n("freed_ranges_bytes") > 0 {
         parts.push(format!("ranges freed {}", bytes_text(n("freed_ranges_bytes"))));
+    }
+    if n("truncated_bytes") > 0 || n("truncates_of_unknown_size") > 0 {
+        parts.push(format!("truncates discarded {}, {} of a size the trace does not show", bytes_text(n("truncated_bytes")), n("truncates_of_unknown_size")));
     }
     parts.join("; ")
 }

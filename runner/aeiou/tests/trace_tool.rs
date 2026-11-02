@@ -646,6 +646,8 @@ fn digest_records_what_freed_or_moved_space() {
     call(r#"ftruncate(3</d/ck/a1.bin>, 0) = 0"#);
     call(r#"close(3</d/ck/a1.bin>) = 0"#);
     call(r#"truncate("/d/ck/a0.bin", 100) = 0"#);
+    call(r#"rename("/d/ck/a0.bin", "/d/ck/a2.bin") = 0"#);
+    call(r#"truncate("/d/ck/a2.bin", 0) = 0"#);
     call(r#"openat(AT_FDCWD</d>, "/d/in/x.dat", O_RDONLY) = 3</d/in/x.dat>"#);
     call(r#"read(3</d/in/x.dat>, "x"..., 10) = 10"#);
     call(r#"close(3</d/in/x.dat>) = 0"#);
@@ -657,10 +659,51 @@ fn digest_records_what_freed_or_moved_space() {
     let by = |name: &str| ts.iter().find(|t| t["template"].as_str().unwrap().starts_with(name)).unwrap_or_else(|| panic!("{name}: {ts:?}"));
     assert_eq!(
         by("ck/")["space"],
-        serde_json::json!({"truncating_opens": 3, "truncating_opens_of_written": 1, "truncating_opens_of_unseen": 2, "truncate": 1, "ftruncate": 1, "to_zero": 1,
-                           "fallocate": {"KEEP_SIZE|PUNCH_HOLE": 1, "allocate": 1}, "freed_ranges_bytes": 8192})
+        // a size is known once a truncate set it: a0's first open and a1's are of unknown size;
+        // a0's second discards its 64 KiB, a1's ftruncate the 4 KiB allocated, the truncate of
+        // a0 to 100 what the second open's write left, and of a2, a0 renamed, its 100 bytes
+        serde_json::json!({"truncating_opens": 3, "truncating_opens_of_written": 1, "truncating_opens_of_unseen": 2, "truncate": 2, "ftruncate": 1, "to_zero": 2,
+                           "fallocate": {"KEEP_SIZE|PUNCH_HOLE": 1, "allocate": 1}, "freed_ranges_bytes": 8192,
+                           "truncated_bytes": 65536 + 4096 + 65436 + 100, "truncates_of_unknown_size": 2})
     );
     assert!(by("in/").get("space").is_none());
     let (out, _) = text(&tool(&["digest", s(&trace), "--root", "/d", "--no-questions", "--text"]));
-    assert!(out.contains("       space: 3 truncating opens (1 of a path written before, 2 of one not seen before); truncate 1; ftruncate 1; 1 to length 0; fallocate KEEP_SIZE|PUNCH_HOLE 1; fallocate allocate 1; ranges freed 8.0 KiB\n"), "{out}");
+    assert!(out.contains("       space: 3 truncating opens (1 of a path written before, 2 of one not seen before); truncate 2; ftruncate 1; 2 to length 0; fallocate KEEP_SIZE|PUNCH_HOLE 1; fallocate allocate 1; ranges freed 8.0 KiB; truncates discarded 132.0 KiB, 2 of a size the trace does not show\n"), "{out}");
+}
+
+/// A call on a descriptor whose open the trace does not show (held from before `strace`
+/// attached, or a fork's parent closing what only its child opened) has no open for the
+/// `trace` node to name, so the export leaves it out, and says so by name, never silently.
+#[test]
+fn export_names_every_call_it_leaves_out_for_want_of_an_open() {
+    let d = tmp("no-open");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 read(5</d/held>, "x"..., 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.000100 lseek(5</d/held>, 0, SEEK_SET) = 0 <0.000010>"#,
+            r#"100 1700000000.000200 fstat(5</d/held>, {st_mode=S_IFREG|0644, st_size=8192, ...}) = 0 <0.000010>"#,
+            r#"100 1700000000.000300 fsync(5</d/held>) = 0 <0.000010>"#,
+            r#"100 1700000000.000400 close(5</d/held>) = 0 <0.000010>"#,
+            r#"100 1700000000.000500 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f) = 101 <0.000050>"#,
+            r#"101 1700000000.000600 openat(AT_FDCWD</d>, "/d/x", O_RDONLY) = 3</d/x> <0.000010>"#,
+            r#"101 1700000000.000700 read(3</d/x>, "x"..., 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.000800 close(3</d/x>) = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let ops: Vec<&str> = lines[1..].iter().map(|l| l["op"].as_str().unwrap()).collect();
+    assert_eq!(ops, ["open", "read"]);
+    let notes = &lines[0]["notes"];
+    for (op, n) in [("read", 1), ("lseek", 1), ("fstat", 1), ("fsync", 1), ("close", 2)] {
+        assert_eq!(notes[format!("not_exported:{op}:descriptor without open")], n, "{op}: {notes}");
+    }
+    assert_eq!(notes["calls_not_exported"], 6, "{notes}");
 }

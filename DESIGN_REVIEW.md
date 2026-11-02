@@ -8696,11 +8696,34 @@ it without: the latter may read a GB, if the file is that big, while the former 
 
 Contract 0.14 carries both abstract changes in one bump; every committed AST was regenerated and
 every case re-locked, the workload ids, fingerprints, and dataset ids unchanged, the shapes
-measured again (their records name the abstract's hash). Not done, for a decision: the digest
+measured again (their records name the abstract's hash). ~~Not done, for a decision: the digest
 does not yet say how many bytes a truncate discarded (the size before it is known only for a
 file the trace wrote or one an `fstat` showed), nor does `compare` hold two digests' `space` to
-each other; the deferred reclaim itself is the storage's and is not modelled beyond issuing the
-call, which is the interposition test's line (the call is the application's, its cost the SUT's).
+each other;~~ *Both built the same day, below.* The deferred reclaim itself is the storage's and
+is not modelled beyond issuing the call, which is the interposition test's line (the call is the
+application's, its cost the SUT's).
+
+*The three left over, built 2026-11-02 at the user's request.* (1) **A call left out for want of
+an open, now named.** Measuring for §3.89 had shown the export one `close` short in two
+traces: a fork's parent closing a descriptor only its child had opened. The cause was wider:
+every call on a descriptor whose open the trace does not show (held from before `strace`
+attached) was left out of the export silently, counted in the metrics, the header saying only
+`descriptors_without_open` once per descriptor. One golden case (`metrics-9f1a54ef`) exported
+nothing of its 400 `pread64`s and said nothing of them. Such a call has no open id for the
+`trace` node, so it is still left out, now noted by name (`not_exported:read:descriptor without
+open`, `calls_not_exported`) at every site: data, `lseek`, `fstat`, the descriptor ops, `close`,
+`mmap`, and an `io_submit` member; seven goldens regenerated, their difference notes alone.
+Whether the export should instead give such a descriptor an open of its own, so that a
+`trace` node replays its reads, is a decision not taken: the open was the application's, made
+before the trace, with flags the trace does not show. (2) **The bytes a truncate discarded**:
+the digest's `space` gains `truncated_bytes` and `truncates_of_unknown_size`; a size is known
+once a truncate set it and is moved by every write and allocation after it and carried through
+a `rename`, never guessed for a file the trace found already there (an `fstat`'s size is not in
+an export). (3) **`compare` over `space`**: a pair's structure gains a `space` aspect where
+either side has one, the kinds of it (truncating opens, of a path written before, `truncate`,
+`ftruncate`, to length 0, `fallocate` by mode) and never the counts, which grow with the scale;
+an abstract that writes where the application truncated is another workload, and a dry run's
+emitted digest is now held to the trace's on it.
 
 ## 4. Plan changes
 

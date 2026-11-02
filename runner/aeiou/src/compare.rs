@@ -558,6 +558,26 @@ fn compare_sites(sa: &[&Value], sb: &[&Value], out: &mut Vec<Aspect>) {
     }
 }
 
+/// The kinds of what a template's calls did to the space its files hold (its `space`, §3.92),
+/// in a fixed order: what happened, never how often, which grows with the scale.
+fn space_kinds(t: &Value) -> Vec<String> {
+    let sp = &t["space"];
+    let n = |k: &str| int(&sp[k]);
+    let mut out: Vec<String> = [
+        ("truncating_opens", "truncating opens"),
+        ("truncating_opens_of_written", "of a path written before"),
+        ("truncate", "truncate"),
+        ("ftruncate", "ftruncate"),
+        ("to_zero", "to length 0"),
+    ]
+    .iter()
+    .filter(|(k, _)| n(k) > 0)
+    .map(|(_, name)| name.to_string())
+    .collect();
+    out.extend(sp["fallocate"].as_object().into_iter().flatten().map(|(mode, _)| format!("fallocate {mode}")));
+    out
+}
+
 fn compare_pair(da: &Value, ta: &Value, db: &Value, tb: &Value, by: &'static str) -> Pair {
     let mut aspects = Vec::new();
     let (fa, fb) = (fields_of(ta), fields_of(tb));
@@ -568,6 +588,11 @@ fn compare_pair(da: &Value, ta: &Value, db: &Value, tb: &Value, by: &'static str
     let (oa, ob) = (ops(ta), ops(tb));
     let join = |s: &BTreeSet<String>, sep: &str| if s.is_empty() { "none".to_string() } else { s.iter().cloned().collect::<Vec<_>>().join(sep) };
     aspects.push(Aspect { name: "ops".into(), a: join(&oa, " "), b: join(&ob, " "), verdict: same(oa == ob), note: String::new() });
+    let (sa, sb) = (space_kinds(ta), space_kinds(tb));
+    if !sa.is_empty() || !sb.is_empty() {
+        let show = |k: &[String]| if k.is_empty() { "none".to_string() } else { k.join(", ") };
+        aspects.push(Aspect { name: "space".into(), a: show(&sa), b: show(&sb), verdict: same(sa == sb), note: String::new() });
+    }
     let (pa, pb) = (phases_of(da, ia), phases_of(db, ib));
     let motifs = |p: &[(i64, i64, i64, String)]| p.iter().map(|x| x.3.clone()).collect::<BTreeSet<String>>();
     let (ma, mb) = (motifs(&pa), motifs(&pb));

@@ -60,7 +60,11 @@ descriptor are `fstat`, on a path `stat`; `getdents64` is `readdir`, once per li
 `truncate`, `ftruncate`, `fallocate`, `mkdir`, `rename`, `fadvise64`, and `close` by name. A
 failed call counts as its op. Nothing that frees or moves a file's space is left out: `export`
 writes a `truncate` with its length and a `fallocate` with its mode by flag name, and a mode
-with a bit no flag names is left out and noted, never written as another. The position of a sequential `read` or `write` is tracked per open file
+with a bit no flag names is left out and noted, never written as another. A call on a
+descriptor whose open the trace does not show (held from before `strace` attached, or a
+fork's parent closing what only its child opened) has no open for a `trace` node to name: it
+is counted in the metrics and left out of the export, noted by name
+(`not_exported:read:descriptor without open`), never silently. The position of a sequential `read` or `write` is tracked per open file
 description from `open`, `lseek`, and the bytes each call moved, shared by `dup`ed
 descriptors, by threads, and across `fork`. An `O_APPEND` write goes to the end of the file
 wherever the trace knows the file's size (from an open that truncated or created it, kept
@@ -112,7 +116,10 @@ is listed. Per pair, each aspect is `same`, `DIFFERENT`, `not compared`, or `sho
 (kind and width); per site, by phase, its kind and each verdict, a side's undecided verdict
 not compared and its owner's asserted answer compared in its place (labelled `assertion`);
 the set of op kinds; the set of motifs (a motif that depends on file size is structure, so the
-run takes the trace's sizes); the peak of lanes at once on the template (each phase an
+run takes the trace's sizes); where either side's template has a `space`, the kinds of what
+its calls did to the space its files hold (truncating opens, of a path written before,
+`truncate`, `ftruncate`, to length 0, `fallocate` by mode), never their counts, which grow with
+the scale; the peak of lanes at once on the template (each phase an
 interval of its lane); and the lanes on it and in all, shown and never judged. A difference
 of structure exits 1, and under `--judge` it decides the verdict whatever the rows.
 
@@ -149,7 +156,10 @@ what its calls did to the space its files hold, a load of the filesystem's own (
 file's extents apart and reclaiming them, deferred): its opens with `TRUNC`, of them those on a
 path an earlier open had written and those on a path the trace had not seen before, its
 `truncate` and `ftruncate` calls and those to length 0, its `fallocate` calls by mode, and the
-bytes of the ranges `PUNCH_HOLE` freed and `COLLAPSE_RANGE` removed; an open with `TRUNC` reads
+bytes of the ranges `PUNCH_HOLE` freed and `COLLAPSE_RANGE` removed, and the bytes its
+truncates discarded where the trace shows the size (set by a truncate and moved by every write
+and allocation after it, carried through a `rename`), with the truncates of a size it does not
+show counted apart, never guessed; an open with `TRUNC` reads
 nothing where one without may read the whole file. **Sites**: what the digest judges, a template or, where
 a template is two phases, the opens of one (`0/write`, `0/read`), of five kinds. A
 *set*, a template opened at least twice and read (a sample set), has the three verdicts

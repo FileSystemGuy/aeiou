@@ -252,3 +252,63 @@ fn the_runners_own_io_on_b_is_set_aside() {
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("template .aeiou-dataset.json: A only, DIFFERENT"), "{out}");
 }
+
+/// The digest of a writer: per path, an open (`O_TRUNC` when `trunc`), a 64 KiB write, `extra`
+/// calls on it, and a close, then the same again, a millisecond apart.
+fn writer_digest(dir: &Path, name: &str, trunc: bool, extra: &[&str]) -> String {
+    let mut out = String::new();
+    let mut t = 0u64;
+    let mut line = |call: String| {
+        t += 1000;
+        out.push_str(&format!("100 1700000000.{t:06} {call} <0.000005>\n"));
+    };
+    let flags = if trunc { "O_WRONLY|O_CREAT|O_TRUNC" } else { "O_WRONLY|O_CREAT" };
+    for _ in 0..2 {
+        for i in 0..3 {
+            let p = format!("/d/ck/s{i}.bin");
+            line(format!("openat(AT_FDCWD</d>, \"{p}\", {flags}, 0644) = 3<{p}>"));
+            line(format!("write(3<{p}>, \"x\"..., 65536) = 65536"));
+            for call in extra {
+                line(call.replace("FD", &format!("3<{p}>")));
+            }
+            line(format!("close(3<{p}>) = 0"));
+        }
+    }
+    let trace = dir.join(format!("{name}.strace"));
+    std::fs::write(&trace, out).unwrap();
+    let doc = dir.join(format!("{name}.digest.json"));
+    let o = tool(&["digest", s(&trace), "--root", "/d", "--no-questions", "-o", s(&doc)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    s(&doc).to_string()
+}
+
+/// What a template's calls did to the space its files hold (the digests' `space`, §3.92) is
+/// part of its structure: the kinds of it, never the counts, which grow with the scale; an
+/// abstract that writes where the application truncated is another workload. A pair that did
+/// none of it on either side has no such aspect.
+#[test]
+fn what_frees_or_moves_space_is_part_of_the_structure() {
+    let d = crate::common::tmpdir("compare-tool", "space");
+    let a = writer_digest(&d, "a", true, &[]);
+    let (code, doc) = json_of(&a, &a, &[]);
+    assert_eq!(code, 0);
+    assert_eq!(aspect(&doc, 0, "space")["a"], "truncating opens, of a path written before");
+    assert_eq!(aspect(&doc, 0, "space")["verdict"], "same");
+    // the same opens without O_TRUNC: the same ops and motifs, another workload
+    let b = writer_digest(&d, "b", false, &[]);
+    let (code, out, _) = compare(&a, &b, &[]);
+    assert_eq!(code, 1, "{out}");
+    let (_, doc) = json_of(&a, &b, &[]);
+    assert_eq!((aspect(&doc, 0, "ops")["verdict"].as_str(), aspect(&doc, 0, "motifs")["verdict"].as_str()), (Some("same"), Some("same")));
+    assert_eq!((aspect(&doc, 0, "space")["b"].as_str(), aspect(&doc, 0, "space")["verdict"].as_str()), (Some("none"), Some("different")));
+    // a hole punched in each is a kind of its own
+    let c = writer_digest(&d, "c", true, &["fallocate(FD, FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE, 0, 4096) = 0"]);
+    let (_, doc) = json_of(&a, &c, &[]);
+    assert_eq!(aspect(&doc, 0, "space")["b"], "truncating opens, of a path written before, fallocate KEEP_SIZE|PUNCH_HOLE");
+    assert_eq!(aspect(&doc, 0, "space")["verdict"], "different");
+    // readers on both sides: no space aspect
+    let p = names("s", 28);
+    let r = digest(&d, "r", &reads(100, &p, false), &[]);
+    let (_, doc) = json_of(&r, &r, &[]);
+    assert!(doc["structure"]["pairs"][0]["aspects"].as_array().unwrap().iter().all(|x| x["name"] != "space"), "{doc}");
+}

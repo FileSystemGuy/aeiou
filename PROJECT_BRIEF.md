@@ -1199,7 +1199,10 @@ numbers; the order is this note's.
     file. Built: `truncate(2)` exported, run by the `trace` node, an op of the abstract
     (contract 0.14), and its own kind in the metrics; `fallocate`'s mode carried end to end and
     rule V29 (a hole punched is never replayed as an allocation); the digest's `space` per
-    template. Open: the bytes a truncate discarded, and `compare` over two digests' `space`.
+    template; ~~open: the bytes a truncate discarded, and `compare` over two digests' `space`~~
+    both built the same day, with every call the export leaves out for want of an open now
+    named (it was left out silently). Open, for a decision: an open of its own for a descriptor
+    held from before the trace, so a `trace` node replays its reads.
 
 ## 7. Environment
 

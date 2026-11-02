@@ -830,6 +830,19 @@ impl Tracer {
         *self.notes.entry(k.to_string()).or_insert(0) += n;
     }
 
+    /// The open id the export names `f` by, or `None`, the call left out and noted by name: a
+    /// descriptor whose open the trace does not show (held from before it began, or one a
+    /// fork's parent closes that only its child opened) has no open for the `trace` node.
+    fn oid_or_note(&mut self, f: Option<&Rc<RefCell<File>>>, op: &str) -> Option<usize> {
+        let ex = self.export.as_mut()?;
+        let oid = f.and_then(|f| f.borrow().oid);
+        if oid.is_none() {
+            ex.note("calls_not_exported", 1);
+            ex.note(&format!("not_exported:{op}:descriptor without open"), 1);
+        }
+        oid
+    }
+
     // ---- paths
 
     /// The path as counted (normalized), or `None` when it is outside the roots or excluded.
@@ -1249,10 +1262,8 @@ impl Tracer {
                 if let Some(m) = self.m() {
                     m.close(tid, p);
                 }
-                if let (Some(ex), Some(f)) = (self.export.as_mut(), &f) {
-                    if let Some(oid) = f.borrow().oid {
-                        ex.op(when, "close", oid, err, Value::Null, vec![]);
-                    }
+                if let Some(oid) = self.oid_or_note(f.as_ref(), "close") {
+                    self.export.as_mut().unwrap().op(when, "close", oid, err, Value::Null, vec![]);
                 }
             }
             return Ok(());
@@ -1281,11 +1292,16 @@ impl Tracer {
             let fp = path.clone().or_else(|| f.as_ref().and_then(|f| f.borrow().path.clone()));
             if inst.is_some() && self.under(fp.as_deref()).is_some() {
                 self.count(tid, "lseek");
-                if let (Some(ex), Some(f)) = (self.export.as_mut(), &f) {
-                    if let (Some(oid), true) = (f.borrow().oid, a.len() > 2) {
-                        if let Some(off) = int0(&a[1]) {
+                if let Some(oid) = self.oid_or_note(f.as_ref(), "lseek") {
+                    let ex = self.export.as_mut().unwrap();
+                    match (a.len() > 2).then(|| int0(&a[1])).flatten() {
+                        Some(off) => {
                             let whence = a[2].replace("SEEK_", "");
                             ex.op(when, "lseek", oid, err, json!(ret), vec![("offset", json!(off)), ("whence", json!(whence))]);
+                        }
+                        None => {
+                            ex.note("calls_not_exported", 1);
+                            ex.note("not_exported:lseek:unparsed", 1);
                         }
                     }
                 }
@@ -1352,14 +1368,13 @@ impl Tracer {
                     self.note("data_ops_without_offset", 1);
                 }
                 self.data(kind, inst, tid, p, offset, length, ret.max(0))?;
-                if let (Some(ex), Some(f)) = (self.export.as_mut(), &f) {
-                    if let (Some(oid), true) = (f.borrow().oid, offset >= 0) {
-                        if base.is_some() {
-                            ex.pin(oid);
-                            ex.note("append_positions_resolved", 1);
-                        }
-                        ex.data(when, KINDS[kind], oid, offset, length, positioned, ret, err);
+                if let (Some(oid), true) = (self.oid_or_note(f.as_ref(), KINDS[kind]), offset >= 0) {
+                    let ex = self.export.as_mut().unwrap();
+                    if base.is_some() {
+                        ex.pin(oid);
+                        ex.note("append_positions_resolved", 1);
                     }
+                    ex.data(when, KINDS[kind], oid, offset, length, positioned, ret, err);
                 }
             }
             return Ok(());
@@ -1373,11 +1388,11 @@ impl Tracer {
             let (fd, path) = fd_arg(&a[4]);
             let f = self.file(tid, fd, path.as_deref());
             let Some(f) = f else { return Ok(()) };
-            let Some(oid) = f.borrow().oid else { return Ok(()) };
             let fp = path.clone().or_else(|| f.borrow().path.clone());
             if inst.is_none() || self.under(fp.as_deref()).is_none() {
                 return Ok(());
             }
+            let Some(oid) = self.oid_or_note(Some(&f), "mmap") else { return Ok(()) };
             let (Some(length), Some(off)) = (int0(&a[1]), int0(&a[5])) else { return Ok(()) };
             let ex = self.export.as_mut().unwrap();
             ex.note("mmap_as_read", 1);
@@ -1442,10 +1457,10 @@ impl Tracer {
                     let f = self.file(tid, Some(cb.fd), path.as_deref());
                     if let Some(f) = f {
                         let fp = path.clone().or_else(|| f.borrow().path.clone());
-                        let oid = f.borrow().oid;
-                        if let (true, Some(oid)) = (cb.op == "PREAD" || cb.op == "PWRITE", oid) {
-                            if self.under(fp.as_deref()).is_some() {
-                                mem.push((if cb.op == "PREAD" { "read" } else { "write" }, oid, cb.offset, cb.nbytes));
+                        if (cb.op == "PREAD" || cb.op == "PWRITE") && self.under(fp.as_deref()).is_some() {
+                            let kind = if cb.op == "PREAD" { "read" } else { "write" };
+                            if let Some(oid) = self.oid_or_note(Some(&f), kind) {
+                                mem.push((kind, oid, cb.offset, cb.nbytes));
                             }
                         }
                     }
@@ -1547,10 +1562,8 @@ impl Tracer {
             }
             if let (Some(_), Some(_)) = (inst, &p) {
                 self.count(tid, op);
-                if let (Some(ex), Some(f)) = (self.export.as_mut(), &f) {
-                    if let Some(oid) = f.borrow().oid {
-                        ex.fd_op(when, op, name, oid, a, ret, err);
-                    }
+                if let Some(oid) = self.oid_or_note(f.as_ref(), op) {
+                    self.export.as_mut().unwrap().fd_op(when, op, name, oid, a, ret, err);
                 }
             }
             return Ok(());
@@ -1569,10 +1582,8 @@ impl Tracer {
                 let f = self.file(tid, fd, path.as_deref());
                 if inst.is_some() && self.under(path.as_deref()).is_some() {
                     self.count(tid, "fstat");
-                    if let (Some(ex), Some(f)) = (self.export.as_mut(), &f) {
-                        if let Some(oid) = f.borrow().oid {
-                            ex.op(when, "fstat", oid, err, Value::Null, vec![]);
-                        }
+                    if let Some(oid) = self.oid_or_note(f.as_ref(), "fstat") {
+                        self.export.as_mut().unwrap().op(when, "fstat", oid, err, Value::Null, vec![]);
                     }
                 }
                 return Ok(());

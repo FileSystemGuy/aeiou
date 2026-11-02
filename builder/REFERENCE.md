@@ -694,7 +694,9 @@ its `space` (`DESIGN_REVIEW.md` §3.92): `truncating_opens` (opens with `TRUNC`)
 `truncating_opens_of_written` (a path an earlier open had written: data discarded) and
 `truncating_opens_of_unseen` (a path the trace had not seen: what it held is not known),
 `truncate`, `ftruncate`, `to_zero`, `fallocate` by mode (`KEEP_SIZE|PUNCH_HOLE`, `allocate` for
-mode 0), and `freed_ranges_bytes`, so the filesystem's deferred work of taking files apart and
+mode 0), `freed_ranges_bytes`, and `truncated_bytes`, what truncates discarded from files whose
+size the trace shows (set by a truncate, moved by every write and allocation after it, carried
+through a `rename`), beside `truncates_of_unknown_size`, never guessed, so the filesystem's deferred work of taking files apart and
 reclaiming their space is in the summary, and an open that truncates (it reads nothing) is told
 from one that does not. `lanes`: per traced task its `phases`, runs of units
 (the calls on one open, or one path call, or one `io_submit`) of one motif on one template,
@@ -836,7 +838,9 @@ both are digests, is new (§3.89's design, built as designed): templates paired 
 text, then `--pair A=B`, then shape (fields' kinds and widths, and the kinds of site) where
 one template of each side has it; per pair the fields, per site and phase its kind and every
 verdict (a side's undecided verdict not compared, its owner's asserted answer compared in its
-place and labelled an assertion), the op kinds, the motifs, and the peak of lanes at once (the
+place and labelled an assertion), the op kinds, the kinds of its `space` where either side
+has one (2026-11-02: truncating opens, of a path written before, `truncate`, `ftruncate`, to
+length 0, `fallocate` by mode; never their counts), the motifs, and the peak of lanes at once (the
 phases on the template as intervals of their lanes); lanes shown, not judged. B's own I/O is
 set aside and listed: names beginning `.aeiou`, and a template of the root that is only stats;
 B only, since an application's root stat is its own. A template of A with no partner is a
