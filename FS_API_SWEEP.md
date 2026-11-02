@@ -82,7 +82,10 @@ work item of its own.
 - **S-5** (A) strace 6.8 prints a descriptor of an unlinked file as `fd<path>(deleted)`, with
   `(deleted)` outside the brackets; `fd_arg` needs the token to end in `>` and returns
   nothing, so every call on an unlinked-open file or an `O_TMPFILE` file is lost silently
-  (Python `tempfile.TemporaryFile`). *Status: open.*
+  (Python `tempfile.TemporaryFile`). *Status: fixed 2026-11-02: `fd_arg` takes `(deleted)` after
+  the brackets as inside them (tests `descriptors_and_their_paths`,
+  `export_keeps_calls_on_an_unlinked_file`); an `O_TMPFILE` file's calls are now exported, its
+  open still the directory's until S-10.*
 - **S-6** (A) `iocb_at` (`strace.rs:600-648`): an `IOCB_CMD_FSYNC`/`FDSYNC`/`NOOP`/`POLL` has
   no `aio_nbytes`/`aio_offset` and a `PREADV`/`PWRITEV` has `aio_buf=[iovec]`, so the search
   runs into the next request (its size taken, the request swallowed, the path overrunning into

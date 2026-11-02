@@ -621,6 +621,35 @@ fn export_keeps_truncates_and_fallocate_modes() {
     assert!(notes.get("not_exported:truncate").is_none(), "{notes}");
 }
 
+/// Calls on a descriptor of a file unlinked while open are exported (`FS_API_SWEEP.md` S-5):
+/// strace 6.8 prints its path as `3</d/f>(deleted)`, `(deleted)` after the brackets.
+#[test]
+fn export_keeps_calls_on_an_unlinked_file() {
+    let d = tmp("deleted");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 openat(AT_FDCWD</d>, "/d/f", O_RDWR|O_CREAT|O_EXCL, 0600) = 3</d/f> <0.000010>"#,
+            r#"100 1700000000.000100 unlink("/d/f") = 0 <0.000010>"#,
+            r#"100 1700000000.000200 write(3</d/f>(deleted), "x"..., 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.000300 pread64(3</d/f>(deleted), "x"..., 4096, 0) = 4096 <0.000010>"#,
+            r#"100 1700000000.000400 close(3</d/f>(deleted)) = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let ops: Vec<&str> = lines[1..].iter().map(|l| l["op"].as_str().unwrap()).collect();
+    assert_eq!(ops, ["open", "unlink", "write", "read", "close"]);
+    assert!(lines[0].get("missing_opens").is_none(), "{}", lines[0]);
+    assert!(lines[0]["notes"].get("opens_synthesized").is_none(), "{}", lines[0]);
+}
+
 /// The digest records per template what its calls did to the space its files hold
 /// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
 /// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the

@@ -144,7 +144,8 @@ pub fn split_args(s: &str) -> Vec<String> {
     out
 }
 
-/// `3</path>` → `(Some(3), Some("/path"))`; `AT_FDCWD</cwd>` → `(None, Some("/cwd"))`; a
+/// `3</path>` → `(Some(3), Some("/path"))`, `3</path>(deleted)` the same; `AT_FDCWD</cwd>` →
+/// `(None, Some("/cwd"))`; a
 /// descriptor without an annotation → `(fd, None)`; anything else `(None, None)`.
 pub fn fd_arg(tok: &str) -> (Option<i64>, Option<String>) {
     let (num, rest) = if let Some(r) = tok.strip_prefix("AT_FDCWD") {
@@ -164,6 +165,8 @@ pub fn fd_arg(tok: &str) -> (Option<i64>, Option<String>) {
     if rest.is_empty() {
         return (num, None);
     }
+    // strace 6.8 prints an unlinked file's `(deleted)` after the brackets, older ones inside
+    let rest = rest.strip_suffix("(deleted)").unwrap_or(rest);
     match rest.strip_prefix('<').and_then(|r| r.strip_suffix('>')) {
         Some(raw) => (num, Some(fd_path(raw))),
         None => (None, None),
@@ -1810,6 +1813,10 @@ mod tests {
         assert_eq!(fd_arg("3<p"), (None, None));
         assert_eq!(fd_arg("4</dev/null<char 1:3>>"), (Some(4), Some("/dev/null".into())));
         assert_eq!(fd_arg("5</gone (deleted)>"), (Some(5), Some("/gone".into())));
+        // strace 6.8 prints `(deleted)` after the brackets (FS_API_SWEEP.md S-5)
+        assert_eq!(fd_arg("5</gone>(deleted)"), (Some(5), Some("/gone".into())));
+        assert_eq!(fd_arg("AT_FDCWD</gone>(deleted)"), (None, Some("/gone".into())));
+        assert_eq!(fd_arg("5</gone>(other)"), (None, None));
         assert_eq!(fd_path(r"/a\74b\76"), "/a<b>");
     }
 
