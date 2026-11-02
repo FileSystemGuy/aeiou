@@ -8793,6 +8793,21 @@ S-36); what `compare` never judges (S-37 to S-39); what the language cannot expr
 6. Group A (the bugs with no design question) is fixed first, test first, one commit per
    finding or tight group, each updating its status in the register. Brief item 57.
 
+*Note (2026-11-02, later; the user's decision).* S-11 and S-12 turned out to hold a design
+question, found while fixing them: the replay closes an open at its **last close line**, after
+every use of it, so a trace showing fewer closes than descriptors (a duplicate closed and the
+original closed implicitly at exit, which the export did not record) closes the open early,
+and that close waits on a later use in its own lane: a hang. Two fixes were put: (a) record the
+implicit closes and let the loader count only the closes after an open's last use, no format
+change, but a close that is not the last issues no `close(2)` and NFS loses its flush; (b)
+record the implicit closes and let the trace file **name descriptors**: a `dup` line, a
+descriptor of its own for each lane a fork gave one, so every close line is a real `close(2)`
+and the last one of an open still waits for its uses. **Decided: (b)**, the per-close flush of
+item 4 carried to duplicates and to every implicit close (exit, `dup2`/`dup3` onto an open
+descriptor, `execve` closing the `O_CLOEXEC` ones, `close_range`); a trace-file change made
+with contract 0.15 (brief item 58), S-11, S-12, and S-14 together. The other group A items
+go on meanwhile.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

@@ -1220,7 +1220,9 @@ numbers; the order is this note's.
 
 58. **The calls the abstract cannot express (decided by the user 2026-11-02, §3.93; not
     started).** Every op of `FS_API_SWEEP.md` S-40 in the abstract and the trace file
-    (contract 0.15): copy, link and symlink and readlink, setattr and xattrs, locks, `syncfs`
+    (contract 0.15), with the trace file naming descriptors (a `dup` line, a descriptor per
+    forked lane, every close line a real `close(2)`, the implicit closes recorded; S-11, S-12,
+    S-14, decided 2026-11-02, §3.93 note): copy, link and symlink and readlink, setattr and xattrs, locks, `syncfs`
     and `sync_file_range`, `msync`, `readahead` and `madvise`, `access`, `statfs`, `lstat`,
     `SEEK_DATA`/`SEEK_HOLE`, the rename and `RWF_*` flags, `O_PATH`, `O_TMPFILE`, `F_SETFL`, the
     IOCB fsyncs and vectored requests, batch deletes; and `compare` judging a kind on one side

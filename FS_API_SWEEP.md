@@ -142,17 +142,23 @@ work item of its own.
 
 - **S-11** (A) Closing one of two descriptors of one open file description (dup, inherited over
   fork) exports a close of the shared open while the other is still open (`strace.rs:1290`);
-  Python `mmap` does `F_DUPFD_CLOEXEC` and closes the duplicate. *Status: open.*
+  Python `mmap` does `F_DUPFD_CLOEXEC` and closes the duplicate. *Status: decided 2026-11-02
+  (§3.93 note): the trace file names descriptors (a `dup` line, a descriptor per forked lane),
+  every close line a real `close(2)`; with S-12 and S-14, contract 0.15. Found while fixing:
+  the replay's close of an open at its last close line waits on a later use in its own lane
+  when the trace shows fewer closes than descriptors, a hang.*
 - **S-12** (A) Implicit closes never recorded: `exit`/`exit_group` and `+++ exited`, `dup2`/
   `dup3` onto an open descriptor, a successful `execve` closing `O_CLOEXEC` descriptors,
-  `close_range`. On NFS each is a flush and a CLOSE. *Status: open.*
+  `close_range`. On NFS each is a flush and a CLOSE. *Status: decided 2026-11-02 with S-11:
+  each recorded as a close line of its descriptor.*
 - **S-13** (A) `close(2)`'s return is thrown away on every POSIX backend and the trace node
   (`OwnedFd` drop; `run.rs:1350`, `uring.rs` inline): NFS reports deferred ENOSPC/EDQUOT/EIO
   at close, so a failed checkpoint is scored a success and an `expect` on a close can never
   match. *Status: open.*
 - **S-14** (A, decided §3.93) A close of a descriptor inherited over a fork issues no
   `close(2)` (`run.rs:1352`; the trace node closes only at an open's last close line,
-  `uring.rs:1985`): each forked worker's close is a `->flush` (NFS, FUSE_FLUSH). *Status: open.*
+  `uring.rs:1985`): each forked worker's close is a `->flush` (NFS, FUSE_FLUSH). *Status: open;
+  built with S-11 (the descriptor per forked lane), contract 0.15.*
 
 ### Failed calls
 
