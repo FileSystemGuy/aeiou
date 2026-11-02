@@ -655,6 +655,30 @@ fn a_traced_error_that_does_not_recur_is_warned_of() {
     assert!(out.contains("WARNING: 1 call(s) the trace shows failing succeeded in this run: mkdir EEXIST 1; the system under test differs from the traced one"), "{out}");
 }
 
+/// An open's explicit mode 0 creates a file with mode 0, where it became 0644, and hashes apart
+/// from an open with no mode (`FS_API_SWEEP.md` S-21).
+#[test]
+fn an_explicit_mode_0_is_mode_0() {
+    use std::os::unix::fs::PermissionsExt;
+    let fingerprint = |mode: &str, tag: &str| {
+        let lines = format!("\n{{\"aeiou_trace\":1,\"lanes\":1,\"creates\":[\"f\"]}}\n{{\"lane\":0,\"op\":\"open\",\"fd\":0,\"path\":\"f\",\"flags\":[\"WRONLY\",\"CREAT\",\"EXCL\"]{mode}}}\n{{\"lane\":0,\"op\":\"close\",\"fd\":0}}\n");
+        let d = tmpdir(tag);
+        let p = abstract_with(&d, &lines, Some(1));
+        let (_, model) = leaked(&p, 1);
+        (d, model, dryrun::run(model, 1, None).unwrap().total.fingerprint)
+    };
+    let (d, model, zero) = fingerprint(r#","mode":0"#, "mode0");
+    let (_, _, absent) = fingerprint("", "mode-absent");
+    assert_ne!(zero, absent, "an explicit 0 hashes apart from no mode");
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    for be in [BackendKind::Sync, BackendKind::Uring] {
+        let _ = std::fs::remove_file(root.join("f"));
+        run::run(model, opts(&root, be, false), Default::default()).unwrap();
+        assert_eq!(std::fs::metadata(root.join("f")).unwrap().permissions().mode() & 0o7777, 0, "{}", be.describe());
+    }
+}
+
 /// A read that returned nothing read nothing: one past the end of its file (an HDF5 library
 /// probing for its superblock at 512, 1024, 2048, … of a small file, a `pread` at a stale
 /// size) says the file was no longer than its offset, never that it was at least that long,

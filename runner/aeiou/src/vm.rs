@@ -203,6 +203,29 @@ pub fn flag_bits(flags: &[OpenFlag]) -> u64 {
     flags.iter().fold(0u64, |acc, f| acc | (1 << (*f as u8)))
 }
 
+/// The mode field's mark of an explicit mode 0, which 0 itself cannot carry: 0 is no mode
+/// (the runner's 0644). Only this mode is marked, so every other open hashes as it did.
+const MODE_ZERO: u64 = 1 << 31;
+
+/// An open's `aux`: its flags' bits, and its mode in the high 32 bits.
+pub fn open_aux(flags: &[OpenFlag], mode: Option<u32>) -> u64 {
+    let m = match mode {
+        Some(0) => MODE_ZERO,
+        m => m.unwrap_or(0) as u64,
+    };
+    flag_bits(flags) | (m << 32)
+}
+
+/// The mode an open's `aux` carries: `None` when it names none (`FS_API_SWEEP.md` S-21: an
+/// explicit 0 was taken for none and created the file 0644).
+pub fn open_mode(aux: u64) -> Option<u32> {
+    match aux >> 32 {
+        0 => None,
+        MODE_ZERO => Some(0),
+        m => Some(m as u32),
+    }
+}
+
 // ---------------------------------------------------------------- the VM
 
 #[derive(Debug, Clone, Copy)]
@@ -1708,7 +1731,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 let size = if t.as_written { self.written.get(&t.path).copied() } else { t.size };
                 let pos = if append { size.unwrap_or(0) } else { 0 };
                 self.open.insert(t.path.clone(), FileState { pos, size, as_written: t.as_written, capped: t.capped });
-                let aux = flag_bits(flags) | ((mode.unwrap_or(0) as u64) << 32);
+                let aux = open_aux(flags, *mode);
                 self.emit(OpKind::Open, t, None, 0, 0, 0, aux, expect, false)
             }
             Node::Close(f) => {

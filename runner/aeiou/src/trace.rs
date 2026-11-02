@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 
 use crate::ast::{Advice, Ast, FallocFlag, IoctlRequest, Node, OpenFlag, Whence};
 use crate::endpoint::Place;
-use crate::vm::{flag_bits, Op, OpCtx, OpKind};
+use crate::vm::{open_aux, Op, OpCtx, OpKind};
 
 pub const FORMAT: u64 = 1;
 
@@ -468,7 +468,7 @@ impl TraceFile {
         let built = match op {
             LineOp::Open { fd, path: p, flags, mode, ret, .. } => {
                 oid = Some(*fd);
-                let aux = flag_bits(flags) | ((mode.unwrap_or(0) as u64) << 32);
+                let aux = open_aux(flags, *mode);
                 Op { kind: OpKind::Open, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux, expect: ret.expect(), positioned: false, seed: 0, capped: false }
             }
             LineOp::Close { fd, ret } => Op { kind: OpKind::Close, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },

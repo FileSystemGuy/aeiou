@@ -603,8 +603,7 @@ impl Engine for LoopIo {
                 if !self.supported(opcode::OpenAt::CODE) {
                     return Ok(self.inline_op(sh, t, op));
                 }
-                let mode = (op.aux >> 32) as u32;
-                let mode = if mode == 0 { 0o644 } else { mode };
+                let mode = crate::vm::open_mode(op.aux).unwrap_or(0o644);
                 let mut flags = open_flags(op.aux & 0xffff_ffff);
                 if direct && flags & libc::O_DIRECTORY == 0 {
                     flags |= libc::O_DIRECT;

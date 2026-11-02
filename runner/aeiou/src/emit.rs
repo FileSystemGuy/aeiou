@@ -117,8 +117,8 @@ impl Emitter {
                 put("fd", json!(id));
                 put("path", json!(w.path));
                 put("flags", json!(flags));
-                if w.aux >> 32 != 0 {
-                    put("mode", json!(w.aux >> 32));
+                if let Some(m) = crate::vm::open_mode(w.aux) {
+                    put("mode", json!(m));
                 }
             }
             OpKind::Stat | OpKind::Unlink | OpKind::Rmdir => put("path", json!(w.path)),

@@ -1565,8 +1565,7 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
     let full = |rel: &str| sh.opts.path(rel);
     match op.kind {
         OpKind::Open => {
-            let mode = (op.aux >> 32) as u32;
-            let mode = if mode == 0 { 0o644 } else { mode };
+            let mode = crate::vm::open_mode(op.aux).unwrap_or(0o644);
             let fd = be.open(&full(op.path), op.aux & 0xffff_ffff, mode)?;
             a.opened(sh, op.path, op.aux, fd);
             Ok(0)

@@ -200,7 +200,10 @@ work item of its own.
   `_ => Ok(0)`), and subtracts removals without regard to order (`run.rs:2849, 3003`): a path
   unlinked and created again is dropped from the manifest. *Status: open.*
 - **S-21** (A) An open's explicit mode 0 becomes 0644 (`run.rs:1550`, `uring.rs:606`); absent and
-  0 hash the same (`vm.rs:1711`). *Status: open.*
+  0 hash the same (`vm.rs:1711`). *Status: fixed 2026-11-02: an explicit 0 carries a mark of
+  its own in the mode field (`vm::open_aux`, `open_mode`), so it creates mode 0 on every path
+  and hashes apart from no mode, every other open's `aux` unchanged (no committed abstract or
+  trace names mode 0); test `an_explicit_mode_0_is_mode_0`.*
 - **S-22** (A) `Whence::from_code`, `IoctlRequest::from_code`, `Advice::from_code` end in `_ =>`
   a default (SET, TCGETS, NORMAL): a new variant missing its arm would silently become the
   default. To be exhaustive. *Status: fixed 2026-11-02: every code has its arm and any other
