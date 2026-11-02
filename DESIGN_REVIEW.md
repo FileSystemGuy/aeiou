@@ -8762,6 +8762,37 @@ reads. A synthesized open is an op the run issues and the application made befor
 so a trace node's fingerprint, its dry run's counts, and its digest's motifs include it, which
 the warning says; no committed capture had a descriptor without an open.
 
+
+### 3.93 Every filesystem call and flag, at every layer: the sweep and the user's decisions on it (2026-11-02)
+
+**Why.** A `truncate`, an `O_TRUNC`, and a `close` had been ignored (§3.92); the user asked for
+every operation and flag of the Linux filesystem APIs to be collected and every layer checked
+against them, so the next such oversight is found now rather than later. The method, the
+statuses, the confidence, and the 41 findings are the register `FS_API_SWEEP.md`, which the
+fixes are worked from and which each fix updates.
+
+**What it found, by type.** Calls dropped with no note where the man page promises they are
+counted by name (S-1 to S-4); parsing that loses or corrupts calls (the `(deleted)` descriptor,
+the `io_submit` parse, `openat2`, `RWF_APPEND`; S-5 to S-10); closes, implicit and duplicate and
+inherited, and `close(2)`'s errors (S-11 to S-14); traced errors not reproduced (S-15, S-16);
+bookkeeping blind to what an op means, the worst a create listed for a file that existed, whose
+gate advice deletes the application's input (S-17 to S-28); the object-log reader (S-29 to
+S-36); what `compare` never judges (S-37 to S-39); what the language cannot express (S-40); mmap
+(S-41).
+
+**Decided (the user, 2026-11-02).**
+1. *New ops:* all of S-40, in the abstract and the trace file (contract 0.15). Brief item 58.
+2. *mmap:* the page references that cause I/O are not in an strace; how to capture them (eBPF
+   hooks in the kernel, brief item 54) is designed first, and S-41 stays an open work item.
+3. *`compare`:* yes to all three: a kind present on one side only is a difference; open flags,
+   advice, whence, and ioctl requests are compared; the documents' notes are shown in the
+   verdict (S-37 to S-39).
+4. *A close of a descriptor inherited over a fork* issues its own `close(2)` on replay (S-14).
+5. *A traced error that does not recur on replay* is warned of loudly, not refused: an ENOSPC in
+   the trace may well not reproduce, and the warning says the systems under test differ (S-15).
+6. Group A (the bugs with no design question) is fixed first, test first, one commit per
+   finding or tight group, each updating its status in the register. Brief item 57.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

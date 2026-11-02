@@ -1210,6 +1210,22 @@ numbers; the order is this note's.
     open synthesized at its first use, a loud warning that the trace is incomplete and how, and
     on.
 
+
+57. **The filesystem API sweep's bugs (found 2026-11-02, `FS_API_SWEEP.md`, `DESIGN_REVIEW.md`
+    §3.93; started 2026-11-02).** The findings of group A of the register: calls dropped with
+    no note, parsing that loses calls, implicit and duplicate closes and `close(2)`'s errors,
+    traced errors not reproduced (a loud warning), bookkeeping blind to truncate, unlink,
+    rename, and rmdir, a create listed for a file that existed, the object-log reader. Each fix
+    updates its finding's status in the register.
+
+58. **The calls the abstract cannot express (decided by the user 2026-11-02, §3.93; not
+    started).** Every op of `FS_API_SWEEP.md` S-40 in the abstract and the trace file
+    (contract 0.15): copy, link and symlink and readlink, setattr and xattrs, locks, `syncfs`
+    and `sync_file_range`, `msync`, `readahead` and `madvise`, `access`, `statfs`, `lstat`,
+    `SEEK_DATA`/`SEEK_HOLE`, the rename and `RWF_*` flags, `O_PATH`, `O_TMPFILE`, `F_SETFL`, the
+    IOCB fsyncs and vectored requests, batch deletes; and `compare` judging a kind on one side
+    only, the flags, and the notes (S-37 to S-39). mmap's page references (S-41) wait on item 54.
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS
