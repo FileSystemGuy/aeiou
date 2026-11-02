@@ -2067,7 +2067,7 @@ impl<E: Engine> Loop<E> {
         }
         inst.completed(&l.tf, c.g);
         let ctx = l.base.ctx(&l.idx);
-        t.io.a.settle(&b.op, &ctx, r, ns)?;
+        t.io.a.settle_line(&b.op, &ctx, r, ns)?;
         let ended = match &mut l.prog {
             LaneProg::Lines { next, .. } => {
                 *next += 1;

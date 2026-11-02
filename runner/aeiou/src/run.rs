@@ -563,6 +563,10 @@ pub struct Stats {
     pub lat: BTreeMap<OpKind, LatHist>,
     pub io_ns: u64,
     pub expected_errors: u64,
+    /// The calls a `trace` node's file shows failing that succeeded in this run, by op and
+    /// errno (`mkdir EEXIST`): the system under test differs from the traced one.
+    #[serde(default)]
+    pub unreproduced_errors: BTreeMap<String, u64>,
     pub compute_ns: u64,
     pub barriers: u64,
     pub barrier_wait_ns: u64,
@@ -591,6 +595,9 @@ impl Stats {
         }
         self.io_ns += o.io_ns;
         self.expected_errors += o.expected_errors;
+        for (k, v) in &o.unreproduced_errors {
+            *self.unreproduced_errors.entry(k.clone()).or_insert(0) += v;
+        }
         self.compute_ns += o.compute_ns;
         self.barriers += o.barriers;
         self.barrier_wait_ns += o.barrier_wait_ns;
@@ -1390,6 +1397,16 @@ impl ActorState {
     /// The structural check of an op's result and its recording: a read must return the
     /// computed count, a write its length, `readdir` the computed entries; a failure must be
     /// in the statement's `expect` list.
+    /// `settle` for a line of a `trace` node: a call its file shows failing (`expect` is its
+    /// traced errno) that succeeds here is counted, to be warned of, never refused (§3.93
+    /// item 5); in an abstract, an `expect` is an error allowed, and success is the rule.
+    pub(crate) fn settle_line(&mut self, op: &Op, ctx: &OpCtx, r: std::io::Result<i64>, ns: u64) -> Result<()> {
+        if let (Ok(_), Some(e)) = (&r, op.expect.first()) {
+            *self.st.unreproduced_errors.entry(format!("{} {e}", op.kind.name())).or_insert(0) += 1;
+        }
+        self.settle(op, ctx, r, ns)
+    }
+
     pub(crate) fn settle(&mut self, op: &Op, ctx: &OpCtx, r: std::io::Result<i64>, ns: u64) -> Result<()> {
         let where_ = || {
             let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
@@ -3172,6 +3189,11 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
             writeln!(out, "WARNING: {}", object_warning(o))?;
         }
     }
+    if !s.unreproduced_errors.is_empty() {
+        let n: u64 = s.unreproduced_errors.values().sum();
+        let each: Vec<String> = s.unreproduced_errors.iter().map(|(k, v)| format!("{k} {v}")).collect();
+        writeln!(out, "WARNING: {n} call(s) the trace shows failing succeeded in this run: {}; the system under test differs from the traced one", each.join(", "))?;
+    }
     for (scope, n) in &r.departure_releases {
         writeln!(out, "WARNING: barrier `{scope}` was released {n} time(s) by instances finishing: not every instance hit it the same number of times")?;
     }
@@ -3400,7 +3422,7 @@ impl Runner {
                 let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
                 // the descriptor belongs to the table, not to this lane's own files
                 table.publish(oid, self.a.fds.own.remove(key));
-                self.a.settle(o, ctx, r, ns)
+                self.a.settle_line(o, ctx, r, ns)
             }
             OpKind::Close => {
                 let oid = b_oid.expect("a close has its id");
@@ -3414,12 +3436,12 @@ impl Runner {
                     drop(last);
                     let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
                     self.a.fds.own.remove(key);
-                    return self.a.settle(o, ctx, r, ns);
+                    return self.a.settle_line(o, ctx, r, ns);
                 }
                 let t = Instant::now();
                 let r = last.map_or(Ok(()), crate::backend::close).map(|_| 0);
                 let ns = t.elapsed().as_nanos() as u64;
-                self.a.settle(o, ctx, r, ns)
+                self.a.settle_line(o, ctx, r, ns)
             }
             _ => match b_oid {
                 Some(oid) => {
@@ -3428,11 +3450,11 @@ impl Runner {
                     let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
                     self.a.fds.own.remove(key);
                     table.release(oid);
-                    self.a.settle(o, ctx, r, ns)
+                    self.a.settle_line(o, ctx, r, ns)
                 }
                 None => {
                     let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
-                    self.a.settle(o, ctx, r, ns)
+                    self.a.settle_line(o, ctx, r, ns)
                 }
             },
         }
@@ -3478,7 +3500,7 @@ impl Runner {
             handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (Err(std::io::Error::from_raw_os_error(libc::EIO)), 0))).collect()
         });
         for (b, (r, ns)) in built.iter().zip(results) {
-            self.a.settle(&b.op, ctx, r, ns)?;
+            self.a.settle_line(&b.op, ctx, r, ns)?;
         }
         Ok(())
     }

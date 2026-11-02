@@ -152,6 +152,7 @@ fn stats(s: &Stats, secs: f64) -> Map<String, Value> {
     m.insert("takes".into(), json!(s.takes));
     m.insert("puts".into(), json!(s.puts));
     m.insert("expected_errors".into(), json!(s.expected_errors));
+    m.insert("unreproduced_errors".into(), json!(s.unreproduced_errors));
     m.insert("threads".into(), json!(s.threads));
     m.insert("input_opens".into(), json!(s.input_opens));
     m.insert("warm_opens".into(), json!(s.warm_opens));

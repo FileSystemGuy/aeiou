@@ -1738,7 +1738,7 @@ ops, bytes_read, bytes_written, rates {ops_per_s, read_bytes_per_s, written_byte
 by_kind {open: n, …}, phases {name: {ops, bytes_read, bytes_written, io_ns}},
 latency {kind: {count, sum_ns, mean_ns, p50_ns, p90_ns, p99_ns, p999_ns, max_ns, buckets [[lower_ns, count], …]}},
 compute_ns, steps {compute, delay: hist, slowest_delays [{delay_ns, template, instance, step}]},
-io_ns, barriers, barrier_wait_ns, takes, puts, expected_errors, threads, threads_peak,
+io_ns, barriers, barrier_wait_ns, takes, puts, expected_errors, unreproduced_errors {"op ERRNO": n}, threads, threads_peak,
 input_opens, warm_opens, objects_created, departure_releases {scope: n}, warnings [text],
 counters {…§4…}, io_uring, libaio, mmap (null unless that backend ran), cold [{host, dropped, residency}],
 object {retries, retries_by_cause {cause: n}} (null without an object endpoint; §16, 2026-10-15),
@@ -1847,7 +1847,11 @@ Lines: a header, then one op per line in the order the calls returned.
   inheritance the exporter resolved. A lane may use an open another lane made.
 - **The ops are §2's**, with the schema's field names and enum words (`flags`, `whence`,
   `advice`, `request`), the path relative to the root, and `ret` the traced result: a count
-  (absent when zero) or an errno name, which becomes the op's `expect`. A `read` or `write`
+  (absent when zero) or an errno name, which becomes the op's `expect`; a line whose traced
+  error does not recur is counted by op and errno and warned of after the run
+  (`unreproduced_errors`; "WARNING: N call(s) the trace shows failing succeeded in this run:
+  …"), never refused, since the systems under test differ (2026-11-02, `DESIGN_REVIEW.md`
+  §3.93 item 5; until then accepted silently, `FS_API_SWEEP.md` S-15). A `read` or `write`
   without `offset` is sequential from the open's position, as the application's call was;
   with one it is positioned. `submit` is an `io_submit`: positioned ops issued together and
   reaped before the lane's next line. `readdir` is one line per listing and its entries

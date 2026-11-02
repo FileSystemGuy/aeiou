@@ -626,6 +626,35 @@ fn a_trace_with_synthesized_opens_runs_and_says_it_is_incomplete() {
     }
 }
 
+/// A traced error that does not recur is counted by op and errno and warned of loudly, never
+/// refused (`FS_API_SWEEP.md` S-15, `DESIGN_REVIEW.md` §3.93 item 5): the trace's ENOSPC may
+/// well not reproduce, and the warning says the systems under test differ. One that recurs is
+/// an expected error, as before.
+#[test]
+fn a_traced_error_that_does_not_recur_is_warned_of() {
+    let lines = r#"
+{"aeiou_trace":1,"lanes":1,"creates":[]}
+{"lane":0,"op":"mkdir","path":"d","ret":"EEXIST"}
+{"lane":0,"op":"stat","path":"gone","ret":"ENOENT"}
+"#;
+    let d = tmpdir("unreproduced");
+    let p = abstract_with(&d, lines, Some(1));
+    let (_, model) = leaked(&p, 1);
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    for be in [BackendKind::Sync, BackendKind::Uring] {
+        let _ = std::fs::remove_dir(root.join("d"));
+        let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap();
+        assert_eq!(rep.stats.expected_errors, 1, "{}", be.describe());
+        assert_eq!(rep.stats.unreproduced_errors, [("mkdir EEXIST".to_string(), 1u64)].into_iter().collect(), "{}", be.describe());
+    }
+    let _ = std::fs::remove_dir(root.join("d"));
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["run", p.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--time-scale", "0"]).env_remove("AEIOU_CONFIG").output().unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(out.contains("WARNING: 1 call(s) the trace shows failing succeeded in this run: mkdir EEXIST 1; the system under test differs from the traced one"), "{out}");
+}
+
 /// A read that returned nothing read nothing: one past the end of its file (an HDF5 library
 /// probing for its superblock at 512, 1024, 2048, … of a small file, a `pread` at a stale
 /// size) says the file was no longer than its offset, never that it was at least that long,

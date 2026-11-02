@@ -167,7 +167,9 @@ work item of its own.
 - **S-15** (A, decided §3.93) A traced error that does not recur on replay is accepted
   silently (`run.rs:1396` `Ok` branch never reads `op.expect`; a write that failed with ENOSPC
   replays as a full write; an `O_EXCL` lock file is created). To warn loudly: the SUTs differ.
-  *Status: open.*
+  *Status: fixed 2026-11-02: counted per op and errno (`Stats::unreproduced_errors`, merged
+  across ranks, in the JSON report) and a `WARNING:` line after the run; test
+  `a_traced_error_that_does_not_recur_is_warned_of`.*
 - **S-16** (A) Object log: a 304 Not Modified becomes EIO (`objectlog.rs:42-49, 360`); a failed
   CompleteMultipartUpload or Abort is exported as a successful close (`objectlog.rs:382` passes
   no error). *Status: open.*
