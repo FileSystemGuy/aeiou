@@ -657,9 +657,10 @@ impl Whence {
     /// Back from an op's `aux` (`*whence as u64`).
     pub fn from_code(code: u64) -> Whence {
         match code {
+            0 => Whence::SET,
             1 => Whence::CUR,
             2 => Whence::END,
-            _ => Whence::SET,
+            _ => panic!("whence code {code}: the VM makes these from the variants"),
         }
     }
 }
@@ -672,9 +673,10 @@ pub enum IoctlRequest {
 impl IoctlRequest {
     pub fn from_code(code: u64) -> IoctlRequest {
         match code {
+            0 => IoctlRequest::TCGETS,
             1 => IoctlRequest::FIONREAD,
             2 => IoctlRequest::BLKGETSIZE64,
-            _ => IoctlRequest::TCGETS,
+            _ => panic!("ioctl request code {code}: the VM makes these from the variants"),
         }
     }
 }
@@ -697,8 +699,9 @@ impl Advice {
             2 => Advice::SEQUENTIAL,
             3 => Advice::WILLNEED,
             4 => Advice::DONTNEED,
+            0 => Advice::NORMAL,
             5 => Advice::NOREUSE,
-            _ => Advice::NORMAL,
+            _ => panic!("advice code {code}: the VM makes these from the variants"),
         }
     }
 }

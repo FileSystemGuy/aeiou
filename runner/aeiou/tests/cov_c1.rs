@@ -51,8 +51,12 @@ fn op_codes_come_back_as_the_values_they_were_made_from() {
     for a in [Advice::NORMAL, Advice::RANDOM, Advice::SEQUENTIAL, Advice::WILLNEED, Advice::DONTNEED, Advice::NOREUSE] {
         assert_eq!(Advice::from_code(a as u64), a);
     }
-    // a code no variant has is the default (what `aux` of another kind of op would carry)
-    assert_eq!((Whence::from_code(9), IoctlRequest::from_code(9), Advice::from_code(9)), (Whence::SET, IoctlRequest::TCGETS, Advice::NORMAL));
+    // a code no variant has is a bug that panics, never a default: a variant added without its
+    // arm became `SET`, `TCGETS`, or `NORMAL` silently (FS_API_SWEEP.md S-22); every caller
+    // reads the `aux` of its own kind of op
+    assert!(std::panic::catch_unwind(|| Whence::from_code(9)).is_err());
+    assert!(std::panic::catch_unwind(|| IoctlRequest::from_code(9)).is_err());
+    assert!(std::panic::catch_unwind(|| Advice::from_code(9)).is_err());
 }
 
 #[test]

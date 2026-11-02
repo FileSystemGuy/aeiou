@@ -203,7 +203,9 @@ work item of its own.
   0 hash the same (`vm.rs:1711`). *Status: open.*
 - **S-22** (A) `Whence::from_code`, `IoctlRequest::from_code`, `Advice::from_code` end in `_ =>`
   a default (SET, TCGETS, NORMAL): a new variant missing its arm would silently become the
-  default. To be exhaustive. *Status: open.*
+  default. To be exhaustive. *Status: fixed 2026-11-02: every code has its arm and any other
+  panics (the VM makes the codes; every caller reads its own kind's `aux`); test
+  `op_codes_come_back_as_the_values_they_were_made_from`, which had pinned the default.*
 - **S-23** (A) A trace `truncate` under `--posix mmap` never updates the lane's mapping
   (`run.rs:1622`, `a.fds` is empty in a lane; REFERENCE §13 says otherwise): SIGBUS risk.
   *Status: open.*
