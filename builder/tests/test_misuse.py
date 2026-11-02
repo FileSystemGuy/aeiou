@@ -145,7 +145,8 @@ def test_a_statement_misused_is_refused_by_name(what, misuse, why):
 def test_what_the_misused_forms_build_when_used_right():
     """The forms next to each refusal, built and validated: a single errno, a parameter's
     listing, `count`, channels with put and take, a compute of a distribution, a loop step, a
-    repeat inside a loop named `rep`, ftruncate and fallocate on a posix namespace, and rmdir."""
+    repeat inside a loop named `rep`, ftruncate, fallocate with and without a mode, and truncate
+    by path (contract 0.14) on a posix namespace, and rmdir."""
     k = _kit()
     assert dir(k.P) == ["n", "spf"]
     with k.w.actor("x") as a:
@@ -163,7 +164,9 @@ def test_what_the_misused_forms_build_when_used_right():
         a.write(f, 8)
         a.ftruncate(f, 4)
         a.fallocate(f, 8, offset=0)
+        a.fallocate(f, 4, offset=0, mode=("KEEP_SIZE", "PUNCH_HOLE"))
         a.close(f)
+        a.truncate(f, 2)
         a.mkdir(k.ns.object(k=1))
         a.rmdir(k.ns.object(k=1))
     ast = k.w.build()
@@ -173,10 +176,31 @@ def test_what_the_misused_forms_build_when_used_right():
     assert body[2]["loop"]["body"][2] == {"compute": {"ns": {"draw": {"uniform": {"lo": 1, "hi": 2}}}}}
     # the repeat's generated index does not shadow the author's `rep`
     assert body[3]["loop"]["body"][0]["loop"]["index"] == "rep_1"
-    assert [next(iter(n)) for n in body[5:]] == ["open", "write", "ftruncate", "fallocate", "close", "mkdir", "rmdir"]
+    assert [next(iter(n)) for n in body[5:]] == ["open", "write", "ftruncate", "fallocate", "fallocate", "close",
+                                                 "truncate", "mkdir", "rmdir"]
+    assert "mode" not in body[8]["fallocate"] and body[9]["fallocate"]["mode"] == ["KEEP_SIZE", "PUNCH_HOLE"]
+    assert body[11]["truncate"]["len"] == 2
 
 
 def test_a_workload_without_actors_is_refused():
     w = Workload("empty")
     with pytest.raises(BuildError, match="workload empty: no actors"):
         w.build()
+
+
+def test_a_fallocate_mode_the_kernel_refuses_or_a_truncate_of_a_dataset_is_refused():
+    """V29, in the reference checker's words (contract 0.14): a flag the schema does not know,
+    a flag twice, PUNCH_HOLE without KEEP_SIZE, two operations, KEEP_SIZE with one that sizes
+    the file itself; and a truncate is a changing op (V12)."""
+    k = _kit()
+    with k.w.actor("x") as a:
+        f = a.let("f", k.ns.object(k=0))
+        a.open(f, "WRONLY|CREAT")
+        for mode, why in [(("HOLE",), "mode flag 'HOLE'"), (("KEEP_SIZE", "KEEP_SIZE"), "a flag twice"),
+                          (("PUNCH_HOLE",), "PUNCH_HOLE without KEEP_SIZE: a hole is punched only with KEEP_SIZE \\(V29\\)"),
+                          (("ZERO_RANGE", "PUNCH_HOLE"), "ZERO_RANGE and PUNCH_HOLE together"),
+                          (("KEEP_SIZE", "INSERT_RANGE"), "INSERT_RANGE with KEEP_SIZE: it takes no other flag")]:
+            with pytest.raises(BuildError, match=why):
+                a.fallocate(f, 4, mode=mode)
+        with pytest.raises(BuildError, match="truncate on dataset d: datasets are read-only"):
+            a.truncate(k.ds.pick(), 0)

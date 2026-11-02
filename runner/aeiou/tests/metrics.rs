@@ -120,7 +120,7 @@ fn small_file_training_is_sequential_and_flat() {
 fn extents_by_hand() {
     use serde_json::{json, Value};
     let ast = json!({
-        "ast": "0.13", "name": "t",
+        "ast": "0.14", "name": "t",
         "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id}", "count": 1, "size": {"const": 1048576}, "seed": 1}},
         "actors": {"gpu": {"body": [
             {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},

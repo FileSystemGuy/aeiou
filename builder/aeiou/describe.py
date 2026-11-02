@@ -30,7 +30,7 @@ from .pattern import Pattern
 
 # The kinds the schema defines (`schema/abstract-ast.schema.json`); a test holds these to it.
 OPS = ("open", "close", "read", "write", "lseek", "ioctl", "fadvise", "fstat", "stat", "fsync", "fdatasync",
-       "unlink", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
+       "unlink", "truncate", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
 STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond", "choose",
               "phase", "trace") + OPS
 DISTS = ("const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture")
@@ -729,10 +729,11 @@ class Describer:
                 ln = self.const(a["len"]) if "len" in a else None
                 rng = f", {'to the end' if ln == 0 else self.value(a['len'], 'bytes')} from {self.value(a.get('offset', 0), 'bytes')}"
             return f"`posix_fadvise` {f} `{a['advice']}`{rng}{expect}"
-        if k == "ftruncate":
-            return f"`ftruncate` {f} to {self.value(a['len'], 'bytes')}{expect}"
+        if k in ("truncate", "ftruncate"):
+            return f"`{k}` {f} to {self.value(a['len'], 'bytes')}{expect}"
         if k == "fallocate":
-            return f"`fallocate` {f}: {self.value(a['len'], 'bytes')} from {self.value(a.get('offset', 0), 'bytes')}{expect}"
+            mode = f" `{'|'.join(a['mode'])}`" if a.get("mode") else ""
+            return f"`fallocate`{mode} {f}: {self.value(a['len'], 'bytes')} from {self.value(a.get('offset', 0), 'bytes')}{expect}"
         if k == "rename":
             return f"`rename` {self.handle(a['from'])} to {self.handle(a['to'])}{expect}"
         if k == "readdir":

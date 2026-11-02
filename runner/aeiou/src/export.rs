@@ -17,6 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::ast::FallocFlag;
 use crate::metrics::{Opts as MetricsOpts, TraceMetrics};
 use crate::strace::{self, for_each_line, int0, normpath, Seen, Tracer, When, R, W};
 use crate::trace::{Line, LineOp, Ret};
@@ -58,6 +59,15 @@ fn advice(a: &str) -> Option<&'static str> {
     })
 }
 
+/// `fallocate`'s mode as strace prints it (`0`, `FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE`, a
+/// bit it has no name for in hex): the flags' names, or `None` for a bit with no flag.
+fn falloc_mode(m: &str) -> Option<Vec<&'static str>> {
+    if let Some(n) = int0(m) {
+        return FallocFlag::of_mode(u64::try_from(n).ok()?).map(|f| f.into_iter().map(FallocFlag::name).collect());
+    }
+    m.split('|').map(|p| p.trim().strip_prefix("FALLOC_FL_").and_then(FallocFlag::from_name).map(FallocFlag::name)).collect()
+}
+
 /// A request of a `submit` line.
 #[derive(Debug, Clone)]
 pub struct Member {
@@ -86,6 +96,8 @@ pub struct Event {
     pub whence: Option<String>,
     pub advice: Option<&'static str>,
     pub request: Option<String>,
+    /// A `fallocate`'s mode flags, written as its `mode` (none: mode 0).
+    pub falloc: Option<Vec<&'static str>>,
     /// A count other than 0, or an errno's name.
     pub ret: Value,
     pub ops: Option<Vec<Member>>,
@@ -127,6 +139,13 @@ impl Event {
         }
         if let Some(l) = self.len {
             let _ = write!(out, r#","len":{l}"#);
+        }
+        if let Some(f) = &self.falloc {
+            out.extend_from_slice(br#","mode":["#);
+            for (i, x) in f.iter().enumerate() {
+                let _ = write!(out, r#"{}"{x}""#, if i > 0 { "," } else { "" });
+            }
+            out.push(b']');
         }
         if let Some(w) = &self.whence {
             out.extend_from_slice(br#","whence":"#);
@@ -392,6 +411,7 @@ impl Exporter {
                 "whence" => e.whence = v.as_str().map(str::to_string),
                 "advice" => e.advice = v.as_str().and_then(advice),
                 "request" => e.request = v.as_str().map(str::to_string),
+                "falloc" => e.falloc = v.as_array().map(|a| a.iter().filter_map(|x| FallocFlag::from_name(x.as_str()?)).map(FallocFlag::name).collect()),
                 _ => {}
             }
         }
@@ -455,8 +475,19 @@ impl Exporter {
             },
             "fallocate" => match (int(2), int(3)) {
                 (Some(o), Some(l)) => {
+                    // the mode is the call: a hole punched, a range collapsed, is never replayed
+                    // as an allocation (DESIGN_REVIEW.md §3.92); one this exporter cannot name
+                    // is left out, noted, never changed
+                    let Some(mode) = a.get(1).and_then(|m| falloc_mode(m)) else {
+                        self.note("calls_not_exported", 1);
+                        self.note(&format!("not_exported:{call}:mode {}", a.get(1).map(String::as_str).unwrap_or("")), 1);
+                        return;
+                    };
                     fields.push(("offset", json!(o)));
                     fields.push(("len", json!(l)));
+                    if !mode.is_empty() {
+                        fields.push(("falloc", json!(mode)));
+                    }
                 }
                 _ => return unparsed(self),
             },
@@ -494,11 +525,6 @@ impl Exporter {
 
     #[allow(clippy::too_many_arguments)]
     pub fn path_op(&mut self, when: When, kind: &'static str, call: &str, path: &str, a: &[String], pi: usize, to: Option<&str>, err: Option<&str>) -> Result<()> {
-        if call == "truncate" {
-            self.note("calls_not_exported", 1);
-            self.note("not_exported:truncate", 1);
-            return Ok(());
-        }
         let rel = self.rel(path)?;
         let to_rel = to.map(|t| self.rel(t)).transpose()?;
         if kind != "stat" && (rel == "." || to_rel.as_deref() == Some(".")) {
@@ -515,6 +541,17 @@ impl Exporter {
                 None => {
                     self.note("calls_not_exported", 1);
                     self.note("not_exported:rename:destination outside the root", 1);
+                    return Ok(());
+                }
+            }
+        } else if kind == "truncate" {
+            // the new size: a truncate is the filesystem's work of taking a file's extents apart
+            // and reclaiming their space, never left out (DESIGN_REVIEW.md §3.92)
+            match a.get(pi + 1).and_then(|x| int0(x)) {
+                Some(n) => e.len = Some(n),
+                None => {
+                    self.note("calls_not_exported", 1);
+                    self.note(&format!("not_exported:{call}:unparsed"), 1);
                     return Ok(());
                 }
             }
@@ -751,6 +788,7 @@ impl FileMetrics {
             LineOp::Ioctl { .. } => self.m.op("ioctl"),
             LineOp::Fadvise { .. } => self.m.op("fadvise"),
             LineOp::Ftruncate { .. } => self.m.op("ftruncate"),
+            LineOp::Truncate { .. } => self.m.op("truncate"),
             LineOp::Fallocate { .. } => self.m.op("fallocate"),
             LineOp::Stat { .. } => self.m.op("stat"),
             LineOp::Unlink { .. } => self.m.op("unlink"),

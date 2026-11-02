@@ -1,6 +1,6 @@
 # The AST contract
 
-Version `0.13`, 2026-10-23 (~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
+Version `0.14`, 2026-11-02 (~~`0.13`, 2026-10-23~~; ~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -127,7 +127,8 @@ backend*), `params`, `datasets`, `namespaces`, `actors`, `provenance`.
 | `lseek {file, offset, whence}` | `SET`, `CUR`, `END`. |
 | `ioctl {file, request, expect}` | `TCGETS` (Python's isatty check), `FIONREAD`, `BLKGETSIZE64`. |
 | `fadvise {file, advice, offset, len, expect}` | `posix_fadvise` on an open file: `NORMAL RANDOM SEQUENTIAL WILLNEED DONTNEED NOREUSE`; `len` 0 or absent means to EOF. `WILLNEED` starts readahead on NFS, and pyarrow issues one before every coalesced read (0.2). |
-| `ftruncate {file, len, expect}`, `fallocate {file, offset, len, expect}` | |
+| `truncate {file, len, expect}` | `truncate(2)` of the path, open or not (contract 0.14, `DESIGN_REVIEW.md` §3.92): a changing op, as `ftruncate`. |
+| `ftruncate {file, len, expect}`, `fallocate {file, offset, len, mode, expect}` | `fallocate`'s `mode` (contract 0.14) is its flags by name, `KEEP_SIZE`, `PUNCH_HOLE`, `COLLAPSE_RANGE`, `ZERO_RANGE`, `INSERT_RANGE`, `UNSHARE_RANGE`, `WRITE_ZEROES`; absent or empty, mode 0 (allocate and extend), the only mode before 0.14; a mode the kernel takes (V29); part of the op and of the fingerprint. |
 | `mkdir {dir, mode, expect}`, `rmdir {dir, expect}`, `rename {from, to, expect}` | |
 | `readdir {dir, repeat: until_end, expect}` | `getdents64` until exhausted. |
 
@@ -324,7 +325,7 @@ checkers enforce.
   write the same files. The count is an expression, so `aeiou run` checks it with the
   resolved counts before the gate (`runner/aeiou/src/trace.rs`); neither validator does.
 - **V12 Datasets are read-only** (added 2026-09-30; `mkdir` and `rmdir` 2026-10-14, as the
-  builder and V14 already refused them). No `write`, `ftruncate`, `fallocate`, `unlink`,
+  builder and V14 already refused them; `truncate` 2026-11-02, contract 0.14). No `write`, `truncate`, `ftruncate`, `fallocate`, `unlink`,
   `rename`, `mkdir`, or `rmdir` may target a dataset file, directory, sample, region, or chunk
   (through a binding or directly), and `open` on one may not carry `WRONLY`, `RDWR`, `CREAT`,
   `TRUNC`, or `APPEND`. A binding may name what its value may be where it is bound: an alias's
@@ -341,7 +342,7 @@ checkers enforce.
 
 - **V14 Input namespaces are read-only** (added 2026-09-30). A namespace declared
   `input: true` holds objects a previous run wrote; the run that declares it reads them and
-  may not `write`, `ftruncate`, `fallocate`, `unlink`, `rename`, `mkdir`, or `rmdir` an
+  may not `write`, `truncate`, `ftruncate`, `fallocate`, `unlink`, `rename`, `mkdir`, or `rmdir` an
   object of it, nor `open` one with a write-mode flag, through a binding that may name one as
   V12 reads it. Namespaces that share a root share its
   manifest (§6), so they must agree on `input`. The runner requires the writer's
@@ -374,7 +375,7 @@ checkers enforce.
   s3` is made by one upload: the writes of one handle, each at the end of the last, sent
   at its `close` (`runner/REFERENCE.md` §16). So the forms that rewrite, extend, or read an
   object in place have no object form and are refused: `open` with `APPEND`, `RDWR`, or
-  `EXCL` (a conditional create the engine does not send), `ftruncate`, and `fallocate`. The
+  `EXCL` (a conditional create the engine does not send), `truncate` (contract 0.14), `ftruncate`, and `fallocate`. The
   validator sees the ops, not the offsets, which are positional expressions: a write the
   upload has not reached fails the run when it comes (`ESPIPE`), as a structural check does.
   Revised 2026-10-15 (RC1 review), no AST changed: an upload is begun by `WRONLY` alone,
@@ -490,6 +491,14 @@ checkers enforce.
   2026-10-22, contract 0.11; namespaces 2026-10-23, contract 0.12). The `of` of a `{"from":
   "st_blksize"}` default names a dataset or a namespace of the abstract, not a name declared as
   both (which would not say whose storage), and its `fallback` is a positive byte count.
+- **V29 a `fallocate` mode is one the kernel takes** (added 2026-11-02, contract 0.14, no
+  committed AST declares a mode). As `vfs_fallocate` (Linux `fs/open.c`) refuses a mode with
+  `EOPNOTSUPP`, checked against its source the same day: at most one operation besides
+  `KEEP_SIZE` (the modes are exclusive), `PUNCH_HOLE` only with `KEEP_SIZE`, and no `KEEP_SIZE`
+  with `COLLAPSE_RANGE`, `INSERT_RANGE`, or `WRITE_ZEROES`, which size the file themselves. A
+  flag twice is refused by the schema. What a filesystem supports (`COLLAPSE_RANGE` on block
+  boundaries, `WRITE_ZEROES` on a device that stores zeroes) is the run's, as any failed op:
+  the mode is issued as written, never changed to one the storage takes.
 
 Contract 0.11 also states what V3, V23, and V27 make of a **required** parameter: its declared
 `kind` is the kind V23 and V27 judge (an `elem` of a required array its `items`), and V3,
@@ -758,3 +767,9 @@ results are compared by.
   distance, a value of the load. A 0.12 document is a 0.13 document with the version changed.
   Every committed AST was regenerated; no fingerprint and no dataset id changed. Reasoning in
   `DESIGN_REVIEW.md` §3.78.
+- **0.14** (2026-11-02): the `truncate` op, `truncate(2)` by path, and `fallocate`'s `mode`
+  with rule V29 (§3, §4), so that an abstract can say every call that frees or moves a file's
+  space, which a trace's export and the `trace` node now keep too. A 0.13 document is a 0.14
+  document with the version changed (its `fallocate`s mode 0). Every committed AST was
+  regenerated; no fingerprint and no dataset id changed (a new op kind is numbered after the
+  others, and mode 0 hashes as before). Reasoning in `DESIGN_REVIEW.md` §3.92.

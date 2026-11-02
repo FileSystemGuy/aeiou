@@ -27,7 +27,7 @@
 //! a `DELETE` (a handle open for writing on the path then makes no object at its close, as
 //! POSIX leaves no file), `rename` a copy (one `CopyObject`: at most 5 GiB on S3) and a
 //! `DELETE` (not atomic), `mkdir` and `rmdir` send nothing
-//! (a prefix is no object), and `ftruncate`, `fallocate`, and `O_APPEND` are refused by V18
+//! (a prefix is no object), and `truncate`, `ftruncate`, `fallocate`, and `O_APPEND` are refused by V18
 //! before a run (`validate.rs`), and here with `EOPNOTSUPP` should one come.
 //!
 //! **Threads.** One multi-thread tokio runtime per process, built on the first object call
@@ -378,6 +378,7 @@ pub(crate) fn start<'a>(store: &Arc<Store>, rest: String, sh: &crate::run::Share
         }
         OpKind::Mkdir | OpKind::Rmdir => Step::Done(Ok(0)),
         OpKind::Ftruncate => refused("ftruncate"),
+        OpKind::Truncate => refused("truncate"),
         OpKind::Fallocate => refused("fallocate"),
     }
 }

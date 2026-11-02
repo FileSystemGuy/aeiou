@@ -725,7 +725,7 @@ fn path_op_of(name: &str) -> Option<(&'static str, Option<usize>, usize)> {
         "newfstatat" | "statx" => ("stat", Some(0), 1),
         "unlink" => ("unlink", None, 0),
         "unlinkat" => ("unlink", Some(0), 1),
-        "truncate" => ("ftruncate", None, 0),
+        "truncate" => ("truncate", None, 0),
         "mkdir" => ("mkdir", None, 0),
         "mkdirat" => ("mkdir", Some(0), 1),
         "rmdir" => ("rmdir", None, 0),
@@ -1513,7 +1513,10 @@ impl Tracer {
                 if self.extent.contains_key(p) {
                     let v = match name {
                         "ftruncate" => Some(a.get(1).and_then(|x| int0(x))),
-                        "fallocate" if a.get(1).map(String::as_str) == Some("0") => {
+                        // the size a mode leaves: a hole punched, a range kept, leaves it; a range
+                        // collapsed or inserted moves it by the length
+                        "fallocate" if a.get(1).is_some_and(|m| m.contains("COLLAPSE_RANGE") || m.contains("INSERT_RANGE")) => Some(None),
+                        "fallocate" if a.get(1).is_some_and(|m| m == "0" || (m == "FALLOC_FL_ZERO_RANGE")) => {
                             Some(match (a.get(2).and_then(|x| int0(x)), a.get(3).and_then(|x| int0(x))) {
                                 (Some(o), Some(l)) => Some(self.extent[p].max(o + l)),
                                 _ => None,

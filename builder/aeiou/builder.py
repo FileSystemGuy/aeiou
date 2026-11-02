@@ -7,6 +7,7 @@ Python control flow runs at build time and generates structure; cursor control f
 """
 from __future__ import annotations
 
+import builtins
 import contextlib
 import math
 import re
@@ -23,6 +24,22 @@ OPEN_FLAGS = ("RDONLY", "WRONLY", "RDWR", "CREAT", "TRUNC", "EXCL", "APPEND", "C
               "DIRECTORY", "DIRECT", "SYNC", "DSYNC", "NOATIME", "NOFOLLOW")
 IOCTLS = ("TCGETS", "FIONREAD", "BLKGETSIZE64")
 ADVICE = ("NORMAL", "RANDOM", "SEQUENTIAL", "WILLNEED", "DONTNEED", "NOREUSE")
+FALLOC_FLAGS = ("KEEP_SIZE", "PUNCH_HOLE", "COLLAPSE_RANGE", "ZERO_RANGE", "INSERT_RANGE", "UNSHARE_RANGE",
+                "WRITE_ZEROES")
+
+
+def falloc_refused(mode):
+    """Why a `fallocate` mode is not one the kernel takes (`vfs_fallocate`), in the reference
+    checker's words (schema/check.py, validate.rs), or None (V29)."""
+    ops = [f for f in mode if f != "KEEP_SIZE"]
+    keep = "KEEP_SIZE" in mode
+    if builtins.len(ops) > 1:
+        return f"{ops[0]} and {ops[1]} together: a mode is at most one operation"
+    if ops == ["PUNCH_HOLE"] and not keep:
+        return "PUNCH_HOLE without KEEP_SIZE: a hole is punched only with KEEP_SIZE"
+    if ops and ops[0] in ("COLLAPSE_RANGE", "INSERT_RANGE", "WRITE_ZEROES") and keep:
+        return f"{ops[0]} with KEEP_SIZE: it takes no other flag"
+    return None
 LAYOUTS = ("whole", "chunked", "compound", "array")
 ACCESSES = ("map", "stream", "indexed")
 FRAMING_KEYS = ("unit", "file_header", "file_header_per_sample", "file_header_per_unit", "file_footer",
@@ -222,7 +239,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.13"
+    AST_VERSION = "0.14"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -1115,18 +1132,37 @@ class Cursor:
                              "len": None if len is None else ast_of(lift(len, "fadvise len")),
                              "expect": _expect(expect)})
 
+    def truncate(self, file, len, *, expect=None):
+        """`truncate(2)` of a path, open or not (contract 0.14): a changing op, as `ftruncate`."""
+        self._read_only(file, "truncate")
+        self._once_in_order(file, "truncate")
+        self._op("truncate", {"file": _handle(file).ast(), "len": ast_of(lift(len, "len")),
+                              "expect": _expect(expect)})
+
     def ftruncate(self, file, len, *, expect=None):
         self._read_only(file, "ftruncate")
         self._once_in_order(file, "ftruncate")
         self._op("ftruncate", {"file": _handle(file).ast(), "len": ast_of(lift(len, "len")),
                                "expect": _expect(expect)})
 
-    def fallocate(self, file, len, *, offset=None, expect=None):
+    def fallocate(self, file, len, *, offset=None, mode=(), expect=None):
+        """`fallocate(2)`; `mode` its flags by name (contract 0.14: `KEEP_SIZE`, `PUNCH_HOLE`, ...;
+        none, mode 0, allocates and extends), a mode the kernel takes (V29)."""
         self._read_only(file, "fallocate")
         self._once_in_order(file, "fallocate")
+        mode = list(mode)
+        bad = [f for f in mode if f not in FALLOC_FLAGS]
+        if bad:
+            raise BuildError(f"fallocate mode flag {bad[0]!r}: one of {FALLOC_FLAGS}")
+        if builtins.len(set(mode)) != builtins.len(mode):
+            raise BuildError(f"fallocate mode {mode}: a flag twice")
+        why = falloc_refused(mode)
+        if why:
+            raise BuildError(f"fallocate mode: {why} (V29)")
         self._op("fallocate", {"file": _handle(file).ast(),
                                "offset": None if offset is None else ast_of(lift(offset, "offset")),
-                               "len": ast_of(lift(len, "len")), "expect": _expect(expect)})
+                               "len": ast_of(lift(len, "len")), "mode": mode or None,
+                               "expect": _expect(expect)})
 
     def mkdir(self, dir, *, mode: int | None = None, expect=None):
         self._read_only(dir, "mkdir")

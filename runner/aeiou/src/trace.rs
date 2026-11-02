@@ -31,7 +31,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::ast::{Advice, Ast, IoctlRequest, Node, OpenFlag, Whence};
+use crate::ast::{Advice, Ast, FallocFlag, IoctlRequest, Node, OpenFlag, Whence};
 use crate::endpoint::Place;
 use crate::vm::{flag_bits, Op, OpCtx, OpKind};
 
@@ -95,7 +95,8 @@ pub enum LineOp {
     Ioctl { fd: usize, request: IoctlRequest, #[serde(default)] ret: Ret },
     Fadvise { fd: usize, #[serde(default)] offset: i64, #[serde(default)] len: i64, advice: Advice, #[serde(default)] ret: Ret },
     Ftruncate { fd: usize, len: i64, #[serde(default)] ret: Ret },
-    Fallocate { fd: usize, #[serde(default)] offset: i64, len: i64, #[serde(default)] ret: Ret },
+    Truncate { path: String, len: i64, #[serde(default)] ret: Ret },
+    Fallocate { fd: usize, #[serde(default)] offset: i64, len: i64, #[serde(default)] mode: Vec<FallocFlag>, #[serde(default)] ret: Ret },
     Stat { path: String, #[serde(default)] ret: Ret },
     Unlink { path: String, #[serde(default)] ret: Ret },
     Mkdir { path: String, #[serde(default)] mode: Option<u32>, #[serde(default)] ret: Ret },
@@ -329,7 +330,7 @@ impl TraceFile {
                     continue;
                 }
                 match op {
-                    LineOp::Stat { path, ret } | LineOp::Unlink { path, ret } | LineOp::Rmdir { path, ret } => {
+                    LineOp::Stat { path, ret } | LineOp::Unlink { path, ret } | LineOp::Truncate { path, ret, .. } | LineOp::Rmdir { path, ret } => {
                         if !matches!(ret, Ret::Err(_)) {
                             input(path, &created, &mut inputs, &mut seen_input);
                         }
@@ -396,7 +397,7 @@ impl TraceFile {
                     LineOp::Close { fd, .. } | LineOp::Fsync { fd, .. } | LineOp::Fdatasync { fd, .. } => one(&self.opens[*fd].path, writable[*fd], &mut intern),
                     LineOp::Read { fd, .. } | LineOp::Lseek { fd, .. } | LineOp::Fstat { fd, .. } | LineOp::Readdir { fd, .. } | LineOp::Ioctl { fd, .. } | LineOp::Fadvise { fd, .. } => one(&self.opens[*fd].path, false, &mut intern),
                     LineOp::Stat { path, .. } => one(path, false, &mut intern),
-                    LineOp::Unlink { path, .. } | LineOp::Mkdir { path, .. } | LineOp::Rmdir { path, .. } => one(path, true, &mut intern),
+                    LineOp::Unlink { path, .. } | LineOp::Truncate { path, .. } | LineOp::Mkdir { path, .. } | LineOp::Rmdir { path, .. } => one(path, true, &mut intern),
                     LineOp::Rename { path, to, .. } => [Some((intern(path), true)), Some((intern(to), true))],
                     LineOp::Submit { .. } => [None, None],
                 };
@@ -466,8 +467,9 @@ impl TraceFile {
             LineOp::Ioctl { fd, request, ret } => Op { kind: OpKind::Ioctl, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: *request as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Fadvise { fd, offset, len, advice, ret } => Op { kind: OpKind::Fadvise, path: path(fd), path2: None, offset: *offset, len: *len, bytes: 0, aux: *advice as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Ftruncate { fd, len, ret } => Op { kind: OpKind::Ftruncate, path: path(fd), path2: None, offset: 0, len: *len, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
-            LineOp::Fallocate { fd, offset, len, ret } => Op { kind: OpKind::Fallocate, path: path(fd), path2: None, offset: *offset, len: *len, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Fallocate { fd, offset, len, mode, ret } => Op { kind: OpKind::Fallocate, path: path(fd), path2: None, offset: *offset, len: *len, bytes: 0, aux: FallocFlag::mode(mode), expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Stat { path: p, ret } => Op { kind: OpKind::Stat, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Truncate { path: p, len, ret } => Op { kind: OpKind::Truncate, path: p, path2: None, offset: 0, len: *len, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Unlink { path: p, ret } => Op { kind: OpKind::Unlink, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Mkdir { path: p, mode, ret } => Op { kind: OpKind::Mkdir, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: mode.unwrap_or(0o777) as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Rmdir { path: p, ret } => Op { kind: OpKind::Rmdir, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
@@ -645,7 +647,7 @@ fn check_paths(name: &str, line: usize, op: &LineOp) -> Result<()> {
     match op {
         LineOp::Open { path, flags, .. } => check_path(name, line, path, !flags.contains(&OpenFlag::CREAT) && !flags.contains(&OpenFlag::TRUNC)),
         LineOp::Stat { path, .. } => check_path(name, line, path, true),
-        LineOp::Unlink { path, .. } | LineOp::Mkdir { path, .. } | LineOp::Rmdir { path, .. } => check_path(name, line, path, false),
+        LineOp::Unlink { path, .. } | LineOp::Truncate { path, .. } | LineOp::Mkdir { path, .. } | LineOp::Rmdir { path, .. } => check_path(name, line, path, false),
         LineOp::Rename { path, to, .. } => {
             check_path(name, line, path, false)?;
             check_path(name, line, to, false)

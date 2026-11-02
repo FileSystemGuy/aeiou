@@ -845,7 +845,7 @@ same as under a directory.
 | `unlink` | `DELETE` (a missing key is no error, as S3 has it) |
 | `rename` | a copy on the server and a `DELETE` of the source; not atomic; an object over 5 GiB, which one `CopyObject` cannot copy, fails with `EFBIG` |
 | `lseek`, `fadvise`, `fsync`, `fdatasync`, `ioctl`, `mkdir`, `rmdir` | none (an `ioctl` answers as for a regular file: `TCGETS` is `ENOTTY`; a prefix is no object) |
-| `O_APPEND`, `O_RDWR`, `O_EXCL`, `O_CREAT` or `O_TRUNC` without `O_WRONLY`, `ftruncate`, `fallocate`; an open for writing with no `close` after it | refused by rule V18 at `aeiou check` (**aeiou-abstract**(7)) |
+| `O_APPEND`, `O_RDWR`, `O_EXCL`, `O_CREAT` or `O_TRUNC` without `O_WRONLY`, `truncate`, `ftruncate`, `fallocate`; an open for writing with no `close` after it | refused by rule V18 at `aeiou check` (**aeiou-abstract**(7)) |
 
 The requests go over ordinary sockets (`epoll`) on the engine's `--object-threads` tokio
 workers, whatever `--posix` says; the run prints `s3 engine: object_store VERSION on tokio

@@ -5,7 +5,7 @@
     {
       "name": "parquet_stream",
       "abstract": "input-pipeline/stream/parquet/parquet_stream.ast.json",
-      "ast_sha256": "444efde72b074b8dcfff9ee4abb5810a630ff8bc5ec466b022de795d91d179d2",
+      "ast_sha256": "44a8984833a1dbdbbc6b7ac7cf221f85f914a63507a48c10319ea4f5ac9b1aa0",
       "params": {
         "batch": {"default": 256},
         "cycle": {"default": 4},

@@ -703,6 +703,8 @@ impl Engine for LoopIo {
                 t.cpath = Some(c);
                 e
             }
+            // no opcode takes a path: issued inline, as the application would call it
+            OpKind::Truncate => return Ok(self.inline_op(sh, t, op)),
             OpKind::Ftruncate => {
                 if !self.supported(opcode::Ftruncate::CODE) {
                     return Ok(self.inline_op(sh, t, op));
@@ -715,7 +717,7 @@ impl Engine for LoopIo {
                     return Ok(self.inline_op(sh, t, op));
                 }
                 let f = try_fd!(t);
-                opcode::Fallocate::new(f, op.len as u64).offset(op.offset as u64).mode(0).build()
+                opcode::Fallocate::new(f, op.len as u64).offset(op.offset as u64).mode(op.aux as i32).build()
             }
             OpKind::Mkdir => {
                 if !self.supported(opcode::MkDirAt::CODE) {

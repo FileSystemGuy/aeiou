@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.13";
+pub const AST_VERSION: &str = "0.14";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -703,6 +703,84 @@ impl Advice {
     }
 }
 
+/// A `fallocate(2)` mode flag, with Linux's bit (contract 0.14, `DESIGN_REVIEW.md` §3.92): no
+/// flag allocates and extends the file; `KEEP_SIZE` allocates past its end without extending it;
+/// `PUNCH_HOLE` (with `KEEP_SIZE`) frees the range; `ZERO_RANGE` zeroes it; `COLLAPSE_RANGE` and
+/// `INSERT_RANGE` remove or insert it, moving what follows; `UNSHARE_RANGE` unshares shared
+/// extents; `WRITE_ZEROES` writes zeroes the device stores as such.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[allow(non_camel_case_types)]
+pub enum FallocFlag {
+    KEEP_SIZE,
+    PUNCH_HOLE,
+    COLLAPSE_RANGE,
+    ZERO_RANGE,
+    INSERT_RANGE,
+    UNSHARE_RANGE,
+    WRITE_ZEROES,
+}
+
+impl FallocFlag {
+    pub const ALL: [FallocFlag; 7] = [FallocFlag::KEEP_SIZE, FallocFlag::PUNCH_HOLE, FallocFlag::COLLAPSE_RANGE, FallocFlag::ZERO_RANGE, FallocFlag::INSERT_RANGE, FallocFlag::UNSHARE_RANGE, FallocFlag::WRITE_ZEROES];
+
+    /// The flag's bit in the `mode` argument (`linux/falloc.h`).
+    pub fn bit(self) -> u64 {
+        match self {
+            FallocFlag::KEEP_SIZE => 0x01,
+            FallocFlag::PUNCH_HOLE => 0x02,
+            FallocFlag::COLLAPSE_RANGE => 0x08,
+            FallocFlag::ZERO_RANGE => 0x10,
+            FallocFlag::INSERT_RANGE => 0x20,
+            FallocFlag::UNSHARE_RANGE => 0x40,
+            FallocFlag::WRITE_ZEROES => 0x80,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            FallocFlag::KEEP_SIZE => "KEEP_SIZE",
+            FallocFlag::PUNCH_HOLE => "PUNCH_HOLE",
+            FallocFlag::COLLAPSE_RANGE => "COLLAPSE_RANGE",
+            FallocFlag::ZERO_RANGE => "ZERO_RANGE",
+            FallocFlag::INSERT_RANGE => "INSERT_RANGE",
+            FallocFlag::UNSHARE_RANGE => "UNSHARE_RANGE",
+            FallocFlag::WRITE_ZEROES => "WRITE_ZEROES",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<FallocFlag> {
+        FallocFlag::ALL.into_iter().find(|f| f.name() == name)
+    }
+
+    /// The `mode` argument of a set of flags.
+    pub fn mode(flags: &[FallocFlag]) -> u64 {
+        flags.iter().fold(0, |m, f| m | f.bit())
+    }
+
+    /// The flags of a `mode` argument, in their order; `None` when it has a bit no flag is.
+    pub fn of_mode(mode: u64) -> Option<Vec<FallocFlag>> {
+        let flags: Vec<FallocFlag> = FallocFlag::ALL.into_iter().filter(|f| mode & f.bit() != 0).collect();
+        (FallocFlag::mode(&flags) == mode).then_some(flags)
+    }
+
+    /// Why a set of flags is not a mode `fallocate(2)` takes, as `vfs_fallocate` refuses it
+    /// (`EOPNOTSUPP` or `EINVAL`): at most one operation, `PUNCH_HOLE` with `KEEP_SIZE`, and
+    /// no `KEEP_SIZE` with an operation that changes the size by itself.
+    pub fn refused(flags: &[FallocFlag]) -> Option<String> {
+        use FallocFlag::*;
+        let ops: Vec<FallocFlag> = flags.iter().copied().filter(|f| *f != KEEP_SIZE).collect();
+        let keep = flags.contains(&KEEP_SIZE);
+        if ops.len() > 1 {
+            return Some(format!("{} and {} together: a mode is at most one operation", ops[0].name(), ops[1].name()));
+        }
+        match ops.first() {
+            Some(PUNCH_HOLE) if !keep => Some("PUNCH_HOLE without KEEP_SIZE: a hole is punched only with KEEP_SIZE".into()),
+            Some(f @ (COLLAPSE_RANGE | INSERT_RANGE | WRITE_ZEROES)) if keep => Some(format!("{} with KEEP_SIZE: it takes no other flag", f.name())),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum Repeat {
@@ -774,8 +852,9 @@ pub enum Node {
     Fsync(FileOp),
     Fdatasync(FileOp),
     Unlink(FileOp),
+    Truncate { file: Handle, len: Expr, #[serde(default)] expect: Expect },
     Ftruncate { file: Handle, len: Expr, #[serde(default)] expect: Expect },
-    Fallocate { file: Handle, #[serde(default)] offset: Option<Expr>, len: Expr, #[serde(default)] expect: Expect },
+    Fallocate { file: Handle, #[serde(default)] offset: Option<Expr>, len: Expr, #[serde(default)] mode: Vec<FallocFlag>, #[serde(default)] expect: Expect },
     Mkdir { dir: Handle, #[serde(default)] mode: Option<u32>, #[serde(default)] expect: Expect },
     Rmdir { dir: Handle, #[serde(default)] expect: Expect },
     Rename { from: Handle, to: Handle, #[serde(default)] expect: Expect },
@@ -811,6 +890,7 @@ impl Node {
             Node::Fsync(_) => "fsync",
             Node::Fdatasync(_) => "fdatasync",
             Node::Unlink(_) => "unlink",
+            Node::Truncate { .. } => "truncate",
             Node::Ftruncate { .. } => "ftruncate",
             Node::Fallocate { .. } => "fallocate",
             Node::Mkdir { .. } => "mkdir",

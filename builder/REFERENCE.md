@@ -115,10 +115,11 @@ the loop, for `x @ i` chains), `loop(index, to, start=, step=)` yielding the ind
 `parallel(index, width)` and `loader(name, workers=, prefetch=, batches=, ordered=)` yielding a
 sub-cursor with `.index`, `channel`/`put`/`take`, `barrier(scope)`, `compute(ns)`, `when(test)`
 / `otherwise()`, `every(n)`, `choose()` with `.arm(weight)`, `phase(name)`, `trace(file, sha256)`, and the
-eighteen ops: `open(f, "RDONLY|CLOEXEC", mode=, expect=)`, `close fstat stat fsync fdatasync
+~~eighteen~~ nineteen ops (contract 0.14): `open(f, "RDONLY|CLOEXEC", mode=, expect=)`, `close fstat stat fsync fdatasync
 unlink`, `read(f, len, offset=, repeat=, expect=)`, `write`, `lseek(f, off, "SET|CUR|END")`,
-`ioctl(f, "TCGETS")`, `fadvise(f, "WILLNEED", offset=, len=)`, `ftruncate`, `fallocate`,
-`mkdir`, `rmdir`, `rename`, `readdir`.
+`ioctl(f, "TCGETS")`, `fadvise(f, "WILLNEED", offset=, len=)`, `truncate(f, len)` (by path,
+2026-11-02), `ftruncate`, `fallocate(f, len, offset=, mode=("KEEP_SIZE", "PUNCH_HOLE"))` (the
+mode 2026-11-02, refused by V29 as the kernel refuses it), `mkdir`, `rmdir`, `rename`, `readdir`.
 
 **Expressions**: node arithmetic (`+ - * // %`, `ceil_div`, `min_`, `max_`, `-x`), comparisons
 (`== != < <= > >=`), `&`, `|`, `~`, `when(test, a, b)` (arms may be expressions, distributions,
@@ -457,7 +458,8 @@ the call moved (fixed 2026-10-14).
   `fstat`, on a path → `stat`; `getdents64` → `readdir`, once per listing (the calls that
   continue a listing and the empty one that ends it are the same op, as the abstract's
   `readdir` is one listing); `unlinkat` with `AT_REMOVEDIR` → `rmdir`; `lseek`, `ioctl`,
-  `fsync`, `fdatasync`, `ftruncate`, `fallocate`, `mkdir`, `rename`, `fadvise64`, `close`
+  `fsync`, `fdatasync`, `truncate` (its own kind since 2026-11-02, counted as `ftruncate`
+  before), `ftruncate`, `fallocate`, `mkdir`, `rename`, `fadvise64`, `close`
   by name. A failed call counts as its op, as an op the abstract expects to fail does.
 - **Offsets.** `pread`/`pwrite` carry theirs. `read`/`write` use the position of the open
   file description, tracked from `open`, `lseek`, and the bytes each call moved, shared by
@@ -627,7 +629,7 @@ flag; the protocol is not part of a dataset id. ~~The runner refuses `object` un
 engine is built~~ The runner reads an `s3` dataset through its object engine and writes one
 with `aeiou datagen` (`runner/REFERENCE.md` §16, 2026-10-09); ~~an `object` namespace waits for
 the engine's writes,~~ it writes and reads an `s3` namespace too (the same night), where
-V18 refuses `open` with `APPEND`, `RDWR`, or `EXCL`, `ftruncate`, and `fallocate` on its
+V18 refuses `open` with `APPEND`, `RDWR`, or `EXCL`, `truncate`, `ftruncate`, and `fallocate` on its
 objects (`namespace(..., protocol="s3")` raises at the op); ~~`aeiou-datagen` writes
 container datasets to directories only (`DESIGN_REVIEW.md` §3.65).~~ `aeiou-datagen` writes
 container datasets to object stores too, streaming each file into an upload (§6,
@@ -687,7 +689,14 @@ aeiou-trace digest app.jsonl                     # an exported file carries its 
 `templates`: every run of digits in a path a field (`train/{a:05}/sample_{b:09}.npz`; sixteen
 or more hex digits with a letter, `{a:x32}`), with each field's value count and range, the
 op mix, bytes, request sizes, and per open how it moved through its file (`whole`,
-`sequential`, `positioned`, `none`). `lanes`: per traced task its `phases`, runs of units
+`sequential`, `positioned`, `none`), and, since 2026-11-02 and only where something happened,
+its `space` (`DESIGN_REVIEW.md` §3.92): `truncating_opens` (opens with `TRUNC`) and of them
+`truncating_opens_of_written` (a path an earlier open had written: data discarded) and
+`truncating_opens_of_unseen` (a path the trace had not seen: what it held is not known),
+`truncate`, `ftruncate`, `to_zero`, `fallocate` by mode (`KEEP_SIZE|PUNCH_HOLE`, `allocate` for
+mode 0), and `freed_ranges_bytes`, so the filesystem's deferred work of taking files apart and
+reclaiming their space is in the summary, and an open that truncates (it reads nothing) is told
+from one that does not. `lanes`: per traced task its `phases`, runs of units
 (the calls on one open, or one path call, or one `io_submit`) of one motif on one template,
 the motif the op sequence with repeating cycles collapsed (`read+`, `(lseek read)+`), with
 repeat counts, bytes, and think time. `sites`: every template opened at least twice, with
@@ -944,7 +953,7 @@ run: accepted, then not accepted, then nothing judged; untraced without one).
 | `run_length_read`, `_write` | byte-weighted median of `run_length.<kind>.bytes` |
 | `request_size_read`, `_write` | byte-weighted median of `request_size.<kind>` (as asked) |
 | `read_share` | `bytes_read / (bytes_read + bytes_written)` |
-| `metadata` | open, close, stat, fstat, readdir, mkdir, rmdir, unlink, rename, ftruncate, fallocate per read and write (lseek, ioctl, fsync, fadvise are neither) |
+| `metadata` | open, close, stat, fstat, readdir, mkdir, rmdir, unlink, rename, truncate, ftruncate, fallocate per read and write (lseek, ioctl, fsync, fadvise are neither) |
 | `reads_own_writes` | 1 when `read_after_write.n` > 0 |
 | `reread` | `reuse_extents.read_after_read.n` over the bytes read (first touches and both reuse kinds), in bytes; ~~over the block reads~~ until 2026-10-22 (`DESIGN_REVIEW.md` §3.79) |
 | `skew` | `popularity_bytes.top_1_pct`; ~~`popularity_blocks.top_1_pct`~~ until 2026-10-22 |

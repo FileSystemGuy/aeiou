@@ -22,7 +22,25 @@ SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "choose", "phase", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
-MUTATING_OPS = {"write", "ftruncate", "fallocate", "unlink"}          # V12 and V14, plus rename, mkdir, rmdir, and open flags
+FALLOC_SIZED = ("COLLAPSE_RANGE", "INSERT_RANGE", "WRITE_ZEROES")   # take no KEEP_SIZE (V29)
+
+
+def falloc_refused(mode):
+    """Why a `fallocate` mode is not one the kernel takes (`vfs_fallocate`), or None: at most one
+    operation besides KEEP_SIZE, PUNCH_HOLE only with it, and none with the ones that size the
+    file themselves (V29, contract 0.14)."""
+    ops = [f for f in mode if f != "KEEP_SIZE"]
+    keep = "KEEP_SIZE" in mode
+    if len(ops) > 1:
+        return f"{ops[0]} and {ops[1]} together: a mode is at most one operation"
+    if ops == ["PUNCH_HOLE"] and not keep:
+        return "PUNCH_HOLE without KEEP_SIZE: a hole is punched only with KEEP_SIZE"
+    if ops and ops[0] in FALLOC_SIZED and keep:
+        return f"{ops[0]} with KEEP_SIZE: it takes no other flag"
+    return None
+
+
+MUTATING_OPS = {"write", "truncate", "ftruncate", "fallocate", "unlink"}          # V12 and V14, plus rename, mkdir, rmdir, and open flags
 WRITE_FLAGS = {"WRONLY", "RDWR", "CREAT", "TRUNC", "APPEND"}
 RESERVED_PREFIX = ".aeiou"                                            # V13: the manifest and sidecars
 
@@ -883,6 +901,11 @@ class Check:
                     self.err(p + ["file"], f"{kind} that uses the file position of a handle this `parallel` or `loader` body did not open: its sub-actors share the descriptor and its position, so the offsets would depend on timing; give an `offset`, or open the handle in the body (V24)")
         if kind == "read" and rep == "until_eof":
             self.check_until_eof(a["file"], p, scope)
+        # V29: a mode `fallocate(2)` takes, never one the kernel would refuse at the run
+        if kind == "fallocate" and a.get("mode"):
+            why = falloc_refused(a["mode"])
+            if why:
+                self.err(p + ["mode"], f"{why} (V29)")
         # V12: datasets are read-only
         if kind in MUTATING_OPS or kind in ("rename", "mkdir", "rmdir"):
             for key in ("file", "dir", "from", "to"):
@@ -911,7 +934,7 @@ class Check:
                 bad = [f for f in a["flags"] if f in ("CREAT", "TRUNC")]
                 if bad:
                     v18 = ("flags", f"open with {bad[0]} without WRONLY")
-        elif kind in ("ftruncate", "fallocate"):
+        elif kind in ("truncate", "ftruncate", "fallocate"):
             v18 = ("file", kind)
         if v18:
             ns = self.object_store_namespace(a["file"], scope)

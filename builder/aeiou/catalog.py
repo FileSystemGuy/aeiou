@@ -71,7 +71,7 @@ SHAPE_VERSION = 3               # 2 (2026-10-14): the op counts, bytes, and each
                                 # 3 (2026-10-22): reread and skew over extents, no block (DESIGN_REVIEW.md §3.79)
 SEEDS = (1, 2, 3)
 START = 64                      # the shortest check length tried is the case's over this
-METADATA = ("open", "close", "stat", "fstat", "readdir", "mkdir", "rmdir", "unlink", "rename", "ftruncate", "fallocate")
+METADATA = ("open", "close", "stat", "fstat", "readdir", "mkdir", "rmdir", "unlink", "rename", "truncate", "ftruncate", "fallocate")
 DATA = ("read", "write")
 MECHANISM_KEYS = {"defaults"}
 DEFAULTS_KEYS = {"ast", "gpus", "length"}

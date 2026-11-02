@@ -122,6 +122,10 @@ impl Emitter {
                 }
             }
             OpKind::Stat | OpKind::Unlink | OpKind::Rmdir => put("path", json!(w.path)),
+            OpKind::Truncate => {
+                put("path", json!(w.path));
+                put("len", json!(w.len));
+            }
             OpKind::Mkdir => {
                 self.created(&w.path);
                 put("path", json!(w.path));
@@ -157,6 +161,10 @@ impl Emitter {
                     OpKind::Fallocate => {
                         put("offset", json!(w.offset));
                         put("len", json!(w.len));
+                        if w.aux != 0 {
+                            let names: Vec<&str> = crate::ast::FallocFlag::of_mode(w.aux).unwrap_or_default().iter().map(|f| f.name()).collect();
+                            put("mode", json!(names));
+                        }
                     }
                     _ => {}
                 }
@@ -264,6 +272,7 @@ mod tests {
             Walked { len: 4096, ..w(0, OpKind::Ftruncate, "out/a") },
             Walked { offset: 0, len: 8192, ..w(0, OpKind::Fallocate, "out/a") },
             w(0, OpKind::Ioctl, "out/a").with(|o| o.aux = 1),
+            Walked { offset: 0, len: 4096, aux: 0x03, ..w(0, OpKind::Fallocate, "out/a") },
             w(0, OpKind::Fsync, "out/a"),
             w(0, OpKind::Fdatasync, "out/a"),
             w(0, OpKind::Fstat, "out/a"),
@@ -274,6 +283,7 @@ mod tests {
             w(1, OpKind::Close, "out"),
             w(0, OpKind::Stat, "out/a"),
             Walked { path2: Some("out/b".into()), ..w(0, OpKind::Rename, "out/a") },
+            Walked { len: 10, ..w(0, OpKind::Truncate, "out/b") },
             w(0, OpKind::Unlink, "out/b"),
             w(0, OpKind::Rmdir, "out"),
         ];
@@ -287,8 +297,11 @@ mod tests {
         assert_eq!((lines[2]["offset"].as_i64(), lines[3].get("offset")), (Some(4096), None));
         assert_eq!((lines[4]["whence"].as_str(), lines[4]["ret"].as_i64()), (Some("SET"), Some(10)));
         assert_eq!((lines[5]["advice"].as_str(), lines[8]["request"].as_str()), (Some("WILLNEED"), Some("FIONREAD")));
-        assert_eq!((lines[14]["ret"].as_i64(), lines[15].get("ret")), (Some(1), None));
-        assert_eq!(lines[18]["to"], "out/b");
+        assert_eq!((lines[15]["ret"].as_i64(), lines[16].get("ret")), (Some(1), None));
+        assert_eq!(lines[19]["to"], "out/b");
+        // a mode 0 allocation writes no mode, as before contract 0.14; a hole punched names it
+        assert_eq!((lines[7].get("mode"), &lines[9]["mode"]), (None, &json!(["KEEP_SIZE", "PUNCH_HOLE"])));
+        assert_eq!((&lines[20]["path"], &lines[20]["len"]), (&json!("out/b"), &json!(10)));
         assert_eq!(e.s.creates, vec!["out".to_string(), "out/a".to_string()]);
         assert_eq!((e.s.opens, e.lanes.len(), e.s.lines), (2, 2, ops.len()));
         // an op on a path its instance has not opened is the walk's error, named

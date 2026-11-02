@@ -1150,18 +1150,27 @@ impl<'a> Checker<'a> {
                 }
                 expect = Some(ex);
             }
-            Node::Ftruncate { file, len, expect: ex } => {
+            Node::Ftruncate { file, len, expect: ex } | Node::Truncate { file, len, expect: ex } => {
                 handles.push(("file", file));
                 exprs.push(("len", len));
                 expect = Some(ex);
             }
-            Node::Fallocate { file, offset, len, expect: ex } => {
+            Node::Fallocate { file, offset, len, mode, expect: ex } => {
                 handles.push(("file", file));
                 if let Some(e) = offset {
                     exprs.push(("offset", e));
                 }
                 exprs.push(("len", len));
                 expect = Some(ex);
+                // V29: a mode `fallocate(2)` takes, never one the kernel would refuse at the run
+                for (i, f) in mode.iter().enumerate() {
+                    if mode[..i].contains(f) {
+                        self.err(&p(pp, &["mode"]), format!("duplicate flag {}", f.name()));
+                    }
+                }
+                if let Some(why) = crate::ast::FallocFlag::refused(mode) {
+                    self.err(&p(pp, &["mode"]), format!("{why} (V29)"));
+                }
             }
             Node::Mkdir { dir, mode, expect: ex } => {
                 handles.push(("dir", dir));
@@ -1230,7 +1239,7 @@ impl<'a> Checker<'a> {
             self.check_until_eof(file, pp, scope, st);
         }
         // V12: datasets are read-only
-        if matches!(node, Node::Write { .. } | Node::Ftruncate { .. } | Node::Fallocate { .. } | Node::Unlink(_) | Node::Rename { .. } | Node::Mkdir { .. } | Node::Rmdir { .. }) {
+        if matches!(node, Node::Write { .. } | Node::Truncate { .. } | Node::Ftruncate { .. } | Node::Fallocate { .. } | Node::Unlink(_) | Node::Rename { .. } | Node::Mkdir { .. } | Node::Rmdir { .. }) {
             for (key, h) in &handles {
                 if let Some(ds) = self.dataset_of(h, scope) {
                     self.err(&p(pp, &[key]), format!("{kind} on dataset `{ds}`: datasets are read-only (V12)"));
@@ -1249,7 +1258,7 @@ impl<'a> Checker<'a> {
             }
         }
         // V14: input namespaces are read-only
-        if matches!(node, Node::Write { .. } | Node::Ftruncate { .. } | Node::Fallocate { .. } | Node::Unlink(_) | Node::Rename { .. } | Node::Mkdir { .. } | Node::Rmdir { .. }) {
+        if matches!(node, Node::Write { .. } | Node::Truncate { .. } | Node::Ftruncate { .. } | Node::Fallocate { .. } | Node::Unlink(_) | Node::Rename { .. } | Node::Mkdir { .. } | Node::Rmdir { .. }) {
             for (key, h) in &handles {
                 if let Some(ns) = self.input_namespace_of(h, scope) {
                     self.err(&p(pp, &[key]), format!("{kind} on input namespace `{ns}`: input namespaces are read-only (V14)"));
@@ -1270,6 +1279,7 @@ impl<'a> Checker<'a> {
                     false => flags.iter().find(|f| matches!(f, OpenFlag::CREAT | OpenFlag::TRUNC)).map(|f| (file, format!("open with {f:?} without WRONLY"), "flags")),
                 }),
             Node::Ftruncate { file, .. } => Some((file, "ftruncate".to_string(), "file")),
+            Node::Truncate { file, .. } => Some((file, "truncate".to_string(), "file")),
             Node::Fallocate { file, .. } => Some((file, "fallocate".to_string(), "file")),
             _ => None,
         };

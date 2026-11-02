@@ -16,7 +16,7 @@ fn tmpdir(tag: &str) -> crate::common::TempDir {
 /// in requests of `b` bytes, with `params` declared.
 fn doc(params: Value) -> String {
     json!({
-        "ast": "0.13", "name": "t", "params": params,
+        "ast": "0.14", "name": "t", "params": params,
         "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": {"const": 8192}, "seed": 1}},
         "actors": {"gpu": {"body": [
             {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},
@@ -168,7 +168,7 @@ fn ns_doc(params: Value, input: bool, more: Value) -> String {
                {"write": {"file": {"ref": "f"}, "len": {"param": "b"}}},
                {"close": {"file": {"ref": "f"}}}])
     };
-    let mut d = json!({"ast": "0.13", "name": if input { "r" } else { "w" }, "params": params, "namespaces": {"o": ns}, "actors": {"gpu": {"body": body}}});
+    let mut d = json!({"ast": "0.14", "name": if input { "r" } else { "w" }, "params": params, "namespaces": {"o": ns}, "actors": {"gpu": {"body": body}}});
     for (k, v) in more.as_object().unwrap() {
         d[k] = v.clone();
     }
@@ -276,7 +276,7 @@ struct Tree {
 
 fn toy() -> String {
     json!({
-        "ast": "0.13", "name": "t",
+        "ast": "0.14", "name": "t",
         "params": {"b": {"default": 4096, "unit": "bytes"}, "k": {"kind": "int", "unit": "count"}, "samples": {"default": 4, "scale": true}},
         "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/f{id:04}", "count": {"param": "samples"}, "size": {"const": 8192}, "seed": 1}},
         "actors": {"gpu": {"body": [

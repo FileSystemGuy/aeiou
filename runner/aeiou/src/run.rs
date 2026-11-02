@@ -1618,13 +1618,17 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
             a.removed.push(op.path.to_string());
             Ok(0)
         }
+        OpKind::Truncate => {
+            let open = a.fds.get(op.path);
+            be.truncate(&full(op.path), op.len, open.as_deref()).map(|_| 0)
+        }
         OpKind::Ftruncate => {
             let fd = a.fd(op.path)?;
             be.ftruncate(&fd, op.len).map(|_| 0)
         }
         OpKind::Fallocate => {
             let fd = a.fd(op.path)?;
-            be.fallocate(&fd, op.offset, op.len).map(|_| 0)
+            be.fallocate(&fd, op.offset, op.len, op.aux).map(|_| 0)
         }
         OpKind::Mkdir => {
             be.mkdir(&full(op.path), op.aux as u32)?;

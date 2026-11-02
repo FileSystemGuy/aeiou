@@ -581,7 +581,11 @@ Not built, in rough order of interest:
   `aeiou dry-run --emit-trace`, the abstract's op stream as a trace file, a lane per context
   and the instances interleaved, whose digest at one instance has the dry run's own numbers.
   Built 2026-11-02: `metrics`'s `--instance-root`, `--chain-gap-us`, and `--metrics-block` on the
-  digest, whose `metrics` section of an strace is now the strace's own reading. To
+  digest, whose `metrics` section of an strace is now the strace's own reading; and nothing
+  drops a truncate (item 56, §3.92): `truncate(2)` exported, run by the `trace` node, and an op
+  of the abstract (contract 0.14), `fallocate`'s mode carried end to end under rule V29 (a hole
+  punched is never replayed as an allocation), and the digest's `space`, what each template's
+  calls did to the space its files hold. To
   build next: stage 5, the Python's
   remains retired and the committed captures rewrapped; a storage-reported value used only with
   evidence that the application derives from it, the digest recording the `st_blksize` a trace

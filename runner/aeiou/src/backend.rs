@@ -321,8 +321,12 @@ pub trait Backend: Send {
     fn fsync(&mut self, file: &OpenFile) -> io::Result<()>;
     fn fdatasync(&mut self, file: &OpenFile) -> io::Result<()>;
     fn unlink(&mut self, path: &Path) -> io::Result<()>;
+    /// `truncate(2)`; `open` is this actor's open of the path, if it has one, for a backend
+    /// that keeps state per open (a mapping's size).
+    fn truncate(&mut self, path: &Path, len: i64, open: Option<&OpenFile>) -> io::Result<()>;
     fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()>;
-    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64) -> io::Result<()>;
+    /// `mode` is `fallocate(2)`'s (`ast::FallocFlag` bits).
+    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64, mode: u64) -> io::Result<()>;
     fn mkdir(&mut self, path: &Path, mode: u32) -> io::Result<()>;
     fn rmdir(&mut self, path: &Path) -> io::Result<()>;
     fn rename(&mut self, from: &Path, to: &Path) -> io::Result<()>;
@@ -540,12 +544,17 @@ impl Backend for Sync {
         check_int(unsafe { libc::unlink(c.as_ptr()) })
     }
 
+    fn truncate(&mut self, path: &Path, len: i64, _open: Option<&OpenFile>) -> io::Result<()> {
+        let c = cpath(path)?;
+        check_int(unsafe { libc::truncate(c.as_ptr(), len) })
+    }
+
     fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()> {
         check_int(unsafe { libc::ftruncate(file.as_raw_fd(), len) })
     }
 
-    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64) -> io::Result<()> {
-        check_int(unsafe { libc::fallocate(file.as_raw_fd(), 0, offset, len) })
+    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64, mode: u64) -> io::Result<()> {
+        check_int(unsafe { libc::fallocate(file.as_raw_fd(), mode as libc::c_int, offset, len) })
     }
 
     fn mkdir(&mut self, path: &Path, mode: u32) -> io::Result<()> {
@@ -686,12 +695,16 @@ impl Backend for PosixAio {
         self.sync.unlink(path)
     }
 
+    fn truncate(&mut self, path: &Path, len: i64, open: Option<&OpenFile>) -> io::Result<()> {
+        self.sync.truncate(path, len, open)
+    }
+
     fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()> {
         self.sync.ftruncate(file, len)
     }
 
-    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64) -> io::Result<()> {
-        self.sync.fallocate(file, offset, len)
+    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64, mode: u64) -> io::Result<()> {
+        self.sync.fallocate(file, offset, len, mode)
     }
 
     fn mkdir(&mut self, path: &Path, mode: u32) -> io::Result<()> {
@@ -994,6 +1007,15 @@ impl Backend for Mmap {
         self.sync.unlink(path)
     }
 
+    fn truncate(&mut self, path: &Path, len: i64, open: Option<&OpenFile>) -> io::Result<()> {
+        self.sync.truncate(path, len, None)?;
+        // as at `ftruncate`: this actor's mapping of the path stops at the new size
+        if let Some(file) = open {
+            file.size.store(len, Ordering::Release);
+        }
+        Ok(())
+    }
+
     fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()> {
         self.sync.ftruncate(file, len)?;
         // a shrink keeps the earlier mapping, whose pages past the new end are a SIGBUS:
@@ -1002,9 +1024,16 @@ impl Backend for Mmap {
         Ok(())
     }
 
-    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64) -> io::Result<()> {
-        self.sync.fallocate(file, offset, len)?;
-        Mmap::wrote(file, Some(offset + len));
+    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64, mode: u64) -> io::Result<()> {
+        use crate::ast::FallocFlag as F;
+        self.sync.fallocate(file, offset, len, mode)?;
+        let has = |f: F| mode & f.bit() != 0;
+        if has(F::COLLAPSE_RANGE) || has(F::INSERT_RANGE) {
+            // the size moved by `len`, down or up: asked again, as after a write at the position
+            Mmap::wrote(file, None);
+        } else if !has(F::KEEP_SIZE) && !has(F::UNSHARE_RANGE) {
+            Mmap::wrote(file, Some(offset + len));
+        }
         Ok(())
     }
 
@@ -1151,7 +1180,7 @@ mod tests {
             for advice in [Advice::NORMAL, Advice::RANDOM, Advice::SEQUENTIAL, Advice::WILLNEED, Advice::DONTNEED, Advice::NOREUSE] {
                 be.fadvise(&f, 0, 4096, advice).unwrap();
             }
-            be.fallocate(&f, 12288, 4096).unwrap();
+            be.fallocate(&f, 12288, 4096, 0).unwrap();
             assert_eq!(be.fstat(&f).unwrap(), 16384, "{what}");
             let mut buf = vec![0u8; 4096];
             assert_eq!(be.read(&f, &mut buf, Some(8192)).unwrap(), 4096, "{what}");
@@ -1166,7 +1195,9 @@ mod tests {
             be.ioctl(&f, IoctlRequest::FIONREAD).unwrap();
             assert_eq!(errno(be.ioctl(&f, IoctlRequest::BLKGETSIZE64)), libc::ENOTTY, "{what}");
             assert_eq!(errno(be.fadvise(&f, 0, -1, Advice::NORMAL)), libc::EINVAL, "{what}");
-            assert_eq!(errno(be.fallocate(&f, -1, 1)), libc::EINVAL, "{what}");
+            assert_eq!(errno(be.fallocate(&f, -1, 1, 0)), libc::EINVAL, "{what}");
+            // a mode the kernel refuses is refused, never issued as another (V29)
+            assert_eq!(errno(be.fallocate(&f, 0, 1, 0x02)), libc::EOPNOTSUPP, "{what}: PUNCH_HOLE without KEEP_SIZE");
             drop(f);
             assert_eq!(be.stat(&p).unwrap(), 4096, "{what}");
             std::fs::write(d.join("sub/.aeiou-hidden"), b"").unwrap();
@@ -1174,6 +1205,9 @@ mod tests {
             assert_eq!(be.readdir(&dir).unwrap(), 1, "{what}: `.`, `..`, and `.aeiou*` are not counted");
             drop(dir);
             assert_eq!(errno(be.rmdir(&d.join("sub"))), libc::ENOTEMPTY, "{what}");
+            be.truncate(&p, 100, None).unwrap();
+            assert_eq!(be.stat(&p).unwrap(), 100, "{what}: truncate by path");
+            assert_eq!(errno(be.truncate(&d.join("none"), 0, None)), libc::ENOENT, "{what}");
             be.rename(&p, &d.join("g")).unwrap();
             assert_eq!(errno(be.stat(&p)), libc::ENOENT, "{what}");
             be.unlink(&d.join("g")).unwrap();
@@ -1263,7 +1297,7 @@ mod tests {
         assert_eq!(be.lseek(&f, 0, Whence::END).unwrap(), 4096);
         assert_eq!(be.write(&f, &[2u8; 4096], None).unwrap(), 4096);
         assert_eq!(be.read(&f, &mut buf, Some(4096)).unwrap(), 4096, "the size was asked again");
-        be.fallocate(&f, 8192, 4096).unwrap();
+        be.fallocate(&f, 8192, 4096, 0).unwrap();
         assert_eq!(be.read(&f, &mut buf, Some(8192)).unwrap(), 4096, "fallocate's zeros");
         assert_eq!(buf[0], 0);
         std::fs::remove_dir_all(&d).unwrap();
@@ -1288,7 +1322,7 @@ mod tests {
         assert_eq!(BackendKind::of(Api::Mmap, Cache::Direct), None);
         // what an abstract declares (names `aeiou check` has refused say so here too)
         let ast = |posix: &str, cache: &str| -> crate::ast::Ast {
-            serde_json::from_str(&format!(r#"{{"ast": "0.13", "name": "t", "actors": {{}}{posix}{cache}}}"#)).unwrap()
+            serde_json::from_str(&format!(r#"{{"ast": "0.14", "name": "t", "actors": {{}}{posix}{cache}}}"#)).unwrap()
         };
         assert_eq!(declared(&ast("", "")).unwrap(), BackendKind::Sync);
         assert_eq!(declared(&ast(r#", "posix": "libaio""#, r#", "cache": "direct""#)).unwrap(), BackendKind::LibAioDirect);

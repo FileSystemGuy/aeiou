@@ -582,3 +582,85 @@ fn digest_takes_the_metrics_options_and_refuses_those_a_file_cannot_answer() {
     let (_, err) = text(&tool(&["digest", s(&file), "--metrics-block", "0"]));
     assert!(err.starts_with("aeiou-trace digest: --metrics-block must be at least 1"), "{err}");
 }
+
+/// What frees or moves space is exported as the call it was (`DESIGN_REVIEW.md` §3.92): a
+/// `truncate` by path with its length, a `fallocate` with its mode by name, and a mode with a
+/// bit no flag is left out and noted, never written as another.
+#[test]
+fn export_keeps_truncates_and_fallocate_modes() {
+    let d = tmp("space");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 openat(AT_FDCWD</d>, "/d/f", O_RDWR|O_CREAT|O_TRUNC, 0644) = 3</d/f> <0.000010>"#,
+            r#"100 1700000000.000100 write(3</d/f>, "x"..., 65536) = 65536 <0.000010>"#,
+            r#"100 1700000000.000200 fallocate(3</d/f>, FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE, 0, 61440) = 0 <0.000010>"#,
+            r#"100 1700000000.000300 fallocate(3</d/f>, 0, 65536, 4096) = 0 <0.000010>"#,
+            r#"100 1700000000.000400 fallocate(3</d/f>, FALLOC_FL_COLLAPSE_RANGE, 0, 4096) = 0 <0.000010>"#,
+            r#"100 1700000000.000500 fallocate(3</d/f>, 0x100 /* FALLOC_FL_??? */, 0, 4096) = -1 EOPNOTSUPP (Operation not supported) <0.000010>"#,
+            r#"100 1700000000.000600 close(3</d/f>) = 0 <0.000010>"#,
+            r#"100 1700000000.000700 truncate("/d/f", 100) = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let ops: Vec<&str> = lines[1..].iter().map(|l| l["op"].as_str().unwrap()).collect();
+    assert_eq!(ops, ["open", "write", "fallocate", "fallocate", "fallocate", "close", "truncate"]);
+    assert_eq!(lines[3]["mode"], serde_json::json!(["KEEP_SIZE", "PUNCH_HOLE"]));
+    assert_eq!(lines[4].get("mode"), None, "mode 0 is written as no mode");
+    assert_eq!(lines[5]["mode"], serde_json::json!(["COLLAPSE_RANGE"]));
+    assert_eq!((&lines[7]["path"], &lines[7]["len"]), (&serde_json::json!("f"), &serde_json::json!(100)));
+    let notes = &lines[0]["notes"];
+    assert_eq!(notes["not_exported:fallocate:mode 0x100 /* FALLOC_FL_??? */"], 1, "{notes}");
+    assert!(notes.get("not_exported:truncate").is_none(), "{notes}");
+}
+
+/// The digest records per template what its calls did to the space its files hold
+/// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
+/// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the
+/// ranges freed; a template that did none of it has no `space`.
+#[test]
+fn digest_records_what_freed_or_moved_space() {
+    let d = tmp("digest-space");
+    let trace = d.join("t.strace");
+    let mut lines = vec![];
+    let mut t = 1700000000.0f64;
+    let mut call = |l: &str| {
+        lines.push(format!("100 {t:.6} {l} <0.000010>"));
+        t += 0.001;
+    };
+    for _ in 0..2 {
+        call(r#"openat(AT_FDCWD</d>, "/d/ck/a0.bin", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3</d/ck/a0.bin>"#);
+        call(r#"write(3</d/ck/a0.bin>, "x"..., 65536) = 65536"#);
+        call(r#"close(3</d/ck/a0.bin>) = 0"#);
+    }
+    call(r#"openat(AT_FDCWD</d>, "/d/ck/a1.bin", O_RDWR|O_TRUNC) = 3</d/ck/a1.bin>"#);
+    call(r#"fallocate(3</d/ck/a1.bin>, FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE, 0, 8192) = 0"#);
+    call(r#"fallocate(3</d/ck/a1.bin>, 0, 0, 4096) = 0"#);
+    call(r#"ftruncate(3</d/ck/a1.bin>, 0) = 0"#);
+    call(r#"close(3</d/ck/a1.bin>) = 0"#);
+    call(r#"truncate("/d/ck/a0.bin", 100) = 0"#);
+    call(r#"openat(AT_FDCWD</d>, "/d/in/x.dat", O_RDONLY) = 3</d/in/x.dat>"#);
+    call(r#"read(3</d/in/x.dat>, "x"..., 10) = 10"#);
+    call(r#"close(3</d/in/x.dat>) = 0"#);
+    std::fs::write(&trace, lines.join("\n") + "\n").unwrap();
+    let o = tool(&["digest", s(&trace), "--root", "/d", "--no-questions"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let ts = doc["templates"].as_array().unwrap();
+    let by = |name: &str| ts.iter().find(|t| t["template"].as_str().unwrap().starts_with(name)).unwrap_or_else(|| panic!("{name}: {ts:?}"));
+    assert_eq!(
+        by("ck/")["space"],
+        serde_json::json!({"truncating_opens": 3, "truncating_opens_of_written": 1, "truncating_opens_of_unseen": 2, "truncate": 1, "ftruncate": 1, "to_zero": 1,
+                           "fallocate": {"KEEP_SIZE|PUNCH_HOLE": 1, "allocate": 1}, "freed_ranges_bytes": 8192})
+    );
+    assert!(by("in/").get("space").is_none());
+    let (out, _) = text(&tool(&["digest", s(&trace), "--root", "/d", "--no-questions", "--text"]));
+    assert!(out.contains("       space: 3 truncating opens (1 of a path written before, 2 of one not seen before); truncate 1; ftruncate 1; 1 to length 0; fallocate KEEP_SIZE|PUNCH_HOLE 1; fallocate allocate 1; ranges freed 8.0 KiB\n"), "{out}");
+}

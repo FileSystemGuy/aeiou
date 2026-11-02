@@ -1193,6 +1193,14 @@ numbers; the order is this note's.
     is retired (§3.89 stage 5): `--instance-root`, `--chain-gap-us`, and `--metrics-block` on
     `aeiou-trace digest` (*built 2026-11-02*, item 47).
 
+56. **Nothing drops a truncate (decided and built with the user 2026-11-02, `DESIGN_REVIEW.md`
+    §3.92).** A truncate is the filesystem's deferred work of taking a file apart and reclaiming
+    its space, and an open with `O_TRUNC` reads nothing where one without may read the whole
+    file. Built: `truncate(2)` exported, run by the `trace` node, an op of the abstract
+    (contract 0.14), and its own kind in the metrics; `fallocate`'s mode carried end to end and
+    rule V29 (a hole punched is never replayed as an allocation); the digest's `space` per
+    template. Open: the bytes a truncate discarded, and `compare` over two digests' `space`.
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS

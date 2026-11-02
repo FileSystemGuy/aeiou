@@ -97,7 +97,8 @@ A body is an array of statements: thirteen control forms and eighteen operations
 | `lseek {file, offset, whence}` | `SET`, `CUR`, `END`. |
 | `ioctl {file, request, expect}` | `TCGETS`, `FIONREAD`, `BLKGETSIZE64`. |
 | `fadvise {file, advice, offset, len, expect}` | `posix_fadvise`: `NORMAL RANDOM SEQUENTIAL WILLNEED DONTNEED NOREUSE`. |
-| `ftruncate {file, len, expect}`, `fallocate {file, offset, len, expect}` | |
+| `truncate {file, len, expect}` | `truncate(2)` of the path, open or not (contract 0.14). |
+| `ftruncate {file, len, expect}`, `fallocate {file, offset, len, mode, expect}` | `mode`, `fallocate`'s flags by name (contract 0.14): `KEEP_SIZE PUNCH_HOLE COLLAPSE_RANGE ZERO_RANGE INSERT_RANGE UNSHARE_RANGE WRITE_ZEROES`; absent, mode 0. |
 | `mkdir {dir, mode, expect}`, `rmdir {dir, expect}`, `rename {from, to, expect}` | |
 | `readdir {dir, repeat: until_end, expect}` | One listing, `getdents64` until exhausted. |
 
@@ -196,7 +197,7 @@ these, and the builder enforces most of them at construction:
 - **V17** Namespaces sharing a root declare one `protocol`.
 - **V18** An object of a namespace declared `protocol: s3` is written once, in order from
   0: no `open` with `APPEND`, `RDWR`, or `EXCL`, or with `CREAT` or `TRUNC` without
-  `WRONLY`, no `ftruncate`, no `fallocate`; an `open` with `WRONLY` is closed by a later
+  `WRONLY`, no `truncate`, no `ftruncate`, no `fallocate`; an `open` with `WRONLY` is closed by a later
   `close` of the same handle in the same body, before an `open` of it again or a `let` of
   a name it reads (a close in a nested body may not run, and the close sends the upload). Offsets are
   positional, so a write the upload has not reached fails the run when it comes.
@@ -223,6 +224,9 @@ these, and the builder enforces most of them at construction:
   field's type for a namespace object's field; two numbers, two strings, two bools, two
   handles, or `null` and anything for a comparison; an array for `elem`, `len`, `sum` (of
   numbers).
+- **V29** A `fallocate` mode is one the kernel takes: at most one operation besides
+  `KEEP_SIZE`, `PUNCH_HOLE` only with `KEEP_SIZE`, no `KEEP_SIZE` with `COLLAPSE_RANGE`,
+  `INSERT_RANGE`, or `WRITE_ZEROES`.
 
 ## PARAMETER FILES
 

@@ -315,7 +315,7 @@ fn node(n: &Node, p: &mut Path) {
                 p.with(&[k, "len"], |p| expr(e, p));
             }
         }
-        Node::Ftruncate { file, len, .. } => {
+        Node::Ftruncate { file, len, .. } | Node::Truncate { file, len, .. } => {
             p.with(&[k, "file"], |p| handle(file, p));
             p.with(&[k, "len"], |p| expr(len, p));
         }

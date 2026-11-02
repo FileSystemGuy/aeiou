@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.13",
+      "const": "0.14",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -1721,6 +1721,26 @@
         "unlink": {
           "$ref": "#/$defs/fileop"
         },
+        "truncate": {
+          "type": "object",
+          "description": "`truncate(2)` of a path, open or not (contract 0.14, DESIGN_REVIEW.md §3.92): the file's size set to `len`. A changing op: never on a dataset (V12) or an input namespace (V14), never on a namespace in an object store (V18).",
+          "required": [
+            "file",
+            "len"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/handle"
+            },
+            "len": {
+              "$ref": "#/$defs/expr"
+            },
+            "expect": {
+              "$ref": "#/$defs/expect"
+            }
+          }
+        },
         "ftruncate": {
           "type": "object",
           "required": [
@@ -1757,6 +1777,23 @@
             },
             "len": {
               "$ref": "#/$defs/expr"
+            },
+            "mode": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "KEEP_SIZE",
+                  "PUNCH_HOLE",
+                  "COLLAPSE_RANGE",
+                  "ZERO_RANGE",
+                  "INSERT_RANGE",
+                  "UNSHARE_RANGE",
+                  "WRITE_ZEROES"
+                ]
+              },
+              "description": "`fallocate(2)`'s mode flags (contract 0.14, DESIGN_REVIEW.md §3.92). Absent or empty: mode 0, allocate and extend. `KEEP_SIZE` allocates past the end without extending; `PUNCH_HOLE` (only with `KEEP_SIZE`) frees the range; `ZERO_RANGE`, `COLLAPSE_RANGE`, `INSERT_RANGE`, `UNSHARE_RANGE`, `WRITE_ZEROES` as Linux defines them. At most one operation besides `KEEP_SIZE`, which `COLLAPSE_RANGE`, `INSERT_RANGE`, and `WRITE_ZEROES` do not take (V29). Part of the op and of the fingerprint."
             },
             "expect": {
               "$ref": "#/$defs/expect"

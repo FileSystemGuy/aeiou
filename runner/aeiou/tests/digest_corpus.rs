@@ -11,7 +11,8 @@
 //! port; these files keep it.
 //!
 //! What the port adds is not in the goldens and is set aside before the comparison: the
-//! version (`aeiou_digest: 2`), the `metrics` section, and each site's `facts`. One thing the
+//! version (`aeiou_digest: 2`), the `metrics` section, each site's `facts`, and each template's
+//! `space` (2026-11-02). One thing the
 //! port does differently: a template's ops with equal counts are listed by name in the report,
 //! where the Python listed them in the order they first appeared, which a JSON object read back
 //! does not keep; the comparison sorts both reports' op lists so.
@@ -57,6 +58,11 @@ fn as_version_1(mut doc: Value) -> Value {
     for s in doc["sites"].as_array_mut().unwrap() {
         assert!(s["facts"].is_array(), "a site's facts");
         s.as_object_mut().unwrap().remove("facts");
+    }
+    // a template's `space`, what its calls did to the space its files hold (2026-11-02,
+    // `DESIGN_REVIEW.md` §3.92; `trace_tool.rs` holds it)
+    for t in doc["templates"].as_array_mut().unwrap() {
+        t.as_object_mut().unwrap().remove("space");
     }
     doc
 }

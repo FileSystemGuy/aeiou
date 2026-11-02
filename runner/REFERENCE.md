@@ -24,7 +24,7 @@ cargo test --release
 
 | Command | What it does |
 |---|---|
-| `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V27), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
+| `aeiou check FILES…` | Loads each AST, validates it (structure plus rules ~~V1–V27~~ V1–V29, V28 2026-10-22, V29 2026-11-02), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. Then each dataset's projection: samples, files, directories, mean file, and total bytes, what `datagen` writes (`project.rs`, 2026-10-13). `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). An option given without the one it narrows (`--steps`, `--limit` without `--gpu`; `--metrics-block`, `--metrics-sample` without `--metrics` or `--metrics-json`) is a usage error that lists what it needs (§15), never ignored. |
 | `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--[no-]ignore-space] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C or `SIGTERM` stops every host, exit 130 (143). Refuses a non-empty root (datasets are read-only, V12), and, on rank 0 before anything is written, bytes to write beyond the free space `statvfs` reports at a directory root (`--ignore-space` writes anyway; §5, *Space*). Prints each dataset's id. |
 | `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--[no-]subset] [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
@@ -48,7 +48,7 @@ dataset that has a format class~~ since 2026-10-12 `aeiou datagen` built with th
 aeiou/src/
   ast.rs       the contract as serde types (externally tagged, deny_unknown_fields)
   canon.rs     canonical form and SHA-256, byte-identical to check.py::canonical
-  validate.rs  rules V1–V27 and the schema's structural constraints, ported from check.py
+  validate.rs  rules V1–V29 and the schema's structural constraints, ported from check.py
   sites.rs     draw sites: the JSON pointer of every draw / pick / choose, hashed
   pattern.rs   path patterns: {id div 1300:05}, {id div files_per_directory:05}, {conv:016x}, {name}
   rng.rs       positional keys, SplitMix64 words, the 4-round Feistel permutation
@@ -185,7 +185,9 @@ each is a recorded decision and the golden tests pin them.
 - **Fingerprint.** Sum modulo 2⁶⁴ over ops of `xxh3_64(kind ‖ actor ‖ n ‖ i₁…iₙ ‖ offset ‖
   len ‖ aux ‖ path [‖ 0 ‖ path₂])`, where `offset` is the effective offset of a read or write,
   `len` the requested length, `aux` the open flags and mode, `lseek` whence, `ioctl` request,
-  or `mkdir` mode, and `path₂` is `rename`'s destination. `phase`, `expect`, results, and
+  `mkdir` mode, or `fallocate` mode (contract 0.14; mode 0 the only one before, so every
+  earlier fingerprint stands), and `path₂` is `rename`'s destination. `kind` is the op kind's
+  number, `truncate` (2026-11-02) numbered after every earlier kind for the same reason. `phase`, `expect`, results, and
   issue order are not hashed. Two runs with the same fingerprint executed the same multiset
   of positioned ops.
 
@@ -1113,8 +1115,8 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   `io_uring_enter` for a completion or the nearest `compute` timer (`IORING_ENTER_EXT_ARG`,
   kernel 5.11+), drains the CQ, and dispatches by `user_data`. Opcodes used: `openat`,
   `read`, `write`, `fsync`/`fdatasync`, `statx` (stat, fstat), `unlinkat` (unlink, rmdir),
-  `mkdirat`, `renameat`, `fallocate`, `fadvise`, `ftruncate` (6.9+). What has no opcode
-  (`lseek`, `ioctl`, `readdir`/`getdents64`), or what the ring's probe says the kernel lacks,
+  `mkdirat`, `renameat`, `fallocate` (with its mode), `fadvise`, `ftruncate` (6.9+). What has no opcode
+  (`lseek`, `ioctl`, `readdir`/`getdents64`, `truncate` by path), or what the ring's probe says the kernel lacks,
   runs inline on the loop thread through the blocking backend, as an `io_uring` application
   has to do; `close` drops the actor's reference as under `sync`. So does an `fadvise` of
   4 GiB or more: the SQE carries its length in 32 bits (the 64-bit form is Linux 6.7 and the
@@ -1859,7 +1861,15 @@ Lines: a header, then one op per line in the order the calls returned.
   since the lanes' interleaving decided it; the header's notes count the rewrites
   (`shared_positions_resolved`). An `mmap` of a file range is one positioned `read` of the
   range (`mmap_as_read`; the faults inside it are not in an `strace`). Calls the schema has
-  no op for are dropped and counted by name.
+  no op for are dropped and counted by name. ~~A `truncate(2)` by path was one of them~~
+  (until 2026-11-02, `DESIGN_REVIEW.md` §3.92): it is a `truncate` line with its `path` and
+  `len`, and a `fallocate` carries its `mode` by flag name (`"mode":["KEEP_SIZE","PUNCH_HOLE"]`,
+  none for mode 0), a mode with a bit no flag names left out and noted
+  (`not_exported:fallocate:mode …`), never written as another. Nothing that frees or moves a
+  file's space is dropped: the filesystem's work of taking a file's extents apart and
+  reclaiming them, deferred, is a load of its own. The runner issues both as the trace made
+  them under every API (`truncate` inline under `io_uring`, which has no opcode for a path;
+  under `mmap` this lane's mapping of the path stops at the new size).
 - **`creates`** lists the paths the trace brings into being under the root (an open with
   `CREAT` of a path not seen before, a `mkdir`, a `rename` destination).
 
@@ -1894,7 +1904,7 @@ application). Two orders cross lanes, both the trace's:
   the application held) waits until every use of the id has completed, then drops the
   descriptor.
 - **Path order.** On a path the trace changes, a changing op (an open with `CREAT` or
-  `TRUNC`, a `write`, `ftruncate`, `fallocate`, a `fsync`, `fdatasync`, or `close` of a
+  `TRUNC`, a `write`, `truncate`, `ftruncate`, `fallocate`, a `fsync`, `fdatasync`, or `close` of a
   writable open, a `rename` on both its paths, `unlink`, `mkdir`, `rmdir`) waits for every
   earlier op on that path, and a reading op (an open to read, `read`, `fstat`, `stat`,
   `readdir`, `lseek`, `fadvise`, `ioctl`) waits for every earlier changing op on it. Reads
@@ -2250,7 +2260,7 @@ sample), and `aeiou datagen`.
 | `rename` | a copy on the server (`CopyObject`) and a `DELETE` of the source: two requests, not atomic, a reader between them sees both names; the target may be under another endpoint's prefix in the same bucket (on the same server); one in another bucket or outside the object store is `EXDEV`. S3 copies at most 5 GiB in one `CopyObject`, and `object_store` 0.14.2 has no multipart copy (`UploadPartCopy`): a copy that fails is followed by a `HEAD` of the source, and one over 5 GiB is `EFBIG`, naming the limit (2026-10-15); a store that copies more (MinIO) renames it. A source the actor has open for writing, its upload unsent, is `EBUSY`: its object is made by its close (V18), so the copy would find none, or an older one, and the close would put the object back at the old name, where POSIX renames the open file; a handle open for writing on the target makes no object at its close, as at an `unlink` (2026-10-15) |
 | `mkdir`, `rmdir` | none: a prefix is no object (and is not recorded among the objects created) |
 | `read` of a handle opened for writing | `EBADF`, as for `O_WRONLY` |
-| `open` with `APPEND`, `RDWR`, `EXCL`, or `CREAT` or `TRUNC` without `WRONLY`; `ftruncate`; `fallocate` | refused by V18 at `aeiou check` (`schema/README.md` §4); `EOPNOTSUPP` here should one come (a read-only `CREAT` or `TRUNC` opens for reading) |
+| `open` with `APPEND`, `RDWR`, `EXCL`, or `CREAT` or `TRUNC` without `WRONLY`; `truncate`; `ftruncate`; `fallocate` | refused by V18 at `aeiou check` (`schema/README.md` §4); `EOPNOTSUPP` here should one come (a read-only `CREAT` or `TRUNC` opens for reading) |
 
 The structural checks are the POSIX ones: a read returns the computed count, `readdir` the
 computed entries. Errors carry an errno for `expect` lists and the check (`object::errno_of`):

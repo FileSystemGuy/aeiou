@@ -27,7 +27,7 @@ fn abstract_with(dir: &Path, lines: &str, count: Option<i64>) -> PathBuf {
     std::fs::write(dir.join("t.jsonl"), &text).unwrap();
     let count = count.map(|c| format!(r#""count": {c},"#)).unwrap_or_default();
     let ast = format!(
-        r#"{{"ast": "0.13", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
+        r#"{{"ast": "0.14", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
             "actors": {{"app": {{{count} "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{}"}}}}]}}}}}}"#,
         sha(text.as_bytes())
     );
@@ -498,6 +498,7 @@ fn every_op_of_a_trace_runs_to_the_dry_runs_fingerprint() {
 {"lane":0,"op":"close","fd":1}
 {"lane":0,"op":"rename","path":"dir/a","to":"dir/b"}
 {"lane":0,"op":"stat","path":"dir/b"}
+{"lane":0,"op":"truncate","path":"dir/b","len":10}
 {"lane":0,"op":"unlink","path":"dir/b"}
 {"lane":0,"op":"rmdir","path":"dir"}
 "#;
@@ -507,7 +508,7 @@ fn every_op_of_a_trace_runs_to_the_dry_runs_fingerprint() {
     let tf = loaded.traces.get("t.jsonl").unwrap();
     // `in` is named only by the failed mkdir: no input; `dir` is made by the trace
     assert_eq!(tf.inputs, Vec::<String>::new());
-    assert_eq!(tf.ops, 21);
+    assert_eq!(tf.ops, 22);
     let dry = dryrun::run(model, 1, None).unwrap();
     let root = d.join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -515,8 +516,84 @@ fn every_op_of_a_trace_runs_to_the_dry_runs_fingerprint() {
     for be in [BackendKind::Sync, BackendKind::Uring, BackendKind::LibAio, BackendKind::PosixAio] {
         let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap_or_else(|e| panic!("{}: {e:#}", be.describe()));
         assert_eq!(rep.stats.fingerprint, dry.total.fingerprint, "{}", be.describe());
-        assert_eq!((rep.stats.ops, rep.stats.expected_errors, rep.stats.bytes_written), (21, 3, 100), "{}", be.describe());
+        assert_eq!((rep.stats.ops, rep.stats.expected_errors, rep.stats.bytes_written), (22, 3, 100), "{}", be.describe());
         assert!(!root.join("dir").exists(), "{}", be.describe());
+    }
+}
+
+/// A `truncate(2)` by path runs as the trace made it (`DESIGN_REVIEW.md` §3.92): the reads after
+/// it find the shorter file, under every API, a mapping of the path this lane holds included,
+/// and its own kind in the counts. A trace may truncate a file it did not create, which must
+/// then exist, and never `--root` itself.
+#[test]
+fn a_truncate_by_path_runs_as_traced_under_every_backend() {
+    let lines = r#"
+{"aeiou_trace":1,"lanes":1,"creates":["f"]}
+{"lane":0,"op":"open","fd":0,"path":"f","flags":["RDWR","CREAT","TRUNC"],"mode":420}
+{"lane":0,"op":"write","fd":0,"offset":0,"len":8192,"ret":8192}
+{"lane":0,"op":"truncate","path":"f","len":100}
+{"lane":0,"op":"read","fd":0,"offset":0,"len":8192,"ret":100}
+{"lane":0,"op":"close","fd":0}
+{"lane":0,"op":"truncate","path":"in","len":0}
+"#;
+    let d = tmpdir("truncate");
+    let p = abstract_with(&d, lines, Some(1));
+    let (loaded, model) = leaked(&p, 1);
+    assert_eq!(loaded.traces.get("t.jsonl").unwrap().inputs, vec!["in".to_string()]);
+    let dry = dryrun::run(model, 1, None).unwrap();
+    let root = d.join("root");
+    for be in [BackendKind::Sync, BackendKind::PosixAio, BackendKind::Mmap, BackendKind::Uring, BackendKind::LibAio] {
+        std::fs::create_dir_all(&root).unwrap();
+        let _ = std::fs::remove_file(root.join("f"));
+        std::fs::write(root.join("in"), vec![7u8; 5000]).unwrap();
+        let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap_or_else(|e| panic!("{}: {e:#}", be.describe()));
+        assert_eq!(rep.stats.fingerprint, dry.total.fingerprint, "{}", be.describe());
+        assert_eq!(rep.stats.bytes_read, 100, "{}", be.describe());
+        assert_eq!(std::fs::metadata(root.join("f")).unwrap().len(), 100, "{}", be.describe());
+        assert_eq!(std::fs::metadata(root.join("in")).unwrap().len(), 0, "{}", be.describe());
+    }
+    let refused = r#"
+{"aeiou_trace":1,"lanes":1,"creates":[]}
+{"lane":0,"op":"truncate","path":".","len":0}
+"#;
+    let d2 = tmpdir("truncate-root");
+    let p2 = abstract_with(&d2, refused, Some(1));
+    let err = match aeiou::load(&p2) {
+        Ok(_) => panic!("a truncate of --root loaded"),
+        Err(e) => format!("{e:#}"),
+    };
+    assert!(err.contains("is --root itself, and the trace changes it"), "{err}");
+}
+
+/// A `fallocate` runs with its mode (`DESIGN_REVIEW.md` §3.92): a hole punched frees the range
+/// and keeps the size, never an allocation, under every API; the mode is in the fingerprint.
+#[test]
+fn a_fallocate_runs_with_its_mode_under_every_backend() {
+    use std::os::unix::fs::MetadataExt;
+    let lines = r#"
+{"aeiou_trace":1,"lanes":1,"creates":["f"]}
+{"lane":0,"op":"open","fd":0,"path":"f","flags":["RDWR","CREAT","TRUNC"],"mode":420}
+{"lane":0,"op":"write","fd":0,"offset":0,"len":65536,"ret":65536}
+{"lane":0,"op":"fsync","fd":0}
+{"lane":0,"op":"fallocate","fd":0,"offset":0,"len":61440,"mode":["KEEP_SIZE","PUNCH_HOLE"]}
+{"lane":0,"op":"close","fd":0}
+"#;
+    let d = tmpdir("punch");
+    let p = abstract_with(&d, lines, Some(1));
+    let (_, model) = leaked(&p, 1);
+    let dry = dryrun::run(model, 1, None).unwrap();
+    let plain = tmpdir("punch-plain");
+    let (_, model0) = leaked(&abstract_with(&plain, &lines.replace(r#","mode":["KEEP_SIZE","PUNCH_HOLE"]"#, ""), Some(1)), 1);
+    assert_ne!(dryrun::run(model0, 1, None).unwrap().total.fingerprint, dry.total.fingerprint, "the mode is part of the op");
+    let root = d.join("root");
+    for be in [BackendKind::Sync, BackendKind::PosixAio, BackendKind::Mmap, BackendKind::Uring, BackendKind::LibAio] {
+        std::fs::create_dir_all(&root).unwrap();
+        let _ = std::fs::remove_file(root.join("f"));
+        let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap_or_else(|e| panic!("{}: {e:#}", be.describe()));
+        assert_eq!(rep.stats.fingerprint, dry.total.fingerprint, "{}", be.describe());
+        let m = std::fs::metadata(root.join("f")).unwrap();
+        assert_eq!(m.len(), 65536, "{}: KEEP_SIZE", be.describe());
+        assert!(m.blocks() * 512 <= 8192, "{}: {} bytes allocated after the hole", be.describe(), m.blocks() * 512);
     }
 }
 
@@ -610,7 +687,7 @@ fn a_trace_of_another_format_or_out_of_order_is_refused_at_load() {
     let good = sha(text.as_bytes());
     let doc = |other: &str| {
         format!(
-            r#"{{"ast": "0.13", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
+            r#"{{"ast": "0.14", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
             "actors": {{"app": {{"count": 1, "body": [{{"choose": {{"arms": [
                {{"weight": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{good}"}}}}]}},
                {{"weight": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{other}"}}}}]}}]}}}}]}}}}}}"#
@@ -644,7 +721,7 @@ fn a_traces_paths_are_checked_where_their_endpoints_place_them() {
     std::fs::write(
         &ast,
         format!(
-            r#"{{"ast": "0.13", "name": "trace_ep", "doc": "t", "params": {{}},
+            r#"{{"ast": "0.14", "name": "trace_ep", "doc": "t", "params": {{}},
              "datasets": {{"d": {{"layout": "whole", "pattern": "d/f{{id}}", "count": 1, "size": {{"const": 100}}, "seed": 3, "access": "map"}}}},
              "namespaces": {{"o": {{"pattern": "o/f{{k}}", "fields": {{"k": "int"}}, "size": "as_written", "seed": 1}}}},
              "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{}"}}}}]}}}}}}"#,

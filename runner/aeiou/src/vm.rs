@@ -52,6 +52,8 @@ pub enum OpKind {
     Rename,
     Readdir,
     Fadvise,
+    /// `truncate(2)`, by path (last: a kind's number is hashed, so the earlier ones keep theirs).
+    Truncate,
 }
 
 impl OpKind {
@@ -75,12 +77,13 @@ impl OpKind {
             OpKind::Rename => "rename",
             OpKind::Readdir => "readdir",
             OpKind::Fadvise => "fadvise",
+            OpKind::Truncate => "truncate",
         }
     }
 
-    pub const ALL: [OpKind; 18] = [
+    pub const ALL: [OpKind; 19] = [
         OpKind::Open, OpKind::Close, OpKind::Read, OpKind::Write, OpKind::Lseek, OpKind::Ioctl, OpKind::Fstat,
-        OpKind::Stat, OpKind::Fsync, OpKind::Fdatasync, OpKind::Unlink, OpKind::Ftruncate, OpKind::Fallocate,
+        OpKind::Stat, OpKind::Fsync, OpKind::Fdatasync, OpKind::Unlink, OpKind::Truncate, OpKind::Ftruncate, OpKind::Fallocate,
         OpKind::Mkdir, OpKind::Rmdir, OpKind::Rename, OpKind::Readdir, OpKind::Fadvise,
     ];
 }
@@ -1844,13 +1847,18 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 self.written.remove(&t.path);
                 self.emit(OpKind::Unlink, t, None, 0, 0, 0, 0, &f.expect, false)
             }
+            Node::Truncate { file, len, expect } => {
+                let t = self.target(file)?;
+                let len = self.expr(len)?.as_int()?;
+                self.emit(OpKind::Truncate, t, None, 0, len, 0, 0, expect, false)
+            }
             Node::Ftruncate { file, len, expect } => {
                 let t = self.target(file)?;
                 let len = self.expr(len)?.as_int()?;
                 self.opened(&t.path, "ftruncate")?;
                 self.emit(OpKind::Ftruncate, t, None, 0, len, 0, 0, expect, false)
             }
-            Node::Fallocate { file, offset, len, expect } => {
+            Node::Fallocate { file, offset, len, mode, expect } => {
                 let t = self.target(file)?;
                 let off = match offset {
                     Some(e) => self.expr(e)?.as_int()?,
@@ -1858,7 +1866,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 };
                 let len = self.expr(len)?.as_int()?;
                 self.opened(&t.path, "fallocate")?;
-                self.emit(OpKind::Fallocate, t, None, off, len, 0, 0, expect, false)
+                // the mode's bits: 0, the only mode before contract 0.14, hashes as it did
+                self.emit(OpKind::Fallocate, t, None, off, len, 0, crate::ast::FallocFlag::mode(mode), expect, false)
             }
             Node::Mkdir { dir, mode, expect } => {
                 let t = self.target(dir)?;
@@ -2030,7 +2039,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.13", "name": "t",
+                r#"{{"ast": "0.14", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

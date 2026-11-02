@@ -330,6 +330,76 @@ struct Template {
     removes: Vec<(i64, u32)>,
     readers: u32,
     kept: Vec<usize>,
+    space: Space,
+}
+
+/// What a template's calls did to the space its files hold (`DESIGN_REVIEW.md` §3.92): a
+/// truncate, by an open's `TRUNC` or a call, is the filesystem's work of taking a file's extents
+/// apart and reclaiming their space, deferred and finished soon after, and an open that truncates
+/// reads nothing where one that does not may read the whole file. Paths are counted once each.
+#[derive(Default)]
+struct Space {
+    /// Opens with `TRUNC` that succeeded; of them, on a path an earlier open had written (data
+    /// discarded) and on a path the trace had not touched before (what it held is not known).
+    trunc_opens: u64,
+    trunc_written: u64,
+    trunc_unseen: u64,
+    truncate: u64,
+    ftruncate: u64,
+    /// `truncate` and `ftruncate` to length 0.
+    to_zero: u64,
+    /// `fallocate` by mode (`KEEP_SIZE|PUNCH_HOLE`); mode 0 is `allocate`.
+    fallocate: BTreeMap<String, u64>,
+    /// The bytes of the ranges `PUNCH_HOLE` freed and `COLLAPSE_RANGE` removed.
+    freed_ranges: i64,
+    /// Paths an open has written, and has not unlinked or truncated to 0 since.
+    written: HashSet<u32>,
+}
+
+impl Space {
+    /// A `truncate`, `ftruncate`, or `fallocate` that succeeded, on path `p` of the template.
+    fn changed(&mut self, op: &str, p: u32, e: &Ev) {
+        let len = e.len.unwrap_or(0);
+        match op {
+            "truncate" | "ftruncate" => {
+                if op == "truncate" {
+                    self.truncate += 1;
+                } else {
+                    self.ftruncate += 1;
+                }
+                if len == 0 {
+                    self.to_zero += 1;
+                    self.written.remove(&p);
+                }
+            }
+            "fallocate" => {
+                let mode: Vec<&str> = e.mode.as_ref().and_then(Value::as_array).map(|m| m.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                if mode.iter().any(|f| *f == "PUNCH_HOLE" || *f == "COLLAPSE_RANGE") {
+                    self.freed_ranges += len.max(0);
+                }
+                let key = if mode.is_empty() { "allocate".to_string() } else { mode.join("|") };
+                *self.fallocate.entry(key).or_insert(0) += 1;
+            }
+            _ => {}
+        }
+    }
+
+    fn any(&self) -> bool {
+        self.trunc_opens + self.truncate + self.ftruncate > 0 || !self.fallocate.is_empty()
+    }
+
+    fn out(&self) -> Value {
+        json!({
+            "truncating_opens": self.trunc_opens,
+            "truncating_opens_of_written": self.trunc_written,
+            "truncating_opens_of_unseen": self.trunc_unseen,
+            "truncate": self.truncate,
+            "ftruncate": self.ftruncate,
+            "to_zero": self.to_zero,
+            "fallocate": self.fallocate.iter().map(|(k, n)| (k.clone(), json!(n))).collect::<Map<_, _>>(),
+            "freed_ranges_bytes": self.freed_ranges,
+        })
+    }
 }
 
 impl Template {
@@ -393,6 +463,9 @@ impl Template {
             "offsets": self.offsets.iter().map(|(k, n)| (k.to_string(), json!(n))).collect::<Map<_, _>>(),
             "runs_per_open": hist(&self.runs),
         });
+        if self.space.any() {
+            d["space"] = self.space.out();
+        }
         if raw {
             let mut p = self.paths.clone();
             p.sort();
@@ -501,6 +574,7 @@ struct Open {
     slot: usize,
     tpl: usize,
     touch: usize,
+    path: u32,
     ops: Vec<u16>,
     first: i64,
     last: i64,
@@ -578,6 +652,9 @@ struct Ev {
     offset: Option<i64>,
     len: Option<i64>,
     ops: Option<Vec<Ev>>,
+    /// An open's flags, a `fallocate`'s mode flags (the line's `flags` and `mode`).
+    flags: Option<Vec<String>>,
+    mode: Option<Value>,
 }
 
 impl Ev {
@@ -598,6 +675,12 @@ impl Digester {
 
     fn note(&mut self, k: &str) {
         *self.notes.entry(k.to_string()).or_insert(0) += 1;
+    }
+
+    /// Whether an earlier call named `path`.
+    fn known(&self, path: &str) -> bool {
+        let (key, _) = split(path);
+        self.templates.get(&key).is_some_and(|&i| self.by_id[i].index.contains_key(path))
     }
 
     fn template(&mut self, path: &str) -> (usize, u32) {
@@ -622,6 +705,7 @@ impl Digester {
                     removes: Vec::new(),
                     readers: 0,
                     kept: Vec::new(),
+                    space: Space::default(),
                 });
                 self.templates.insert(key, id);
                 id
@@ -703,7 +787,7 @@ impl Digester {
         };
         u.bytes[kind] += n;
         u.data.add(off, n);
-        let tpl = u.tpl;
+        let (tpl, path) = (u.tpl, u.path);
         if member.is_none() {
             let id = self.op_id(op);
             self.opens.get_mut(&oid).unwrap().op(id, t, dur); // a submit's members are the submit unit's ops, not the open's
@@ -712,6 +796,9 @@ impl Digester {
         tp.count(op);
         tp.bytes[kind] += n;
         tp.size[kind].add(len.max(0) as u64, 1);
+        if kind == 1 && n > 0 {
+            tp.space.written.insert(path);
+        }
     }
 
     fn event(&mut self, e: &Ev) {
@@ -721,7 +808,17 @@ impl Digester {
         match op {
             "open" => {
                 let path = e.path.as_deref().unwrap_or("");
+                let truncating = e.flags.as_ref().is_some_and(|f| f.iter().any(|x| x == "TRUNC")) && e.ret.as_ref().map_or(true, |r| !r.is_string());
+                let unseen = truncating && !self.known(path);
                 let (tpl, p) = self.template(path);
+                if truncating {
+                    let sp = &mut self.by_id[tpl].space;
+                    sp.trunc_opens += 1;
+                    sp.trunc_unseen += u64::from(unseen);
+                    if sp.written.remove(&p) {
+                        sp.trunc_written += 1;
+                    }
+                }
                 let open = self.op_id("open");
                 let slot = self.slot(lane);
                 let tp = &mut self.by_id[tpl];
@@ -730,7 +827,7 @@ impl Digester {
                 tp.touches.push(Touch { t, path: p, lane, first: t, last: t + dur, ..Default::default() });
                 let touch = tp.touches.len() - 1;
                 tp.prune();
-                let o = Open { lane, slot, tpl, touch, ops: vec![open], first: t, last: t + dur, bytes: [0, 0], synced: false, pos: 0, data: Data::default() };
+                let o = Open { lane, slot, tpl, touch, path: p, ops: vec![open], first: t, last: t + dur, bytes: [0, 0], synced: false, pos: 0, data: Data::default() };
                 if let Some(old) = self.opens.insert(e.fd.unwrap_or(-1), o) {
                     self.retire(old, false);
                 }
@@ -786,8 +883,11 @@ impl Digester {
                     u.synced = true;
                 }
                 u.op(id, t, dur);
-                let tpl = u.tpl;
+                let (tpl, path) = (u.tpl, u.path);
                 self.by_id[tpl].count(op);
+                if e.ret.as_ref().map_or(true, |r| !r.is_string()) {
+                    self.by_id[tpl].space.changed(op, path, e);
+                }
             }
             _ => {
                 // a path op: a unit of one op
@@ -800,6 +900,10 @@ impl Digester {
                 self.place(lane, slot, Unit { first: t, last: t + dur, template: tpl as i64, key, groups, ops: 1, bytes: [0, 0] });
                 if op == "unlink" && e.ret.as_ref().map_or(true, |r| r.as_i64() == Some(0)) {
                     self.by_id[tpl].removes.push((t, p));
+                    self.by_id[tpl].space.written.remove(&p);
+                }
+                if op == "truncate" && e.ret.as_ref().map_or(true, |r| !r.is_string()) {
+                    self.by_id[tpl].space.changed(op, p, e);
                 }
                 if op == "rename" {
                     if let Some(to) = e.to.as_deref() {
@@ -2301,6 +2405,30 @@ fn projection_rank(k: &str) -> (usize, String) {
 }
 
 /// The text report of a document.
+/// A template's `space` as the report says it: only what happened.
+fn space_text(sp: &Value) -> String {
+    let n = |k: &str| sp[k].as_i64().unwrap_or(0);
+    let mut parts = Vec::new();
+    if n("truncating_opens") > 0 {
+        parts.push(format!("{} truncating opens ({} of a path written before, {} of one not seen before)", n("truncating_opens"), n("truncating_opens_of_written"), n("truncating_opens_of_unseen")));
+    }
+    for k in ["truncate", "ftruncate"] {
+        if n(k) > 0 {
+            parts.push(format!("{k} {}", n(k)));
+        }
+    }
+    if n("to_zero") > 0 {
+        parts.push(format!("{} to length 0", n("to_zero")));
+    }
+    for (mode, c) in sp["fallocate"].as_object().into_iter().flatten() {
+        parts.push(format!("fallocate {mode} {c}"));
+    }
+    if n("freed_ranges_bytes") > 0 {
+        parts.push(format!("ranges freed {}", bytes_text(n("freed_ranges_bytes"))));
+    }
+    parts.join("; ")
+}
+
 pub fn render(doc: &Value) -> String {
     let mut out: Vec<String> = Vec::new();
     let arr = |v: &Value| v.as_array().cloned().unwrap_or_default();
@@ -2343,6 +2471,9 @@ pub fn render(doc: &Value) -> String {
             line += &format!("; offsets {}", offs.join(", "));
         }
         out.push(line);
+        if let Some(sp) = t.get("space") {
+            out.push(format!("       space: {}", space_text(sp)));
+        }
         for f in arr(&t["fields"]) {
             let rng = if f["kind"] == "int" { format!(" {}..{}", py(&f["min"]), py(&f["max"])) } else { String::new() };
             let width = match f["width"].as_i64() {

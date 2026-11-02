@@ -58,7 +58,7 @@ fn op_codes_come_back_as_the_values_they_were_made_from() {
 #[test]
 fn an_ast_of_another_contract_version_is_refused() {
     let e = aeiou::ast::parse(r#"{"ast": "0.9", "name": "t", "actors": {}}"#).unwrap_err();
-    assert_eq!(e.to_string(), "ast version `0.9` is not `0.13`");
+    assert_eq!(e.to_string(), "ast version `0.9` is not `0.14`");
 }
 
 /// A cloned draw keeps the site `sites::annotate` gave it, so a clone draws what the original does.
@@ -97,7 +97,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(params: Value, datasets: Value, namespaces: Value, body: Value) -> String {
-    json!({"ast": "0.13", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
+    json!({"ast": "0.14", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
 }
 
 /// One plain dataset `d` of ten one-byte files.
@@ -169,6 +169,7 @@ fn choose_takes_its_arms_by_weight_and_position() {
 /// and without an offset), `fdatasync`, `rmdir`, and `rename`, each with the fields it carries.
 #[test]
 fn ftruncate_fallocate_fdatasync_and_rmdir_carry_their_arguments() {
+    // `truncate` takes a path, open or not; `fallocate` its mode as the bits of `aux`
     let ns = json!({"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": 100, "seed": 2}});
     let o = |k: i64| json!({"object": {"namespace": "o", "fields": {"k": k}}});
     let body = json!([
@@ -176,8 +177,10 @@ fn ftruncate_fallocate_fdatasync_and_rmdir_carry_their_arguments() {
         {"ftruncate": {"file": o(1), "len": 10}},
         {"fallocate": {"file": o(1), "offset": 4, "len": 8}},
         {"fallocate": {"file": o(1), "len": 3}},
+        {"fallocate": {"file": o(1), "offset": 0, "len": 4, "mode": ["KEEP_SIZE", "PUNCH_HOLE"]}},
         {"fdatasync": {"file": o(1)}},
         {"close": {"file": o(1)}},
+        {"truncate": {"file": o(1), "len": 2}},
         {"rename": {"from": o(1), "to": o(2)}},
         {"mkdir": {"dir": o(3)}},
         {"rmdir": {"dir": o(3)}}
@@ -187,8 +190,10 @@ fn ftruncate_fallocate_fdatasync_and_rmdir_carry_their_arguments() {
         "ftruncate o/1 off=0 len=10 bytes=0 aux=0",
         "fallocate o/1 off=4 len=8 bytes=0 aux=0",
         "fallocate o/1 off=0 len=3 bytes=0 aux=0",
+        "fallocate o/1 off=0 len=4 bytes=0 aux=3",
         "fdatasync o/1 off=0 len=0 bytes=0 aux=0",
         "close o/1 off=0 len=0 bytes=0 aux=0",
+        "truncate o/1 off=0 len=2 bytes=0 aux=0",
         "rename o/1 -> o/2 off=0 len=0 bytes=0 aux=0",
         &format!("mkdir o/3 off=0 len=0 bytes=0 aux={}", 0o777),
         "rmdir o/3 off=0 len=0 bytes=0 aux=0",

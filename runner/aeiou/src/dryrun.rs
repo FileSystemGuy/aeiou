@@ -160,7 +160,8 @@ impl<'m, 'a> Sink<'m, 'a> for DryRun {
                 OpKind::Open => line.push_str(&format!(" flags={:#x}", op.aux)),
                 OpKind::Lseek => line.push_str(&format!(" off={} whence={}", op.offset, op.aux)),
                 OpKind::Fadvise => line.push_str(&format!(" off={} len={} advice={:?}", op.offset, op.len, crate::ast::Advice::from_code(op.aux))),
-                OpKind::Ftruncate => line.push_str(&format!(" len={}", op.len)),
+                OpKind::Ftruncate | OpKind::Truncate => line.push_str(&format!(" len={}", op.len)),
+                OpKind::Fallocate if op.aux != 0 => line.push_str(&format!(" off={} len={} mode={:#x}", op.offset, op.len, op.aux)),
                 OpKind::Fallocate => line.push_str(&format!(" off={} len={}", op.offset, op.len)),
                 OpKind::Rename => line.push_str(&format!(" -> {}", op.path2.unwrap_or("?"))),
                 _ => {}
