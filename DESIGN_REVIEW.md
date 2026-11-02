@@ -6324,6 +6324,14 @@ integration job now runs the whole Python suite against its binary with
 in no job), the object job `test_object.py` with `object` and `minio` added; the `abstracts` job
 keeps its runner-less run, where those skips are right. `test_require.py` holds the hook to that
 and requires every skip in the suite to name a capability, so a new one cannot escape it.
+*Revised 2026-11-02 (the user's choice, of two this side offered):* the `abstracts` job reported
+579 passed and 227 skipped, all of them run by `runner-integration`, so it now names what it is
+without, `AEIOU_WITHOUT=runner,formats,object,strace,header,minio`; a test marked `skipif` for
+one of them is deselected and counted by capability in the summary (`AEIOU_WITHOUT: 228
+deselected, needing minio 15, runner 213`), never a skip, and a test that skips for one at run
+time fails, so the seven run-time skips known before a test runs (the runner or `aeiou-trace`
+not built, no MinIO) became marks (`test_require.py` holds both). The other choice, the runner,
+`strace`, and MinIO built into the quick job, would have run the integration job twice.
 
 (iv) The Rust tests fail what they lack (asked by the user 2026-10-14). A Rust test has no
 skipped state: the three MinIO tests in `tests/object.rs` returned early when `TEST_MINIO_BIN`

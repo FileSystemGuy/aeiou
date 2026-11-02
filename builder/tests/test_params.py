@@ -12,6 +12,7 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 BUILDER = HERE.parent
 ROOT = BUILDER.parent
+needs_runner = pytest.mark.skipif(not pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).exists(), reason="runner binary not built")
 WORKLOADS = ROOT / "workloads"
 
 
@@ -88,6 +89,7 @@ def test_value_rules():
     assert "elements are a scalar" in params.check(ast, {**base, "abstract": "safetensors_load", "params": v2({"off": [1, [2]]})})[0]
 
 
+@needs_runner
 def test_an_integral_float_is_the_integer_its_default_is(tmp_path):
     """A value keeps its default's kind down to the number, as the runner has it (RC1 review):
     where the default is an integer, 3000.0 is 3000 (a divisor too: `files_per_directory`
@@ -108,8 +110,6 @@ def test_an_integral_float_is_the_integer_its_default_is(tmp_path):
     assert params.check(dast, {**dbase, "params": v2({"tail_back": [1, 2.5]})}) == ["params: tail_back[1]: the default is an integer, the value 2.5 is not"]
     # the runner takes and refuses the same files
     runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
-    if not runner.exists():
-        pytest.skip("runner binary not built")
     for value, ok in ((3000.0, True), (20.7, False)):
         f = tmp_path / "f.params.json"
         job = {"batch": 32, "workers": 8, "prefetch": 2, "step_time": 105_000_000, "sample_median": 112_640}   # required since 2026-10-22
@@ -355,6 +355,7 @@ GIVEN = [  # (abstract, given, the runner's `check_given` errors)
 ]
 
 
+@needs_runner
 @pytest.mark.parametrize("which,given,want", GIVEN, ids=[f"{w}-{g}" for w, g, _ in GIVEN])
 def test_given_scalars_are_judged_by_every_rule_that_reads_them(tmp_path, which, given, want):
     """A given scalar is the value in effect for every rule the runner's `check_given` applies,
@@ -373,8 +374,6 @@ def test_given_scalars_are_judged_by_every_rule_that_reads_them(tmp_path, which,
     assert r.returncode == (1 if want else 0), r.stdout + r.stderr
     # resolved here: CI gives a path relative to builder/, and the run below is in tmp_path
     runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
-    if not runner.exists():
-        pytest.skip("runner binary not built")
     r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)],
                        capture_output=True, text=True, cwd=str(tmp_path))
     if want:
@@ -406,6 +405,7 @@ def test_non_json_numbers_in_a_parameter_file_are_refused(tmp_path, lit):
             assert r.returncode == 1 and "not JSON" in r.stderr, r.stderr
 
 
+@needs_runner
 def test_a_file_pinned_to_the_builders_hash_is_taken_by_the_runner(tmp_path):
     """A float literal is read to the nearest f64 by both sides: the runner's serde_json read
     123456789.12345679 one ULP off, so a parameter file pinned to the hash `aeiou-params` computes
@@ -418,8 +418,6 @@ def test_a_file_pinned_to_the_builders_hash_is_taken_by_the_runner(tmp_path):
     r = _run(["check", a, f])
     assert r.returncode == 0, r.stdout + r.stderr
     runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
-    if not runner.exists():
-        pytest.skip("runner binary not built")
     r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)],
                        capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr

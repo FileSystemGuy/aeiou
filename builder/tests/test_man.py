@@ -19,6 +19,7 @@ ROOT = BUILDER.parent
 MAN = ROOT / "man"
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 TRACE_BIN = pathlib.Path(os.environ.get("AEIOU_TRACE") or RUNNER.with_name("aeiou-trace"))
+needs_trace = pytest.mark.skipif(not TRACE_BIN.exists(), reason="needs the runner binary aeiou-trace")
 
 # tool -> (module, subcommands); a flat tool has the one section `### <tool>`
 TOOLS = {
@@ -41,8 +42,7 @@ def help_text(module, *sub):
     """A Python tool's help by its module; `trace` is the runner's `aeiou-trace` binary (DESIGN_REVIEW.md §3.89)."""
     env = {"PYTHONPATH": str(BUILDER), "PATH": "/usr/bin:/bin"}
     if module == "trace":
-        if not TRACE_BIN.exists():
-            pytest.skip("needs the runner binary aeiou-trace")
+        assert TRACE_BIN.exists(), "a test that runs aeiou-trace is marked needs_trace"
         r = subprocess.run([str(TRACE_BIN), *sub, "--help"], capture_output=True, text=True, cwd=str(BUILDER), env=env)
         assert r.returncode == 0, r.stderr
         return r.stdout
@@ -78,7 +78,7 @@ def read(name):
     return (MAN / name).read_text()
 
 
-@pytest.mark.parametrize("tool", sorted(TOOLS))
+@pytest.mark.parametrize("tool", [pytest.param(t, marks=needs_trace) if TOOLS[t][0] == "trace" else t for t in sorted(TOOLS)])
 def test_python_tool_options_are_the_pages(tool):
     module, subs = TOOLS[tool]
     secs = sections(read(f"{tool}.1.md"))
@@ -119,6 +119,7 @@ def runner_flags():
     return out
 
 
+@needs_trace
 def test_every_flag_named_in_any_page_exists():
     flags = runner_flags()
     for tool, (module, subs) in TOOLS.items():

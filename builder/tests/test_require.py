@@ -1,6 +1,10 @@
 """`AEIOU_REQUIRE` (`conftest.py`): a skip for a capability the job names is a failure, a skip
 for one it does not name stays a skip, an unknown name is a usage error, and every skip in the
-suite names a capability, so no test can lack one unseen (DESIGN_REVIEW.md §3.75)."""
+suite names a capability, so no test can lack one unseen (DESIGN_REVIEW.md §3.75). And
+`AEIOU_WITHOUT`, what a job deliberately lacks: a test marked `skipif` for it is deselected,
+counted by capability, never a skip, and one that skips for it at run time fails, so such a job
+reports no skip (2026-11-02, the user's choice: CI's quick job ran 227 tests as skips that the
+integration job runs)."""
 import os
 import pathlib
 import re
@@ -35,7 +39,7 @@ def test_library():
 '''
 
 
-def probe(tmp_path, require):
+def probe(tmp_path, require, without=None):
     # the suite's conftest itself, loaded from where it is (a copy would be another file, its
     # coverage nobody's), its hooks exposed under the names pytest looks for
     (tmp_path / "conftest.py").write_text(
@@ -44,11 +48,16 @@ def probe(tmp_path, require):
         "_real = importlib.util.module_from_spec(_spec)\n"
         "_spec.loader.exec_module(_real)\n"
         "pytest_configure = _real.pytest_configure\n"
-        "pytest_runtest_makereport = _real.pytest_runtest_makereport\n")
+        "pytest_runtest_makereport = _real.pytest_runtest_makereport\n"
+        "pytest_collection_modifyitems = _real.pytest_collection_modifyitems\n"
+        "pytest_terminal_summary = _real.pytest_terminal_summary\n"
+        "pytest_sessionfinish = _real.pytest_sessionfinish\n")
     (tmp_path / "test_probe.py").write_text(PROBE)
-    env = {k: v for k, v in os.environ.items() if k != "AEIOU_REQUIRE"}
+    env = {k: v for k, v in os.environ.items() if k not in ("AEIOU_REQUIRE", "AEIOU_WITHOUT")}
     if require is not None:
         env["AEIOU_REQUIRE"] = require
+    if without is not None:
+        env["AEIOU_WITHOUT"] = without
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist", "-rA", str(tmp_path)],
                        capture_output=True, text=True, cwd=str(tmp_path), env=env)
     return r.returncode, r.stdout + r.stderr
@@ -66,6 +75,36 @@ def test_a_skip_for_a_required_capability_fails(tmp_path):
     assert code == 1 and "1 failed, 3 skipped" in out, out
     code, out = probe(tmp_path, "runner,gpu")
     assert code != 0 and "AEIOU_REQUIRE: unknown capability gpu" in out, out
+
+
+def test_a_test_for_a_capability_the_job_is_without_is_deselected(tmp_path):
+    code, out = probe(tmp_path, None, "runner")
+    # the marked test is deselected; the one that skips for a missing capability at run time
+    # stays a skip only for one the job does not say it is without
+    assert code == 0 and "3 skipped, 1 deselected" in out, out
+    assert "AEIOU_WITHOUT: 1 deselected, needing runner 1" in out, out
+    code, out = probe(tmp_path, None, "runner,formats,minio")
+    # a run-time skip for one is a failure: mark the test `skipif`, so it is deselected
+    assert code == 1 and "2 failed, 1 skipped, 1 deselected" in out, out
+    assert "skipped at run time for `formats`, which AEIOU_WITHOUT names: mark the test skipif" in out, out
+    code, out = probe(tmp_path, None, "gpu")
+    assert code != 0 and "AEIOU_WITHOUT: unknown capability gpu" in out, out
+    code, out = probe(tmp_path, "runner", "runner")
+    assert code != 0 and "AEIOU_REQUIRE and AEIOU_WITHOUT both name runner" in out, out
+
+
+def test_every_skip_known_before_a_test_runs_is_a_mark():
+    """A run-time `pytest.skip` cannot be deselected by `AEIOU_WITHOUT`, so a skip known before
+    the test runs (the runner or `aeiou-trace` not built, no MinIO) is a `skipif` mark. What only
+    the binary can say (a cargo feature, `aeiou-header` beside it) is asked at run time, in a
+    test marked as needing the runner, which a job without it never runs."""
+    runtime = []
+    for f in sorted(TESTS.glob("test_*.py")):
+        if f.name == "test_require.py":
+            continue
+        runtime += [(f.name, r) for r in re.findall(r'pytest\.skip\(f?"([^"]+)"', f.read_text())]
+    static = [(f, r) for f, r in runtime if any(w in r for w in CAPABILITIES["runner"] + CAPABILITIES["minio"])]
+    assert not static, static
 
 
 def test_every_skip_in_the_suite_names_a_capability():

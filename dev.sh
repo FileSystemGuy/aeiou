@@ -138,7 +138,8 @@ link_header() { ln -sf ../../../builder/.venv/bin/aeiou-header "$ROOT/runner/tar
 job_abstracts() {
     py_sync
     "$PY/python" "$ROOT/schema/check.py"
-    (cd "$ROOT/builder" && AEIOU_REQUIRE=py-formats .venv/bin/pytest -q -n auto)
+    # what this job does not build or install is deselected, never skipped: runner-integration runs it all
+    (cd "$ROOT/builder" && AEIOU_WITHOUT=runner,formats,object,strace,header,minio AEIOU_REQUIRE=py-formats .venv/bin/pytest -q -n auto)
     (cd "$ROOT/builder" && .venv/bin/aeiou-build --hermetic --twice --check $(find ../workloads -name '*.py' -not -path '*/kit/*' | LC_ALL=C sort))
     # the parameter files fit their abstracts
     (cd "$ROOT/builder" && for f in $(find ../workloads -name '*params.json' | LC_ALL=C sort); do

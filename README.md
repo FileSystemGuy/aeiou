@@ -343,7 +343,9 @@ included; the object engine's tests again in a build without `formats`, with
 the integration job that diffs the Rust checker against the reference checker, runs every
 Python test against the binary (the container datasets to their fingerprints, the metrics of
 an strace of the runner held to its own dry run), and checks the workload catalog. A test
-skipped for something its job built fails (`AEIOU_REQUIRE`). A tag `vX.Y.Z` runs a second
+skipped for something its job built fails (`AEIOU_REQUIRE`), and a job without something by
+design (the quick job builds no runner) deselects what needs it, never skipping it
+(`AEIOU_WITHOUT`). A tag `vX.Y.Z` runs a second
 workflow that builds the release tarball and attaches it to a GitHub Release (`.github/workflows/release.yml`).
 
 ## Quick start

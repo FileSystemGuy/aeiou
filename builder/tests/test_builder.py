@@ -1046,6 +1046,7 @@ def test_a_dataset_size_is_never_below_zero():
         w.build()
 
 
+@pytest.mark.skipif(not pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).exists(), reason="runner binary not built")
 def test_integers_outside_64_bits_are_refused_by_builder_checker_and_runner(tmp_path):
     """The contract's integers are i64, a seed u64 (schema/README.md §1). A Python int is
     unbounded; the runner's serde_json parses one past u64 as a float, so such an AST hashed
@@ -1089,8 +1090,6 @@ def test_integers_outside_64_bits_are_refused_by_builder_checker_and_runner(tmp_
     pset = {"params_version": 2, "abstract": "t", "params": {"n": {"default": [1, 2 ** 64]}}}
     assert params_mod.check(ast, pset, name="x") == [f"x: params/n/default/1: integer {2 ** 64} {rng}"]
     runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
-    if not runner.exists():
-        pytest.skip("runner binary not built")
     out = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
     assert out.returncode != 0
     assert [l.strip() for l in (out.stdout + out.stderr).splitlines() if "is outside" in l] == want

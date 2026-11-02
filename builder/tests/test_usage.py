@@ -26,6 +26,7 @@ _BUILDS = [p for p in (ROOT / "runner" / "target" / "release" / "aeiou", ROOT / 
 RUNNER = pathlib.Path(os.environ["AEIOU_RUNNER"]) if "AEIOU_RUNNER" in os.environ else max(_BUILDS, key=lambda p: p.stat().st_mtime, default=ROOT / "runner" / "target" / "release" / "aeiou")
 
 TRACE_BIN = pathlib.Path(os.environ.get("AEIOU_TRACE") or RUNNER.with_name("aeiou-trace"))
+needs_trace = pytest.mark.skipif(not TRACE_BIN.exists(), reason="needs the runner binary aeiou-trace")
 FOOTER = "For more information, try '{prog} --help'.\n"
 MISSING = "the following required arguments were not provided:"
 
@@ -35,8 +36,7 @@ def tool(module, *args, env=None, stdin=None):
     full = {k: v for k, v in os.environ.items() if not k.startswith("AEIOU_")}
     full.update({"PYTHONPATH": str(BUILDER), **(env or {})})
     if module == "trace":
-        if not TRACE_BIN.exists():
-            pytest.skip("needs the runner binary aeiou-trace")
+        assert TRACE_BIN.exists(), "a test that runs aeiou-trace is marked needs_trace"
         return subprocess.run([str(TRACE_BIN), *map(str, args)], input=stdin, capture_output=True, text=True, cwd=str(BUILDER), env=full)
     return subprocess.run([sys.executable, "-m", f"aeiou.{module}", *map(str, args)], input=stdin, capture_output=True, text=True, cwd=str(BUILDER), env=full)
 
@@ -92,6 +92,7 @@ def test_a_wrong_file_for_the_abstract_says_what_an_abstract_is(tmp_path):
     assert r.returncode == 1 and r.stderr.startswith("FAIL file_per_sample.ast.json: an abstract, not a builder script; aeiou-build takes the `.py` that authors it")
 
 
+@needs_trace
 def test_every_tool_and_subcommand_lists_what_it_lacks():
     message, usage = frame(tool("cli"), "aeiou-build")
     assert message == f"{MISSING}\n  <SCRIPTS>...  builder scripts (`.py`), each constructing one or more Workloads"
@@ -128,12 +129,14 @@ def test_every_tool_and_subcommand_lists_what_it_lacks():
     )
 
 
+@needs_trace
 def test_a_failure_during_the_work_names_the_command_and_exits_1(tmp_path):
     r = tool("trace", "compare", tmp_path / "absent.json", tmp_path / "b.json")
     assert r.returncode == 1
     assert r.stderr == f"aeiou-trace compare: {tmp_path / 'absent.json'}: No such file or directory (os error 2)\n"
 
 
+@needs_trace
 def test_the_help_has_the_runners_look():
     for module, args, prog in (("datagen", (), "aeiou-datagen"), ("cli", (), "aeiou-build"), ("params", ("npz",), "aeiou-params npz"), ("trace", ("compare",), "aeiou-trace compare")):
         r = tool(module, *args, "--help")
@@ -154,6 +157,7 @@ HELPS = [("cli",), ("params",), ("params", "defaults"), ("params", "check"), ("p
 
 
 @pytest.mark.parametrize("columns", ["80", "120"])
+@needs_trace
 def test_the_help_wraps_at_spaces_only(columns):
     """(RC1 review, R50) the help wrapped a long word mid-word (`-e trac` / `e=%file,...`) and
     at its hyphens (`aeiou dry-` / `run`): clap wraps at spaces, and so does `usage.Formatter`."""

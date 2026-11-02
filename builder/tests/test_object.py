@@ -27,6 +27,8 @@ obstore = pytest.importorskip("obstore")
 from aeiou import datagen  # noqa: E402
 
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
+# every test here needs the server; marked so a job without it deselects them (conftest.py)
+pytestmark = pytest.mark.skipif(not os.environ.get("TEST_MINIO_BIN"), reason="TEST_MINIO_BIN is not set (a MinIO server binary)")
 USER, SECRET = "aeiou", "aeiou-secret"
 
 # the job and GPU values the stream abstracts, file_per_sample, and hdf5_map require (DESIGN_REVIEW.md §3.78), as flags
@@ -105,8 +107,6 @@ class Minio:
 
 @pytest.fixture(scope="module")
 def minio(tmp_path_factory):
-    if not os.environ.get("TEST_MINIO_BIN"):
-        pytest.skip("TEST_MINIO_BIN is not set (a MinIO server binary)")
     m = Minio(tmp_path_factory.mktemp("minio"))
     yield m
     m.proc.kill()
