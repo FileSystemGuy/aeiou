@@ -106,7 +106,11 @@ work item of its own.
 - **S-8** (A) `creat` loses its mode (read from `a[pi+2]`; creat's is `a[1]`). *Status: fixed
   2026-11-02, with S-7 (same test).*
 - **S-9** (A) `pwritev2`/`preadv2` `RWF_*` (`a[4]`) never read: an `RWF_APPEND` write is
-  exported at its given offset (0) instead of the end of the file. *Status: open.* (`RWF_DSYNC`,
+  exported at its given offset (0) instead of the end of the file. *Status: fixed 2026-11-02:
+  `RWF_APPEND` appends as `O_APPEND` does, for the one call; and an append moves the position
+  only when the call names no offset, where a `pwrite` on an `O_APPEND` file moved it to the
+  end (a later read placed there); test
+  `export_places_appends_at_the_end_and_moves_the_position_as_the_kernel_does`.* (`RWF_DSYNC`,
   `RWF_SYNC`, `RWF_NOWAIT`, `RWF_HIPRI` carried: B, S-40.)
 - **S-10** (A) `O_PATH` exported as a full `RDONLY` open, `O_TMPFILE` as an `RDWR` open of the
   directory (replay: EISDIR or a refusal as a missing input); both counted only in the unnamed

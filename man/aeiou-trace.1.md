@@ -75,8 +75,9 @@ and write) so a `trace` node replays them, the header lists each such open
 naming them, and go on. A descriptor with no path to open (a trace without `-yy`) is left
 out, noted by name. The position of a sequential `read` or `write` is tracked per open file
 description from `open`, `lseek`, and the bytes each call moved, shared by `dup`ed
-descriptors, by threads, and across `fork`. An `O_APPEND` write goes to the end of the file
-wherever the trace knows the file's size (from an open that truncated or created it, kept
+descriptors, by threads, and across `fork`. An `O_APPEND` write, and a `pwritev2` with
+`RWF_APPEND`, goes to the end of the file, moving the position there only if the call names no
+offset (a `pwrite` never moves it), wherever the trace knows the file's size (from an open that truncated or created it, kept
 through every call that changes it); where it cannot, the write is counted from 0 and noted
 (`append_to_unknown_size`). The requests of one `io_submit` are a fan-out,
 reaped by the matching `io_getevents`: its reads and writes, vectored ones by their iovecs'

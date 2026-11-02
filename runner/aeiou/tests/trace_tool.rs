@@ -725,6 +725,42 @@ fn export_reads_openat2_and_creat() {
     assert_eq!(lines[0]["notes"]["not_exported:openat2:resolve RESOLVE_NO_SYMLINKS|RESOLVE_BENEATH"], 1, "{}", lines[0]);
 }
 
+/// A `pwritev2` with `RWF_APPEND` writes at the end of the file whatever its offset
+/// (`FS_API_SWEEP.md` S-9), and an append moves the position only when the call names no
+/// offset (`pwritev2` at -1, `write`): a `pwrite` on an `O_APPEND` file leaves it where it was.
+#[test]
+fn export_places_appends_at_the_end_and_moves_the_position_as_the_kernel_does() {
+    let d = tmp("rwf_append");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 openat(AT_FDCWD</d>, "/d/f", O_RDWR|O_CREAT|O_TRUNC, 0644) = 3</d/f> <0.000010>"#,
+            r#"100 1700000000.000100 write(3</d/f>, "x"..., 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.000200 pwritev2(3</d/f>, [{iov_base="x"..., iov_len=4096}], 1, 0, RWF_APPEND) = 4096 <0.000010>"#,
+            r#"100 1700000000.000300 read(3</d/f>, "x"..., 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.000400 pwritev2(3</d/f>, [{iov_base="x"..., iov_len=4096}], 1, -1, RWF_DSYNC|RWF_APPEND) = 4096 <0.000010>"#,
+            r#"100 1700000000.000500 read(3</d/f>, "", 4096) = 0 <0.000010>"#,
+            r#"100 1700000000.000600 close(3</d/f>) = 0 <0.000010>"#,
+            r#"100 1700000000.000700 openat(AT_FDCWD</d>, "/d/g", O_RDWR|O_CREAT|O_TRUNC|O_APPEND, 0644) = 3</d/g> <0.000010>"#,
+            r#"100 1700000000.000800 write(3</d/g>, "x"..., 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.000900 lseek(3</d/g>, 0, SEEK_SET) = 0 <0.000010>"#,
+            r#"100 1700000000.001000 pwrite64(3</d/g>, "x"..., 4096, 0) = 4096 <0.000010>"#,
+            r#"100 1700000000.001100 read(3</d/g>, "x"..., 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.001200 close(3</d/g>) = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let data: Vec<(&str, i64)> = lines[1..].iter().filter(|l| l["op"] == "read" || l["op"] == "write").map(|l| (l["op"].as_str().unwrap(), l["offset"].as_i64().unwrap_or(-1))).collect();
+    assert_eq!(data, [("write", 0), ("write", 4096), ("read", 4096), ("write", 8192), ("read", 12288), ("write", 0), ("write", 4096), ("read", 0)], "{lines:?}");
+}
+
 /// The digest records per template what its calls did to the space its files hold
 /// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
 /// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the

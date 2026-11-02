@@ -1352,19 +1352,25 @@ impl Tracer {
             }
             let mut positioned = off_tok.is_some_and(|t| digits_only(t.strip_prefix('-').unwrap_or(t)) && t.parse::<i64>().is_ok_and(|v| v >= 0));
             let p = self.under(path.as_deref());
+            // `pwritev2`'s `RWF_APPEND` appends as `O_APPEND` does, for this call only
+            let rwf_append = name == "pwritev2" && a.get(4).is_some_and(|fl| fl.split('|').any(|x| x.trim() == "RWF_APPEND"));
+            let append = kind == W && (rwf_append || f.as_ref().is_some_and(|f| f.borrow().append));
             let base = match (&p, &f) {
-                (Some(p), Some(f)) if kind == W && f.borrow().append => self.extent.get(p).copied(),
+                (Some(p), Some(_)) if append => self.extent.get(p).copied(),
                 _ => None,
             };
+            if let (true, None, Some(_), Some(_)) = (rwf_append, base, &p, inst) {
+                self.note("append_to_unknown_size", 1);
+            }
             let offset;
             if let Some(b) = base {
-                // `O_APPEND`: at the end of the file, a `pwrite`'s offset ignored, the position
-                // left at the end
+                // an append: at the end of the file, a given offset ignored, and the position
+                // moved to the end only by a call that gives none (a `pwrite` never moves it)
                 offset = b;
-                positioned = true;
-                if ret > 0 {
+                if ret > 0 && !positioned {
                     f.as_ref().unwrap().borrow_mut().pos = b + ret;
                 }
+                positioned = true;
             } else if positioned {
                 offset = off_tok.unwrap().parse().unwrap();
             } else {
