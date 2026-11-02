@@ -1869,11 +1869,13 @@ Lines: a header, then one op per line in the order the calls returned.
   file's space is dropped: the filesystem's work of taking a file's extents apart and
   reclaiming them, deferred, is a load of its own. The runner issues both as the trace made
   them under every API (`truncate` inline under `io_uring`, which has no opcode for a path;
-  under `mmap` this lane's mapping of the path stops at the new size). A call on a descriptor
-  whose open the trace does not show (held from before `strace` attached, or a fork's parent
-  closing what only its child opened) has no open id: it is left out and noted by name
-  (`not_exported:close:descriptor without open`), where until 2026-11-02 it was left out
-  silently, the header saying only `descriptors_without_open`.
+  under `mmap` this lane's mapping of the path stops at the new size). A descriptor used
+  without the open that made it (held from before `strace` began) gets an open written at its
+  first use, `{"op":"open",…,"synthesized":true}`, its flags its use (`RDONLY`, `WRONLY`,
+  `RDWR`), its position 0; the header lists each (`"missing_opens":[{"path","lane","first"}]`)
+  and `aeiou dry-run` and `aeiou run` say on standard error that the trace is incomplete,
+  naming them, and go on (2026-11-02, `DESIGN_REVIEW.md` §3.92; until then the calls on such a
+  descriptor were left out of the export silently).
 - **`creates`** lists the paths the trace brings into being under the root (an open with
   `CREAT` of a path not seen before, a `mkdir`, a `rename` destination).
 

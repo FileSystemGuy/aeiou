@@ -1174,7 +1174,11 @@ numbers; the order is this note's.
       the tracepoints present, starts `strace` and the probes together, records the kernel
       version, the clock offset, and whether the cache was cold, and says what the capture
       could not see; the instructions as a page an owner follows without us. The kit is worth
-      writing for `strace` alone before any probe is added.
+      writing for `strace` alone before any probe is added. *Noted 2026-11-02 (the user):* the
+      instructions start the command under `strace` (`strace -f … -o FILE COMMAND`), never
+      attach to it running (`strace -p`), which loses the opens made before it attached and
+      leaves a trace whose export must synthesize them (§3.92); and add `%network` when the
+      application passes descriptors over a socket, so the `recvmsg` that delivers one is seen.
     Questions to settle: whether a mapping's faults are evidence enough for a site of an
     abstract, or only a check on one; which kernels the probes must support; whether the
     digest's record of what a trace cannot see (an application record's blind spots) becomes
@@ -1201,8 +1205,10 @@ numbers; the order is this note's.
     rule V29 (a hole punched is never replayed as an allocation); the digest's `space` per
     template; ~~open: the bytes a truncate discarded, and `compare` over two digests' `space`~~
     both built the same day, with every call the export leaves out for want of an open now
-    named (it was left out silently). Open, for a decision: an open of its own for a descriptor
-    held from before the trace, so a `trace` node replays its reads.
+    named (it was left out silently); ~~open, for a decision: an open of its own for a
+    descriptor held from before the trace~~ decided with the user the same day and built: an
+    open synthesized at its first use, a loud warning that the trace is incomplete and how, and
+    on.
 
 ## 7. Environment
 

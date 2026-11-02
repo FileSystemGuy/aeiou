@@ -98,6 +98,8 @@ pub struct Event {
     pub request: Option<String>,
     /// A `fallocate`'s mode flags, written as its `mode` (none: mode 0).
     pub falloc: Option<Vec<&'static str>>,
+    /// An open the trace does not show (`Exporter::synthesize`).
+    pub synthesized: bool,
     /// A count other than 0, or an errno's name.
     pub ret: Value,
     pub ops: Option<Vec<Member>>,
@@ -133,6 +135,9 @@ impl Event {
         }
         if let Some(m) = self.mode {
             let _ = write!(out, r#","mode":{m}"#);
+        }
+        if self.synthesized {
+            out.extend_from_slice(br#","synthesized":true"#);
         }
         if let Some(o) = self.offset {
             let _ = write!(out, r#","offset":{o}"#);
@@ -179,6 +184,11 @@ struct Open {
     multi: bool,
     pinned: bool,
     creat: bool,
+    /// An open the trace does not show, synthesized at the descriptor's first use, and whether
+    /// the calls on it read and wrote (its flags).
+    synth: bool,
+    reads: bool,
+    writes: bool,
     /// Sequential reads and writes on it (positioned in the file when `multi` or `pinned`).
     sequential: u64,
 }
@@ -189,6 +199,8 @@ pub struct Plan {
     t0: Option<f64>,
     positioned: Vec<bool>,
     rets: HashMap<(usize, usize), Value>,
+    /// A synthesized open's access mode, by open id.
+    synth: HashMap<usize, &'static str>,
 }
 
 /// The exporter of one pass.
@@ -206,6 +218,8 @@ pub struct Exporter {
     rets: HashMap<(usize, usize), Value>,
     /// The lines of the second pass, until the driver takes them.
     pub queue: Vec<Event>,
+    /// The opens synthesized (`synthesize`), for the header.
+    missing: Vec<Value>,
 }
 
 /// An errno name, or the count when it is not 0 (`_ret` of the Python).
@@ -240,6 +254,7 @@ impl Exporter {
             created: HashSet::new(),
             rets: HashMap::new(),
             queue: Vec::new(),
+            missing: Vec::new(),
         }
     }
 
@@ -257,6 +272,25 @@ impl Exporter {
             let e = self.notes.entry(k.to_string()).or_insert(json!(0));
             *e = json!(e.as_u64().unwrap_or(0) + n);
         }
+    }
+
+    /// An open of `path` the trace does not show, written before the descriptor's first use
+    /// (`first`, the call): the descriptor was opened before `strace` began (attached with `-p`,
+    /// inherited from the shell, received over a socket), so its open is missing. Its flags are
+    /// the descriptor's use, `RDONLY`, `WRONLY`, or `RDWR` (learned in the first pass), its
+    /// position 0, as the reader takes it; the header lists it (`missing_opens`).
+    pub fn synthesize(&mut self, when: When, path: &str, first: &str) -> Result<usize> {
+        let rel = self.rel(path)?;
+        let oid = self.opens.len();
+        self.opens.push(Open { synth: true, ..Default::default() });
+        let flags = self.plan.as_ref().and_then(|p| p.synth.get(&oid).copied()).unwrap_or("RDONLY");
+        let lane = self.lane(when.0);
+        if self.first_pass() {
+            self.missing.push(json!({"path": rel, "lane": lane, "first": first}));
+            self.note("opens_synthesized", 1);
+        }
+        self.event(when, Event { op: "open", fd: Some(oid), path: Some(rel), flags: Some(vec![flags]), synthesized: true, ..Default::default() });
+        Ok(oid)
     }
 
     pub fn pin(&mut self, oid: usize) {
@@ -313,6 +347,11 @@ impl Exporter {
             match o.first_lane {
                 None => o.first_lane = Some(lane),
                 Some(l) if l != lane => o.multi = true,
+                _ => {}
+            }
+            match e.op {
+                "read" => o.reads = true,
+                "write" | "ftruncate" | "fallocate" => o.writes = true,
                 _ => {}
             }
         }
@@ -438,6 +477,11 @@ impl Exporter {
         let mut ops = Vec::new();
         for (op, oid, off, nbytes) in members {
             let o = &mut self.opens[*oid];
+            if *op == "read" {
+                o.reads = true;
+            } else {
+                o.writes = true;
+            }
             match o.first_lane {
                 None => o.first_lane = Some(lane),
                 Some(l) if l != lane => o.multi = true,
@@ -581,7 +625,8 @@ impl Exporter {
         for (k, v) in source_notes {
             notes.entry(k.clone()).or_insert(json!(v));
         }
-        let plan = Plan { t0: self.t0, positioned: self.opens.iter().map(|o| o.multi || o.pinned).collect(), rets: self.rets.clone() };
+        let synth = self.opens.iter().enumerate().filter(|(_, o)| o.synth).map(|(i, o)| (i, match (o.reads, o.writes) { (_, false) => "RDONLY", (false, true) => "WRONLY", (true, true) => "RDWR" })).collect();
+        let plan = Plan { t0: self.t0, positioned: self.opens.iter().map(|o| o.multi || o.pinned).collect(), rets: self.rets.clone(), synth };
         let header = json!({
             "aeiou_trace": TRACE_FORMAT,
             "source": source,
@@ -592,6 +637,10 @@ impl Exporter {
             "creates": self.creates,
             "notes": notes,
         });
+        let mut header = header;
+        if !self.missing.is_empty() {
+            header["missing_opens"] = json!(self.missing);
+        }
         (plan, header)
     }
 }

@@ -40,6 +40,11 @@ The trace is taken with
 strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>
 ```
 
+Start the command under `strace`, never attach to it running (`strace -p`): a descriptor
+the command opened before `strace` attached has no open in the trace (see **What counts**).
+Add `%network` to `-e trace=` when the application passes descriptors over a socket
+(`SCM_RIGHTS`), so the `recvmsg` that delivers one is seen.
+
 `-f` follows threads and children; `-yy` puts the path behind every descriptor on the
 line, which is how a call is known to be on the storage under test; `%process` records the
 `clone`s, so descriptor tables and process trees are followed; the AIO calls are named
@@ -60,11 +65,15 @@ descriptor are `fstat`, on a path `stat`; `getdents64` is `readdir`, once per li
 `truncate`, `ftruncate`, `fallocate`, `mkdir`, `rename`, `fadvise64`, and `close` by name. A
 failed call counts as its op. Nothing that frees or moves a file's space is left out: `export`
 writes a `truncate` with its length and a `fallocate` with its mode by flag name, and a mode
-with a bit no flag names is left out and noted, never written as another. A call on a
-descriptor whose open the trace does not show (held from before `strace` attached, or a
-fork's parent closing what only its child opened) has no open for a `trace` node to name: it
-is counted in the metrics and left out of the export, noted by name
-(`not_exported:read:descriptor without open`), never silently. The position of a sequential `read` or `write` is tracked per open file
+with a bit no flag names is left out and noted, never written as another. A descriptor used
+without the open that made it, held from before `strace` began (attached with `strace -p` to
+a running process, inherited from the shell, received over a socket), is a trace that is
+incomplete: its calls are counted from position 0, `export` writes an open of it at its first
+use (`"synthesized": true`, its flags `RDONLY`, `WRONLY`, or `RDWR` as the calls on it read
+and write) so a `trace` node replays them, the header lists each such open
+(`missing_opens`), and `export`, `digest`, and `metrics` print a warning on standard error
+naming them, and go on. A descriptor with no path to open (a trace without `-yy`) is left
+out, noted by name. The position of a sequential `read` or `write` is tracked per open file
 description from `open`, `lseek`, and the bytes each call moved, shared by `dup`ed
 descriptors, by threads, and across `fork`. An `O_APPEND` write goes to the end of the file
 wherever the trace knows the file's size (from an open that truncated or created it, kept

@@ -248,6 +248,29 @@ fn notes_lines(notes: &Value) -> String {
     notes.as_object().map(|m| m.iter().map(|(k, v)| format!("note: {k}: {}\n", v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()))).collect()).unwrap_or_default()
 }
 
+/// The warning that a trace is incomplete (`DESIGN_REVIEW.md` §3.92): descriptors used without
+/// the open that made them, `missing` the opens the export synthesized (`missing_opens`), or,
+/// where the tool exported nothing, their count alone. Printed to stderr; the tool goes on.
+fn incomplete(prog: &str, count: u64, missing: Option<&Value>, what: &str) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    let mut out = format!(
+        "{prog}: WARNING: the trace is incomplete: {count} descriptor(s) were used without the open that made them, held from before strace began (attached with strace -p to a running process, inherited from the shell, or received over a socket, which needs %network in -e trace=); {what}\n"
+    );
+    for m in missing.and_then(Value::as_array).into_iter().flatten() {
+        out += &format!("  {} (first used by {} in lane {})\n", m["path"].as_str().unwrap_or(""), m["first"].as_str().unwrap_or(""), m["lane"]);
+    }
+    out + "  trace the command from its start: strace -f ... -o FILE COMMAND\n"
+}
+
+/// The warning for a header (an export's, a trace file's) that lists synthesized opens.
+fn incomplete_of(prog: &str, header: &Value) -> String {
+    let missing = header.get("missing_opens");
+    let n = missing.and_then(Value::as_array).map_or(0, Vec::len) as u64;
+    incomplete(prog, n, missing, "an open was synthesized for each at its first use, its flags its use, its position 0, so its calls are replayed:")
+}
+
 fn missing_object_root(kind: &str) -> anyhow::Error {
     let mut m = Missing::new();
     m.need(false, "--root <BUCKET[/PREFIX]>", "the bucket, and the prefix under it, whose requests count", Some(&format!("needed for an object log ({kind})")));
@@ -305,6 +328,8 @@ fn metrics(a: MetricsArgs) -> Result<()> {
         d
     };
     doc["trace"] = json!(trace);
+    let held = doc["notes"]["descriptors_without_open"].as_u64().unwrap_or(0);
+    eprint!("{}", incomplete("aeiou-trace metrics", held, None, "their calls are counted from position 0, the open's own work not at all"));
     let text = serde_json::to_string_pretty(&doc)? + "\n";
     match &a.out {
         Some(out) => {
@@ -369,6 +394,7 @@ fn export_cmd(a: ExportArgs) -> Result<()> {
         }
     };
     let h = &s.header;
+    eprint!("{}", incomplete_of("aeiou-trace export", h));
     print_out(&format!(
         "{} line(s) on {} lane(s), {} open(s), {} path(s) created under {}; {}\nsha256 {}\n{}",
         h["lines"],
@@ -475,6 +501,7 @@ fn digest_cmd(a: DigestArgs) -> Result<()> {
     }
     let opener = || input.reader();
     let an = digest::analyze(&opener, &first, a.root.as_deref(), &a.exclude, a.cwd.as_deref(), &mo).map_err(|e| anyhow!("{trace}: {e:#}"))?;
+    eprint!("{}", incomplete_of("aeiou-trace digest", &an.header));
     let sha = sha256_of(&trace)?;
     let (mut by, mut at) = (a.answered_by.clone().unwrap_or_else(who), now());
     let o = digest::Opts { epochs, candidates: a.candidates, paths: a.paths };

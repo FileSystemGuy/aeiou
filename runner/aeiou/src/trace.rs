@@ -83,7 +83,9 @@ impl Ret {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
 pub enum LineOp {
-    Open { fd: usize, path: String, flags: Vec<OpenFlag>, #[serde(default)] mode: Option<u32>, #[serde(default)] ret: Ret },
+    /// `synthesized`: an open the trace did not show, written by the exporter at the
+    /// descriptor's first use (`Header::missing_opens`); run as any open.
+    Open { fd: usize, path: String, flags: Vec<OpenFlag>, #[serde(default)] mode: Option<u32>, #[serde(default)] synthesized: bool, #[serde(default)] ret: Ret },
     Close { fd: usize, #[serde(default)] ret: Ret },
     Read { fd: usize, #[serde(default)] offset: Option<i64>, len: i64, #[serde(default)] ret: Ret },
     Write { fd: usize, #[serde(default)] offset: Option<i64>, len: i64, #[serde(default)] ret: Ret },
@@ -161,6 +163,27 @@ pub struct Header {
     pub creates: Vec<String>,
     #[serde(default)]
     pub notes: serde_json::Map<String, serde_json::Value>,
+    /// The opens the trace did not show, which the exporter synthesized: `{path, lane, first}`.
+    #[serde(default)]
+    pub missing_opens: Vec<serde_json::Value>,
+}
+
+/// The warning that a trace file is incomplete (`DESIGN_REVIEW.md` §3.92): the opens it was
+/// missing, synthesized by its export, named. `None` for a complete one.
+pub fn incomplete(t: &TraceFile) -> Option<String> {
+    let m = &t.header.missing_opens;
+    if m.is_empty() {
+        return None;
+    }
+    let mut out = format!(
+        "WARNING: trace `{}` is incomplete: {} descriptor(s) were used without the open that made them (held from before strace began); its export synthesized an open for each at its first use, which this run issues:\n",
+        t.name,
+        m.len()
+    );
+    for o in m {
+        out += &format!("  {} (first used by {} in lane {})\n", o["path"].as_str().unwrap_or(""), o["first"].as_str().unwrap_or(""), o["lane"]);
+    }
+    Some(out)
 }
 
 /// What the file says about one open id.
@@ -443,7 +466,7 @@ impl TraceFile {
         let path = |fd: &usize| self.opens[*fd].path.as_str();
         let mut oid = op.fd();
         let built = match op {
-            LineOp::Open { fd, path: p, flags, mode, ret } => {
+            LineOp::Open { fd, path: p, flags, mode, ret, .. } => {
                 oid = Some(*fd);
                 let aux = flag_bits(flags) | ((mode.unwrap_or(0) as u64) << 32);
                 Op { kind: OpKind::Open, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux, expect: ret.expect(), positioned: false, seed: 0, capped: false }

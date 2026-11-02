@@ -671,11 +671,14 @@ fn digest_records_what_freed_or_moved_space() {
     assert!(out.contains("       space: 3 truncating opens (1 of a path written before, 2 of one not seen before); truncate 2; ftruncate 1; 2 to length 0; fallocate KEEP_SIZE|PUNCH_HOLE 1; fallocate allocate 1; ranges freed 8.0 KiB; truncates discarded 132.0 KiB, 2 of a size the trace does not show\n"), "{out}");
 }
 
-/// A call on a descriptor whose open the trace does not show (held from before `strace`
-/// attached, or a fork's parent closing what only its child opened) has no open for the
-/// `trace` node to name, so the export leaves it out, and says so by name, never silently.
+/// A descriptor whose open the trace does not show (held from before `strace` began: attached
+/// with `-p`, inherited, received over a socket; here a fork's parent closing its own descriptor 3,
+/// not the one its child opened, since a fork copies the table) gets an open synthesized at
+/// its first use, marked `synthesized`, its flags its use, so its calls are replayed and not
+/// lost; the header lists each such open (`missing_opens`), and the command warns, loudly,
+/// that the trace is incomplete and how, and goes on.
 #[test]
-fn export_names_every_call_it_leaves_out_for_want_of_an_open() {
+fn export_synthesizes_the_open_a_trace_is_missing_and_warns() {
     let d = tmp("no-open");
     let trace = d.join("t.strace");
     std::fs::write(
@@ -684,7 +687,7 @@ fn export_names_every_call_it_leaves_out_for_want_of_an_open() {
             r#"100 1700000000.000000 read(5</d/held>, "x"..., 4096) = 4096 <0.000010>"#,
             r#"100 1700000000.000100 lseek(5</d/held>, 0, SEEK_SET) = 0 <0.000010>"#,
             r#"100 1700000000.000200 fstat(5</d/held>, {st_mode=S_IFREG|0644, st_size=8192, ...}) = 0 <0.000010>"#,
-            r#"100 1700000000.000300 fsync(5</d/held>) = 0 <0.000010>"#,
+            r#"100 1700000000.000300 write(5</d/held>, "x"..., 10) = 10 <0.000010>"#,
             r#"100 1700000000.000400 close(5</d/held>) = 0 <0.000010>"#,
             r#"100 1700000000.000500 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f) = 101 <0.000050>"#,
             r#"101 1700000000.000600 openat(AT_FDCWD</d>, "/d/x", O_RDONLY) = 3</d/x> <0.000010>"#,
@@ -699,11 +702,24 @@ fn export_names_every_call_it_leaves_out_for_want_of_an_open() {
     let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
     let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    let ops: Vec<&str> = lines[1..].iter().map(|l| l["op"].as_str().unwrap()).collect();
-    assert_eq!(ops, ["open", "read"]);
-    let notes = &lines[0]["notes"];
-    for (op, n) in [("read", 1), ("lseek", 1), ("fstat", 1), ("fsync", 1), ("close", 2)] {
-        assert_eq!(notes[format!("not_exported:{op}:descriptor without open")], n, "{op}: {notes}");
+    let ops: Vec<(i64, &str, i64)> = lines[1..].iter().map(|l| (l["lane"].as_i64().unwrap(), l["op"].as_str().unwrap(), l["fd"].as_i64().unwrap_or(-1))).collect();
+    // the held descriptor's open, then its calls; the child's own open; the parent's descriptor 3
+    // its own open, never the child's
+    assert_eq!(ops, [(0, "open", 0), (0, "read", 0), (0, "lseek", 0), (0, "fstat", 0), (0, "write", 0), (0, "close", 0), (1, "open", 1), (1, "read", 1), (0, "open", 2), (0, "close", 2)]);
+    assert_eq!((&lines[1]["flags"], &lines[1]["synthesized"]), (&serde_json::json!(["RDWR"]), &serde_json::json!(true)), "read and written");
+    assert_eq!(&lines[9]["flags"], &serde_json::json!(["RDONLY"]));
+    assert!(lines[7].get("synthesized").is_none());
+    let h = &lines[0];
+    assert_eq!(h["missing_opens"], serde_json::json!([{"path": "held", "lane": 0, "first": "read"}, {"path": "x", "lane": 0, "first": "close"}]));
+    assert_eq!(h["notes"]["opens_synthesized"], 2, "{h}");
+    let (_, err) = text(&o);
+    assert!(err.starts_with("aeiou-trace export: WARNING: the trace is incomplete: 2 descriptor(s) were used without the open that made them, held from before strace began"), "{err}");
+    assert!(err.contains("  held (first used by read in lane 0)\n  x (first used by close in lane 0)\n"), "{err}");
+    assert!(err.contains("trace the command from its start: strace -f ... -o FILE COMMAND"), "{err}");
+    // the runner replays it, an open of an existing path; the digest and metrics warn too
+    for cmd in [vec!["digest", s(&trace), "--root", "/d", "--no-questions"], vec!["metrics", s(&trace), "--root", "/d"]] {
+        let o = tool(&cmd);
+        assert_eq!(o.status.code(), Some(0), "{cmd:?}: {}", text(&o).1);
+        assert!(text(&o).1.contains(": WARNING: the trace is incomplete: 2 descriptor(s)"), "{cmd:?}: {}", text(&o).1);
     }
-    assert_eq!(notes["calls_not_exported"], 6, "{notes}");
 }

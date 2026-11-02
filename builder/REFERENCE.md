@@ -431,7 +431,11 @@ aeiou-trace compare trace.metrics.json abstract.metrics.json [--template-b NAME]
 aeiou-trace compare trace.metrics.json abstract.metrics.json --judge [--self other-seed.metrics.json]… [--tolerances FILE]
 ```
 
-What a trace needs: `-f` (threads and children), `-yy` (the path behind every descriptor,
+What a trace needs: the command started under `strace`, never `strace -p` attached to it
+running, which misses the opens made before it attached (2026-11-02: an export gives such a
+descriptor an open at its first use, `"synthesized": true`, and every tool reading it warns
+that the trace is incomplete, naming the opens, `DESIGN_REVIEW.md` §3.92); `%network` where
+descriptors pass over a socket; `-f` (threads and children), `-yy` (the path behind every descriptor,
 which is how a call is known to be on the storage under test), `%process` (the `clone`s,
 so descriptor tables and process trees are followed; without it a thread that uses a
 descriptor it did not open is attached to the table that has that descriptor and path, and

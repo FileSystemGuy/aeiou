@@ -8705,7 +8705,11 @@ application's, its cost the SUT's).
 
 *The three left over, built 2026-11-02 at the user's request.* (1) **A call left out for want of
 an open, now named.** Measuring for §3.89 had shown the export one `close` short in two
-traces: a fork's parent closing a descriptor only its child had opened. The cause was wider:
+traces: ~~a fork's parent closing a descriptor only its child had opened~~ (*wrong, as the user
+pointed out: a fork copies the descriptor table, so the parent's `close(3)` is of its own
+descriptor 3, never the child's; both traces are synthetic, written by the Python's tests to
+check that the table is copied, and the parent's descriptor 3 is one the trace never shows
+opened*). The cause was wider:
 every call on a descriptor whose open the trace does not show (held from before `strace`
 attached) was left out of the export silently, counted in the metrics, the header saying only
 `descriptors_without_open` once per descriptor. One golden case (`metrics-9f1a54ef`) exported
@@ -8713,9 +8717,10 @@ nothing of its 400 `pread64`s and said nothing of them. Such a call has no open 
 `trace` node, so it is still left out, now noted by name (`not_exported:read:descriptor without
 open`, `calls_not_exported`) at every site: data, `lseek`, `fstat`, the descriptor ops, `close`,
 `mmap`, and an `io_submit` member; seven goldens regenerated, their difference notes alone.
-Whether the export should instead give such a descriptor an open of its own, so that a
+~~Whether the export should instead give such a descriptor an open of its own, so that a
 `trace` node replays its reads, is a decision not taken: the open was the application's, made
-before the trace, with flags the trace does not show. (2) **The bytes a truncate discarded**:
+before the trace, with flags the trace does not show.~~ *Decided by the user the same day,
+below.* (2) **The bytes a truncate discarded**:
 the digest's `space` gains `truncated_bytes` and `truncates_of_unknown_size`; a size is known
 once a truncate set it and is moved by every write and allocation after it and carried through
 a `rename`, never guessed for a file the trace found already there (an `fstat`'s size is not in
@@ -8724,6 +8729,30 @@ either side has one, the kinds of it (truncating opens, of a path written before
 `ftruncate`, to length 0, `fallocate` by mode) and never the counts, which grow with the scale;
 an abstract that writes where the application truncated is another workload, and a dry run's
 emitted digest is now held to the trace's on it.
+
+*An open synthesized for a descriptor the trace never shows opened (decided by the user and
+built 2026-11-02).* The user: synthesize an open call rather than drop 400 reads, raise a loud
+warning that the trace is incomplete and how (the missing open), and continue. And the cause:
+a trace taken by attaching to a running job (`strace -p PID`) misses the opens made before it
+attached, where one taken by starting the command under `strace` sees every open the command
+makes; so the tracing instructions start the command under `strace` (brief item 54). This
+side's addition: an open can still be missing from a trace started that way, for a descriptor
+inherited from the shell or received over a socket (`SCM_RIGHTS`, seen only with `%network`).
+Built: the exporter writes, at the descriptor's first use, `{"op":"open",…,"synthesized":true}`
+with the flags its use needs (`RDONLY`, `WRONLY`, or `RDWR`, learned in the first pass; never
+`CREAT` or `TRUNC`, the file being there), at position 0, as the reader already took it; the
+header lists each (`missing_opens`: path, lane, the call that first used it) and counts them
+(`opens_synthesized`); `aeiou-trace export`, `digest`, and `metrics` print a warning naming them
+and saying to trace the command from its start, and `aeiou dry-run` and `run` of a `trace` node
+print one too; the run issues the open, an open of an existing path (the path an input the
+root must hold). A `close` of a descriptor the table does not have is given a descriptor of
+its own, never another process's of the same path, so the fork golden keeps the parent's and
+the child's apart and its metrics unchanged (they gain the `descriptors_without_open` note,
+which they had lacked). Seven goldens regenerated, each checked to keep every call it had and to
+add only calls on the paths its `missing_opens` names; `metrics-9f1a54ef` now exports its 400
+reads. A synthesized open is an op the run issues and the application made before the trace,
+so a trace node's fingerprint, its dry run's counts, and its digest's motifs include it, which
+the warning says; no committed capture had a descriptor without an open.
 
 ## 4. Plan changes
 

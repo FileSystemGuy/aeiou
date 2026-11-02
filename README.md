@@ -586,8 +586,10 @@ Not built, in rough order of interest:
   of the abstract (contract 0.14), `fallocate`'s mode carried end to end under rule V29 (a hole
   punched is never replayed as an allocation), and the digest's `space`, what each template's
   calls did to the space its files hold, with the bytes its truncates discarded, compared by
-  kind in `compare`; and every call the export leaves out for want of an open, now named
-  (it was left out silently). To
+  kind in `compare`; and a descriptor a trace never shows opened (held from before `strace`
+  began) given an open synthesized at its first use, so its calls are replayed, with a
+  warning from every tool that reads it that the trace is incomplete and which opens it lacks.
+  To
   build next: stage 5, the Python's
   remains retired and the committed captures rewrapped; a storage-reported value used only with
   evidence that the application derives from it, the digest recording the `st_blksize` a trace

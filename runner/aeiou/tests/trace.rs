@@ -597,6 +597,35 @@ fn a_fallocate_runs_with_its_mode_under_every_backend() {
     }
 }
 
+/// A trace file whose export synthesized the opens it was missing (`DESIGN_REVIEW.md` §3.92)
+/// loads, its synthesized open run as any open of an existing path, and `dry-run` and `run`
+/// say on stderr that it is incomplete, naming each missing open, and go on.
+#[test]
+fn a_trace_with_synthesized_opens_runs_and_says_it_is_incomplete() {
+    let lines = r#"
+{"aeiou_trace":1,"lanes":1,"creates":[],"missing_opens":[{"path":"held","lane":0,"first":"read"}],"notes":{"opens_synthesized":1}}
+{"lane":0,"op":"open","fd":0,"path":"held","flags":["RDONLY"],"synthesized":true}
+{"lane":0,"op":"read","fd":0,"len":4096,"ret":4096}
+{"lane":0,"op":"read","fd":0,"len":4096,"ret":4096}
+{"lane":0,"op":"close","fd":0}
+"#;
+    let d = tmpdir("synthesized");
+    let p = abstract_with(&d, lines, Some(1));
+    let (loaded, _) = leaked(&p, 1);
+    let t = loaded.traces.get("t.jsonl").unwrap();
+    assert_eq!(t.inputs, vec!["held".to_string()], "the open of a path the trace did not create: an input");
+    assert_eq!(aeiou::trace::incomplete(t).unwrap(), "WARNING: trace `t.jsonl` is incomplete: 1 descriptor(s) were used without the open that made them (held from before strace began); its export synthesized an open for each at its first use, which this run issues:\n  held (first used by read in lane 0)\n");
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("held"), vec![1u8; 8192]).unwrap();
+    for cmd in [vec!["dry-run", p.to_str().unwrap(), "--gpus", "1"], vec!["run", p.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--time-scale", "0"]] {
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(&cmd).env_remove("AEIOU_CONFIG").output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(0), "{cmd:?}: {err}");
+        assert!(err.contains("aeiou: WARNING: trace `t.jsonl` is incomplete: 1 descriptor(s)"), "{cmd:?}: {err}");
+    }
+}
+
 /// A read that returned nothing read nothing: one past the end of its file (an HDF5 library
 /// probing for its superblock at 512, 1024, 2048, … of a small file, a `pread` at a stale
 /// size) says the file was no longer than its offset, never that it was at least that long,

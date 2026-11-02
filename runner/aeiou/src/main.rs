@@ -1547,6 +1547,7 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     let mut cfg = parse_config(&a.run.shape, a.gpus, a.run.seed.unwrap_or(0))?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
+    warn_incomplete(loaded);
     if let Some(c) = &a.case {
         case_layer(c, &mut cfg, loaded)?;
     }
@@ -2366,6 +2367,7 @@ fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     let (abstract_path, gpus) = (abstract_path.expect("checked"), gpus.expect("checked"));
     let mut cfg = parse_config(&a.run.shape, gpus, seed)?;
     let loaded = aeiou::load(&abstract_path)?;
+    warn_incomplete(&loaded);
     if let Some(c) = &case {
         case_layer(c, &mut cfg, &loaded)?;
     }
@@ -2514,5 +2516,16 @@ mod tests {
         }
         let listed: std::collections::BTreeSet<String> = options::ALL_OPTIONS.iter().map(|s| s.to_string()).collect();
         assert_eq!(names, listed);
+    }
+}
+
+/// Each `trace` node's file that is incomplete, named on stderr before the run goes on.
+fn warn_incomplete(loaded: &aeiou::Loaded) {
+    let mut v: Vec<_> = loaded.traces.values().collect();
+    v.sort_by(|x, y| x.name.cmp(&y.name));
+    for t in v {
+        if let Some(w) = aeiou::trace::incomplete(t) {
+            eprint!("aeiou: {w}");
+        }
     }
 }
