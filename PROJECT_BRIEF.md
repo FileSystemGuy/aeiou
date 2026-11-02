@@ -1228,6 +1228,21 @@ numbers; the order is this note's.
     IOCB fsyncs and vectored requests, batch deletes; and `compare` judging a kind on one side
     only, the flags, and the notes (S-37 to S-39). mmap's page references (S-41) wait on item 54.
 
+59. **A third kind of state, modified in place, and its reset (decided by the user 2026-11-02,
+    `DESIGN_REVIEW.md` §3.94; not started).** Content made before the run (by `aeiou datagen`
+    or an earlier run with its manifest) that the run modifies (a KV cache or a vector index
+    restarted over what it left); its manifest the initial conditions. Reset by datagen over
+    the **computed write set** (from the abstract, parameters, seed, GPU count; never a tree
+    walk), bounded for an interrupted run by a durable per-actor high-water mark of ops
+    completed; a dirty marker written at a modifying run's start, refused by the next run,
+    cleared by reset. The content check is `aeiou-verify`'s, sampled (§3.94 item 5).
+
+60. **The `trace` node's preconditions, recorded and prepared (decided by the user 2026-11-02,
+    §3.94 item 6; not started).** Whether each path existed before the trace, from all the
+    trace's evidence (earlier and later), else asked of the trace's owner by the digest's
+    interview and recorded with provenance; a prepare step that makes the inputs at their read
+    extents and removes the creates. `FS_API_SWEEP.md` S-17 is built with it.
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS

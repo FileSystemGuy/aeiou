@@ -8808,6 +8808,72 @@ descriptor, `execve` closing the `O_CLOEXEC` ones, `close_range`); a trace-file 
 with contract 0.15 (brief item 58), S-11, S-12, and S-14 together. The other group A items
 go on meanwhile.
 
+### 3.94 A run's preconditions: a third kind of state, modified in place, and its reset (debated with the user, decided 2026-11-02)
+
+**How it came up.** Fixing S-17 (a create listed for a file that existed, `FS_API_SWEEP.md`),
+the user saw the larger lesson: re-executing a trace, or an abstract with its parameters, may
+depend on the storage holding at the start exactly what it held when the trace was taken, and
+the suite had no notion of resetting the system under test to known preconditions. A tree
+walk comparing what exists with what should exist costs hours of metadata load on a 50M-file
+corpus (and pollutes what it would measure); reading every file to compare its content and its
+compression and dedupe ratios costs a full read. The user was hesitant about both.
+
+**What already holds, without a walk.** For an abstract, the precondition is a claim recorded
+by the tool that built the state and checked by identity: a dataset's manifest
+(`.aeiou-dataset.json`, its definition compared by `aeiou run`), never changed by a run (V12);
+an output namespace empty at start; an input namespace with the manifest of the run that wrote
+it, read-only (V14, V15). A run cannot change a dataset's compression or dedupe ratios, since
+what a run writes goes to a namespace.
+
+**What does not fit (the user's point).** "Full and read-only" or "empty and writable" is too
+limiting: a KV cache restarted over the entries it left, or a vector index restarted over the
+index on disk, finds content made before the run *and modifies it in place* (new entries,
+evictions, overwrites, compaction). `lmcache-shared-fs` models only the cold reader.
+
+**Decided (the user, 2026-11-02).**
+1. **A third kind of state: made before the run and modified in place by it.** Its initial
+   content comes from `aeiou datagen` or from an earlier run with its manifest; the manifest
+   describes the *initial conditions*, not the current ones. Its name is settled when it is
+   built (naming for the mechanism, `PROJECT_BRIEF.md` §8). This replaces the workaround of
+   modelling the rewritten part as an earlier run's namespace restored by running the writer
+   again: that is now the rule, formalized.
+2. **Reset is datagen's, and costs the write set, never the corpus.** No tree walk, ever, in a
+   run or in a reset. The op multiset is fixed before the run starts, so the **write set** (every
+   path the run may create, write, truncate, unlink, or rename) is computed from the abstract,
+   the parameters, the seed, and the GPU count (`dry-run`), not recorded; the user agreed the
+   computed set meets the need ("efficient cleanup"). Reset regenerates each path of the set
+   that the initial manifest holds (its bytes a pure function of the seed and position, so the
+   initial content comes back exactly), removes each one it does not, and makes again each one
+   the run removed. Datagen is given the manifest, the run's identity (to compute the set),
+   and the progress marks.
+3. **A per-actor high-water mark bounds an interrupted run** (the user liked this best): an
+   actor's op sequence is deterministic, so a durable "ops completed" count per actor, saved
+   from time to time, bounds what a stopped run touched at O(actors), not O(files); an
+   in-memory list of paths is lost exactly when it is needed. Without the marks, reset
+   regenerates the whole write set: correct, slower.
+4. **A dirty marker.** A run that modifies a pre-existing state writes a marker at its root
+   first; the next run refuses a dirty state rather than measure from another starting point,
+   and reset clears it. One stat per root.
+5. **Content is verified optionally and by sample**, in `aeiou-verify`, never in a scored run:
+   a file's bytes are a pure function of (dataset seed, file id, offset), so checking N random
+   files costs CPU, not a reference copy, and gives a confidence the user chooses, compression
+   and dedupe ratios included; a full read stays possible, never required. Changes made out of
+   band are found only this way.
+6. **For the `trace` node** (brief item 14, §3.58: a captured trace executed literally inside
+   an abstract, for calibration, never CLOSED): whether a path existed before the trace is a
+   recorded fact of the capture, not a guess. The export decides it from all the trace's
+   evidence, earlier and later (an `O_EXCL` create, a `mkdir`, or an ENOENT first: absent; a
+   stat, an open without `O_CREAT`, an unlink before the create, or later a read of bytes it
+   never wrote, an `fstat` or `SEEK_END` showing content: existed); where the evidence does not
+   decide, the digest's interview asks the trace's owner and records the answer with its
+   provenance; a **prepare** step puts the recorded state in place (inputs made at their read
+   extents, creates removed). S-17 waits for this (the user, 2026-11-02): the first fix, which
+   listed a create from a path's first appearance only, ignoring what the trace shows later,
+   was reverted (57ba393).
+
+Recorded as brief items 59 (the third kind of state and its reset) and 60 (the trace node's
+recorded preconditions and prepare, with S-17); the sampled verify joins `aeiou-verify`.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

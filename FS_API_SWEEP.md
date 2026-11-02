@@ -179,7 +179,11 @@ work item of its own.
 - **S-17** (A) An `O_CREAT` open of a file that already existed is listed in the trace file's
   `creates` (`export.rs:389`); the gate then refuses, and its advice, `--clean-namespaces`,
   deletes the application's input (Python `'a'`, h5py `'a'`, an S3 PUT overwrite). A create to
-  be listed only when the trace proves the file new. *Status: open.*
+  be listed only when the trace proves the file new. *Status: waits on brief item 60
+  (DESIGN_REVIEW §3.94 item 6, the user 2026-11-02): whether a path existed is decided from all
+  the trace's evidence, earlier and later, else asked of the trace's owner and recorded, and a
+  prepare step puts that state in place. A first fix (45cfdba, a path's first appearance only)
+  was reverted (57ba393).*
 - **S-18** (A) Locality history is keyed by path hash and never reset or moved by an `O_TRUNC`
   open, `truncate`, `ftruncate`, a punched hole, `unlink`, or `rename` (`metrics.rs:777-791`,
   both sides): false reuse for a file rewritten under its name, the write-tmp-rename-read link
