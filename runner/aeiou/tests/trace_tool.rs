@@ -828,6 +828,51 @@ fn export_notes_by_name_every_call_on_the_root_it_does_not_count() {
     assert_eq!(m["notes"]["not_counted:sendfile"], 1, "{m}");
 }
 
+/// The calls on a mapping name only its address: one inside a range an `mmap` of a file under
+/// the root returned is noted by name (`FS_API_SWEEP.md` S-4), followed through `mremap` and
+/// forgotten at `munmap`; one on any other mapping is not; and a `sync()`, which writes back
+/// every filesystem's dirty pages, the root's among them, is noted wherever it is.
+#[test]
+fn export_notes_the_calls_on_a_mapping_of_the_root_and_sync() {
+    let d = tmp("mapping");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 openat(AT_FDCWD</d>, "/d/f", O_RDWR) = 3</d/f> <0.000010>"#,
+            r#"100 1700000000.000010 mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_SHARED, 3</d/f>, 0) = 0x7f0000000000 <0.000010>"#,
+            r#"100 1700000000.000020 mmap(NULL, 4096, PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f1000000000 <0.000010>"#,
+            r#"100 1700000000.000030 msync(0x7f0000001000, 4096, MS_SYNC) = 0 <0.000010>"#,
+            r#"100 1700000000.000040 madvise(0x7f0000000000, 8192, MADV_WILLNEED) = 0 <0.000010>"#,
+            r#"100 1700000000.000050 mlock(0x7f0000000000, 4096) = 0 <0.000010>"#,
+            r#"100 1700000000.000060 msync(0x7f1000000000, 4096, MS_SYNC) = 0 <0.000010>"#,
+            r#"100 1700000000.000070 mremap(0x7f0000000000, 8192, 16384, MREMAP_MAYMOVE) = 0x7f2000000000 <0.000010>"#,
+            r#"100 1700000000.000080 msync(0x7f0000000000, 4096, MS_SYNC) = 0 <0.000010>"#,
+            r#"100 1700000000.000090 msync(0x7f2000003000, 4096, MS_ASYNC) = 0 <0.000010>"#,
+            r#"100 1700000000.000100 munmap(0x7f2000000000, 16384) = 0 <0.000010>"#,
+            r#"100 1700000000.000110 msync(0x7f2000000000, 4096, MS_SYNC) = -1 ENOMEM (Cannot allocate memory) <0.000010>"#,
+            r#"100 1700000000.000120 sync() = 0 <0.000010>"#,
+            r#"100 1700000000.000130 close(3</d/f>) = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let header: Value = serde_json::from_str(std::fs::read_to_string(&out).unwrap().lines().next().unwrap()).unwrap();
+    let notes: Vec<(&str, i64)> = header["notes"].as_object().unwrap().iter().filter(|(k, _)| k.starts_with("not_counted:")).map(|(k, v)| (k.as_str(), v.as_i64().unwrap())).collect();
+    assert_eq!(
+        notes,
+        [("not_counted:madvise", 1), ("not_counted:mlock", 1), ("not_counted:mremap", 1), ("not_counted:msync", 2), ("not_counted:munmap", 1), ("not_counted:sync", 1)],
+        "{header}"
+    );
+    let o = tool(&["metrics", s(&trace), "--root", "/d"]);
+    let m: Value = serde_json::from_str(&text(&o).0).unwrap();
+    assert_eq!(m["notes"]["not_counted:msync"], 2, "{m}");
+}
+
 /// The digest records per template what its calls did to the space its files hold
 /// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
 /// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the

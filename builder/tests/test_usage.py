@@ -167,7 +167,7 @@ def test_the_help_wraps_at_spaces_only(columns):
         for line in r.stdout.splitlines():
             assert not (line.endswith("-") and line[-2:-1].isalnum()), f"{args}: a word broken at a hyphen: {line!r}"
     out = tool("trace", "--help", env={"COLUMNS": columns}).stdout
-    assert " trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy" in out, out
+    assert " trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy" in out, out
     assert "aeiou dry-run --metrics-json" in " ".join(out.split()), out
 
 

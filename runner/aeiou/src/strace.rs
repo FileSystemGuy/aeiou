@@ -714,10 +714,21 @@ fn path_op_of(name: &str) -> Option<(&'static str, Option<usize>, usize)> {
     })
 }
 
-/// Whether a call outside `handled` may name a path: its arguments show a string or a
-/// descriptor's annotation, or it is an `io_uring_setup`; the test before any parsing.
+/// The calls that name a mapping by its address alone.
+const MAPPING_CALLS: [&str; 6] = ["msync", "madvise", "munmap", "mremap", "mlock", "mlock2"];
+
+/// Whether a call outside `handled` may be on the root: its arguments show a string or a
+/// descriptor's annotation, or it is an `io_uring_setup`, a `sync`, or a call on a mapping;
+/// the test before any parsing.
 fn may_name_a_path(name: &str, args: &str) -> bool {
-    name == "io_uring_setup" || args.contains('"') || args.contains('<')
+    matches!(name, "io_uring_setup" | "sync") || MAPPING_CALLS.contains(&name) || args.contains('"') || args.contains('<')
+}
+
+/// `0x7f0000000000` at the start of `s` as a number; `None` for anything else.
+fn address(s: &str) -> Option<u64> {
+    let h = s.trim_start().strip_prefix("0x")?;
+    let k = h.bytes().position(|c| !c.is_ascii_hexdigit()).unwrap_or(h.len());
+    u64::from_str_radix(&h[..k], 16).ok()
 }
 
 /// `aio_fildes` of `aio_fildes=3</p>`: a struct field's name.
@@ -781,6 +792,11 @@ pub struct Tracer {
     /// The size of each file under the roots the trace made known (created, truncated, or
     /// renamed into place since), kept as its writes extend it: an `O_APPEND` write's base.
     extent: HashMap<String, i64>,
+    /// The address ranges `mmap` returned for files under a root (start → length), so a call
+    /// that names only an address can be told to be on one
+    maps: BTreeMap<u64, u64>,
+    /// The address a call returned (`mmap`, `mremap`), `None` for a number or an error
+    ret_addr: Option<u64>,
     pub seen: Seen,
     error: Option<anyhow::Error>,
 }
@@ -811,6 +827,8 @@ impl Tracer {
             tids: Default::default(),
             under_cache: HashMap::new(),
             extent: HashMap::new(),
+            maps: BTreeMap::new(),
+            ret_addr: None,
             seen: Seen::default(),
             error: None,
         }
@@ -879,12 +897,52 @@ impl Tracer {
     /// "dropped and counted by name"); an `io_uring_setup` always, since the I/O of its ring
     /// is not in an strace.
     fn not_counted(&mut self, tid: i64, name: &str, a: &[String]) {
-        if self.instance(tid).is_none() {
-            return;
-        }
-        if name == "io_uring_setup" || self.names_a_root_path(tid, a) {
+        let hit = match name {
+            "io_uring_setup" | "sync" => true,
+            _ if MAPPING_CALLS.contains(&name) => self.on_a_root_mapping(name, a),
+            _ => self.names_a_root_path(tid, a),
+        };
+        if hit && self.instance(tid).is_some() {
             self.note(&format!("not_counted:{name}"), 1);
         }
+    }
+
+    /// Whether a call naming an address range (`a[0]`, `a[1]`) is on a mapping of a file under
+    /// a root, the ranges kept as the kernel does: `munmap` takes its range out of them, and a
+    /// successful `mremap` moves the mapping it names to the address it returned. Address
+    /// spaces are not told apart: a range is the last mapping of a root file there.
+    fn on_a_root_mapping(&mut self, name: &str, a: &[String]) -> bool {
+        let (Some(addr), Some(len)) = (a.first().and_then(|t| address(t)), a.get(1).and_then(|t| int0(t)).filter(|&l| l > 0)) else { return false };
+        let end = addr.saturating_add(len as u64);
+        // the ranges of one address space never overlap, so the scan down from `end` stops at
+        // the first that ends at or before `addr`
+        let over: Vec<(u64, u64)> = self.maps.range(..end).rev().take_while(|(&s, &l)| s.saturating_add(l) > addr).map(|(&s, &l)| (s, l)).collect();
+        if over.is_empty() {
+            return false;
+        }
+        match name {
+            "munmap" => {
+                for (s, l) in &over {
+                    self.maps.remove(s);
+                    if *s < addr {
+                        self.maps.insert(*s, addr - s);
+                    }
+                    if s.saturating_add(*l) > end {
+                        self.maps.insert(end, s.saturating_add(*l) - end);
+                    }
+                }
+            }
+            "mremap" => {
+                if let (Some(new), Some(n)) = (self.ret_addr, a.get(2).and_then(|t| int0(t)).filter(|&n| n > 0)) {
+                    for (s, _) in &over {
+                        self.maps.remove(s);
+                    }
+                    self.maps.insert(new, n as u64);
+                }
+            }
+            _ => {}
+        }
+        true
     }
 
     /// Whether arguments name a path under a root: a descriptor's `<path>`, inside a struct or
@@ -1163,6 +1221,7 @@ impl Tracer {
         if !handled(name) {
             if let Some(k) = body.rfind(") = ").filter(|&k| may_name_a_path(name, &body[i..k])) {
                 let args = split_args(&body[i + 1..k]);
+                self.ret_addr = address(&body[k + 4..]);
                 self.not_counted(tid, name, &args);
             }
             return;
@@ -1212,6 +1271,7 @@ impl Tracer {
         self.tids.insert(tid);
         self.seen.calls += 1;
         let args = split_args(&body[i + 1..k]);
+        self.ret_addr = address(ret_s);
         let name = name.to_string();
         if let Err(e) = self.call(tid, &name, &args, ret, ret_path, issued, done, err) {
             self.error = Some(e);
@@ -1482,6 +1542,14 @@ impl Tracer {
             return Ok(());
         }
         if name == "mmap" {
+            // the range of a file under a root is kept for the calls that name only an address
+            if let (Some(at), Some(len), Some(tok)) = (self.ret_addr, a.get(1).and_then(|t| int0(t)).filter(|&l| l > 0), a.get(4)) {
+                let (fd, path) = fd_arg(tok);
+                let path = path.or_else(|| fd.and_then(|fd| self.table(tid).borrow().get(&fd).and_then(|f| f.borrow().path.clone())));
+                if self.under(path.as_deref()).is_some() {
+                    self.maps.insert(at, len as u64);
+                }
+            }
             // exported only (the metrics do not count a mapping): the mapped range as one read,
             // since the faults inside it are not in the trace
             if self.export.is_none() || a.len() < 6 || ret < 0 {

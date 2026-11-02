@@ -84,7 +84,15 @@ work item of its own.
   `not_counted:io_uring_setup` in every instance.*
 - **S-4** (A) The capture recipe's `-e trace=%file,%desc,%network,%process,io_*` cannot see
   `msync`, `madvise`, `munmap`, `mremap`, `mlock*` (`%memory`) or `sync()` (no class); the
-  `metrics` help text's filter also lacks `%network` (SCM_RIGHTS). *Status: open.*
+  `metrics` help text's filter also lacks `%network` (SCM_RIGHTS). *Status: fixed 2026-11-02:
+  the recipe (man page, `--help`, READMEs, references; the workloads' READMEs keep the command
+  each capture was taken with) names `sync`, `msync`, `madvise`, `munmap`, `mremap`, `mlock`,
+  `mlock2`, and `io_cancel`, not `%memory` (every `brk` and `mprotect`); each is noted by name,
+  a call on a mapping when its address is in a range an `mmap` of a root file returned
+  (followed through `mremap`, trimmed by `munmap`); test
+  `export_notes_the_calls_on_a_mapping_of_the_root_and_sync`. `%network` stays the addition the
+  man page names for an application that passes descriptors over a socket (2026-11-02,
+  §3.92), not the default: a socket-heavy job's trace would fill with its messages.*
 
 ### Parsing that loses or corrupts calls
 
