@@ -62,8 +62,11 @@ pipes, and sockets are not the workload. `open`, `openat`, `creat` are `open`; `
 `pread64`, `readv`, `preadv` are `read` and likewise for `write`; `fstat` and `statx` on a
 descriptor are `fstat`, on a path `stat`; `getdents64` is `readdir`, once per listing;
 `unlinkat` with `AT_REMOVEDIR` is `rmdir`; `lseek`, `ioctl`, `fsync`, `fdatasync`,
-`truncate`, `ftruncate`, `fallocate`, `mkdir`, `rename`, `fadvise64`, and `close` by name. A
-failed call counts as its op. Nothing that frees or moves a file's space is left out: `export`
+`truncate`, `ftruncate`, `fallocate`, `mkdir`, `rename`, `fadvise64`, and `close` by name. Any
+other call that names a path or a descriptor under the root is not counted and is noted by
+name (`not_counted:readlink`; an `fcntl` by its command, `F_SETFL` with the flags it set, and
+none for a command that changes nothing on the file), as is every `io_uring_setup`, whose
+ring's I/O no `strace` shows. A failed call counts as its op. Nothing that frees or moves a file's space is left out: `export`
 writes a `truncate` with its length and a `fallocate` with its mode by flag name, and a mode
 with a bit no flag names is left out and noted, never written as another. A descriptor used
 without the open that made it, held from before `strace` began (attached with `strace -p` to

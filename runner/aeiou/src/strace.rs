@@ -714,6 +714,17 @@ fn path_op_of(name: &str) -> Option<(&'static str, Option<usize>, usize)> {
     })
 }
 
+/// Whether a call outside `handled` may name a path: its arguments show a string or a
+/// descriptor's annotation, or it is an `io_uring_setup`; the test before any parsing.
+fn may_name_a_path(name: &str, args: &str) -> bool {
+    name == "io_uring_setup" || args.contains('"') || args.contains('<')
+}
+
+/// `aio_fildes` of `aio_fildes=3</p>`: a struct field's name.
+fn is_field(k: &str) -> bool {
+    !k.is_empty() && k.bytes().all(|c| c == b'_' || c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
 fn handled(name: &str) -> bool {
     OPENS.contains(&name)
         || READS.contains(&name)
@@ -862,6 +873,62 @@ impl Tracer {
             self.under_cache.insert(path.to_string(), out.clone());
         }
         out
+    }
+
+    /// A call no op covers, noted by name when it names a path under a root (the man page's
+    /// "dropped and counted by name"); an `io_uring_setup` always, since the I/O of its ring
+    /// is not in an strace.
+    fn not_counted(&mut self, tid: i64, name: &str, a: &[String]) {
+        if self.instance(tid).is_none() {
+            return;
+        }
+        if name == "io_uring_setup" || self.names_a_root_path(tid, a) {
+            self.note(&format!("not_counted:{name}"), 1);
+        }
+    }
+
+    /// Whether arguments name a path under a root: a descriptor's `<path>`, inside a struct or
+    /// an array too; a string first, after a directory descriptor, or absolute after another
+    /// path, as a path argument stands (never a buffer's bytes elsewhere).
+    fn names_a_root_path(&mut self, tid: i64, a: &[String]) -> bool {
+        let mut after_path = false;
+        for (i, t) in a.iter().enumerate() {
+            let t = t.split_once('=').filter(|(k, _)| is_field(k)).map_or(t.as_str(), |(_, v)| v);
+            let was = std::mem::take(&mut after_path);
+            if t.starts_with('{') || t.starts_with('[') {
+                let inner = &t[1..t.len().saturating_sub(1).max(1)];
+                if self.names_a_root_path(tid, &split_args(inner)) {
+                    return true;
+                }
+                continue;
+            }
+            if let (_, Some(p)) = fd_arg(t) {
+                if self.under(Some(&p)).is_some() {
+                    return true;
+                }
+                after_path = p.starts_with('/');
+                continue;
+            }
+            let Some(p) = c_string(t).filter(|p| !p.is_empty() && !truncated(t)) else { continue };
+            let dir = i.checked_sub(1).and_then(|j| fd_arg(&a[j]).1).filter(|d| d.starts_with('/'));
+            let full = if p.starts_with('/') && (i == 0 || dir.is_some() || was) {
+                p
+            } else if let Some(d) = dir {
+                join(&d, &p)
+            } else if i == 0 {
+                match self.cwds.get(&tid).or(self.cwd.as_ref()).filter(|c| !c.is_empty()) {
+                    Some(c) => join(c, &p),
+                    None => continue,
+                }
+            } else {
+                continue;
+            };
+            if self.under(Some(&full)).is_some() {
+                return true;
+            }
+            after_path = true;
+        }
+        false
     }
 
     fn resolve(&mut self, tid: i64, dirfd_tok: Option<&str>, path: Option<String>) -> Option<String> {
@@ -1069,7 +1136,7 @@ impl Tracer {
         if !is_resumed && body.ends_with(UNFINISHED) {
             let name = body.split('(').next().unwrap_or("");
             let head = &body[..body.len() - UNFINISHED.len()];
-            if handled(name) {
+            if handled(name) || may_name_a_path(name, head) {
                 self.pending.insert(tid, (name.to_string(), head.to_string(), ts));
             }
             if name == "close" {
@@ -1094,6 +1161,10 @@ impl Tracer {
         }
         let name = &body[..i];
         if !handled(name) {
+            if let Some(k) = body.rfind(") = ").filter(|&k| may_name_a_path(name, &body[i..k])) {
+                let args = split_args(&body[i + 1..k]);
+                self.not_counted(tid, name, &args);
+            }
             return;
         }
         let Some(k) = body.rfind(") = ") else { return };
@@ -1288,6 +1359,13 @@ impl Tracer {
         }
         if DUPS.contains(&name) {
             if name == "fcntl" && !(a.len() > 1 && a[1].starts_with("F_DUPFD")) {
+                // by its command, `F_SETFL` with the flags it set; none for those that change
+                // nothing on the file
+                let cmd = a.get(1).map(String::as_str).unwrap_or("");
+                if !matches!(cmd, "F_GETFD" | "F_SETFD" | "F_GETFL" | "F_GETOWN" | "F_SETOWN" | "F_GETOWN_EX" | "F_SETOWN_EX" | "F_GETSIG" | "F_SETSIG") && inst.is_some() && self.names_a_root_path(tid, &a[..1]) {
+                    let what = if cmd == "F_SETFL" { format!("F_SETFL {}", a.get(2).map(String::as_str).unwrap_or("")) } else { cmd.to_string() };
+                    self.note(&format!("not_counted:fcntl:{what}"), 1);
+                }
                 return Ok(());
             }
             let (fd, path) = a.first().map(|x| fd_arg(x)).unwrap_or((None, None));

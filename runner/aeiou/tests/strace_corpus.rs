@@ -10,7 +10,10 @@
 //! of (held from before it began) given an open synthesized at its first use, so its calls are
 //! exported, where they were left out silently, and a `close` of one counted among the
 //! metrics' `descriptors_without_open` (the same day; seven cases, each checked to keep every
-//! call it had and to add only calls on the paths its `missing_opens` names). Three of
+//! call it had and to add only calls on the paths its `missing_opens` names); a call no op
+//! covers that names a path under the root noted by name (`not_counted:<call>`, the same day,
+//! `FS_API_SWEEP.md` S-1; three cases, each a `realpath` walk's `readlink`s under the root,
+//! their notes the only difference). Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths
 //! rewritten to `/t/...` and the checkout's to `/src/aeiou`.

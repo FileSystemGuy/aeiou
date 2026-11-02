@@ -761,6 +761,73 @@ fn export_places_appends_at_the_end_and_moves_the_position_as_the_kernel_does() 
     assert_eq!(data, [("write", 0), ("write", 4096), ("read", 4096), ("write", 8192), ("read", 12288), ("write", 0), ("write", 4096), ("read", 0)], "{lines:?}");
 }
 
+/// A call no op covers is noted by name when it names a path or a descriptor under the root
+/// (`FS_API_SWEEP.md` S-1 to S-3), as the man page promises, whether or not strace split it:
+/// a copy, a `sendfile` out of a file, the metadata reads and writes, a lock; an `fcntl` by
+/// its command (`F_SETFL` with the flags it set), none for those that change nothing on the
+/// file; and an `io_uring_setup`, whose ring's I/O no strace shows. Calls elsewhere are not.
+#[test]
+fn export_notes_by_name_every_call_on_the_root_it_does_not_count() {
+    let d = tmp("by_name");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 openat(AT_FDCWD</d>, "/d/f", O_RDWR) = 3</d/f> <0.000010>"#,
+            r#"100 1700000000.000010 openat(AT_FDCWD</d>, "/d/g", O_WRONLY|O_CREAT, 0644) = 4</d/g> <0.000010>"#,
+            r#"100 1700000000.000020 access("/d/f", R_OK) = 0 <0.000010>"#,
+            r#"100 1700000000.000030 faccessat2(AT_FDCWD</d>, "f", W_OK, AT_EACCESS) = 0 <0.000010>"#,
+            r#"100 1700000000.000040 readlink("/d/l", "f", 4095) = 1 <0.000010>"#,
+            r#"100 1700000000.000050 statfs("/d", {f_type=NFS_SUPER_MAGIC, f_bsize=1048576}) = 0 <0.000010>"#,
+            r#"100 1700000000.000060 getxattr("/d/f", "user.x", NULL, 0) = -1 ENODATA (No data available) <0.000010>"#,
+            r#"100 1700000000.000070 copy_file_range(3</d/f>, NULL, 4</d/g>, NULL, 4096, 0) = 4096 <0.000010>"#,
+            r#"100 1700000000.000080 sendfile(5<socket:[77]>, 3</d/f>, NULL, 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.000090 fcntl(3</d/f>, F_SETFL, O_RDWR|O_DIRECT) = 0 <0.000010>"#,
+            r#"100 1700000000.000100 fcntl(3</d/f>, F_SETLKW, {l_type=F_WRLCK, l_whence=SEEK_SET, l_start=0, l_len=0}) = 0 <0.000010>"#,
+            r#"100 1700000000.000110 fcntl(3</d/f>, F_GETFL) = 0x4002 (flags O_RDWR|O_DIRECT) <0.000010>"#,
+            r#"100 1700000000.000120 fcntl(3</d/f>, F_SETFD, FD_CLOEXEC) = 0 <0.000010>"#,
+            r#"100 1700000000.000130 flock(3</d/f>, LOCK_EX <unfinished ...>"#,
+            r#"101 1700000000.000140 access("/etc/passwd", R_OK) = 0 <0.000010>"#,
+            r#"100 1700000000.000150 <... flock resumed>) = 0 <0.000020>"#,
+            r#"100 1700000000.000160 futex(0x7f0000000000, FUTEX_WAKE_PRIVATE, 1) = 0 <0.000010>"#,
+            r#"100 1700000000.000170 sendto(5<socket:[77]>, "/d/f", 4, 0, NULL, 0) = 4 <0.000010>"#,
+            r#"100 1700000000.000180 io_uring_setup(8, {flags=0, sq_thread_cpu=0, sq_thread_idle=0}) = 6<anon_inode:[io_uring]> <0.000010>"#,
+            r#"100 1700000000.000190 close(4</d/g>) = 0 <0.000010>"#,
+            r#"100 1700000000.000200 close(3</d/f>) = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let header: Value = serde_json::from_str(std::fs::read_to_string(&out).unwrap().lines().next().unwrap()).unwrap();
+    let notes: Vec<(&str, i64)> = header["notes"].as_object().unwrap().iter().filter(|(k, _)| k.starts_with("not_counted:")).map(|(k, v)| (k.as_str(), v.as_i64().unwrap())).collect();
+    assert_eq!(
+        notes,
+        [
+            ("not_counted:access", 1),
+            ("not_counted:copy_file_range", 1),
+            ("not_counted:faccessat2", 1),
+            ("not_counted:fcntl:F_SETFL O_RDWR|O_DIRECT", 1),
+            ("not_counted:fcntl:F_SETLKW", 1),
+            ("not_counted:flock", 1),
+            ("not_counted:getxattr", 1),
+            ("not_counted:io_uring_setup", 1),
+            ("not_counted:readlink", 1),
+            ("not_counted:sendfile", 1),
+            ("not_counted:statfs", 1),
+        ],
+        "{header}"
+    );
+    // the metrics carry the same notes
+    let o = tool(&["metrics", s(&trace), "--root", "/d"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let m: Value = serde_json::from_str(&text(&o).0).unwrap();
+    assert_eq!(m["notes"]["not_counted:sendfile"], 1, "{m}");
+}
+
 /// The digest records per template what its calls did to the space its files hold
 /// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
 /// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the

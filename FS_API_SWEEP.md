@@ -67,12 +67,21 @@ work item of its own.
   `copy_file_range`, `splice` (data: `shutil.copyfile`, `cp`), `readahead`, `syncfs`,
   `sync_file_range`, `access`/`faccessat*`, `readlink*`, `statfs`/`fstatfs`, every xattr call,
   `chmod`/`chown`/`utime*`, `link*`/`symlink*`/`mknod*`, `flock`, `close_range`, `io_destroy`,
-  `io_cancel`, `name_to_handle_at`, `open_by_handle_at`. *Status: open.*
+  `io_cancel`, `name_to_handle_at`, `open_by_handle_at`. *Status: fixed 2026-11-02: a call
+  outside the list that names a path under the root, by a descriptor (inside a struct too) or
+  a string where a path argument stands, is noted `not_counted:<call>` in the metrics and the
+  export header, a split one (`<unfinished ...>`) as well; three corpus goldens gained
+  `not_counted:readlink` and nothing else; test
+  `export_notes_by_name_every_call_on_the_root_it_does_not_count`. `close_range` and
+  `io_destroy` name no path: S-12.*
 - **S-2** (A) `fcntl` other than `F_DUPFD*` returns with no note (`strace.rs:1302`): `F_SETFL`
   turning `O_DIRECT`/`O_APPEND`/`O_NOATIME` on after the open, `F_SETLK`/`F_SETLKW`/`F_GETLK`,
-  the OFD locks, leases, `F_SET_RW_HINT`. *Status: open.*
+  the OFD locks, leases, `F_SET_RW_HINT`. *Status: fixed 2026-11-02 with S-1: noted
+  `not_counted:fcntl:<command>`, `F_SETFL` with its flags; none for `F_GETFD`, `F_SETFD`,
+  `F_GETFL`, and the owner and signal commands.*
 - **S-3** (A) An `io_uring_setup` on a traced task is not noted: the application's ring I/O is
-  invisible to strace and nothing says so. *Status: open.*
+  invisible to strace and nothing says so. *Status: fixed 2026-11-02 with S-1: noted
+  `not_counted:io_uring_setup` in every instance.*
 - **S-4** (A) The capture recipe's `-e trace=%file,%desc,%network,%process,io_*` cannot see
   `msync`, `madvise`, `munmap`, `mremap`, `mlock*` (`%memory`) or `sync()` (no class); the
   `metrics` help text's filter also lacks `%network` (SCM_RIGHTS). *Status: open.*
