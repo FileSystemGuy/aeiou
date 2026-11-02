@@ -1907,8 +1907,10 @@ application). Two orders cross lanes, both the trace's:
 
 - **The open table.** One slot per open id, filled by the lane that executes the `open`. An
   op waits for the open it names; the last `close` of an id (one close line per descriptor
-  the application held) waits until every use of the id has completed, then drops the
-  descriptor.
+  the application held) waits until every use of the id has completed, then closes the
+  descriptor, `close(2)`'s error the line's (NFS reports a deferred ENOSPC, EDQUOT, or EIO
+  there; until 2026-11-02 a drop threw it away, `FS_API_SWEEP.md` S-13, as it did for every
+  backend's `close`, which now fails the op the same way).
 - **Path order.** On a path the trace changes, a changing op (an open with `CREAT` or
   `TRUNC`, a `write`, `truncate`, `ftruncate`, `fallocate`, a `fsync`, `fdatasync`, or `close` of a
   writable open, a `rename` on both its paths, `unlink`, `mkdir`, `rmdir`) waits for every

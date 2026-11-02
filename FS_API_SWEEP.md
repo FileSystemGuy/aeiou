@@ -154,7 +154,9 @@ work item of its own.
 - **S-13** (A) `close(2)`'s return is thrown away on every POSIX backend and the trace node
   (`OwnedFd` drop; `run.rs:1350`, `uring.rs` inline): NFS reports deferred ENOSPC/EDQUOT/EIO
   at close, so a failed checkpoint is scored a success and an `expect` on a close can never
-  match. *Status: open.*
+  match. *Status: fixed 2026-11-02: `backend::close` closes the last reference explicitly and
+  returns `close(2)`'s error, used by the actor's `close` (every backend, objects included)
+  and the trace node's last close on both paths; test `a_close_returns_the_error_of_close`.*
 - **S-14** (A, decided §3.93) A close of a descriptor inherited over a fork issues no
   `close(2)` (`run.rs:1352`; the trace node closes only at an open's last close line,
   `uring.rs:1985`): each forked worker's close is a `->flush` (NFS, FUSE_FLUSH). *Status: open;

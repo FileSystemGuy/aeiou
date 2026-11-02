@@ -1348,17 +1348,19 @@ impl ActorState {
         }
     }
 
-    /// `close`: drop this actor's reference (the descriptor closes with the last one); a file
-    /// inherited from the parent is marked closed here without closing it there.
+    /// `close`: give up this actor's reference (the descriptor closes with the last one, and
+    /// `close(2)`'s error is the op's); a file inherited from the parent is marked closed here
+    /// without closing it there.
     pub(crate) fn close(&mut self, path: &str) -> std::io::Result<()> {
         let key: Arc<str> = Arc::from(path);
-        if self.fds.own.remove(&key).is_none() {
-            if self.fds.get(path).is_none() {
-                return Err(std::io::Error::from_raw_os_error(libc::EBADF));
+        match self.fds.own.remove(&key) {
+            Some(f) => crate::backend::close(f),
+            None if self.fds.get(path).is_none() => Err(std::io::Error::from_raw_os_error(libc::EBADF)),
+            None => {
+                self.fds.closed.insert(key);
+                Ok(())
             }
-            self.fds.closed.insert(key);
         }
-        Ok(())
     }
 
     fn record(&mut self, op: &Op, ctx: &OpCtx, ns: u64, transferred: u64) {
@@ -3415,9 +3417,9 @@ impl Runner {
                     return self.a.settle(o, ctx, r, ns);
                 }
                 let t = Instant::now();
-                drop(last);
+                let r = last.map_or(Ok(()), crate::backend::close).map(|_| 0);
                 let ns = t.elapsed().as_nanos() as u64;
-                self.a.settle(o, ctx, Ok(0), ns)
+                self.a.settle(o, ctx, r, ns)
             }
             _ => match b_oid {
                 Some(oid) => {

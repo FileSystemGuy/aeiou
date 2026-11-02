@@ -805,6 +805,23 @@ impl std::ops::Deref for OpenFile {
     }
 }
 
+/// Give up a reference to an open file: the last one closes it, its mappings unmapped first,
+/// and returns what `close(2)` returned (NFS reports a deferred ENOSPC, EDQUOT, or EIO there,
+/// which a drop would throw away); an earlier one, or an object's handle, closes nothing.
+pub fn close(f: Arc<OpenFile>) -> std::io::Result<()> {
+    let Some(mut f) = Arc::into_inner(f) else { return Ok(()) };
+    for m in f.all.get_mut().unwrap_or_else(|e| e.into_inner()).drain(..) {
+        unsafe { libc::munmap(m.ptr as *mut libc::c_void, m.len) };
+    }
+    let Some(fd) = f.fd.take() else { return Ok(()) };
+    OPEN_FILES.fetch_sub(1, Ordering::Relaxed);
+    // the descriptor is gone whatever close returns (Linux frees it first), so never retried
+    if unsafe { libc::close(std::os::fd::IntoRawFd::into_raw_fd(fd)) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 impl Drop for OpenFile {
     fn drop(&mut self) {
         if self.fd.is_some() {
@@ -1058,6 +1075,25 @@ impl Backend for Mmap {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// `close` closes with the last reference and returns what `close(2)` returned, where a
+    /// drop threw it away (`FS_API_SWEEP.md` S-13: NFS reports a deferred ENOSPC, EDQUOT, or
+    /// EIO at close).
+    #[test]
+    fn a_close_returns_the_error_of_close() {
+        let path = std::env::temp_dir().join(format!("aeiou-close-{}", std::process::id()));
+        let f = Arc::new(OpenFile::from(OwnedFd::from(std::fs::File::create(&path).unwrap())));
+        let other = f.clone();
+        let raw = f.as_raw_fd();
+        close(f).unwrap();
+        assert!(unsafe { libc::fcntl(raw, libc::F_GETFD) } >= 0, "another reference holds it open");
+        close(other).unwrap();
+        assert_eq!(unsafe { libc::fcntl(raw, libc::F_GETFD) }, -1, "the last reference closed it");
+        std::fs::remove_file(&path).unwrap();
+        // a descriptor number no process can hold, so close(2) fails and no other test's is hit
+        let bad = Arc::new(OpenFile::from(unsafe { OwnedFd::from_raw_fd(i32::MAX - 1) }));
+        assert_eq!(close(bad).unwrap_err().raw_os_error(), Some(libc::EBADF));
+    }
 
     #[test]
     fn a_mapping_belongs_to_the_open_file_and_a_grown_file_is_mapped_again() {

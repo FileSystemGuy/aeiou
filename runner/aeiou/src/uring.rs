@@ -1998,9 +1998,9 @@ impl<E: Engine> Loop<E> {
                             }
                             fd => {
                                 let at = Instant::now();
-                                drop(fd);
+                                let r = fd.map_or(Ok(()), crate::backend::close).map(|_| 0);
                                 let ns = at.elapsed().as_nanos() as u64;
-                                return self.lane_finish(id, Ok(0), ns);
+                                return self.lane_finish(id, r, ns);
                             }
                         }
                     }
