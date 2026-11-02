@@ -1001,14 +1001,17 @@ impl Tracer {
     // ---- the stream
 
     pub fn feed(&mut self, input: impl BufRead) -> Result<()> {
-        for_each_line(input, |line| {
-            self.seen.lines += 1;
-            self.line(line);
-            match self.error.take() {
-                Some(e) => Err(e),
-                None => Ok(()),
-            }
-        })
+        for_each_line(input, |line| self.feed_line(line))
+    }
+
+    /// One line of the trace, counted as read; the error a call raised, if any.
+    pub fn feed_line(&mut self, line: &str) -> Result<()> {
+        self.seen.lines += 1;
+        self.line(line);
+        match self.error.take() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     fn m(&mut self) -> Option<&mut TraceMetrics> {
@@ -1704,6 +1707,11 @@ pub fn metrics(input: impl BufRead, o: &Opts) -> Result<(Value, Seen)> {
     let mut t = Tracer::new(o, true, None);
     t.feed(input)?;
     t.finish()?;
+    Ok((metrics_document(&t, o), t.seen))
+}
+
+/// The `aeiou_metrics: 2` document of a finished tracer made with its metrics on.
+pub fn metrics_document(t: &Tracer, o: &Opts) -> Value {
     let m = t.metrics.as_ref().unwrap();
     let mut notes: serde_json::Map<String, Value> = t.notes.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
     if t.chain_gap.is_none() && !m.m.fan_out.is_empty() {
@@ -1713,7 +1721,7 @@ pub fn metrics(input: impl BufRead, o: &Opts) -> Result<(Value, Seen)> {
         notes.insert("arrays_truncated".into(), json!("trace again with strace -v: without it strace prints only the first 32 elements of an array"));
     }
     let instances = m.instances.len().max(usize::from(o.instance_roots.is_empty()));
-    let doc = json!({
+    json!({
         "aeiou_metrics": METRICS_FORMAT,
         "source": "strace",
         "roots": t.roots,
@@ -1724,8 +1732,7 @@ pub fn metrics(input: impl BufRead, o: &Opts) -> Result<(Value, Seen)> {
         "chain_gap_us": t.chain_gap.map(|g| g * 1e6),
         "notes": notes,
         "total": m.total(t.chain_gap.is_some()),
-    });
-    Ok((doc, t.seen))
+    })
 }
 
 /// Why a trace gave no call to count: the roots matched none of its calls, or it is no strace.

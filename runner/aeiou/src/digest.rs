@@ -1767,6 +1767,16 @@ pub struct Analysis {
     metrics: Value,
 }
 
+/// The options of the `metrics` section, `aeiou-trace metrics`'s: an instance per process tree
+/// (`--instance-root`), chains of `io_submit` rounds (`--chain-gap-us`), both an strace's alone,
+/// and the block metrics (`--metrics-block`).
+#[derive(Debug, Clone, Default)]
+pub struct MetricsOpts {
+    pub instance_roots: Vec<i64>,
+    pub chain_gap_us: Option<f64>,
+    pub block: Option<u64>,
+}
+
 /// Reads exported lines, the header first, into a digester and the metrics.
 struct Reader {
     no: usize,
@@ -1777,8 +1787,8 @@ struct Reader {
 }
 
 impl Reader {
-    fn new() -> Reader {
-        Reader { no: 0, header: None, d: Digester::default(), fm: FileMetrics::new(None), skipped: 0 }
+    fn new(block: Option<u64>) -> Reader {
+        Reader { no: 0, header: None, d: Digester::default(), fm: FileMetrics::new(block), skipped: 0 }
     }
 
     fn line(&mut self, line: &str) -> Result<()> {
@@ -1848,11 +1858,20 @@ impl Write for Sink<'_> {
 
 /// Read an exported trace file (carries its root; `root`, when given, must be it), or an strace
 /// or an object-store request log (needs `root`: the directory, or the bucket and prefix), whose
-/// calls the export turns into the exported lines. `first` is the input's first line.
-pub fn analyze(open: &Opener, first: &str, root: Option<&str>, exclude: &[String], cwd: Option<&str>) -> Result<Analysis> {
-    let mut r = Reader::new();
+/// calls the export turns into the exported lines. `first` is the input's first line. The
+/// metrics are an strace's own, read in the export's first pass (`aeiou-trace metrics` of it);
+/// a file's and a log's are of the exported lines, which are all they have.
+pub fn analyze(open: &Opener, first: &str, root: Option<&str>, exclude: &[String], cwd: Option<&str>, m: &MetricsOpts) -> Result<Analysis> {
+    let mut r = Reader::new(m.block);
     let source;
     let root_out;
+    let mut traced = None;
+    let is_strace = !first.starts_with("{\"aeiou_trace\"") && objectlog::source_of(first).is_none();
+    if !is_strace {
+        if let Some(opt) = strace_only(m) {
+            bail!("{opt}: only an strace has the process tree and the rounds' ends it needs");
+        }
+    }
     if first.starts_with("{\"aeiou_trace\"") {
         strace::for_each_line(open()?, |line| r.line(line))?;
         let header = r.header.clone().unwrap_or(json!({}));
@@ -1881,7 +1900,9 @@ pub fn analyze(open: &Opener, first: &str, root: Option<&str>, exclude: &[String
             }
             s
         } else {
-            let s = export::strace(open, &strace::abspath(root), exclude, cwd, &mut sink)?;
+            let mo = strace::Opts { instance_roots: m.instance_roots.clone(), chain_gap_us: m.chain_gap_us, block: m.block, ..Default::default() };
+            let (s, doc) = export::strace_with_metrics(open, &strace::abspath(root), exclude, cwd, Some(&mo), &mut sink)?;
+            traced = doc;
             if s.lines == 0 {
                 let r = s.header["root"].as_str().unwrap_or("").to_string();
                 bail!("{}", strace::nothing_counted(&[r], s.seen));
@@ -1899,10 +1920,16 @@ pub fn analyze(open: &Opener, first: &str, root: Option<&str>, exclude: &[String
     d.finish();
     let mut mh = header.clone();
     mh["source"] = json!(source);
-    let mut metrics = r.fm.document(&mh)?;
-    if r.skipped > 0 {
-        metrics["notes"]["lines_not_counted"] = json!(r.skipped);
-    }
+    let metrics = match traced {
+        Some(doc) => doc,
+        None => {
+            let mut metrics = r.fm.document(&mh)?;
+            if r.skipped > 0 {
+                metrics["notes"]["lines_not_counted"] = json!(r.skipped);
+            }
+            metrics
+        }
+    };
     let units = d.lanes.values().flatten().flatten();
     let (start, end) = units.fold((i64::MAX, i64::MIN), |(s, e), u| (s.min(u.first), e.max(u.last)));
     let (start, end) = if start == i64::MAX { (0, 0) } else { (start, end) };
@@ -1912,7 +1939,23 @@ pub fn analyze(open: &Opener, first: &str, root: Option<&str>, exclude: &[String
     Ok(Analysis { header, source, root: root_out, d, parts, names, metrics })
 }
 
+/// The first of the options only an strace can answer, as the command line names it.
+pub fn strace_only(m: &MetricsOpts) -> Option<&'static str> {
+    if !m.instance_roots.is_empty() {
+        Some("--instance-root")
+    } else if m.chain_gap_us.is_some() {
+        Some("--chain-gap-us")
+    } else {
+        None
+    }
+}
+
 impl Analysis {
+    /// The `metrics` section: `aeiou-trace metrics` of the same input.
+    pub fn metrics(&self) -> &Value {
+        &self.metrics
+    }
+
     fn part(&self, tid: usize, phase: Option<&str>) -> &Part {
         self.parts[tid].iter().find(|p| p.phase == phase).unwrap()
     }

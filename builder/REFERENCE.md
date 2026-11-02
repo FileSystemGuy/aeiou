@@ -679,7 +679,8 @@ through the same resolver, or an exported trace file, reduced to a document that
 the trace's owner (~~`aeiou_digest: 1`~~ `aeiou_digest: 2` since 2026-10-31, below; no raw path unless `--paths`, no data bytes ever):
 
 ```
-aeiou-trace digest trace.txt --root /mnt/data [--exclude GLOB]… [--cwd DIR] [--epochs N] [--candidates N] [--paths] [--text] [-o trace.digest.json]
+aeiou-trace digest trace.txt --root /mnt/data [--exclude GLOB]… [--cwd DIR] [--epochs N] [--candidates N] [--paths] [--text]
+            [--metrics-block BYTES] [--instance-root PID]… [--chain-gap-us US] [-o trace.digest.json]
 aeiou-trace digest app.jsonl                     # an exported file carries its root
 ```
 
@@ -767,9 +768,17 @@ an open's ops become its unit at its close, a site keeps one record per open, pa
 once per template, and the counts per offset of an open are kept only while it could be a
 template's one open or one reader, a `within` site (`tests/trace_tool.rs` holds the peak
 memory of 960,000 reads to that of 3,200 over the same opens). The document is version 2:
-`metrics`, the `aeiou_metrics: 2` document of the same exported calls (`export::FileMetrics`,
+`metrics`, the `aeiou_metrics: 2` document ~~of the same exported calls (`export::FileMetrics`,
 the metrics of an exported file; a line it would refuse, such as an op on an open no line
-made, counted in its `notes` as `lines_not_counted`), and each site's `facts`, `name`, `ask`,
+made, counted in its `notes` as `lines_not_counted`)~~ that `aeiou-trace metrics` writes of
+the same input (since 2026-11-02, `DESIGN_REVIEW.md` §3.89, the stage-5 note): of an strace,
+the strace's own reading, by a second tracer on a thread of its own fed the lines of the
+export's first pass, under the digest's `--instance-root`, `--chain-gap-us`, and
+`--metrics-block`; of an exported file or an object log, its exported lines
+(`export::FileMetrics`, a line it would refuse counted in its `notes` as `lines_not_counted`),
+under `--metrics-block` alone, the other two refused as usage errors, since neither input has
+a process tree or the end of an `io_submit` round (`tests/strace_corpus.rs` holds the section
+to every metrics document of the golden corpus), and each site's `facts`, `name`, `ask`,
 and, where the trace bounds it, `least` and `why`, the value below which `fact_check` rejects
 it. On a synthetic strace of 200 MB (npz-shaped opens, four threads, two shuffled passes) the
 port takes 7.8 s and 0.21 GB, the metrics included, against the Python's 14.5 s and 1.7 GB over

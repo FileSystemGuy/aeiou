@@ -549,3 +549,36 @@ fn the_digests_memory_follows_the_opens_never_the_ops() {
     let b = peak_kib(&["digest", s(&large), "--no-questions"]);
     assert!(b < a + 8 * 1024, "{a} KiB for 3,200 reads, {b} KiB for 960,000");
 }
+
+#[test]
+fn digest_takes_the_metrics_options_and_refuses_those_a_file_cannot_answer() {
+    // an strace: the section is `aeiou-trace metrics` of it under the same options
+    for (name, opts) in [("metrics-05125926", vec!["--instance-root", "401", "--instance-root", "402"]), ("metrics-2604699b", vec!["--chain-gap-us", "50000"])] {
+        let mut args: Vec<String> = vec!["digest".into(), s(&fixture(&format!("{name}.in"))).to_string(), "--root".into(), "/d".into(), "--no-questions".into()];
+        args.extend(opts.iter().map(|o| o.to_string()));
+        let o = tool(&args.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(o.status.code(), Some(0), "{name}: {}", text(&o).1);
+        let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
+        assert_eq!(doc["metrics"], golden(name)["metrics"], "{name}");
+    }
+    let file = fixture("metrics_file-070d3851.in");
+    let o = tool(&["digest", s(&file), "--no-questions", "--metrics-block", "4096"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(doc["metrics"]["block"], 4096);
+    // the process tree and the rounds' ends are an strace's; a file or a log carries neither
+    for (input, root) in [(file.clone(), None), (fixture("objectlog-2e5ae1d9.in"), Some(golden("objectlog-2e5ae1d9")["args"]["root"].as_str().unwrap().to_string()))] {
+        for opt in [["--instance-root", "7"], ["--chain-gap-us", "10"]] {
+            let mut args = vec!["digest", s(&input), "--no-questions", opt[0], opt[1]];
+            if let Some(r) = &root {
+                args.extend(["--root", r.as_str()]);
+            }
+            let o = tool(&args);
+            assert_eq!(o.status.code(), Some(2), "{opt:?} {input:?}");
+            let (_, err) = text(&o);
+            assert!(err.starts_with(&format!("aeiou-trace digest: {}: only an strace", opt[0])), "{err}");
+        }
+    }
+    let (_, err) = text(&tool(&["digest", s(&file), "--metrics-block", "0"]));
+    assert!(err.starts_with("aeiou-trace digest: --metrics-block must be at least 1"), "{err}");
+}

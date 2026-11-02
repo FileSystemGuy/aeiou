@@ -965,9 +965,10 @@ numbers; the order is this note's.
     built 2026-11-01:* `aeiou-trace compare` in Rust (`compare.rs`), the numbers held to every
     comparison the Python's tests made and two digests' structure compared as designed, `--pair`
     and `--json` added; `aeiou dry-run --emit-trace` (`emit.rs`). Not done in stage 4:
-    `aeiou-trace metrics` is not retired, since its strace-only options (`--instance-root`,
-    `--chain-gap-us`, `--metrics-block`) have no place in the digest yet and the committed
-    captures are metrics documents until stage 5 rewraps them; nor does `dry-run --metrics-json`
+    `aeiou-trace metrics` is not retired, since ~~its strace-only options (`--instance-root`,
+    `--chain-gap-us`, `--metrics-block`) have no place in the digest yet and~~ the committed
+    captures are metrics documents until stage 5 rewraps them (the three options on the digest
+    since 2026-11-02, its `metrics` section the strace's own reading, `DESIGN_REVIEW.md` §3.89); nor does `dry-run --metrics-json`
     write a digest (its numbers are compared as a metrics document's). Next, stage 5.
 
 48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
@@ -1190,7 +1191,7 @@ numbers; the order is this note's.
     traced value; an audit of every committed `st_blksize` parameter; an `fstat` shim and the
     runs that confirm each derivation. Also queued the same day, before `aeiou-trace metrics`
     is retired (§3.89 stage 5): `--instance-root`, `--chain-gap-us`, and `--metrics-block` on
-    `aeiou-trace digest`.
+    `aeiou-trace digest` (*built 2026-11-02*, item 47).
 
 ## 7. Environment
 

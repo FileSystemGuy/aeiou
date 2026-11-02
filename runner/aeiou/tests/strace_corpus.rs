@@ -9,7 +9,7 @@
 use std::io::BufRead;
 use std::path::PathBuf;
 
-use aeiou::{export, objectlog, strace};
+use aeiou::{digest, export, objectlog, strace};
 use serde_json::Value;
 
 fn corpus() -> Vec<(String, String, Value)> {
@@ -102,4 +102,46 @@ fn every_golden_case_is_reproduced() {
             k => panic!("{name}: kind {k}"),
         }
     }
+}
+
+/// The digest's `metrics` section is `aeiou-trace metrics` of the same input, row for row, under
+/// the same `--instance-root`, `--chain-gap-us`, and `--metrics-block`: of an strace the strace's
+/// own reading, not the exported lines' (which leave out what the export cannot write and count
+/// an `io_submit` member in line order, not when it is reaped), so retiring `metrics` (§3.89
+/// stage 5) loses nothing.
+#[test]
+fn the_digest_metrics_are_the_metrics_documents() {
+    let mut checked = [0usize; 3];
+    for (name, text, want) in &corpus() {
+        let args = &want["args"];
+        let w = &want["metrics"];
+        if w.get("error").is_some() || w["total"]["ops"].as_u64().unwrap_or(0) == 0 {
+            continue;
+        }
+        let opener = || -> std::io::Result<Box<dyn BufRead + '_>> { Ok(Box::new(text.as_bytes())) };
+        let first = text.lines().next().unwrap_or("").to_string();
+        let m = digest::MetricsOpts {
+            instance_roots: args["instance_roots"].as_array().map(|a| a.iter().filter_map(Value::as_i64).collect()).unwrap_or_default(),
+            chain_gap_us: args["chain_gap_us"].as_f64(),
+            block: args["block"].as_u64(),
+        };
+        let (root, exclude, cwd, slot) = match want["kind"].as_str().unwrap() {
+            "export" | "metrics" => {
+                let roots = strs(&args["roots"]);
+                if roots.len() != 1 {
+                    continue; // the digest takes one root
+                }
+                (Some(roots[0].clone()), strs(&args["exclude"]), args["cwd"].as_str().map(str::to_string), 0)
+            }
+            "metrics_file" => (None, vec![], None, 1),
+            "objectlog" => (Some(args["root"].as_str().unwrap().to_string()), vec![], None, 2),
+            _ => continue,
+        };
+        let Ok(an) = digest::analyze(&opener, &first, root.as_deref(), &exclude, cwd.as_deref(), &m) else {
+            continue; // nothing exported: no digest to have a section
+        };
+        assert_eq!(an.metrics(), w, "{name}: the digest's metrics are not the metrics document");
+        checked[slot] += 1;
+    }
+    assert!(checked.iter().all(|&n| n >= 3), "every kind of input is checked: {checked:?}");
 }

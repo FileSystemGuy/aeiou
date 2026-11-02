@@ -110,6 +110,15 @@ struct DigestArgs {
     /// Include every raw path under each template (the digest otherwise carries templates and counts only)
     #[arg(long)]
     paths: bool,
+    /// The block metrics too in the metrics section, reuse and popularity in blocks of BYTES, as captures taken before 2026-10-22 have them
+    #[arg(long, value_name = "BYTES", allow_negative_numbers = true)]
+    metrics_block: Option<i64>,
+    /// The metrics section: the process tree under PID is one instance (repeatable; an strace's alone, and needs clone in it); default: the whole trace is one instance
+    #[arg(long, value_name = "PID")]
+    instance_root: Vec<i64>,
+    /// The metrics section reports depth: consecutive io_submit rounds of a thread form a chain until more than US microseconds pass between a round's end and the next submit (an strace's alone)
+    #[arg(long, value_name = "US", value_parser = non_negative)]
+    chain_gap_us: Option<f64>,
     /// Print the text report instead of the JSON document (with -o, the report is printed beside the file anyway)
     #[arg(long)]
     text: bool,
@@ -434,6 +443,10 @@ fn digest_cmd(a: DigestArgs) -> Result<()> {
     if a.candidates.is_some_and(|c| c < 1) {
         return Err(usage::err("--candidates must be at least 1"));
     }
+    if a.metrics_block.is_some_and(|b| b < 1) {
+        return Err(usage::err("--metrics-block must be at least 1"));
+    }
+    let mo = digest::MetricsOpts { instance_roots: a.instance_root.clone(), chain_gap_us: a.chain_gap_us, block: a.metrics_block.map(|b| b as u64) };
     if trace == "-" {
         return Err(usage::err("the digest reads the trace as a file, never stdin: the comparison after the fit and a re-run with answers read it again"));
     }
@@ -450,13 +463,18 @@ fn digest_cmd(a: DigestArgs) -> Result<()> {
     let input = Input::open(&trace)?;
     let first = input.first_line()?;
     let exported = first.starts_with("{\"aeiou_trace\"");
+    if exported || objectlog::source_of(&first).is_some() {
+        if let Some(opt) = digest::strace_only(&mo) {
+            return Err(usage::err(format!("{opt}: only an strace has the process tree and the rounds' ends it needs; {trace} is {}", if exported { "an exported trace file" } else { "an object-store request log" })));
+        }
+    }
     if !exported && a.root.is_none() {
         let mut m = Missing::new();
         m.need(false, "--root <DIR>", "digest only calls on paths under DIR", Some("needed for an strace; an exported trace file carries its root"));
         m.check()?;
     }
     let opener = || input.reader();
-    let an = digest::analyze(&opener, &first, a.root.as_deref(), &a.exclude, a.cwd.as_deref()).map_err(|e| anyhow!("{trace}: {e:#}"))?;
+    let an = digest::analyze(&opener, &first, a.root.as_deref(), &a.exclude, a.cwd.as_deref(), &mo).map_err(|e| anyhow!("{trace}: {e:#}"))?;
     let sha = sha256_of(&trace)?;
     let (mut by, mut at) = (a.answered_by.clone().unwrap_or_else(who), now());
     let o = digest::Opts { epochs, candidates: a.candidates, paths: a.paths };

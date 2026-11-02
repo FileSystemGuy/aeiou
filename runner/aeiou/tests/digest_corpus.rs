@@ -70,7 +70,7 @@ fn every_golden_digest_is_reproduced() {
         let args = &want["args"];
         let first = text.lines().next().map(|l| format!("{l}\n")).unwrap_or_default();
         let opener = || -> std::io::Result<Box<dyn BufRead + '_>> { Ok(Box::new(text.as_bytes())) };
-        let got = digest::analyze(&opener, &first, args["root"].as_str(), &strs(&args["exclude"]), args["cwd"].as_str());
+        let got = digest::analyze(&opener, &first, args["root"].as_str(), &strs(&args["exclude"]), args["cwd"].as_str(), &Default::default());
         let an = match (got, want.get("error").and_then(Value::as_str)) {
             (Ok(an), None) => an,
             (Err(e), Some(w)) => {
@@ -174,7 +174,7 @@ fn every_golden_interview_is_reproduced() {
         let args = &want["args"];
         let first = text.lines().next().map(|l| format!("{l}\n")).unwrap_or_default();
         let opener = || -> std::io::Result<Box<dyn BufRead + '_>> { Ok(Box::new(text.as_bytes())) };
-        let an = digest::analyze(&opener, &first, args["root"].as_str(), &strs(&args["exclude"]), args["cwd"].as_str()).unwrap();
+        let an = digest::analyze(&opener, &first, args["root"].as_str(), &strs(&args["exclude"]), args["cwd"].as_str(), &Default::default()).unwrap();
         let held = want["apps"].as_str().map(|f| records_of(f, name));
         let o = &want["options"];
         let o = digest::Opts { epochs: o["epochs"].as_i64().unwrap(), candidates: o["candidates"].as_i64(), paths: o["paths"].as_bool().unwrap() };

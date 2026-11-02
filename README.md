@@ -393,7 +393,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-11-01)
+## Status (2026-11-02)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -579,8 +579,10 @@ Not built, in rough order of interest:
   by hand, or by shape; each pair's verdicts, the owner's asserted answers in place of
   undecided ones, op kinds, motifs, and peak of lanes; the runner's own I/O set aside); and
   `aeiou dry-run --emit-trace`, the abstract's op stream as a trace file, a lane per context
-  and the instances interleaved, whose digest at one instance has the dry run's own numbers. To
-  build next: the digest gaining `metrics`'s strace-only options, then stage 5, the Python's
+  and the instances interleaved, whose digest at one instance has the dry run's own numbers.
+  Built 2026-11-02: `metrics`'s `--instance-root`, `--chain-gap-us`, and `--metrics-block` on the
+  digest, whose `metrics` section of an strace is now the strace's own reading. To
+  build next: stage 5, the Python's
   remains retired and the committed captures rewrapped; a storage-reported value used only with
   evidence that the application derives from it, the digest recording the `st_blksize` a trace
   saw and asking whether a site's size follows it (item 55, decided 2026-11-01, §3.91);

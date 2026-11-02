@@ -185,10 +185,12 @@ verdict says how many touches would decide it. *Order* within a pass (`sequentia
 `permuted`, `other`) and the bytes per open (`constant`, `per-path`, `drawn`) are judged
 the same way, each `undecided` with what settles it. **Facts**: every site lists the facts a
 person can give about it at scale (below, under asking), each with its question and, where the
-trace bounds it, the least value the trace allows and what it shows. **Metrics**: the numbers
-`metrics` computes, by its definitions, over the same exported calls (`aeiou_metrics: 2`, as
-the metrics of the exported trace file: a lane is a context, the whole trace one instance), so
-one document carries a trace's structure and its numbers. **Open**: every undecided verdict as a
+trace bounds it, the least value the trace allows and what it shows. **Metrics**: the document
+`metrics` writes of the same input under the same `--instance-root`, `--chain-gap-us`, and
+`--metrics-block` (`aeiou_metrics: 2`), so one document carries a trace's structure and its
+numbers: of an strace, the strace's own reading, taken beside the export's first pass (every
+call under the root counted, a libaio request when it is reaped); of an exported trace file or
+an object log, its exported lines (a lane is a context, the whole input one instance). **Open**: every undecided verdict as a
 question in the application's terms, its candidate constructs, what evidence settles it,
 and the candidates' divergence at `--epochs` passes (the share of the set a draw with
 replacement never reads, e^-N, against zero for a pass), ranked largest first. **Asking**:
@@ -396,6 +398,20 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
   Include every raw path under each template. Without it the document carries templates
   and counts only, which is what leaves the trace's owner.
+- **--metrics-block** *BYTES*
+
+  The block metrics too in the `metrics` section, as `metrics --metrics-block` computes
+  them. At least 1.
+- **--instance-root** *PID*
+
+  The `metrics` section's instances, as `metrics --instance-root` makes them. Repeatable.
+  An strace's alone: for an exported trace file or an object log, which carry no process
+  tree, it is a usage error.
+- **--chain-gap-us** *US*
+
+  The `metrics` section's depth, as `metrics --chain-gap-us` reports it. An strace's
+  alone: an exported trace file or an object log does not show where a round of
+  `io_submit` ends, and it is a usage error there.
 - **--text**
 
   Print the text report instead of the JSON document.
@@ -517,7 +533,8 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 - **2**
 
   A usage error, in the frame every tool of the suite shares; a `--max-distance` or
-  `--chain-gap-us` that is negative or not a finite number is one.
+  `--chain-gap-us` that is negative or not a finite number is one, and so is a digest's
+  `--instance-root` or `--chain-gap-us` for an input that is not an strace.
 
 ## EXAMPLES
 

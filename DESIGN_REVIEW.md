@@ -8513,14 +8513,34 @@ completion order against the walk's round-robin), and two differences of structu
 shows as an op kind and a motif and the emitted file does not have. The set-aside found the
 dataset manifest and the root's stat. Not done in stage 4, left for stage 5 or a decision:
 `aeiou-trace metrics` is not retired (its strace-only options, `--instance-root`,
-`--chain-gap-us`, `--metrics-block`, have no place in the digest yet, and the committed captures
-are metrics documents until stage 5 rewraps them), and `dry-run --metrics-json` still writes a
+`--chain-gap-us`, `--metrics-block`, ~~have no place in the digest yet~~ *on the digest since
+2026-11-02, below*, and the committed captures are metrics documents until stage 5 rewraps them), and `dry-run --metrics-json` still writes a
 metrics document, which `compare` reads as numbers only. One test fixed on the way: stage 2's
 memory test (`tests/trace_tool.rs`) read its digest child's `ru_maxrss`, which on Linux counts
 the peak of the process the child was forked from; under coverage the test process, running
 every test of the crate, reached 9.7 GB, and the new tests moved the schedule so that both
 digests reported 2.8 GB of it. The child is now measured from a fresh process (the test binary
 run again for a helper alone).
+
+*The metrics options on the digest, 2026-11-02 (the user's instruction of 2026-11-01: before
+`metrics` is retired).* Measured first: the digest's `metrics` were the exported lines'
+(`export::FileMetrics`), which differ from `aeiou-trace metrics` of the same strace in 5 of the
+27 golden straces taken without options: two libaio traces in read-after-read reuse (the strace
+counts an `io_submit` member when it is reaped, the file in line order), one with a `truncate`
+the export left out (`not_exported:truncate`, §3.92), two with a `close` the export does not
+write, and the `depth_not_computed` note missing. And the file has neither a process tree nor a
+round's end, so `--instance-root` and `--chain-gap-us` could not have worked through it. Decided
+with the user: of an strace, the section is the strace's own reading, `aeiou-trace metrics` of
+it, by a second tracer (its instances and notes must not change the export's) fed the lines of
+the export's first pass; of an exported file or an object log (whose numbers were already equal,
+three of three) the exported lines' as before. `--metrics-block` works on every input;
+`--instance-root` and `--chain-gap-us` for a file or a log are usage errors, where `metrics`
+ignores them. `tests/strace_corpus.rs` holds the section to every metrics document of the corpus.
+The cost, on a synthetic strace of 570 MB (a million npz opens of four reads, eight threads): the
+digest took 35.0 s and 1.47 GB; parsing every line twice on one thread, 48.3 s; with the metrics
+tracer on its own thread, fed 1 MB batches, 40.2 s and 2.05 GB, the extra memory the metrics' own
+(`metrics` alone, 8.8 s and 0.86 GB). The section changes for the five traces above, the goldens
+of the digest corpus not at all (they set the section aside).
 
 ### 3.90 Two audiences, two tool suites, and the digest between them (the user's reasoning, 2026-10-31)
 

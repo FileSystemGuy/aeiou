@@ -595,16 +595,66 @@ pub fn write_file(out: &mut dyn Write, header: &Value, pass: impl FnOnce(&mut dy
 
 /// Export an strace: the calls on paths under `root`, written relative to it.
 pub fn strace(open: &Opener, root: &str, exclude: &[String], cwd: Option<&str>, out: &mut dyn Write) -> Result<Summary> {
+    strace_with_metrics(open, root, exclude, cwd, None, out).map(|(s, _)| s)
+}
+
+/// The bytes of trace lines the metrics reader is sent at a time.
+const BATCH: usize = 1 << 20;
+
+/// An export whose first pass also reads the strace as `aeiou-trace metrics` does, under
+/// `metrics` (its roots, exclusions, and directory this export's): the metrics document, the
+/// strace's own, beside the summary. A tracer of its own, since instances and the notes of
+/// either must not change the other.
+pub fn strace_with_metrics(open: &Opener, root: &str, exclude: &[String], cwd: Option<&str>, metrics: Option<&strace::Opts>, out: &mut dyn Write) -> Result<(Summary, Option<Value>)> {
     let o = strace::Opts { roots: vec![root.to_string()], exclude: exclude.to_vec(), cwd: cwd.map(str::to_string), ..Default::default() };
+    let mo = metrics.map(|m| strace::Opts { roots: o.roots.clone(), exclude: o.exclude.clone(), cwd: o.cwd.clone(), ..m.clone() });
     let root = normpath(root);
+    let mut metrics_doc = None;
     let mut t = Tracer::new(&o, false, Some(Exporter::new(&root)));
-    t.feed(open()?)?;
+    match &mo {
+        None => t.feed(open()?)?,
+        Some(mo) => {
+            // on a thread of its own, fed the lines in batches: the export's pass is not slowed
+            // by a second parse of every line
+            let (tx, rx) = std::sync::mpsc::sync_channel::<String>(8);
+            let doc = std::thread::scope(|sc| {
+                let reader = sc.spawn(move || -> Result<Value> {
+                    let mut mt = Tracer::new(mo, true, None);
+                    for batch in rx {
+                        for line in batch.split_terminator('\n') {
+                            mt.feed_line(line)?;
+                        }
+                    }
+                    mt.finish()?;
+                    Ok(strace::metrics_document(&mt, mo))
+                });
+                let mut batch = String::with_capacity(BATCH);
+                let fed = for_each_line(open()?, |line| {
+                    t.feed_line(line)?;
+                    batch.push_str(line.strip_suffix('\n').unwrap_or(line));
+                    batch.push('\n');
+                    if batch.len() >= BATCH {
+                        // a send fails only when the reader stopped, on an error its join returns
+                        let _ = tx.send(std::mem::replace(&mut batch, String::with_capacity(BATCH)));
+                    }
+                    Ok(())
+                });
+                if !batch.is_empty() {
+                    let _ = tx.send(batch);
+                }
+                drop(tx);
+                let doc = reader.join().map_err(|_| anyhow!("the metrics reader panicked"))?;
+                fed.and(doc)
+            })?;
+            metrics_doc = Some(doc);
+        }
+    }
     t.finish()?;
     let (plan, header) = t.export.as_ref().unwrap().finish(&root, "strace", &t.notes);
     let seen = t.seen;
     let lines = header["lines"].as_u64().unwrap_or(0) as usize;
     if lines == 0 {
-        return Ok(Summary { header, lines, sha256: String::new(), seen });
+        return Ok((Summary { header, lines, sha256: String::new(), seen }, metrics_doc));
     }
     let sha256 = write_file(out, &header, |write| {
         let mut t = Tracer::new(&o, false, Some(Exporter::emitting(&root, plan)));
@@ -618,7 +668,7 @@ pub fn strace(open: &Opener, root: &str, exclude: &[String], cwd: Option<&str>, 
         let q = std::mem::take(&mut t.export.as_mut().unwrap().queue);
         write(q)
     })?;
-    Ok(Summary { header, lines, sha256, seen })
+    Ok((Summary { header, lines, sha256, seen }, metrics_doc))
 }
 
 // ---------------------------------------------------------------- the metrics of a trace file
