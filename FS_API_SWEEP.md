@@ -102,7 +102,7 @@ work item of its own.
   (Python `tempfile.TemporaryFile`). *Status: fixed 2026-11-02: `fd_arg` takes `(deleted)` after
   the brackets as inside them (tests `descriptors_and_their_paths`,
   `export_keeps_calls_on_an_unlinked_file`); an `O_TMPFILE` file's calls are now exported, its
-  open still the directory's until S-10.*
+  open still the directory's until S-10 (fixed the same day).*
 - **S-6** (A) `iocb_at` (`strace.rs:600-648`): an `IOCB_CMD_FSYNC`/`FDSYNC`/`NOOP`/`POLL` has
   no `aio_nbytes`/`aio_offset` and a `PREADV`/`PWRITEV` has `aio_buf=[iovec]`, so the search
   runs into the next request (its size taken, the request swallowed, the path overrunning into
@@ -132,7 +132,11 @@ work item of its own.
 - **S-10** (A) `O_PATH` exported as a full `RDONLY` open, `O_TMPFILE` as an `RDWR` open of the
   directory (replay: EISDIR or a refusal as a missing input); both counted only in the unnamed
   `open_flags_dropped`. Dropped flags to be named, `O_PATH`/`O_TMPFILE` noted and not replayed
-  as another call until B. *Status: open.*
+  as another call until B. *Status: fixed 2026-11-02: both opens left out and noted
+  (`not_exported:open:O_PATH`, `…:O_TMPFILE`), the calls on the descriptor noted as on an open
+  not exported (no longer "descriptor without open"), and a dropped flag noted by name
+  (`open_flags_dropped:O_NONBLOCK`; three corpus goldens renamed that note and changed nothing
+  else); test `export_leaves_out_o_path_and_o_tmpfile_opens_and_names_dropped_flags`.*
 
 ### Closes (the close class)
 

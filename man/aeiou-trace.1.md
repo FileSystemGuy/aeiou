@@ -111,7 +111,11 @@ to the one `--root`. A sequential read or write on an open that more than one la
 written positioned at the offset the trace shows it used, as is every read and write on an
 open whose `O_APPEND` write went to a known end of the file; an `mmap` of a file range is one
 positioned `read` of the range; a call the schema has no op for is dropped and counted by
-name in the header's `notes`. The file's sha256 is printed, for the abstract's
+name in the header's `notes`. An `O_PATH` open (a handle on the path that moves no data) and an
+`O_TMPFILE` one (an unnamed file in the directory it names) are left out and noted
+(`not_exported:open:O_PATH`), never written as an open of the file or the directory, and the
+calls on the descriptor with them; a flag of an open the trace file has no name for is left
+out and noted by name (`open_flags_dropped:O_NONBLOCK`). The file's sha256 is printed, for the abstract's
 `w.trace("app.jsonl", sha256)`; the runner refuses the file when it differs. The trace is read
 twice (the first pass learns which opens several lanes shared, the earliest start, and what each
 AIO request returned; the second writes), so standard input is first copied to a temporary

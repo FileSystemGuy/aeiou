@@ -667,13 +667,15 @@ pub struct File {
     pub oid: Option<usize>,
     /// A descriptor the trace shows no open of: held from before it began.
     pub held: bool,
+    /// An open under the root the export left out (`O_PATH`, `O_TMPFILE`, the root itself).
+    pub unexported: bool,
 }
 
 type FileRef = Rc<RefCell<File>>;
 type Table = Rc<RefCell<HashMap<i64, FileRef>>>;
 
 fn new_file(path: Option<String>, pos: i64, append: bool) -> FileRef {
-    Rc::new(RefCell::new(File { path, pos, append, listed: false, oid: None, held: false }))
+    Rc::new(RefCell::new(File { path, pos, append, listed: false, oid: None, held: false, unexported: false }))
 }
 
 const OPENS: [&str; 4] = ["open", "openat", "openat2", "creat"];
@@ -860,8 +862,9 @@ impl Tracer {
                 Ok(Some(oid))
             }
             _ => {
+                let why = if f.is_some_and(|f| f.borrow().unexported) { "its open not exported" } else { "descriptor without open" };
                 ex.note("calls_not_exported", 1);
-                ex.note(&format!("not_exported:{op}:descriptor without open"), 1);
+                ex.note(&format!("not_exported:{op}:{why}"), 1);
                 Ok(None)
             }
         }
@@ -1373,7 +1376,9 @@ impl Tracer {
                     }
                     let oid = ex.open(when, p, &flags, mode.as_deref(), err)?;
                     if let Some(f) = &f {
-                        f.borrow_mut().oid = oid;
+                        let mut fb = f.borrow_mut();
+                        fb.oid = oid;
+                        fb.unexported = oid.is_none();
                     }
                 }
             }

@@ -410,17 +410,25 @@ impl Exporter {
     }
 
     pub fn open(&mut self, when: When, path: &str, flags: &str, mode: Option<&str>, err: Option<&str>) -> Result<Option<usize>> {
+        // an `O_PATH` open is a handle on the path that reads and writes nothing, an `O_TMPFILE`
+        // one makes an unnamed file in the directory it names: neither is written as an open
+        // of the file or the directory (FS_API_SWEEP.md S-10)
+        if let Some(kind) = flags.split('|').find_map(|f| match f {
+            "O_PATH" => Some("O_PATH"),
+            "O_TMPFILE" | "__O_TMPFILE" => Some("O_TMPFILE"),
+            _ => None,
+        }) {
+            self.note("calls_not_exported", 1);
+            self.note(&format!("not_exported:open:{kind}"), 1);
+            return Ok(None);
+        }
         let mut names: Vec<&'static str> = Vec::new();
-        let mut dropped = 0;
         for f in flags.split('|') {
             match open_flag(f) {
                 Some(n) => names.push(n),
-                None if !f.is_empty() && f != "O_LARGEFILE" => dropped += 1,
+                None if !f.is_empty() && f != "O_LARGEFILE" => self.note(&format!("open_flags_dropped:{f}"), 1),
                 None => {}
             }
-        }
-        if dropped > 0 {
-            self.note("open_flags_dropped", dropped);
         }
         if !names.iter().any(|n| matches!(*n, "RDONLY" | "WRONLY" | "RDWR")) {
             names.insert(0, "RDONLY"); // O_RDONLY is 0 and strace prints it, but be sure

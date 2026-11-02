@@ -13,7 +13,9 @@
 //! call it had and to add only calls on the paths its `missing_opens` names); a call no op
 //! covers that names a path under the root noted by name (`not_counted:<call>`, the same day,
 //! `FS_API_SWEEP.md` S-1; three cases, each a `realpath` walk's `readlink`s under the root,
-//! their notes the only difference). Three of
+//! their notes the only difference); and an open's dropped flag noted by name
+//! (`open_flags_dropped:O_NONBLOCK`, S-10; three cases, the note's name the only difference).
+//! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths
 //! rewritten to `/t/...` and the checkout's to `/src/aeiou`.

@@ -873,6 +873,52 @@ fn export_notes_the_calls_on_a_mapping_of_the_root_and_sync() {
     assert_eq!(m["notes"]["not_counted:msync"], 2, "{m}");
 }
 
+/// An `O_PATH` or `O_TMPFILE` open is left out of the export and noted, never written as an open
+/// of the file or of the directory (`FS_API_SWEEP.md` S-10), and the calls on its descriptor
+/// are noted as calls on an open not exported; an open's flag the trace file has no name for is
+/// noted by name.
+#[test]
+fn export_leaves_out_o_path_and_o_tmpfile_opens_and_names_dropped_flags() {
+    let d = tmp("o_path");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 openat(AT_FDCWD</d>, "/d", O_RDWR|O_TMPFILE, 0600) = 3</d/#1185826>(deleted) <0.000010>"#,
+            r#"100 1700000000.000100 write(3</d/#1185826>(deleted), "x"..., 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.000200 close(3</d/#1185826>(deleted)) = 0 <0.000010>"#,
+            r#"100 1700000000.000300 openat(AT_FDCWD</d>, "/d/f", O_PATH|O_CLOEXEC) = 4</d/f> <0.000010>"#,
+            r#"100 1700000000.000400 fstat(4</d/f>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0 <0.000010>"#,
+            r#"100 1700000000.000500 close(4</d/f>) = 0 <0.000010>"#,
+            r#"100 1700000000.000600 openat(AT_FDCWD</d>, "/d/g", O_RDONLY|O_NONBLOCK|O_NOCTTY) = 5</d/g> <0.000010>"#,
+            r#"100 1700000000.000700 close(5</d/g>) = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let ops: Vec<(&str, &Value)> = lines[1..].iter().map(|l| (l["op"].as_str().unwrap(), &l["path"])).collect();
+    assert_eq!(ops, [("open", &serde_json::json!("g")), ("close", &Value::Null)]);
+    let notes = &lines[0]["notes"];
+    for (k, n) in [
+        ("not_exported:open:O_TMPFILE", 1),
+        ("not_exported:open:O_PATH", 1),
+        ("not_exported:write:its open not exported", 1),
+        ("not_exported:fstat:its open not exported", 1),
+        ("not_exported:close:its open not exported", 2),
+        ("open_flags_dropped:O_NONBLOCK", 1),
+        ("open_flags_dropped:O_NOCTTY", 1),
+    ] {
+        assert_eq!(notes[k], n, "{k}: {notes}");
+    }
+    assert!(notes.get("open_flags_dropped").is_none(), "{notes}");
+    assert!(lines[0].get("missing_opens").is_none(), "{}", lines[0]);
+}
+
 /// The digest records per template what its calls did to the space its files hold
 /// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
 /// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the
