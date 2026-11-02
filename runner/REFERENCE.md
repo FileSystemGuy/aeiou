@@ -1880,15 +1880,8 @@ Lines: a header, then one op per line in the order the calls returned.
   and `aeiou dry-run` and `aeiou run` say on standard error that the trace is incomplete,
   naming them, and go on (2026-11-02, `DESIGN_REVIEW.md` §3.92; until then the calls on such a
   descriptor were left out of the export silently).
-- **`creates`** lists the paths the trace brings into being under the root, those the gate
-  requires absent and `--clean-namespaces` removes: a path the trace proves absent when it
-  began (its first appearance an `O_EXCL` create or a `mkdir`, or an ENOENT, then created),
-  or one whose first appearance destroys what it held (an `O_CREAT|O_TRUNC` open, a `rename`
-  onto it), so every run's open is a create and never a truncate of the last run's file.
-  ~~An open with `CREAT` of a path not seen before~~ (until 2026-11-02, `FS_API_SWEEP.md`
-  S-17): an `O_CREAT` open that keeps what the file holds (Python's and h5py's `'a'`, a
-  write-only open without `O_TRUNC`), unproven, may be of the application's input, which the
-  gate refused and its advice deleted; it is listed in neither `creates` nor the inputs.
+- **`creates`** lists the paths the trace brings into being under the root (an open with
+  `CREAT` of a path not seen before, a `mkdir`, a `rename` destination).
 
 **Loading.** `aeiou load` reads the node's `file` relative to the document's directory and
 refuses it before the gate when its sha256 is not the node's. Open ids must be ordinal; a

@@ -919,54 +919,6 @@ fn export_leaves_out_o_path_and_o_tmpfile_opens_and_names_dropped_flags() {
     assert!(lines[0].get("missing_opens").is_none(), "{}", lines[0]);
 }
 
-/// A path is listed among the creates (which the gate requires absent, and
-/// `--clean-namespaces` removes) when the trace proves it absent when it began (its first
-/// appearance an `O_EXCL` create, a `mkdir`, or an ENOENT) or its first appearance destroys
-/// what it held (an `O_TRUNC` create, a rename onto it); never for an `O_CREAT` open that
-/// keeps the file's content, unproven, or a path the trace used before it created it: the
-/// application's input, which the gate's advice would have deleted (`FS_API_SWEEP.md` S-17).
-#[test]
-fn export_lists_a_create_only_where_the_trace_proves_the_path_new() {
-    let d = tmp("creates");
-    let trace = d.join("t.strace");
-    std::fs::write(
-        &trace,
-        [
-            r#"100 1700000000.000000 openat(AT_FDCWD</d>, "/d/a", O_WRONLY|O_CREAT|O_APPEND, 0644) = 3</d/a> <0.000010>"#,
-            r#"100 1700000000.000010 close(3</d/a>) = 0 <0.000010>"#,
-            r#"100 1700000000.000020 openat(AT_FDCWD</d>, "/d/b", O_WRONLY|O_CREAT|O_EXCL, 0644) = 3</d/b> <0.000010>"#,
-            r#"100 1700000000.000030 close(3</d/b>) = 0 <0.000010>"#,
-            r#"100 1700000000.000040 newfstatat(AT_FDCWD</d>, "/d/c", 0x7ffd, 0) = -1 ENOENT (No such file or directory) <0.000010>"#,
-            r#"100 1700000000.000050 openat(AT_FDCWD</d>, "/d/c", O_RDWR|O_CREAT, 0644) = 3</d/c> <0.000010>"#,
-            r#"100 1700000000.000060 close(3</d/c>) = 0 <0.000010>"#,
-            r#"100 1700000000.000070 unlink("/d/e") = 0 <0.000010>"#,
-            r#"100 1700000000.000080 openat(AT_FDCWD</d>, "/d/e", O_WRONLY|O_CREAT|O_EXCL, 0644) = 3</d/e> <0.000010>"#,
-            r#"100 1700000000.000090 close(3</d/e>) = 0 <0.000010>"#,
-            r#"100 1700000000.000100 mkdir("/d/m", 0755) = 0 <0.000010>"#,
-            r#"100 1700000000.000110 openat(AT_FDCWD</d>, "/d/m/t", O_WRONLY|O_CREAT|O_EXCL, 0644) = 3</d/m/t> <0.000010>"#,
-            r#"100 1700000000.000120 close(3</d/m/t>) = 0 <0.000010>"#,
-            r#"100 1700000000.000130 rename("/d/m/t", "/d/final") = 0 <0.000010>"#,
-            r#"100 1700000000.000140 openat(AT_FDCWD</d>, "/d/n", O_RDONLY) = -1 ENOENT (No such file or directory) <0.000010>"#,
-            r#"100 1700000000.000150 rename("/d/m/t2", "/d/n") = -1 ENOENT (No such file or directory) <0.000010>"#,
-            r#"100 1700000000.000160 openat(AT_FDCWD</d>, "/d/h5", O_RDWR|O_CREAT, 0644) = 3</d/h5> <0.000010>"#,
-            r#"100 1700000000.000170 close(3</d/h5>) = 0 <0.000010>"#,
-            r#"100 1700000000.000180 openat(AT_FDCWD</d>, "/d/out", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3</d/out> <0.000010>"#,
-            r#"100 1700000000.000190 close(3</d/out>) = 0 <0.000010>"#,
-            r#"100 1700000000.000200 newfstatat(AT_FDCWD</d>, "/d/in", {st_mode=S_IFREG|0644, st_size=10, ...}, 0) = 0 <0.000010>"#,
-            r#"100 1700000000.000210 openat(AT_FDCWD</d>, "/d/in", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3</d/in> <0.000010>"#,
-            r#"100 1700000000.000220 close(3</d/in>) = 0 <0.000010>"#,
-            "",
-        ]
-        .join("\n"),
-    )
-    .unwrap();
-    let out = d.join("t.jsonl");
-    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
-    let header: Value = serde_json::from_str(std::fs::read_to_string(&out).unwrap().lines().next().unwrap()).unwrap();
-    assert_eq!(header["creates"], serde_json::json!(["b", "c", "m", "m/t", "final", "out"]), "{header}");
-}
-
 /// The digest records per template what its calls did to the space its files hold
 /// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
 /// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the

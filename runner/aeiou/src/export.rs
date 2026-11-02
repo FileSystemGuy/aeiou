@@ -213,8 +213,6 @@ pub struct Exporter {
     notes: BTreeMap<String, Value>,
     events: usize,
     seen: HashSet<String>,
-    /// Paths whose first appearance in the trace was an ENOENT: absent when it began.
-    absent: HashSet<String>,
     creates: Vec<String>,
     created: HashSet<String>,
     rets: HashMap<(usize, usize), Value>,
@@ -252,7 +250,6 @@ impl Exporter {
             notes: BTreeMap::new(),
             events: 0,
             seen: HashSet::new(),
-            absent: HashSet::new(),
             creates: Vec::new(),
             created: HashSet::new(),
             rets: HashMap::new(),
@@ -382,49 +379,28 @@ impl Exporter {
         }
     }
 
-    /// The first pass's bookkeeping of a line: the creates, in the order the lines come, which
-    /// the gate requires absent and `--clean-namespaces` removes. A path the trace proves absent
-    /// when it began is one (its first appearance an `O_EXCL` create or a `mkdir`, or an
-    /// ENOENT); so is one whose first appearance destroys what it held, an `O_TRUNC` create or
-    /// a rename onto it, since removing it first takes nothing the application keeps and makes
-    /// every run's open a create, never a truncate of the last run's file. An `O_CREAT` open
-    /// that keeps what the file holds (Python's and h5py's `'a'`) is not, unproven: it may be
-    /// the application's input, which the gate's advice would delete (`FS_API_SWEEP.md` S-17).
+    /// The first pass's bookkeeping of a line: the creates, in the order the lines come.
     fn learn(&mut self, e: &Event) {
+        let failed = !e.ret.is_null() && !e.ret.is_number();
         let ok = e.ret.is_null();
-        let enoent = e.ret.as_str() == Some("ENOENT");
-        let mut first = |p: &str| {
-            let new = self.seen.insert(p.to_string());
-            if new && enoent {
-                self.absent.insert(p.to_string());
-            }
-            new
-        };
-        let path_first = e.path.as_deref().map(&mut first);
-        let to_first = e.to.as_deref().map(&mut first);
         match e.op {
-            "open" if ok && e.fd.is_some_and(|fd| self.opens[fd].creat) => {
+            "open" => {
                 let p = e.path.clone().unwrap_or_default();
-                let excl_or_trunc = e.flags.as_ref().is_some_and(|f| f.contains(&"EXCL") || f.contains(&"TRUNC"));
-                if (path_first == Some(true) && excl_or_trunc) || self.absent.contains(&p) {
-                    self.create(p);
+                if self.opens[e.fd.unwrap()].creat && !self.seen.contains(&p) && !self.created.contains(&p) && ok {
+                    self.created.insert(p.clone());
+                    self.creates.push(p.clone());
                 }
+                self.seen.insert(p);
             }
-            "mkdir" if ok => {
-                let p = e.path.clone().unwrap_or_default();
-                if path_first == Some(true) || self.absent.contains(&p) {
-                    self.create(p);
-                }
-            }
-            "rename" if ok => {
-                let p = e.to.clone().unwrap_or_default();
-                if to_first == Some(true) || self.absent.contains(&p) {
-                    self.create(p);
-                }
+            "mkdir" if ok => self.create(e.path.clone().unwrap_or_default()),
+            "rename" if ok => self.create(e.to.clone().unwrap_or_default()),
+            "stat" if ok => {
+                self.seen.insert(e.path.clone().unwrap_or_default());
             }
             "read" | "write" if e.offset.is_none() && e.at.is_some() => self.opens[e.fd.unwrap()].sequential += 1,
             _ => {}
         }
+        let _ = failed;
     }
 
     fn create(&mut self, p: String) {

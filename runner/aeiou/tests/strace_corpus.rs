@@ -14,10 +14,7 @@
 //! covers that names a path under the root noted by name (`not_counted:<call>`, the same day,
 //! `FS_API_SWEEP.md` S-1; three cases, each a `realpath` walk's `readlink`s under the root,
 //! their notes the only difference); and an open's dropped flag noted by name
-//! (`open_flags_dropped:O_NONBLOCK`, S-10; three cases, the note's name the only difference);
-//! and a create listed only where the trace proves the path absent or its first open
-//! truncates it (S-17; twelve cases, each losing only creates of `O_CREAT` opens without
-//! `O_TRUNC`, the Python's synthetic fixtures, and none of this runner's own straces).
+//! (`open_flags_dropped:O_NONBLOCK`, S-10; three cases, the note's name the only difference).
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths

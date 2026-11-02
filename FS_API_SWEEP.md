@@ -179,16 +179,7 @@ work item of its own.
 - **S-17** (A) An `O_CREAT` open of a file that already existed is listed in the trace file's
   `creates` (`export.rs:389`); the gate then refuses, and its advice, `--clean-namespaces`,
   deletes the application's input (Python `'a'`, h5py `'a'`, an S3 PUT overwrite). A create to
-  be listed only when the trace proves the file new. *Status: fixed 2026-11-02, the rule
-  narrowed while fixing: a create is listed when the trace proves the path absent when it
-  began (first appearance an `O_EXCL` create, a `mkdir`, or an ENOENT) or when its first
-  appearance destroys what it held (`O_CREAT|O_TRUNC`, a rename onto it, an S3 PUT), so a
-  rerun never truncates the last run's file (§3.92) and the clean removes nothing the
-  application keeps; an `O_CREAT` open that keeps the content (`O_APPEND`, `O_RDWR`, write-only
-  without `O_TRUNC`), unproven, is not, nor a path the trace used before creating it. "Only
-  when proven new" literally cut the corpus's creates from 110 to 5. Twelve corpus goldens
-  lose such creates, nothing else; test
-  `export_lists_a_create_only_where_the_trace_proves_the_path_new`.*
+  be listed only when the trace proves the file new. *Status: open.*
 - **S-18** (A) Locality history is keyed by path hash and never reset or moved by an `O_TRUNC`
   open, `truncate`, `ftruncate`, a punched hole, `unlink`, or `rename` (`metrics.rs:777-791`,
   both sides): false reuse for a file rewritten under its name, the write-tmp-rename-read link
