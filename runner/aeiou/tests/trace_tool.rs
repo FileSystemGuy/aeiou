@@ -650,6 +650,40 @@ fn export_keeps_calls_on_an_unlinked_file() {
     assert!(lines[0]["notes"].get("opens_synthesized").is_none(), "{}", lines[0]);
 }
 
+/// Every AIO request is read as strace prints it (`FS_API_SWEEP.md` S-6): a sync or a NOOP
+/// ends at its descriptor and never runs into the next request, a vectored request moves its
+/// iovec's bytes, `aio_rw_flags` before the opcode is no obstacle, and a submit that took only
+/// the first `ret` requests issued only those.
+#[test]
+fn export_reads_every_aio_request_as_strace_prints_it() {
+    let d = tmp("aio");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 openat(AT_FDCWD</d>, "/d/f", O_RDWR|O_CREAT|O_TRUNC, 0644) = 3</d/f> <0.000010>"#,
+            r#"100 1700000000.000100 io_setup(16, [0x7f0000000000]) = 0 <0.000010>"#,
+            r#"100 1700000000.000200 io_submit(0x7f0000000000, 4, [{aio_data=0x1, aio_lio_opcode=IOCB_CMD_FSYNC, aio_fildes=3</d/f>}, {aio_data=0x2, aio_lio_opcode=IOCB_CMD_PWRITEV, aio_fildes=3</d/f>, aio_buf=[{iov_base="xx"..., iov_len=4096}, {iov_base="xx"..., iov_len=4096}], aio_offset=0}, {aio_data=0x3, aio_rw_flags=RWF_DSYNC, aio_lio_opcode=IOCB_CMD_PWRITE, aio_fildes=3</d/f>, aio_buf="xx"..., aio_nbytes=4096, aio_offset=8192}, {aio_data=0x4, aio_lio_opcode=IOCB_CMD_PREADV, aio_fildes=3</d/f>, aio_buf=[{iov_base=0x1, iov_len=512}], aio_offset=0}]) = 4 <0.000010>"#,
+            r#"100 1700000000.000300 io_getevents(0x7f0000000000, 4, 16, [{data=0x1, obj=0x1, res=0, res2=0}, {data=0x2, obj=0x2, res=8192, res2=0}, {data=0x3, obj=0x3, res=4096, res2=0}, {data=0x4, obj=0x4, res=512, res2=0}], NULL) = 4 <0.000010>"#,
+            r#"100 1700000000.000400 io_submit(0x7f0000000000, 2, [{aio_data=0x5, aio_lio_opcode=IOCB_CMD_NOOP, aio_fildes=3</d/f>}, {aio_data=0x6, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=3</d/f>, aio_buf=0x1, aio_nbytes=4096, aio_offset=0}]) = -1 EINVAL (Invalid argument) <0.000010>"#,
+            r#"100 1700000000.000500 io_submit(0x7f0000000000, 2, [{aio_data=0x7, aio_lio_opcode=IOCB_CMD_FDSYNC, aio_fildes=3</d/f>}, {aio_data=0x8, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=3</d/f>, aio_buf=0x1, aio_nbytes=4096, aio_offset=0}]) = 1 <0.000010>"#,
+            r#"100 1700000000.000600 close(3</d/f>) = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let ops: Vec<&str> = lines[1..].iter().map(|l| l["op"].as_str().unwrap()).collect();
+    assert_eq!(ops, ["open", "submit", "close"], "{lines:?}");
+    let members: Vec<(&str, i64, i64)> = lines[2]["ops"].as_array().unwrap().iter().map(|m| (m["op"].as_str().unwrap(), m["offset"].as_i64().unwrap(), m["len"].as_i64().unwrap())).collect();
+    assert_eq!(members, [("write", 0, 8192), ("write", 8192, 4096), ("read", 0, 512)]);
+    assert!(lines[0].get("missing_opens").is_none(), "{}", lines[0]);
+}
+
 /// The digest records per template what its calls did to the space its files hold
 /// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
 /// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the

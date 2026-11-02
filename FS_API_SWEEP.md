@@ -92,7 +92,12 @@ work item of its own.
   it and planted in the descriptor table: a false "trace incomplete" warning and synthesized
   opens); a request with `aio_rw_flags=` (printed before the opcode) is skipped. Measured: 1 of
   4 and 0 of 2 requests exported. The unit test builds an FSYNC in a format strace never
-  prints. *Status: open.*
+  prints. *Status: fixed 2026-11-02: each `{...}` is read by its fields (`iocb`), a vectored
+  request counted as the read or write it is by its iovec's bytes, and only the first `ret`
+  requests issued, where the counted ones were cut to `ret` (an unsubmitted read after a
+  sync was exported); tests `aio_arrays` (every kind as strace 6.8 prints it, probed) and
+  `export_reads_every_aio_request_as_strace_prints_it`. `aio_rw_flags` still not carried
+  (S-40).*
 - **S-7** (A) `openat2`: the `{flags=…, mode=…, resolve=…}` struct is read as the flags and the
   size as the mode: `WRONLY|CREAT|TRUNC` exported `["RDONLY","CREAT"]`, mode 020; the run fails
   with EBADF. `RESOLVE_*` lost. *Status: open.*

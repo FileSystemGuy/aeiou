@@ -570,6 +570,17 @@ struct Iocb {
     offset: i64,
 }
 
+impl Iocb {
+    /// `Some(true)` for a read, `Some(false)` for a write, `None` for any other request.
+    fn reads(&self) -> Option<bool> {
+        match self.op.as_str() {
+            "PREAD" | "PREADV" => Some(true),
+            "PWRITE" | "PWRITEV" => Some(false),
+            _ => None,
+        }
+    }
+}
+
 fn word_at(s: &str, i: usize) -> &str {
     let k = s.as_bytes()[i..].iter().position(|c| !is_word(*c)).map_or(s.len(), |k| i + k);
     &s[i..k]
@@ -585,72 +596,35 @@ fn num_at(s: &str, i: usize, neg: bool) -> Option<(i64, usize)> {
     Some((s[i..k].parse().ok()?, k))
 }
 
-/// The requests of an `io_submit` array (`_IOCB` of the Python, every match in turn).
+/// The requests of an `io_submit` array, each `{...}` read by its fields as strace prints
+/// them: `aio_data`, `aio_rw_flags` if set, `aio_lio_opcode`, `aio_fildes` with its path, and
+/// then by opcode nothing (the syncs, NOOP), `aio_buf` (POLL), `aio_buf`, `aio_nbytes`,
+/// `aio_offset` (PREAD, PWRITE), or an iovec `aio_buf` and `aio_offset` (PREADV, PWRITEV);
+/// a request strace did not print whole is left out.
 fn iocbs(s: &str) -> Vec<Iocb> {
-    let mut out = Vec::new();
-    let mut from = 0;
-    while let Some(i) = s[from..].find("aio_data=").map(|i| i + from) {
-        match iocb_at(s, i + 9) {
-            Some((cb, end)) => {
-                out.push(cb);
-                from = end;
-            }
-            None => from = i + 1,
-        }
-    }
-    out
+    let s = s.trim();
+    let Some(inner) = s.strip_prefix('[') else { return Vec::new() };
+    let inner = inner.strip_suffix(']').unwrap_or(inner);
+    split_args(inner).iter().filter_map(|e| iocb(e)).collect()
 }
 
-fn iocb_at(s: &str, i: usize) -> Option<(Iocb, usize)> {
-    let data = word_at(s, i);
-    if data.is_empty() {
-        return None;
-    }
-    let mut at = i + data.len();
-    at += s[at..].strip_prefix(", aio_lio_opcode=IOCB_CMD_").map(|_| 26)?;
-    let op = word_at(s, at);
-    if op.is_empty() {
-        return None;
-    }
-    at += op.len();
-    // `.*?aio_fildes=(\d+)(?:<(.*?)>)?, `: the first fildes that parses
-    let mut search = at;
-    loop {
-        let j = s[search..].find("aio_fildes=").map(|j| j + search)?;
-        search = j + 1;
-        let Some((fd, k)) = num_at(s, j + 11, false) else { continue };
-        let (path, after) = if s[k..].starts_with('<') {
-            // the shortest `<...>` followed by `, `
-            let mut e = k + 1;
-            let mut found = None;
-            while let Some(g) = s[e..].find(">, ").map(|g| g + e) {
-                found = Some(g);
-                break;
-            }
-            match found {
-                Some(g) => {
-                    e = g;
-                    (Some(s[k + 1..e].to_string()), e + 3)
-                }
-                None => continue,
-            }
-        } else if s[k..].starts_with(", ") {
-            (None, k + 2)
-        } else {
-            continue;
-        };
-        // `.*?aio_nbytes=(\d+), aio_offset=(-?\d+)`
-        let mut n_search = after;
-        while let Some(m) = s[n_search..].find("aio_nbytes=").map(|m| m + n_search) {
-            n_search = m + 1;
-            let Some((nbytes, k2)) = num_at(s, m + 11, false) else { continue };
-            let Some(rest) = s[k2..].strip_prefix(", aio_offset=") else { continue };
-            let o = s.len() - rest.len();
-            let Some((offset, end)) = num_at(s, o, true) else { continue };
-            return Some((Iocb { data: data.to_string(), op: op.to_string(), fd, path, nbytes, offset }, end));
+fn iocb(e: &str) -> Option<Iocb> {
+    let body = e.strip_prefix('{')?.strip_suffix('}')?;
+    let (mut data, mut op, mut fd, mut path, mut nbytes, mut offset, mut iov) = (None, None, None, None, 0, 0, None);
+    for f in split_args(body) {
+        let (k, v) = f.split_once('=')?;
+        match k {
+            "aio_data" => data = Some(v.to_string()),
+            "aio_lio_opcode" => op = Some(v.strip_prefix("IOCB_CMD_").unwrap_or(v).to_string()),
+            "aio_fildes" => (fd, path) = fd_arg(v),
+            "aio_nbytes" => nbytes = v.parse().ok()?,
+            "aio_offset" => offset = v.parse().ok()?,
+            "aio_buf" if v.starts_with('[') => iov = Some(iov_lens(v)),
+            _ => {}
         }
-        return None;
     }
+    let (data, op, fd) = (data.filter(|d| !d.is_empty())?, op.filter(|o| !o.is_empty())?, fd?);
+    Some(Iocb { data, op, fd, path, nbytes: iov.unwrap_or(nbytes), offset })
 }
 
 /// `{data=X, obj=Y, res=N` of every event an `io_getevents` returned.
@@ -1448,23 +1422,24 @@ impl Tracer {
                 // the requests past the 32nd are not in the trace
                 self.note("aio_requests_truncated", (ret - cbs.len() as i64) as u64);
             }
+            // the kernel takes the first `ret` requests of the array and none past them
+            let taken = ret.max(0) as usize;
             let mut got: Vec<(String, usize, String, i64, i64)> = Vec::new();
-            for cb in &cbs {
-                let path = cb.path.as_deref().map(fd_path).filter(|p| !p.is_empty());
+            for cb in cbs.iter().take(taken) {
+                let path = cb.path.clone().filter(|p| !p.is_empty());
                 let f = self.file(tid, Some(cb.fd), path.as_deref());
                 let fp = path.clone().or_else(|| f.as_ref().and_then(|f| f.borrow().path.clone()));
                 let Some(p) = self.under(fp.as_deref()) else { continue };
-                if cb.op != "PREAD" && cb.op != "PWRITE" {
+                let Some(read) = cb.reads() else {
                     self.note("aio_requests_not_counted", 1);
                     continue;
-                }
-                got.push((cb.data.clone(), if cb.op == "PREAD" { R } else { W }, p, cb.offset, cb.nbytes));
+                };
+                got.push((cb.data.clone(), if read { R } else { W }, p, cb.offset, cb.nbytes));
             }
             let Some(inst) = inst else { return Ok(()) };
             if got.is_empty() || ret <= 0 {
                 return Ok(());
             }
-            got.truncate(ret as usize);
             let mut c = self.chain.get(&tid).copied();
             if let (Some(cc), Some(gap), Some(iss)) = (c, self.chain_gap, issued) {
                 if let Some(last) = cc.1 {
@@ -1485,20 +1460,19 @@ impl Tracer {
             let mut members: Option<Vec<(usize, usize)>> = None;
             if self.export.is_some() {
                 let mut mem = Vec::new();
-                for cb in &cbs {
-                    let path = cb.path.as_deref().map(fd_path).filter(|p| !p.is_empty());
+                for cb in cbs.iter().take(taken) {
+                    let path = cb.path.clone().filter(|p| !p.is_empty());
                     let f = self.file(tid, Some(cb.fd), path.as_deref());
                     if let Some(f) = f {
                         let fp = path.clone().or_else(|| f.borrow().path.clone());
-                        if (cb.op == "PREAD" || cb.op == "PWRITE") && self.under(fp.as_deref()).is_some() {
-                            let kind = if cb.op == "PREAD" { "read" } else { "write" };
+                        if let (Some(read), Some(_)) = (cb.reads(), self.under(fp.as_deref())) {
+                            let kind = if read { "read" } else { "write" };
                             if let Some(oid) = self.oid_or_note(Some(&f), kind, when)? {
                                 mem.push((kind, oid, cb.offset, cb.nbytes));
                             }
                         }
                     }
                 }
-                mem.truncate(ret as usize);
                 if !mem.is_empty() {
                     members = Some(self.export.as_mut().unwrap().submit(when, &mem));
                 }
@@ -1913,12 +1887,32 @@ mod tests {
 
     #[test]
     fn aio_arrays() {
-        let s = "[{aio_data=0x1, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=3</d/a, b>, aio_buf=0x1, aio_nbytes=4096, aio_offset=0}, {aio_data=0x2, aio_lio_opcode=IOCB_CMD_FSYNC, aio_fildes=4, aio_nbytes=7, aio_offset=-1}]";
+        let s = "[{aio_data=0x1, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=3</d/a, b>, aio_buf=0x1, aio_nbytes=4096, aio_offset=0}, {aio_data=0x2, aio_lio_opcode=IOCB_CMD_FSYNC, aio_fildes=4}]";
         let cbs = iocbs(s);
         assert_eq!(cbs.len(), 2);
         assert_eq!((cbs[0].fd, cbs[0].path.as_deref(), cbs[0].nbytes, cbs[0].offset), (3, Some("/d/a, b"), 4096, 0));
-        assert_eq!((cbs[1].op.as_str(), cbs[1].path.as_deref(), cbs[1].offset), ("FSYNC", None, -1));
+        assert_eq!((cbs[1].op.as_str(), cbs[1].path.as_deref(), cbs[1].nbytes, cbs[1].offset), ("FSYNC", None, 0, 0));
         assert!(iocbs("aio_data=, x").is_empty());
+        // every request kind as strace 6.8 prints it (FS_API_SWEEP.md S-6): the syncs, NOOP, and
+        // POLL end at the descriptor, a vectored request has an iovec and no `aio_nbytes`, and
+        // `aio_rw_flags` comes before the opcode; none runs into the next request
+        let s = r#"[{aio_data=0x1, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=3</r/f>, aio_buf=0x5bc64f97d040, aio_nbytes=4096, aio_offset=4096}, {aio_data=0x2, aio_lio_opcode=IOCB_CMD_FSYNC, aio_fildes=3</r/f>}, {aio_data=0x3, aio_lio_opcode=IOCB_CMD_PWRITEV, aio_fildes=3</r/f>, aio_buf=[{iov_base="xxxxxxxx"..., iov_len=4096}, {iov_base="xxxxxxxx"..., iov_len=4096}], aio_offset=0}, {aio_data=0x4, aio_rw_flags=RWF_DSYNC, aio_lio_opcode=IOCB_CMD_PWRITE, aio_fildes=3</r/f>, aio_buf="xxxxxxxx"..., aio_nbytes=4096, aio_offset=4096}, {aio_data=0x5, aio_lio_opcode=IOCB_CMD_FDSYNC, aio_fildes=3</r/f>(deleted)}, {aio_data=0x6, aio_lio_opcode=IOCB_CMD_PREADV, aio_fildes=3</r/f>, aio_buf=[{iov_base=0x5bc64f97d040, iov_len=4096}, {iov_base=0x5bc64f97e040, iov_len=512}], aio_offset=8192}, {aio_data=0x7, aio_lio_opcode=IOCB_CMD_NOOP, aio_fildes=3</r/f>}, {aio_data=0x9, aio_lio_opcode=IOCB_CMD_POLL, aio_fildes=3</r/f>, aio_buf=POLLIN}, {aio_data=0xa, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=4</r/c\74d\76>, aio_buf=0x1, aio_nbytes=10, aio_offset=20, aio_flags=IOCB_FLAG_RESFD, aio_resfd=9}, ...]"#;
+        let got: Vec<(String, String, i64, Option<String>, i64, i64)> = iocbs(s).into_iter().map(|c| (c.data, c.op, c.fd, c.path, c.nbytes, c.offset)).collect();
+        let f = || Some("/r/f".to_string());
+        assert_eq!(
+            got,
+            vec![
+                ("0x1".into(), "PREAD".into(), 3, f(), 4096, 4096),
+                ("0x2".into(), "FSYNC".into(), 3, f(), 0, 0),
+                ("0x3".into(), "PWRITEV".into(), 3, f(), 8192, 0),
+                ("0x4".into(), "PWRITE".into(), 3, f(), 4096, 4096),
+                ("0x5".into(), "FDSYNC".into(), 3, f(), 0, 0),
+                ("0x6".into(), "PREADV".into(), 3, f(), 4608, 8192),
+                ("0x7".into(), "NOOP".into(), 3, f(), 0, 0),
+                ("0x9".into(), "POLL".into(), 3, f(), 0, 0),
+                ("0xa".into(), "PREAD".into(), 4, Some("/r/c<d>".into()), 10, 20),
+            ]
+        );
         assert_eq!(events("[{data=0x1, obj=0x2, res=4096, res2=0}, {data=0x3, obj=0x4, res=-5}]"), vec![("0x1".to_string(), 4096), ("0x3".to_string(), -5)]);
         assert_eq!(iov_lens("[{iov_base=\"\", iov_len=3}, {iov_base=\"\", iov_len=4}]"), 7);
         assert!(shares_files("clone3", "{flags=CLONE_VM|CLONE_FILES, exit_signal=0}"));

@@ -79,7 +79,9 @@ descriptors, by threads, and across `fork`. An `O_APPEND` write goes to the end 
 wherever the trace knows the file's size (from an open that truncated or created it, kept
 through every call that changes it); where it cannot, the write is counted from 0 and noted
 (`append_to_unknown_size`). The requests of one `io_submit` are a fan-out,
-reaped by the matching `io_getevents`. Not visible to `strace`: `io_uring` submissions and
+reaped by the matching `io_getevents`: its reads and writes, vectored ones by their iovecs'
+bytes, among the first as many as the call returned (the kernel takes no request past them);
+any other request, a sync, a poll, a no-op, is noted (`aio_requests_not_counted`). Not visible to `strace`: `io_uring` submissions and
 page faults on a mapping; an application that reads through a mapping leaves every row
 unseen.
 
