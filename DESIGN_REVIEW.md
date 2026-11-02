@@ -8581,6 +8581,46 @@ digest, case, lock, and results chain without the trace (stage 5, when the commi
 are rewrapped, could make them digests); and items 52 and 49, all-rank traces and object-store
 logs, both reaching both audiences through the one document.
 
+### 3.91 A storage-reported value needs evidence that the application derives from it (debated with the user, decided 2026-11-01)
+
+**The gap.** On §3.89's spike the run read `st_blksize` 4 KiB from ext4 and the dry run took the
+1 MiB fallback, so the two issued different reads until the dry run was given `--st-blksize
+4096`. Nothing on the trace side records the value the traced application saw: not the digest,
+not a capture. The value is in the trace (`strace -v` prints `st_blksize=` in every `fstat`;
+the spike's strace has 75, all 4096). The committed capture pairs compare at the fallback and
+pass only because their traces were taken on NFS at `rsize` 1 MiB; a local-disk trace would be
+held against the wrong op sequence (4 KiB reads against 1 MiB).
+
+**The debate.** The user: by the interposition test `st_blksize` is the SUT's (a shim could
+report any value to an unmodified application), so a run on storage reporting another value may
+issue other reads, *if* the application derives its I/O size from it; but we will not read every
+application's source, and letting anyone set the value to a convenient one is a risk. This side:
+agreed, with the condition that the derivation is a claim about the application needing
+evidence. One trace cannot separate "4 KiB because the file system said so" from "4 KiB hard-coded"
+(4096 is the commonest hard-coded size), and the relation need not be identity (glibc stdio
+`min(BUFSIZ, st_blksize)`, a [verify] claim; a recollection, low confidence, that recent CPython
+changed `io`'s buffer sizing, which would make the rule version-dependent). Evidence, strongest
+first: (1) interposition as an experiment, the application under a shim whose `fstat` reports
+another value on the same storage, a second value giving the relation's form; (2) two traces on
+storage reporting different values; (3) primary sources, tagged with confidence; (4) consistency in
+one trace (the `fstat` before the reads, the read size equal to the value), which supports and
+never settles.
+
+**Decided (the user, 2026-11-01).** A parameter takes `{"from": "st_blksize"}` only with recorded
+provenance of kind 1, 2, or 3; without it the parameter is fixed at the traced value, the same
+for every SUT (strict sameness by default, fidelity when proven). The digest records the
+`st_blksize` its trace's `fstat`/`stat` results show, per template, and treats the derivation as
+an open question of the site (derived or fixed, undecided from one trace, settled by a shim run or
+a second trace; an owner's answer recorded as an assertion with its source). A capture keeps the
+observed value beside its fitted parameters, and a dry run of a capture or a fit takes it as
+`--st-blksize`. `aeiou dry-run --emit-trace` records the resolved storage-reported values in its
+header, and `aeiou-trace compare` flags (not refuses) a run side whose value differs from the
+observed one: with a proven derivation the difference is legitimate and the report shows it; a
+rules file may still lock the value. Every committed `st_blksize` parameter (npy, file-per-sample,
+tfrecord, parquet, hdf5, dcp, LMCache shared-fs) is audited for its provenance, one resting only
+on a matching trace fixed until a shim run confirms it; the shim and those runs are part of the
+item. Brief item 55. Not started.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

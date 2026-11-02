@@ -166,6 +166,7 @@ job_object() {
     (cd "$ROOT/builder" && AEIOU_REQUIRE=runner,object,formats,header,minio,py-formats,py-s3 TEST_MINIO_BIN=$minio AEIOU_RUNNER="$BIN" .venv/bin/pytest -q -rs tests/test_object.py)
 }
 job_integration() {
+    minio=$(fetch minio) || exit 1
     rust_build
     py_sync
     link_header
@@ -176,8 +177,9 @@ job_integration() {
     sed '1,/^$/d' "$out/rs.all" > "$out/rs"                          # past the options block
     diff "$out/py" "$out/rs" || { rm -rf "$out"; die "the Rust checker and schema/check.py disagree"; }
     rm -rf "$out"
-    # every Python test against the binary, none skipped for what this job built
-    (cd "$ROOT/builder" && AEIOU_REQUIRE=runner,formats,strace,header,py-formats AEIOU_RUNNER="$BIN" .venv/bin/pytest -q -n auto -rs)
+    # every Python test against the binary, none skipped for what this job built: the object
+    # tests against the pinned MinIO too (2026-11-01), as the object job runs them
+    (cd "$ROOT/builder" && AEIOU_REQUIRE=runner,object,formats,strace,header,minio,py-formats,py-s3 TEST_MINIO_BIN=$minio AEIOU_RUNNER="$BIN" .venv/bin/pytest -q -n auto -rs)
     # the workload catalog, every shape re-measured at its check length
     (cd "$ROOT/builder" && .venv/bin/aeiou-catalog check --workloads ../workloads --runner "$BIN")
 }

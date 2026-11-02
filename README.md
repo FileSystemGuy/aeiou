@@ -580,7 +580,10 @@ Not built, in rough order of interest:
   undecided ones, op kinds, motifs, and peak of lanes; the runner's own I/O set aside); and
   `aeiou dry-run --emit-trace`, the abstract's op stream as a trace file, a lane per context
   and the instances interleaved, whose digest at one instance has the dry run's own numbers. To
-  build next: stage 5, the Python's remains retired and the committed captures rewrapped;
+  build next: the digest gaining `metrics`'s strace-only options, then stage 5, the Python's
+  remains retired and the committed captures rewrapped; a storage-reported value used only with
+  evidence that the application derives from it, the digest recording the `st_blksize` a trace
+  saw and asking whether a site's size follows it (item 55, decided 2026-11-01, §3.91);
   `aeiou-catalog disclose`, every string
   and number a contribution would publish (item 47); a digest redacted for publication, its
   path literals tokenized and its owner's names dropped (item 53, queued 2026-10-31); a trace's

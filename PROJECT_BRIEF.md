@@ -1179,6 +1179,19 @@ numbers; the order is this note's.
     digest's record of what a trace cannot see (an application record's blind spots) becomes
     a record of what this capture did see.
 
+55. **A storage-reported value needs evidence the application derives from it (decided with the
+    user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no
+    `st_blksize`, so a capture's dry run takes the fallback and a local-disk trace would be held
+    against the wrong reads. Parts: the digest records the observed `st_blksize` per template
+    and asks, as an open question, whether the site's size is derived from it (settled by a shim
+    run or a second trace); a capture keeps the value and its dry runs take it; `--emit-trace`
+    records the resolved values and `compare` flags a mismatch; `{"from": "st_blksize"}` only
+    with provenance (interposition run, two traces, or primary source), else fixed at the
+    traced value; an audit of every committed `st_blksize` parameter; an `fstat` shim and the
+    runs that confirm each derivation. Also queued the same day, before `aeiou-trace metrics`
+    is retired (§3.89 stage 5): `--instance-root`, `--chain-gap-us`, and `--metrics-block` on
+    `aeiou-trace digest`.
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS
