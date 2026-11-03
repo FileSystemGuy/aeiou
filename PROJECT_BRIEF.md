@@ -1133,7 +1133,9 @@ numbers; the order is this note's.
     may still want left out.
 
 54. **What `strace` cannot see: an eBPF capture beside it, and the instructions for a capture
-    (raised by the user 2026-10-31, queued, not started).** An `strace` misses three kinds of
+    (raised by the user 2026-10-31, queued; taken up by the user 2026-11-03 for a capture with
+    both POSIX calls and object requests, measured by a spike the same day, `DESIGN_REVIEW.md`
+    §3.96; decisions open, not started).** An `strace` misses three kinds of
     I/O the abstracts model: the accesses through a mapping (it sees `mmap`, `madvise`,
     `msync`, `munmap`, never the loads; `builder/REFERENCE.md` §7), the operations of an
     `io_uring` (it sees `io_uring_setup`, `io_uring_register`, and `io_uring_enter`, never the
@@ -1162,10 +1164,16 @@ numbers; the order is this note's.
       key, and `Range`, but only for a client linked to the system's OpenSSL: the AWS CRT
       (`s3torchconnector`, Mountpoint) uses s2n-tls on Linux, and Go clients carry their own
       TLS (low to medium; each client's source read first). An SDK's debug log, and a packet
-      capture against a plain-HTTP test endpoint, are the other leads.
+      capture against a plain-HTTP test endpoint, are the other leads. *Measured 2026-11-03
+      (§3.96):* a libssl uprobe and an `LD_PRELOAD` shim both gave boto3's request heads over
+      TLS under the system's Python (not under uv's standalone Python, whose OpenSSL is static),
+      at +1 to +2 %; the CRT's s2n-tls is inside its own `.so`, reached over plain HTTP only.
     - **The capture.** `strace` stays the primary record (its `-yy` paths are better than
       what a probe resolves), and the eBPF log is a second input joined to it by thread and
-      time, as the object logs are a second input today. `strace -ttt` is wall-clock and BPF
+      time, as the object logs are a second input today. *Proposed 2026-11-03 to change, not
+      decided (§3.96):* eBPF the primary record where the owner can grant it (0.2 to 0.4 µs a call against
+      strace's 88 µs here; paths copied by the probe, descriptors resolved after the run from
+      the recorded opens, as the export does), ptrace where not. `strace -ttt` is wall-clock and BPF
       the monotonic clock, so the capture records their offset. It needs root, or `CAP_BPF`
       and `CAP_PERFMON`, and `bpftrace` or a small tool of ours, which some owners' hosts and
       containers will not allow; its overhead is far below `strace`'s.
@@ -1183,6 +1191,28 @@ numbers; the order is this note's.
     abstract, or only a check on one; which kernels the probes must support; whether the
     digest's record of what a trace cannot see (an application record's blind spots) becomes
     a record of what this capture did see.
+    *Revised 2026-11-03 (§3.96, the spike's measurements; this side's proposal, the user to
+    decide):* a capture tool of the suite that starts the command and takes four sources,
+    chosen per host and client, all converted afterward to the strace text the suite reads:
+    (1) eBPF where root or `CAP_BPF` and `CAP_PERFMON` are granted, the default: system calls
+    on raw tracepoints in variable-length binary records (a path copied by the probe at entry,
+    retried at exit, every failure counted), a binary reader (bpftrace's text reader sustains
+    about a million events a second and loses half beyond that, whatever its buffer), a buffer
+    sized to seconds of the peak, every loss counted by CPU and time range, libssl uprobes for
+    request heads, and later the mapping faults and `io_uring` requests above; (2) ptrace
+    where not: strace with `--seccomp-bpf` (missing from the man page's line, 3.6 times slower
+    without it), or a binary tracer of ours (1.6 to 5 times faster than strace); (3) the
+    `LD_PRELOAD` shim for request heads where the client loads a shared `libssl` and eBPF is
+    not granted; (4) the store's log for the rest, a reader per log format, aligned by anchor
+    requests. `-s 512`, proposed earlier the same day, is withdrawn (every file buffer printed, the
+    trace 5.7 times larger). The record of a capture: kernel, tools, command, each mount's
+    filesystem, endpoints and scheme, cold cache or not, the clocks' offset, the buffer size,
+    every loss, and what it could not see. Timing parameters (think time, a save's interval)
+    come from an untraced run, never a traced one's gaps. Open: aya or libbpf-rs; a ptrace
+    tracer of ours or strace; the shim in one library with item 55's `fstat` shim; the anchor
+    requests (a 403 in the owner's audit log) or the owner's own command; and the spike's
+    scripts re-run on a real Linux client node before a choice rests on a ratio (the numbers
+    are WSL2's, whose cross-CPU ptrace wakeups cost about 50 µs).
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no

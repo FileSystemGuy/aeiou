@@ -9015,6 +9015,158 @@ maps local files. Where the suite stands for such an application:
   open read at many offsets) are POSIX-shaped; item 61 adds object sites, and a digest of a
   merged trace has sites of both.
 
+### 3.96 The capture: what strace costs, what eBPF and a shim reach, and the kit item 54 builds (debated with the user and measured, 2026-11-03; decisions open, not started)
+
+**How it came up.** The user took up brief item 54 to be able to ask a trace's owner for one
+capture holding both POSIX calls and object requests. This side proposed the strace line with
+`%network` and `-s 512`, the store's own log, and anchor requests for the clocks; the user
+asked how much slower `%network` makes the capture and whether that lowers what the runner
+demands, whether a client-side `LD_PRELOAD` shim could record the object requests as it passes
+them to the library, whether strace is itself slow (it flushes per call, so a binary format
+parsed afterward might be much faster), and how eBPF compares. A spike measured each, the same
+day.
+
+**The spike.** WSL2, kernel 6.18.54.1, 20 cores (i7-13800H); strace 6.8, bpftrace 0.20.2 (the
+eBPF runs by the user, as root), MinIO RELEASE.2025-09-07 on 127.0.0.1 with its data in
+`/dev/shm`, boto3 1.43.123, `s3torchconnectorclient` 1.5.0 (the AWS CRT, no torch), the
+system's Python 3.12.3 (OpenSSL 3.0.13, shared) and uv's standalone Python 3.12.13. Programs
+written for it, kept outside the repository: a microbenchmark (cached 4 KiB `pread`s of one
+file, each followed by K untraced `getppid`s), a minimal ptrace tracer (`PTRACE_GET_SYSCALL_INFO`,
+an optional seccomp filter on the strace set's calls, binary records of time, tid, number, and
+six arguments at entry and the return at exit, a path read with `process_vm_readv` at entry,
+one `write` per MiB), an `LD_PRELOAD` shim logging HTTP request and response heads seen through
+OpenSSL (`SSL_write`/`SSL_read` and their `_ex` forms) and through libc on sockets, with tid and
+`CLOCK_REALTIME`, and S3 loads (`s3load.py`: PUT then GET, a ranged GET each; `s3get.py`: GETs
+only over preloaded objects, 200 of 4 KiB and 8 of 8 MiB read twice, 416 requests and 128 MiB).
+Every number below is WSL2's, whose ptrace wakeups across CPUs cost about 50 µs; a real Linux
+client node is to be measured with the same scripts before a choice rests on a ratio.
+
+*ptrace, per traced call* (100,000 `pread`s, K = 4, best of 3): untraced 0.9 µs; strace with
+the man page's line, which has no `--seccomp-bpf`, 320 µs; with `--seccomp-bpf` 88 µs (90 as
+root); the same writing to `/dev/null` 67; without `-ttt -T -yy -v` 81; with `-s 512` 93 µs and
+a trace 5.7 times larger (159 MB against 28); the minimal tracer without a filter 280, with
+one 56 µs. Tracer and application pinned to one CPU: strace 33 µs, the minimal tracer 6.5 µs.
+So the wakeup dominates when the two run on different CPUs, and when it does not, strace's own
+work (about 26 µs a call) is five times a lean tracer's.
+
+*strace's own work* (an outer `strace -c` of strace, pinned): per traced call two `write`s,
+one at its entry and one at its exit, unbuffered (54 % of strace's own system-call time; the
+user's guess), four `wait4` and four `ptrace` (the floor), three `newfstatat` and one
+`readlink` of `/proc/PID/fd/N` (`-yy`), and one `process_vm_readv`; about 15 calls where the
+minimal tracer makes about 6 and one `write` per MiB.
+
+*S3 GETs* (`s3get.py`, medians of 7 interleaved runs, then of 5 as root):
+
+| | untraced | shim | strace `--seccomp-bpf` | + `%network` | strace, no seccomp | minimal tracer | eBPF record |
+|---|---|---|---|---|---|---|---|
+| boto3 | 0.96 s | +5 % | +38 % | +44 % | +40 % | +18 % | +2 % |
+| CRT | 0.41 s | +4 % | 7.1× | 6.9× | 8.2× | 3.7× | +24 % |
+
+`%network` adds little: the CRT reads and writes its sockets with `read` and `write`, which
+`%desc` traces already, and boto3's `recv_into` is one call per buffer. The CRT under strace
+was bimodal (1.1 s to 3.0 s), its event loop's timing changed by the stops: for an
+asynchronous client the slowdown is a fidelity question as well as a cost.
+
+*What the shim reaches.* Over HTTP every request and response of both clients (boto3 47 of 47,
+the 46 issued and the bucket's create; CRT 90 of 90), with `Range` and `Content-Range`. Over
+TLS, boto3 under the system's Python, 47 of 47 in plaintext, once the shim found the real
+`SSL_read_ex` by walking the loaded objects: Python loads `_ssl` and its `libssl` with
+`RTLD_LOCAL`, so `dlsym(RTLD_NEXT)` returns NULL (the first version crashed on it). Not over
+TLS: uv's standalone Python (python-build-standalone links OpenSSL into the interpreter,
+nothing exported) and the CRT (s2n-tls inside its own `.so`; it imports no `libssl`, but
+libc's `send`, `sendmsg`, `write`, `writev`, `read`, `recvmsg`, so over HTTP it is reached).
+Go clients (Milvus's minio-go) make their system calls without libc, and Rust's rustls and the
+JVM carry their own TLS (from knowledge, not checked in the spike). Two facts about the CRT
+that bear on an abstract: every PUT is a multipart upload (create, one part, complete), a
+4 KiB object's too, and every request is issued from its event-loop thread, not the thread
+that asked, so a shim's or a probe's thread for an asynchronous client is the loop's.
+
+*eBPF* (bpftrace on the raw tracepoints `sys_enter`/`sys_exit`, the strace set's calls, the
+target in a cgroup of its own: bpftrace's `pid` is the kernel's, and WSL2 runs the distribution
+in a PID namespace, so `pid == cpid` never matched; reading a tracepoint's arguments made
+bpftrace look for kernel headers WSL2 does not ship, so the arguments were read from `pt_regs`
+at fixed offsets; WSL2's `perf` has no `trace`). Per call: counting only +0.2 µs, recording
+every call with four arguments +0.36 µs; on the S3 loads boto3 +2 %, the CRT +24 % (its many
+socket calls and bpftrace's formatting competing for the CPUs). A uprobe on the system's
+`libssl` `SSL_write_ex`, copying 64 bytes of the buffer, gave boto3's request lines over TLS at
++2 % (the shim +1 %), the same clients the shim reaches; the user's expectation that eBPF gets
+no TLS plaintext holds only for clients without a shared `libssl`.
+
+*eBPF's losses.* A probe cannot make the application wait, so where the reader falls behind,
+events are lost (counted). At bpftrace's default 64 pages per CPU the 100,000-`pread` run lost
+40 to 52 % of its events; from 1,024 pages (4 MiB) none were lost, at the same per-call cost;
+one record per call (arguments kept per thread at entry, printed at exit) halved the events
+but cost +0.25 µs in bpftrace's six hash-map writes. Sustained (no untraced calls, about 2.9
+million events a second from one thread): 1 million `pread`s lost 50 % at 1,024 pages and 3 %
+at 16,384 (64 MiB); 5 million lost 52 % and 43 %. bpftrace's text reader sustains roughly a
+million events a second, about 1 µs of CPU each; a larger buffer only delays the loss.
+
+**Assessment, this side's, the user to decide.**
+
+- *Throughput is the reader's, not the probe's.* The probe costs 0.2 to 0.4 µs a call; a
+  reader that copies binary records rather than formatting text should keep up with tens of
+  millions of events a second (estimated, not measured), leaving the disk as the limit (2.9
+  million events a second at about 48 bytes is 140 MB/s). The rate tested is one thread making
+  cached calls flat out; storage-bound calls are orders of magnitude slower, but many threads
+  reading from the page cache could approach it. So the tool sizes its buffer to hold seconds
+  of its peak, can run a reader per group of CPUs, writes to fast local storage and reports its
+  write rate, and counts every loss by CPU and time range in the capture's record, a trace
+  with a gap flagged as one; the owner can re-capture under ptrace, which is lossless by
+  construction.
+- *Records are variable length, and the probe copies what a pointer names.* A record of a call
+  on a descriptor (`read`, `pread`, `write`, `fsync`, `close`), the bulk, is 32 to 64 bytes;
+  a call that takes a path carries the string, copied by the probe at entry on the
+  application's thread (`bpf_probe_read_user_str`), since the pointer means nothing to the
+  reader and the memory may be reused before it reads. A probe in a raw tracepoint cannot take
+  a page fault, so a string whose page is not resident is not copied: the probe retries at the
+  call's exit, when the kernel has just copied it itself, or a sleepable program
+  (`fentry.s`, `bpf_copy_from_user`) faults it in; every path not copied is counted. The same
+  holds for an HTTP head copied at `SSL_write`. A descriptor's path is resolved after the run
+  from the recorded opens, `dup`s, forks, and `chdir`s, as the export already does, where
+  strace's `-yy` reads `/proc` per call; the kernel's resolved path at an open's exit
+  (`bpf_d_path`, allowed only at some hooks) is an option to check per kernel.
+- *The clock.* eBPF's `nsecs` is the monotonic clock, strace's `-ttt` and the shim's records
+  the wall clock; a capture records the offset.
+- *The pause is a fidelity cost.* An abstract does not replay a trace's timing, so a slowed
+  capture does not make the runner demand less, except where a parameter is taken from the
+  trace's gaps (the digest's think time, a save's interval: under ptrace they are inflated, so
+  they come from an untraced run or the application's own log, as `mountstats` comes from runs
+  without strace) or where the application's behavior depends on timing (an asynchronous
+  client's concurrency and part sizes, a prefetch queue's depth, work handed to whoever asks
+  first), and ptrace's serialization of stops lowers the concurrency a trace shows. The `trace`
+  node replays think time unless run with `--time-scale 0`.
+- *`-s 512` is withdrawn.* It applies to every buffer strace prints, file data included (the
+  owner's contents in the trace, 5.7 times its size); the object requests come from the shim,
+  a uprobe, or the store's log instead. And the man page's strace line lacks `--seccomp-bpf`,
+  3.6 times slower without it on the microbenchmark (the DiskANN kit used it, §3.42's capture
+  notes).
+- *Object-store logs need a reader per format.* No standard exists: S3's server access log and
+  CloudTrail differ, MinIO's audit log, Ceph RGW's ops log, Azure's resource logs or Storage
+  Analytics, GCS's audit logs, and OCI's service logs each have their own (from knowledge,
+  medium confidence, each read from its vendor's documentation before a reader is written),
+  and each lacks something (S3's has no `Range` and whole seconds). Azure Blob and GCS's JSON
+  API are not S3 requests at all, so item 61's ops would need their own or a capture through an
+  S3-compatible interface. A logging proxy or an HTTP capture in a lab is one format whatever
+  the store.
+
+**The proposal** (brief item 54, revised the same day): a capture tool of the suite that
+starts the command (never attaches), with four sources chosen per host and client, all
+converted afterward to the strace text the suite reads, so every reader and golden keeps
+working: eBPF where the owner can grant root or `CAP_BPF` and `CAP_PERFMON` (the default:
+system calls through raw tracepoints, libssl uprobes for request heads, and later the mapping
+faults and `io_uring` requests the item began with); ptrace where it cannot (strace with
+`--seccomp-bpf`, or a binary tracer of ours, 1.6 to 5 times faster here); the `LD_PRELOAD` shim
+for request heads where the client loads a shared `libssl` and eBPF is not available; the
+store's log for the rest, aligned by anchor requests (an unsigned `HEAD` logged on both sides).
+It records the kernel, the tools and versions, the command, each mount's filesystem, the
+endpoints and their scheme, whether the cache was cold, the clocks' offset, the buffer size,
+every loss, and what it could not see. *Open for the user:* aya or libbpf-rs for the eBPF
+side (gcc cannot build BPF programs; clang with the BPF target or aya's toolchain is needed);
+a ptrace tracer of ours or strace with `--seccomp-bpf`; whether the shim shares a library with
+item 55's `fstat` shim; the anchor requests (an unsigned `HEAD` shows as a 403 in the owner's
+audit log) or a command the owner supplies; and the measurements on a real Linux client node
+first.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
