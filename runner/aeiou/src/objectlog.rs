@@ -7,7 +7,8 @@
 //! Range's start when the log has it), and a close; a PUT an open that creates, one write, and
 //! a close; a HEAD a stat; a DELETE an unlink; a listing an open of the prefix, a readdir, and a
 //! close; a multipart upload an open at its start, a write per part, and a close at its
-//! completion. A lane is a client host, since the log knows no thread. The root is
+//! completion (a failed completion or abort a failed close). A GET or HEAD answered 304 Not
+//! Modified is a stat that succeeded: the client's copy was current and nothing was read. A lane is a client host, since the log knows no thread. The root is
 //! `BUCKET[/PREFIX]`; keys outside it are left out and counted.
 //!
 //! Two formats, told apart by the first line: MinIO's audit log (JSON lines with an `api`
@@ -359,6 +360,17 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, mut drain: i
         let full = if r.key.is_empty() { r.bucket.clone() } else { format!("{}/{}", r.bucket, r.key) };
         let err = if (200..300).contains(&r.status) { None } else { Some(errno(r.status)) };
         let op = r.op.as_str();
+        if r.status == 304 && (GET.contains(&op) || HEAD.contains(&op)) {
+            // Not Modified: the client's copy is current; the object was looked at and none of
+            // it read, a stat that succeeded
+            if r.key.is_empty() || !under(&full, root) {
+                note("requests_outside_root");
+            } else {
+                note("not_modified");
+                ex.path_event(when, "stat", &full, None)?;
+            }
+            return drain(ex);
+        }
         if LIST.contains(&op) {
             let path = match r.prefix.as_deref().filter(|p| !p.is_empty()) {
                 Some(p) => format!("{}/{}", r.bucket, p.trim_matches('/')),
@@ -379,8 +391,9 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, mut drain: i
             match uploads.remove(&full) {
                 None => note(if under(&full, root) { "multipart_without_start" } else { "requests_outside_root" }),
                 Some((_, oid, _)) => {
-                    ex.op(when, "close", oid, None, Value::Null, vec![]);
-                    if MP_ABORT.contains(&op) {
+                    // a failed completion or abort is a failed close; a failed abort removed nothing
+                    ex.op(when, "close", oid, err, Value::Null, vec![]);
+                    if err.is_none() && MP_ABORT.contains(&op) {
                         ex.path_event(when, "unlink", &full, None)?;
                     }
                 }

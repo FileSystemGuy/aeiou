@@ -172,7 +172,11 @@ work item of its own.
   `a_traced_error_that_does_not_recur_is_warned_of`.*
 - **S-16** (A) Object log: a 304 Not Modified becomes EIO (`objectlog.rs:42-49, 360`); a failed
   CompleteMultipartUpload or Abort is exported as a successful close (`objectlog.rs:382` passes
-  no error). *Status: open.*
+  no error). *Status: fixed 2026-11-02: a GET or HEAD answered 304 is a stat that succeeded
+  (the client's copy current, nothing read), counted under `not_modified`; a failed completion
+  or abort is a close with the status's errno, and a failed abort exports no unlink (a retry of
+  the completion after it is counted under `multipart_without_start`, as the close released the
+  handle); test `an_object_request_s_answer_is_its_export_s`.*
 
 ### Bookkeeping that ignores what an op means
 

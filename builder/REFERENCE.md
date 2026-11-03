@@ -871,7 +871,10 @@ offset when the log has it, PUT open-create/write/close, HEAD stat, DELETE unlin
 open-directory/readdir/close of the prefix, multipart open at the start, a write per part
 (their positions resolved across lanes by the exporter), close at completion, unlink on abort;
 a lane per client host; errors by status (404 `ENOENT`, 403 `EACCES`, else `EIO`) as the
-open's or the stat's `ret`; requests outside the root, without an engine call behind them,
+open's or the stat's `ret`, and a failed completion or abort's as the close's, a failed abort
+removing nothing; a GET or HEAD answered 304 Not Modified a stat that succeeded, counted under
+`not_modified` (2026-11-02, `FS_API_SWEEP.md` S-16: it was an `EIO` open, and a failed
+completion a close that succeeded); requests outside the root, without an engine call behind them,
 without a time, or parts without a start are counted under `notes`, as is `ranges_unknown`
 for an access log's partial GET. ~~`trace.metrics_of_events` gives the metrics of events in memory,
 `trace.object_log_events` is the commands' hook, and `digest.analyze` detects the log itself.~~

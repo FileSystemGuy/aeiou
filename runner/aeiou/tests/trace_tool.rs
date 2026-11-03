@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_aeiou-trace")
@@ -207,6 +207,50 @@ fn object_logs_take_one_bucket_root() {
     let o = tool(&["export", s(&f), "--root", "no-such-bucket", "-o", s(&out)]);
     assert_eq!(o.status.code(), Some(1));
     assert!(text(&o).1.contains("no request under --root no-such-bucket"), "{}", text(&o).1);
+}
+
+/// What an object request answered is what its export says (`FS_API_SWEEP.md` S-16): a GET
+/// answered 304 Not Modified looked at the object and read none of it, a `stat` that succeeded,
+/// not EIO; a CompleteMultipartUpload or AbortMultipartUpload that failed is a close that
+/// failed, and a failed abort removes nothing.
+#[test]
+fn an_object_request_s_answer_is_its_export_s() {
+    let entry = |ms: u32, api: &str, object: &str, code: u32| {
+        format!(
+            r#"{{"version": "1", "time": "2026-10-29T12:00:00.{ms:03}000000Z", "trigger": "incoming", "api": {{"name": "{api}", "bucket": "b", "object": "{object}", "statusCode": {code}, "rx": 0, "tx": 0, "timeToResponseInNS": "1000000"}}, "remotehost": "10.0.0.5:1"}}"#
+        )
+    };
+    let log = [
+        entry(10, "PutObject", "r/a", 200),
+        entry(20, "GetObject", "r/a", 304),
+        entry(30, "NewMultipartUpload", "r/m", 200),
+        entry(40, "CompleteMultipartUpload", "r/m", 500),
+        entry(50, "NewMultipartUpload", "r/n", 200),
+        entry(60, "AbortMultipartUpload", "r/n", 503),
+    ]
+    .join("\n");
+    let d = tmp("answers");
+    let (input, out) = (d.join("audit.log"), d.join("t.jsonl"));
+    std::fs::write(&input, log + "\n").unwrap();
+    let o = tool(&["export", s(&input), "--root", "b/r", "-o", s(&out)]);
+    assert!(o.status.success(), "{:?}", text(&o));
+    let events: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().skip(1).map(|l| serde_json::from_str(l).unwrap()).collect();
+    let brief: Vec<(String, Value)> = events.iter().map(|e| (e["op"].as_str().unwrap().to_string(), e["ret"].clone())).collect();
+    let want: Vec<(String, Value)> = [
+        ("open", Value::Null),
+        ("write", Value::Null),
+        ("close", Value::Null),
+        ("stat", Value::Null),
+        ("open", Value::Null),
+        ("close", json!("EIO")),
+        ("open", Value::Null),
+        ("close", json!("EIO")),
+    ]
+    .into_iter()
+    .map(|(o, r)| (o.to_string(), r))
+    .collect();
+    assert_eq!(brief, want, "{events:#?}");
+    assert_eq!(events[3]["path"], "a");
 }
 
 #[test]
