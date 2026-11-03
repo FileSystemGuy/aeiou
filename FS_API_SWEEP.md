@@ -335,7 +335,10 @@ work item of its own.
   alone.*
 - **S-36** (A) Object engine: a read-only open of a missing key succeeds (ENOENT at the first
   read), a HEAD 404 replays as HEAD + LIST, `BLKGETSIZE64` succeeds, and `SYNC`/`DSYNC`/
-  `DIRECT` are ignored without being listed in REFERENCE §16. *Status: open.*
+  `DIRECT` are ignored without being listed in REFERENCE §16. *Status: paused 2026-11-03 (the
+  user): each item is an artifact of mapping POSIX ops onto object requests, which
+  `DESIGN_REVIEW.md` §3.95 decides to replace with object requests as the abstract's own ops
+  (brief item 61).*
 
 ### What `compare` never judges
 

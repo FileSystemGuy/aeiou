@@ -4179,7 +4179,9 @@ one home, the backend name, when each binds to something different:
   per-request timing. Those PRs come from measuring it (step 3 below), not before.
   *2026-10-09:* moot; the object engine is built on `object_store` (decided below).
 
-**The object mapping (draft; §3.32 extended).** Per op, for a namespace declared object:
+**The object mapping (draft; §3.32 extended).** *2026-11-03: to be replaced by object
+requests as the abstract's own ops, with no mapping (§3.95, brief item 61); built as below
+until then.* Per op, for a namespace declared object:
 
 | Op | Object operation | Notes |
 |---|---|---|
@@ -8873,6 +8875,130 @@ evictions, overwrites, compaction). `lmcache-shared-fs` models only the cold rea
 
 Recorded as brief items 59 (the third kind of state and its reset) and 60 (the trace node's
 recorded preconditions and prepare, with S-17); the sampled verify joins `aeiou-verify`.
+
+### 3.95 Object requests are the abstract's own ops: no mapping between POSIX and object (debated with the user, decided 2026-11-03; not started)
+
+**How it came up.** Fixing the object-log reader's findings (`FS_API_SWEEP.md` S-29 to S-36,
+2026-11-02 and 11-03), the user saw that every one was a loss in a round trip. An abstract's
+POSIX ops are turned into S3 requests by §3.65's mapping (`runner/REFERENCE.md` §16,
+`object.rs`), and an object-store log is turned into POSIX calls (`objectlog.rs`, §3.88 step
+5) that the engine turns into requests again. Each finding was something the POSIX shape could
+not carry: part numbers and the abort of a multipart upload (S-29, S-32), suffix ranges and
+part GETs (S-30), listing pages (S-33), a 404 GET that replays as nothing and a 404 HEAD that
+replays as HEAD and LIST (S-36). The user's question: should a trace be taken at face value, an
+S3 GET replayed as an S3 GET with no POSIX mapping, since no solid and comprehensive mapping
+between the two exists and the open/read/close tuple does not recreate the application's
+requests with fidelity?
+
+**Assessment.** §3.65 had already said half of it (2026-10-09): "The object API has no
+descriptor, `open`, `close`, `lseek`, `fstat` of a descriptor, `fadvise`, or `getdents`, so it
+cannot reproduce a traced call sequence", for the direction from POSIX to object; the suite
+then built the reverse direction anyway.
+
+- *CLOSED already decides it.* The API is the application's (the interposition test, brief
+  §5; §3.48), and §3.65's axis table binds the protocol family to the abstract. Declaring the
+  protocol per namespace while keeping the op vocabulary POSIX stopped halfway.
+- *The POSIX shape buys no comparability.* A run under another API is another workload and is
+  never compared with it (§3.48), so a POSIX abstract run against S3 is not comparable with its
+  POSIX run: the mapping pays in fidelity for a property nothing scored uses.
+- *POSIX backends are interchangeable; objects are not.* A `pread`, a `libaio` read, and an
+  `io_uring` read are the same kernel operation on the same file, so their mapping is exact. A
+  GET as open, read, and close is a guess at what some client library would do.
+- *What fidelity gains.* Each request replays as one request: ranged, suffix, part, and
+  conditional GETs (the 304s), HEAD, LIST pages with their own `max-keys` and delimiter, PUT,
+  multipart create, part N, complete, and abort, CopyObject, UploadPartCopy, DeleteObjects
+  (S-34 solved, not deferred). A 404 reproduces itself. The parallel part uploads and parallel
+  ranged GETs of one object that high-throughput clients issue (the AWS CRT, s5cmd) can be
+  expressed, where the one-op-per-handle model and V18 serialize them. Object storage is
+  measured per request (rate and latency by type, request size), which falls out directly.
+- *A clean boundary.* An application reaching S3 through a FUSE file system (mountpoint-s3,
+  s3fs) is a POSIX application: its strace is POSIX, and the FUSE layer is the solution under
+  the interposition test. Object ops are for applications that call an object API themselves.
+  Each trace keeps the shape it was captured in.
+- *Against.* A second op vocabulary through the contract, schema, validator, builder, VM,
+  `dry-run --metrics`, the trace file (a request line), the digest's sites, and `compare`; the
+  format classes need object reader protocols, per format and per client library (pyarrow's
+  S3 file system, fsspec's block cache, the CRT coalesce differently, which the POSIX reader
+  protocol hides); the "this POSIX job on an object store" question is no longer an engine
+  property; and the POSIX emulation in `object.rs` and the export to POSIX in `objectlog.rs` are
+  given up (the logs' parsing carries over: `Content-Range`, `uploadId` binding, aws-chunked
+  lengths, the notes of S-30 to S-35).
+
+**Decided (the user, 2026-11-03).**
+1. **An object namespace's ops are object requests, taken from the trace at face value.** No
+   mapping from POSIX to object or back, in the runner, the trace file, or the export of a log.
+   The POSIX APIs keep one POSIX op stream; the object client is an API with its own ops.
+2. **No converter.** Many open-source projects map or convert between POSIX and object; the
+   suite neither reinvents nor competes with them. A POSIX application on such a layer is
+   traced as POSIX, the layer the system under test.
+3. **Not short-term.** No one in the WG needs an object workload soon, and no committed
+   workload declares `s3` (checked 2026-11-03), so no abstract or fingerprint changes when it
+   is built. Queued as brief item 61.
+4. **`FS_API_SWEEP.md` S-36 paused**: each of its four items (a read-only open of a missing
+   key, HEAD and LIST for a 404, `BLKGETSIZE64`, the ignored `SYNC`, `DSYNC`, and `DIRECT`) is
+   an artifact of the emulation. The fixes made for S-29 to S-35 stand until the rework; their
+   log parsing carries into it.
+
+**What it reverses or changes, when built.**
+- The invariant "the abstract is POSIX-shaped and identical for every I/O backend" (CLAUDE.md,
+  brief §5) becomes: identical for every backend *of one protocol*.
+- §3.65's object mapping table and V18 (an object written once, in order): the table goes;
+  V18 is moot (a PUT is whole by construction; parts come in any order). V19 (an API per
+  protocol) stays, and matters more.
+- `runner/REFERENCE.md` §16's mapping and `object.rs`'s emulation: `stat` as HEAD then LIST,
+  `readdir` as every page, `rename` as a copy and a DELETE, an unlink marking open uploads,
+  `Upload` buffering, `EBUSY` and `ESPIPE`. The transport stays: tokio inside the object engine
+  (the cargo feature `object`), `--s3 blocking|async`, the eventfd that wakes the loop.
+- §3.88 step 5 and §3.89: an object log exports request lines (the trace file's version 2);
+  `trace::check_root`'s refusal of an object written out of order (S-29) goes.
+- Brief item 58's object entries (a write's part number, a discard for an abort, the
+  recursive listing of S-33) become native ops of item 61, out of item 58.
+- The digest gains object sites, and `compare` judges request kinds; the builder gains object
+  op nodes, and a format class an object reader protocol, refused (as V9 refuses an access
+  mode) where it has none.
+- Open: whether `object_store` can issue what faithful replay needs. From memory of the crate,
+  not checked against its source: it numbers and orders a multipart upload's parts itself,
+  pages a listing with no `max-keys`, and has no part GET or UploadPartCopy. If so, the engine
+  needs `aws-sdk-s3` or a small signed-HTTP client of its own, which reopens §3.65's library
+  choice (still inside the object engine's tokio boundary). To be checked first when item 61
+  starts.
+
+**One trace, one digest, one abstract over both protocols (the user's question, the same
+day).** The motivating case is an application that uses POSIX and an object store for
+different purposes. Milvus is one, checked against its own sources on 2026-11-03:
+- Its storage layer has two backends behind one interface (`ChunkManager`): a local one, keys
+  absolute paths under `localStorage.path` (`/var/lib/milvus/data/insert_log/1/2/3/...`), and a
+  remote one, keys in a bucket under `minio.rootPath` (`files/insert_log/1/2/3/...`)
+  (`docs/agent_guides/storage/path_contract.md` in milvus-io/milvus; high confidence).
+- Object storage persists data and index files; query nodes cache what they serve and, under
+  tiered storage (2.6.4 on), fetch field data and indexes on demand; Woodpecker, the default
+  WAL, writes directly to object storage (milvus.io architecture overview, v3.0.x; high).
+- Memory-mapped fields and indexes are files under `localStorage.path/mmap`, and a DISKANN
+  index is read from local disk (`applications/milvus/3.0.toml`, read 2026-10-29: milvus.io
+  `mmap.md`, `disk_index.md`, `configs/milvus.yaml`; high for the paths). That an index node
+  builds a DISKANN index on local disk and uploads it is likely and not checked here (medium).
+- No FUSE use was found in Milvus's documentation or source (a code search of milvus-io/milvus
+  for "fuse" finds only words such as "refuse"). A FUSE file system or a CSI driver under
+  `localStorage.path` would be a deployment's choice, and the solution's under the
+  interposition test (medium: absence of evidence).
+
+So a Milvus query node, in one process, GETs index files and binlogs and reads, writes, and
+maps local files. Where the suite stands for such an application:
+- *The abstract: yes, by design.* Protocol and API are bound per namespace (§3.65, decided and
+  built 2026-10-09: per-name endpoints, V19), so one abstract holds a POSIX namespace and an S3
+  one, one actor issuing both. With item 61 its object ops are requests; the data flowing
+  between them (an object fetched and written to local disk, then read) is two namespaces'
+  ops, sizes from the same positional expressions.
+- *The trace: not yet; one source at a time today.* An strace never shows the object requests
+  (TLS, `applications/milvus` records the blind spot), and an object log has no thread and the
+  server's clock. One trace of both is a merge of the two: lanes from the strace's threads,
+  requests attributed to them by the client's address and by time, with the clocks' offset
+  bounded (the strace's `%network` calls give the client side of each request's connection
+  and its timing; over plain HTTP, its request line). Not designed; it joins brief item 49
+  (the logs not yet read and the merged trace) and item 52 (all-rank traces).
+- *The digest: not yet.* Its four site kinds (a sample set, a keyed lookup, a bulk write, one
+  open read at many offsets) are POSIX-shaped; item 61 adds object sites, and a digest of a
+  merged trace has sites of both.
 
 ## 4. Plan changes
 

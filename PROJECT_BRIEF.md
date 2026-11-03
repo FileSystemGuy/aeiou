@@ -1250,6 +1250,18 @@ numbers; the order is this note's.
     interview and recorded with provenance; a prepare step that makes the inputs at their read
     extents and removes the creates. `FS_API_SWEEP.md` S-17 is built with it.
 
+61. **Object requests as the abstract's own ops (decided by the user 2026-11-03,
+    `DESIGN_REVIEW.md` §3.95; not started, no WG need short-term).** An object namespace's ops
+    are the requests the application sent, taken from its trace at face value: ranged,
+    suffix, part, and conditional GETs, HEAD, LIST pages, PUT, multipart create, part N,
+    complete, and abort, CopyObject, UploadPartCopy, DeleteObjects; no mapping between POSIX
+    and object anywhere, and no converter (open-source projects do that). Replaces §3.65's
+    mapping and V18, `object.rs`'s POSIX emulation, and the export of an object log to POSIX
+    calls (request lines in the trace file's version 2); takes item 58's object entries.
+    First step: check whether `object_store` can issue what replay needs, else `aws-sdk-s3`
+    or a small signed-HTTP client. A trace merging an strace with an object log (Milvus: a
+    query node's local files and its bucket) joins item 49.
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS
