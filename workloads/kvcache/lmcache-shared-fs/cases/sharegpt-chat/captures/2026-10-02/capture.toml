@@ -3,6 +3,7 @@
 # other seeds as its own spread (builder/tests/test_trace.py walks these files).
 raw_trace = "not retained"   # a scratch capture: the metrics are kept, never the trace
 # the writer's store order (two threads) stays outside
+# the writer's read-after-write and popularity rows stay outside since FS_API_SWEEP.md S-18 (2026-11-03): its metrics predate it
 
 [[pair]]
 trace = "writer.trace"   # writer.trace.metrics.json

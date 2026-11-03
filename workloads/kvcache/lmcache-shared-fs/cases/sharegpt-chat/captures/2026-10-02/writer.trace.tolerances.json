@@ -14,6 +14,26 @@
     {
       "metric": "reuse distance, write after write",
       "reason": "370 samples, a file's chunk write after its header write; in 231 of them another thread's call completed in between (two store threads and the load pool, against the dry run's one request after another)"
+    },
+    {
+      "metric": "reuse: first touches / block reads",
+      "reason": "the trace's metrics were taken on 2026-10-02, before FS_API_SWEEP.md S-18 (2026-11-03), and the raw trace is not retained, so they cannot be taken again: a read of a chunk file written under a temporary name and renamed was a first touch then, and is a read after write since, as in the dry run"
+    },
+    {
+      "metric": "reuse: read after write / block reads",
+      "reason": "the trace's metrics were taken on 2026-10-02, before FS_API_SWEEP.md S-18 (2026-11-03), and the raw trace is not retained, so they cannot be taken again: the same reads, none a read after write then"
+    },
+    {
+      "metric": "reuse distance, read after write",
+      "reason": "the trace's metrics were taken on 2026-10-02, before FS_API_SWEEP.md S-18 (2026-11-03), and the raw trace is not retained, so they cannot be taken again: the same reads, no read after write to take a distance of then"
+    },
+    {
+      "metric": "popularity, blocks: accesses to the top 10 %",
+      "reason": "the trace's metrics were taken on 2026-10-02, before FS_API_SWEEP.md S-18 (2026-11-03), and the raw trace is not retained, so they cannot be taken again: an object was a name then and is a file's data since, so a chunk file's reads after its rename and its writes under the temporary name were two objects then and one since, its blocks likewise"
+    },
+    {
+      "metric": "popularity, objects: accesses to the top 10 %",
+      "reason": "the trace's metrics were taken on 2026-10-02, before FS_API_SWEEP.md S-18 (2026-11-03), and the raw trace is not retained, so they cannot be taken again: an object was a name then and is a file's data since, so a chunk file's reads after its rename and its writes under the temporary name were two objects then and one since, its blocks likewise"
     }
   ]
 }
