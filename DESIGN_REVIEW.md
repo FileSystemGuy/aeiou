@@ -9183,6 +9183,125 @@ built as two shared objects, the capture's and item 55's `fstat` one: the captur
 item 55's changes what the application sees, so the capture's library holds no code that can
 alter a result, and no stray variable turns a capture into an experiment.
 
+**The capture tool's design (debated with the user the same day, 2026-11-03; this side's
+proposal, recorded at the user's request before a context clear; not approved, nothing
+built: the user says "proceed" before any of it is coded).**
+
+*Shape.* `aeiou-trace capture [--source auto|ebpf|strace] --root DIR... [--endpoint URL]...
+[--cold] [--accept CHECK]... -o DIR -- COMMAND [ARGS...]`, a subcommand of `aeiou-trace`
+(the release tarball is all an owner needs). It always starts COMMAND (no `-p`, which also
+means a privileged binary can watch nothing but its own child), exits with COMMAND's status
+as strace does, forwards `SIGINT`/`SIGTERM` (the scheduler's at a time limit too), drains,
+and writes its record marked interrupted. Usage errors in the §15 frame; `aeiou-trace(1)`
+gets a `capture` section, and an owner's page `CAPTURE.md` ships in the tarball beside
+`QUICKSTART.md` (recommended; the man page alone is the alternative).
+
+*The capture directory* (`-o DIR`, empty or absent; `%h` host and `%p` pid expand, so one
+template serves every node): `trace.txt`, the strace text every reader reads (strace's own,
+or converted from the eBPF records); `capture.json` (`aeiou_capture: 1`): tool version,
+kernel, distribution, CPUs, memory, source and its version and why it was chosen, the exact
+strace line or probe set, argv and cwd, exit status, start and end, realtime minus monotonic
+at start and end, each `--root`'s mount (filesystem, server and export, options from
+`/proc/self/mountinfo`), endpoints and scheme, cache `dropped` (`--cold`, root) or `not
+dropped`, losses (0 under strace; by CPU and time range under eBPF), paths not copied, what
+the capture could not see, the uid the command ran as, waivers, the trace's size and sha256;
+and the sources' raw files kept (`syscalls.bin`, `requests.jsonl`) so a converter's bug is
+fixed by re-converting, never by asking the owner again. No `mountstats` from a traced run
+(the record says to take them untraced). Proposed defaults, the user to confirm: `%network`
+always in the strace set (+6 % on boto3; an owner cannot know whether descriptors pass over a
+socket); at least one `--root` or `--endpoint` required; `--cold` as sync and drop (or a
+`mincore` sample of `--root`, the user's choice); the readers take `DIR/trace.txt` in phase 1
+and the directory itself (its `--root`, `--cwd`) later, once phase 2 gives it a second file.
+
+*Starting the command.* The tool forks the child, which waits on a pipe; the tool records
+the child's inherited descriptor table (for the converter), attaches, then releases it to
+`exec`. Under strace, strace starts the command as the man page's line does.
+
+*Privilege (eBPF only; the user: the traced command must not run as root, and a cluster
+capture cannot prompt for a password, since under ssh, `srun`, or `mpirun` there is no
+terminal).* The tool always runs as the invoking user in their environment (sudo would
+reset `PATH`, `LD_LIBRARY_PATH`, the virtualenv: another run); it never prompts. Privilege is
+needed only to load and attach, and comes, in order, from (1) file capabilities an
+administrator grants once on a node-local copy (`setcap cap_bpf,cap_perfmon+ep`,
+`CAP_SYS_ADMIN` before 5.8; not over NFS, which carries no `security.*` xattr; execution
+limited to a group, since the binary can probe the host): the cluster default; (2) a
+`NOPASSWD` sudoers rule for a helper mode of the same binary that takes no arguments (its
+requests arrive over a socket, so the rule names one exact command), called with `sudo -n`,
+the binary root-owned; (3) on a single host, `sudo -v` beforehand so `sudo -n` succeeds.
+The helper loads and attaches and passes the link and ring-buffer descriptors back over a
+Unix socket (`SCM_RIGHTS`) and exits: privilege is checked at load and attach, not at read,
+so the reader is unprivileged and the probes live as long as it holds the descriptors.
+Under capabilities the tool attaches first and drops every capability for good before it
+releases the command or reads the buffer; a capability binary is secure-exec (no
+`LD_PRELOAD`), and `exec` of the command carries none. The target is filtered by process
+tree, not a cgroup (which would need delegation): the namespace-local pid
+(`bpf_get_ns_current_pid_tgid`, 5.7+, which also fixes WSL2's mismatch) and children added
+at `sched_process_fork`. Run wholly as root, the record says so and the tool warns (some
+applications run as root, in containers especially), never refuses.
+
+*Several nodes (the user: `aeiou-launch` needs only password-less ssh, and that is the
+baseline; Slurm and its kind supported, never assumed; torchrun is training's alone, VDB
+and KV cache are servers and load generators).* Two cases. (1) The owner can start the
+application per node over ssh: `aeiou-launch HOSTS -- aeiou-trace capture ... -- COMMAND`,
+a fourth command of the launcher (it accepts only `aeiou run`, `aeiou datagen`,
+`aeiou-datagen` today) with the same three flags appended, rank meaning only host index.
+The capture joins the runner's TCP coordinator for a start barrier (every node attached
+before any node's command is released; one that cannot, none start), clock offsets between
+hosts measured over its connections against rank 0's, bounded by half the round trip
+(beside `ntp_adjtime`'s unprivileged synchronized flag and error bounds, and the anchor
+`HEAD`s tying hosts to the store's log), stopping together, and a `capture-set.json` on
+rank 0 (each node's directory, source, losses, offset, status; only records cross the
+network, traces stay on each node's local disk for the owner to collect). One capture per
+node: every attached probe runs on every call on the host, so N per node cost N times.
+(2) The application has its own multi-host launcher (`mpirun`, `srun`, Kubernetes, a
+service manager): the capture goes inside that line, joined by `--capture-id` (default
+`SLURM_JOB_ID` when set), and accepts `--ranks`, `--rank`, `--coordinator` directly so such
+a line can supply them from its environment and get the barrier and comparisons; without
+them, per-node only, the cross-node comparison made afterward from the records and marked
+so. Several captures per node (one per `mpirun` rank) are recorded with their count; one
+probe set shared among them on a node is deferred until a case needs it. Recorded from the
+environment: a fixed list only (`SLURM_JOB_ID`, `SLURM_NODEID`, `SLURM_PROCID`, `RANK`,
+`LOCAL_RANK`, `WORLD_SIZE`, `MASTER_ADDR`), never the whole environment. No silent mix of
+sources (one node under strace slows a synchronized job and distorts every node's trace):
+the barrier refuses it; `--source auto` is for a single host.
+
+*The checks are the capture's first step, every time (the user: protect against a runner
+who forgets a preflight by hand, or whose cluster changed overnight).* In `aeiou-trace
+capture`, not `aeiou-launch`: case (2) has no launcher, the knowledge (capabilities, BTF,
+lockdown, strace) is the binary's, and the launcher stays a generic ssh loop; the pattern is
+the runner's own (§11's limit checks before the gate, rank 0's differences table). Each node
+checks itself: the source it can use and why (capabilities or `sudo -n`, lockdown, BTF,
+kernel), the strace version, the release, each `--root`'s server, export, and options,
+clock synchronization, `-o` on local disk, not under any `--root`, its free space, no other
+capture running; rank 0 gathers and compares across nodes (same release, same mounts and
+options: a node mounted with another `vers`, `rsize`, or `nconnect` is the classic bad node;
+clock offsets) and prints one table. Any check failing on any node: no node starts, every
+capture exits non-zero, the table names each node and check. Every check fails by default;
+a deliberate exception (a mixed cluster under test) is waived by name, `--accept CHECK`
+(repeatable, one flag for every check), printed and recorded. The checks run again at the
+end (mounts, clock state) and every change is recorded. `--check` remains a dry mode for
+planning (no command), never required.
+
+*The phases* (each tests first): (1) strace source, the record, the checks, the barrier,
+clock offsets, `capture-set.json`, `aeiou-launch` support, `CAPTURE.md`: everything that
+holds under strace, so phase 1 is a coordinated tool, not a wrapper; (2) the HTTP-head shim
+(a Rust `cdylib`, the capture's library of the interposition crate) writing
+`requests.jsonl` on the wall clock with tids, the anchor `HEAD`s at start and end of each
+`--endpoint`, a third format for `objectlog.rs` (not implemented in it: the join of requests
+to calls, items 49 and 61); (3) eBPF system calls with aya: raw tracepoints, variable-length
+binary records, a binary reader, a buffer of seconds of the peak, every loss counted, the
+converter to strace text resolving descriptors from the recorded opens, `dup`s, forks, and
+`chdir`s, and its test an equivalence of the *parsed* calls of one command under strace and
+under eBPF; needs nightly Rust and `bpf-linker` locally and in CI, pinned by `dev.sh`, the
+user to approve installing them (GitHub's runners have `sudo` for the root tests); (4)
+libssl uprobes, then mapping faults and `io_uring` (CO-RE).
+
+*Open, later.* Servers started in containers (Milvus, vLLM with LMCache): the capture inside
+the container (the binary there, `--cap-add BPF --cap-add PERFMON`) or on the host against a
+container it did not start, against "start the command, never attach"; the user decides
+when those workloads come. Whether `aeiou run` should compare mounts across hosts too (not
+checked whether it does; a brief item if the user wants it, not folded in here).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

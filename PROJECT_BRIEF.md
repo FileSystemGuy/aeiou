@@ -1220,6 +1220,19 @@ numbers; the order is this note's.
     for kernel structures later from a C-built object, to be checked); the shim one crate of
     interposition machinery built as two libraries, the capture's (observes only) and item 55's
     `fstat` one (changes what the application sees).
+    *The tool's design proposed and debated the same day (§3.96, "The capture tool's design";
+    recorded before a context clear, not approved, nothing built until the user says
+    proceed):* `aeiou-trace capture ... -o DIR -- COMMAND`, a capture directory with
+    `trace.txt`, `capture.json`, and the sources' raw files; the command never runs as root
+    and nothing prompts (file capabilities an administrator grants once on a node-local copy,
+    or a `NOPASSWD` rule for an argument-free helper under `sudo -n`; descriptors handed back,
+    capabilities dropped before the command starts); several nodes through `aeiou-launch`
+    (password-less ssh, the baseline) and the runner's coordinator for a start barrier, clock
+    offsets, and a capture-set record, or inside the application's own launcher; the checks
+    the first step of every capture, compared across nodes, any failure starting no node,
+    waived only by name (`--accept`), run again at the end. Phases: strace and everything
+    that holds under it; the shim and anchors; eBPF with aya (nightly and `bpf-linker`, the
+    user to approve); uprobes, faults, `io_uring`.
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no
