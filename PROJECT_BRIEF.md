@@ -1229,7 +1229,9 @@ numbers; the order is this note's.
     2026-11-02 that it must come back), `RWF_*` flags, multipart uploads in the object engine
     (a write naming its part number, so parts uploaded as they came replay, refused at the
     gate until then; a discard for an abort or an upload never completed, which export as a
-    plain close with a note until then; S-29, S-32, decided 2026-11-02), `O_PATH`, `O_TMPFILE`, `F_SETFL`, the
+    plain close with a note until then; S-29, S-32, decided 2026-11-02), a recursive listing
+(an object listing without a delimiter, every key below the prefix, exported as a one-level
+`readdir` noted `list_recursive` until then; S-33, decided 2026-11-02), `O_PATH`, `O_TMPFILE`, `F_SETFL`, the
     IOCB fsyncs and vectored requests, batch deletes; and `compare` judging a kind on one side
     only, the flags, and the notes (S-37 to S-39). mmap's page references (S-41) wait on item 54.
 

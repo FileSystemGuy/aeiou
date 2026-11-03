@@ -275,7 +275,12 @@ calls the runner's object engine issues for it (`runner/REFERENCE.md` §16): a G
 open, one read (where the response's `Content-Range` says, else at the start of the
 `Range` asked for, else from 0), and a
 close; a PUT an open that creates, one write, and a close; a HEAD a stat; a DELETE an
-unlink; a listing an open of the prefix, a readdir, and a close; a multipart upload an open
+unlink; a listing an open of the prefix, a readdir, and a close, once however many pages
+it took (the engine's readdir lists every page; a page carrying a `continuation-token` or a
+`marker` is counted under `list_pages_folded`), a prefix not ending in `/` listing the
+directory it filters (`list_prefix_partial`), and a listing without a delimiter, which S3
+answers with every key below the prefix where the engine lists one level, counted under
+`list_recursive`; a multipart upload an open
 at its start, a write per part, and a close at its completion. A lane is a client host,
 since the log knows no thread; `--root` is `BUCKET[/PREFIX]`, one, and requests outside it
 are counted and left out, as are the requests with no call of the engine behind them

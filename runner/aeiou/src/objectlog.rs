@@ -5,8 +5,10 @@
 //! (`runner/REFERENCE.md` §16), through the exporter of `export.rs`, so the trace file, the
 //! metrics, and the runner's `trace` node take it unchanged: a GET is an open, one read (at the
 //! answer's `Content-Range`, else the `Range` asked for, when the log has either), and a close; a PUT an open that creates, one write, and
-//! a close; a HEAD a stat; a DELETE an unlink; a listing an open of the prefix, a readdir, and a
-//! close; a multipart upload an open at its start, a write per part at its place in the object
+//! a close; a HEAD a stat; a DELETE an unlink; a listing an open of the prefix (of the directory a
+//! prefix not ending in `/` filters, noted), a readdir, and a close, its later pages counted
+//! and exporting nothing, since the engine's readdir lists every page (a listing without a
+//! delimiter, every key below the prefix, is noted: the engine lists one level); a multipart upload an open at its start, a write per part at its place in the object
 //! (after the parts numbered below it), and a close at its completion (a failed completion or
 //! abort a failed close; an abort or an upload never completed a close with a note, removing
 //! nothing). A GET or HEAD answered 304 Not
@@ -178,6 +180,9 @@ struct Request {
     part: Option<i64>,
     /// The note of a GET the log asked for a range of and did not say where (S-30).
     unplaced: Option<&'static str>,
+    /// A listing's later page (a continuation token or a marker) and its delimiter (S-33).
+    continued: bool,
+    delimiter: Option<String>,
 }
 
 /// Python's `int(v)` with a default: a number (truncated), a numeric string, a bool.
@@ -247,6 +252,8 @@ fn minio_request(doc: &Value, no: usize) -> Result<Request> {
         upload: text(q.and_then(|q| q.get("uploadId"))),
         part,
         unplaced,
+        continued: ["continuation-token", "marker"].iter().any(|k| text(q.and_then(|q| q.get(*k))).is_some()),
+        delimiter: text(q.and_then(|q| q.get("delimiter"))),
     })
 }
 
@@ -342,6 +349,8 @@ fn s3_request(line: &str, no: usize) -> Result<Request> {
         upload: query_value(query, "uploadId"),
         part: query_value(query, "partNumber").and_then(|v| v.parse().ok()).filter(|n: &i64| *n > 0),
         unplaced: None,
+        continued: ["continuation-token", "marker"].iter().any(|k| query_value(query, k).is_some()),
+        delimiter: query_value(query, "delimiter"),
     })
 }
 
@@ -453,13 +462,32 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, parts: &mut 
             return drain(ex);
         }
         if LIST.contains(&op) {
-            let path = match r.prefix.as_deref().filter(|p| !p.is_empty()) {
-                Some(p) => format!("{}/{}", r.bucket, p.trim_matches('/')),
-                None => r.bucket.clone(),
+            // the engine's readdir lists every page, so a later page of a listing is the
+            // first's (S-33)
+            if r.continued {
+                note("list_pages_folded");
+                return drain(ex);
+            }
+            // a prefix not ending in '/' filters names: the directory it filters is listed
+            let prefix = r.prefix.as_deref().unwrap_or("").trim_start_matches('/');
+            let dir = match prefix.rsplit_once('/') {
+                _ if prefix.is_empty() || prefix.ends_with('/') => prefix,
+                Some((d, _)) => d,
+                None => "",
+            };
+            let path = match dir.trim_end_matches('/') {
+                "" => r.bucket.clone(),
+                d => format!("{}/{d}", r.bucket),
             };
             if !under(&path, root) {
                 note("requests_outside_root");
                 return drain(ex);
+            }
+            if dir.len() < prefix.len() {
+                note("list_prefix_partial");
+            }
+            if r.delimiter.is_none() {
+                note("list_recursive");
             }
             let oid = ex.open(when, &path, "O_RDONLY|O_DIRECTORY", None, err)?;
             if let (None, Some(oid)) = (err, oid) {

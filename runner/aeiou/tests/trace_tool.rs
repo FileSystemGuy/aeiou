@@ -391,6 +391,55 @@ fn a_get_s_bytes_are_where_the_answer_says() {
     assert!(notes.get("ranges_unknown").is_none(), "{notes}");
 }
 
+/// A listing is one readdir however many pages it took (`FS_API_SWEEP.md` S-33): the object
+/// engine's readdir lists every page, so a page that continues one (a continuation token, a
+/// marker) is counted and exports nothing; a listing without a delimiter, which S3 answers with
+/// every key below the prefix, is a readdir of the prefix with a note; a prefix that is not a
+/// directory (a name filter) lists the directory it filters, with a note.
+#[test]
+fn a_listing_is_one_readdir_however_many_pages() {
+    let entry = |ms: u32, api: &str, query: &str| {
+        format!(
+            r#"{{"version": "1", "time": "2026-10-29T12:00:00.{ms:03}000000Z", "trigger": "incoming", "api": {{"name": "{api}", "bucket": "b", "statusCode": 200, "rx": 0, "tx": 0, "timeToResponseInNS": "1000000"}}, "requestQuery": {{{query}}}, "remotehost": "10.0.0.5:1"}}"#
+        )
+    };
+    let log = [
+        entry(10, "ListObjectsV2", r#""prefix": "r/d/", "delimiter": "/", "list-type": "2""#),
+        entry(20, "ListObjectsV2", r#""prefix": "r/d/", "delimiter": "/", "list-type": "2", "continuation-token": "t1""#),
+        entry(30, "ListObjectsV2", r#""prefix": "r/d/", "delimiter": "/", "list-type": "2", "continuation-token": "t2""#),
+        entry(40, "ListObjectsV1", r#""prefix": "r/e/", "delimiter": "/", "marker": "r/e/k9""#),
+        entry(50, "ListObjectsV2", r#""prefix": "r/d/", "list-type": "2""#),
+        entry(60, "ListObjectsV2", r#""prefix": "r/d/img_0", "delimiter": "/", "list-type": "2""#),
+    ]
+    .join("\n");
+    let d = tmp("listing");
+    let (input, out) = (d.join("audit.log"), d.join("t.jsonl"));
+    std::fs::write(&input, log + "\n").unwrap();
+    let o = tool(&["export", s(&input), "--root", "b/r", "-o", s(&out)]);
+    assert!(o.status.success(), "{:?}", text(&o));
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let brief: Vec<String> = lines[1..].iter().map(|e| format!("{} {}", e["op"].as_str().unwrap(), e["path"])).collect();
+    assert_eq!(
+        brief,
+        [
+            r#"open "d""#,
+            "readdir null",
+            "close null",
+            r#"open "d""#,
+            "readdir null",
+            "close null",
+            r#"open "d""#,
+            "readdir null",
+            "close null",
+        ],
+        "{lines:#?}"
+    );
+    let notes = &lines[0]["notes"];
+    for (k, n) in [("list_pages_folded", 3), ("list_recursive", 1), ("list_prefix_partial", 1)] {
+        assert_eq!(notes[k], n, "{k}: {notes}");
+    }
+}
+
 #[test]
 fn compare_needs_no_python_and_lists_what_it_lacks() {
     // ported (DESIGN_REVIEW.md §3.89, stage 4): no interpreter is asked for

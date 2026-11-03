@@ -307,7 +307,15 @@ work item of its own.
   object replaced at the close), on a file the truncate comes at the start; same test.*
 - **S-33** (A) Each ListObjects page is its own listing (continuation, `max-keys`, `delimiter`
   ignored; a non-directory prefix becomes a directory): replayed as about N² requests.
-  *Status: open.*
+  *Status: fixed 2026-11-02 (the user's choice of the recommendations): a listing is one
+  open, readdir, and close however many pages it took, a page with a `continuation-token` or
+  `marker` counted under `list_pages_folded` and exporting nothing (the engine's readdir lists
+  every page); a prefix not ending in `/` lists the directory it filters, noted
+  `list_prefix_partial`; a listing without a delimiter (every key below the prefix) is still a
+  one-level readdir, noted `list_recursive`, until brief item 58 adds a recursive listing;
+  `max-keys` stays unread (the engine's page size is the store's). Test
+  `a_listing_is_one_readdir_however_many_pages`; three goldens gain the `list_recursive` note
+  alone.*
 - **S-34** (B) DeleteObjects (batch), CopyObject, UploadPartCopy are counted, never exported:
   their unlinks and their targets lost. Copy is S-40's copy op. *Status: open.*
 - **S-35** (A) Unchecked, to verify: replicated PUTs (MinIO `trigger`, replication headers)

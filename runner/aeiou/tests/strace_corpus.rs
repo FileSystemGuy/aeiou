@@ -20,7 +20,9 @@
 //! only difference); and an object log's multipart upload written as the object it makes
 //! (S-29, S-31, S-32; three cases: a part's write positioned, so `shared_positions_resolved`
 //! goes; an upload never completed closed at the log's end, not at 0; an abort's `unlink`
-//! gone, noted `multipart_aborted`).
+//! gone, noted `multipart_aborted`); and an object listing without a delimiter noted
+//! `list_recursive` (S-33; two cases, the note in the header and the metrics the only
+//! difference).
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths

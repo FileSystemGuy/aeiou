@@ -869,7 +869,12 @@ turns each request (`Request`, from `minio_request` or `s3_request`) into the ca
 object engine issues for it through the strace `Exporter`, so the header and events are the
 exported trace file's, with `source` the log's format: GET open/read/close with the Range's
 offset when the log has it, PUT open-create/write/close, HEAD stat, DELETE unlink, listing
-open-directory/readdir/close of the prefix, multipart open at the start, a write per part at
+open-directory/readdir/close of the prefix, once per listing (a later page, with a
+`continuation-token` or `marker`, counted under `list_pages_folded` and exporting nothing, the
+engine's readdir listing every page; a prefix not ending in `/` the directory it filters,
+`list_prefix_partial`; no delimiter, a listing of every key below the prefix where the engine
+lists one level, `list_recursive`; 2026-11-02, `FS_API_SWEEP.md` S-33: each page was a listing
+of its own, replayed as about N² requests), multipart open at the start, a write per part at
 its time and its place in the object, the sizes of the parts numbered below it whatever order
 they came in (the sizes learned in the first pass; a failed part a failed write that moves
 nothing; a part out of order or retried noted `multipart_parts_out_of_order`), the upload

@@ -193,6 +193,7 @@
   ],
   "notes": {
    "lanes": "one per client host; the log knows no thread",
+   "list_recursive": 1,
    "multipart_not_completed": 1,
    "multipart_without_start": 1,
    "opens_not_closed": 1,
