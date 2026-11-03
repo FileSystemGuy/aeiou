@@ -198,6 +198,11 @@ pub struct OpenInfo {
     pub failed: bool,
     /// Opened with `DIRECT`.
     pub direct: bool,
+    /// The end of the bytes its successful writes have written in order from 0, and the first
+    /// write that was not at that end (its offset, and the end then): a file takes it, an
+    /// object's upload does not (V18; `FS_API_SWEEP.md` S-29).
+    pub written: i64,
+    pub unordered: Option<(i64, i64)>,
 }
 
 /// A loaded trace file.
@@ -310,7 +315,7 @@ impl TraceFile {
                         bail!("trace `{name}`: line {}: open id {fd} out of order (expected {})", no, opens.len());
                     }
                     let failed = matches!(ret, Ret::Err(_));
-                    opens.push(OpenInfo { path: path.clone(), uses: 0, closes: 0, failed, direct: flags.contains(&OpenFlag::DIRECT) });
+                    opens.push(OpenInfo { path: path.clone(), uses: 0, closes: 0, failed, direct: flags.contains(&OpenFlag::DIRECT), written: 0, unordered: None });
                     pos.push(0);
                     if !failed {
                         live += 1;
@@ -337,6 +342,13 @@ impl TraceFile {
                     }
                     let path = info.path.clone();
                     match op {
+                        LineOp::Write { offset, ret, .. } if ret.count() >= 0 && !matches!(ret, Ret::Err(_)) => {
+                            let off = offset.unwrap_or(pos[fd]);
+                            if off != info.written && info.unordered.is_none() {
+                                info.unordered = Some((off, info.written));
+                            }
+                            info.written = info.written.max(off.saturating_add(ret.count().max(0)));
+                        }
                         LineOp::Read { offset, ret, .. } => {
                             let off = offset.unwrap_or(pos[fd]);
                             let end = off.checked_add(ret.count().max(0)).ok_or_else(|| past("read's end"))?;
@@ -763,6 +775,14 @@ pub fn check_root(tf: &TraceFile, place: &(impl Place + ?Sized), creates: bool) 
             if is_file && (len as i64) < *need {
                 bail!("trace `{}`: {} is {} bytes, the trace reads to {need}", tf.name, p, len);
             }
+        }
+    }
+    // an object's upload is written in order from 0 (V18): a trace that writes one otherwise
+    // would fail at its first write out of order, after the gate
+    for o in &tf.opens {
+        if let (Some((off, end)), Some(_)) = (o.unordered, place.object(&o.path)) {
+            let (at, _) = found(place, &o.path);
+            bail!("trace `{}`: {} ({at}) is written out of order (a write at {off} after the end at {end}), and an object's upload is written in order from 0 (V18): a multipart upload's parts as they came wait on brief item 58", tf.name, o.path);
         }
     }
     for p in tf.header.creates.iter().filter(|_| creates) {

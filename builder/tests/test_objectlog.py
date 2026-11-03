@@ -142,12 +142,14 @@ def test_refusals_and_edge_cases():
         export_of([first, '{"api": {}}'], "b")
     with pytest.raises(BuildError, match="line 2: not an S3 server access log record"):
         export_of([S3.splitlines()[0], "nonsense"], "b")
-    # a request without a time is counted, an abort closes and unlinks, a HEAD outside the root is counted
+    # a request without a time is counted, an abort closes and removes nothing (S3 keeps the
+    # object; FS_API_SWEEP.md S-32), a HEAD outside the root is counted
     lines = [minio("NewMultipartUpload", "b", "k", t="soon"), "", minio("AbortMultipartUpload", "b", "k", t="2026-10-29T12:00:01Z"),
              minio("HeadObject", "c", "k"), minio("ListObjectsV2", "c", "", query={"prefix": "p"}), minio("GetObject", "b", "k", status=500),
              minio("CompleteMultipartUpload", "c", "z"), minio("PutObjectPart", "c", "z", rx=1)]
     header, events = export_of([line + "\n" for line in lines], "b")
-    assert [e["op"] for e in events] == ["open", "close", "unlink", "open"] and events[-1]["ret"] == "EIO"
+    assert [e["op"] for e in events] == ["open", "close", "open"] and events[-1]["ret"] == "EIO"
+    assert header["notes"]["multipart_aborted"] == 1
     assert header["notes"]["requests_without_time"] == 1 and header["notes"]["requests_outside_root"] == 4 and header["requests"] == 7
 
 

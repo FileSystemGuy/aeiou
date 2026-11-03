@@ -95,7 +95,7 @@
       "bytes_read": 0,
       "bytes_written": 0,
       "first": 150000095,
-      "last": 152000188,
+      "last": 152000189,
       "motif": "open close",
       "ops": 2,
       "repeats": {},
@@ -199,7 +199,6 @@
    "requests_not_exported:CopyObject": 1,
    "requests_not_exported:GetBucketLocation": 1,
    "requests_outside_root": 2,
-   "shared_positions_resolved": 2,
    "time_is_response_end": "a MinIO audit entry's time is taken as when the response completed; the request starts timeToResponse earlier"
   },
   "open": [

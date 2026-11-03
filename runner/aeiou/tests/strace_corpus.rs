@@ -17,7 +17,10 @@
 //! (`open_flags_dropped:O_NONBLOCK`, S-10; three cases, the note's name the only difference);
 //! and a `renameat2` with a flag noted by name and left out, not exported as a plain rename
 //! (`not_exported:renameat2:RENAME_NOREPLACE`, S-27; two cases, the one line and its note the
-//! only difference).
+//! only difference); and an object log's multipart upload written as the object it makes
+//! (S-29, S-31, S-32; three cases: a part's write positioned, so `shared_positions_resolved`
+//! goes; an upload never completed closed at the log's end, not at 0; an abort's `unlink`
+//! gone, noted `multipart_aborted`).
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths

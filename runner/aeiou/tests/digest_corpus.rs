@@ -12,7 +12,10 @@
 //!
 //! What the port adds is not in the goldens and is set aside before the comparison: the
 //! version (`aeiou_digest: 2`), the `metrics` section, each site's `facts`, and each template's
-//! `space` (2026-11-02). One thing the
+//! `space` (2026-11-02). One golden is regenerated for a decision since: `digest-6ec72e2c`, whose
+//! object log has an upload never completed, closed at the log's end and not at 0, and its parts
+//! positioned (`FS_API_SWEEP.md` S-32, S-29: a phase's `last` and the note
+//! `shared_positions_resolved` the only difference). One thing the
 //! port does differently: a template's ops with equal counts are listed by name in the report,
 //! where the Python listed them in the order they first appeared, which a JSON object read back
 //! does not keep; the comparison sorts both reports' op lists so.

@@ -253,6 +253,90 @@ fn an_object_request_s_answer_is_its_export_s() {
     assert_eq!(events[3]["path"], "a");
 }
 
+/// A multipart upload is exported as the object it makes (`FS_API_SWEEP.md` S-29, S-31, S-32):
+/// each part written at its time and at its place in the object, the sizes of the parts below
+/// it, whatever the order they came in; a failed part a failed write that moves nothing; two
+/// uploads to one key told apart by their upload ids; an abort closes the upload with a note
+/// and removes nothing (S3 keeps the object there); an upload never completed is closed at
+/// the log's end on its own lane.
+#[test]
+fn a_multipart_upload_is_exported_as_the_object_it_makes() {
+    let entry = |ms: u32, host: &str, api: &str, object: &str, code: u32, rx: u32, query: &str| {
+        format!(
+            r#"{{"version": "1", "time": "2026-10-29T12:00:00.{ms:03}000000Z", "trigger": "incoming", "api": {{"name": "{api}", "bucket": "b", "object": "{object}", "statusCode": {code}, "rx": {rx}, "tx": 0, "timeToResponseInNS": "1000000"}}, "requestQuery": {{{query}}}, "remotehost": "{host}:1"}}"#
+        )
+    };
+    let part = |id: &str, n: u32| format!(r#""uploadId": "{id}", "partNumber": "{n}""#);
+    let id = |id: &str| format!(r#""uploadId": "{id}""#);
+    let log = [
+        entry(10, "10.0.0.1", "NewMultipartUpload", "r/m", 200, 0, ""),
+        entry(20, "10.0.0.1", "PutObjectPart", "r/m", 200, 5, &part("u0", 2)),
+        entry(30, "10.0.0.1", "PutObjectPart", "r/m", 500, 10, &part("u0", 1)),
+        entry(40, "10.0.0.1", "PutObjectPart", "r/m", 200, 10, &part("u0", 1)),
+        entry(50, "10.0.0.1", "CompleteMultipartUpload", "r/m", 200, 0, &id("u0")),
+        entry(60, "10.0.0.1", "NewMultipartUpload", "r/k", 200, 0, ""),
+        entry(70, "10.0.0.1", "NewMultipartUpload", "r/k", 200, 0, ""),
+        entry(80, "10.0.0.1", "PutObjectPart", "r/k", 200, 3, &part("u1", 1)),
+        entry(90, "10.0.0.1", "PutObjectPart", "r/k", 200, 4, &part("u2", 1)),
+        entry(100, "10.0.0.1", "CompleteMultipartUpload", "r/k", 200, 0, &id("u2")),
+        entry(110, "10.0.0.1", "CompleteMultipartUpload", "r/k", 200, 0, &id("u1")),
+        entry(120, "10.0.0.1", "NewMultipartUpload", "r/n", 200, 0, ""),
+        entry(130, "10.0.0.1", "AbortMultipartUpload", "r/n", 204, 0, &id("u3")),
+        entry(140, "10.0.0.2", "NewMultipartUpload", "r/z", 200, 0, ""),
+        entry(150, "10.0.0.1", "PutObject", "r/last", 200, 1, ""),
+    ]
+    .join("\n");
+    let d = tmp("multipart");
+    let (input, out) = (d.join("audit.log"), d.join("t.jsonl"));
+    std::fs::write(&input, log + "\n").unwrap();
+    let o = tool(&["export", s(&input), "--root", "b/r", "-o", s(&out)]);
+    assert!(o.status.success(), "{:?}", text(&o));
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let brief: Vec<String> = lines[1..]
+        .iter()
+        .map(|e| {
+            let mut s = format!("{} {}", e["lane"], e["op"].as_str().unwrap());
+            for k in ["fd", "path", "offset", "len", "ret"] {
+                if !e[k].is_null() {
+                    s += &format!(" {k}={}", e[k]);
+                }
+            }
+            s
+        })
+        .collect();
+    assert_eq!(
+        brief,
+        [
+            r#"0 open fd=0 path="m""#,
+            "0 write fd=0 offset=10 len=5 ret=5",
+            r#"0 write fd=0 offset=0 len=10 ret="EIO""#,
+            "0 write fd=0 offset=0 len=10 ret=10",
+            "0 close fd=0",
+            r#"0 open fd=1 path="k""#,
+            r#"0 open fd=2 path="k""#,
+            "0 write fd=1 offset=0 len=3 ret=3",
+            "0 write fd=2 offset=0 len=4 ret=4",
+            "0 close fd=2",
+            "0 close fd=1",
+            r#"0 open fd=3 path="n""#,
+            "0 close fd=3",
+            r#"1 open fd=4 path="z""#,
+            r#"0 open fd=5 path="last""#,
+            "0 write fd=5 len=1 ret=1",
+            "0 close fd=5",
+            "1 close fd=4",
+        ],
+        "{lines:#?}"
+    );
+    // the close of the upload never completed is at the log's end: the last response's
+    assert!(lines.last().unwrap()["t"].as_i64() > lines[lines.len() - 2]["t"].as_i64(), "{lines:#?}");
+    let notes = &lines[0]["notes"];
+    for (k, n) in [("multipart_aborted", 1), ("multipart_not_completed", 1), ("multipart_parts_out_of_order", 1)] {
+        assert_eq!(notes[k], n, "{k}: {notes}");
+    }
+    assert!(notes.get("multipart_without_start").is_none(), "{notes}");
+}
+
 #[test]
 fn compare_needs_no_python_and_lists_what_it_lacks() {
     // ported (DESIGN_REVIEW.md §3.89, stage 4): no interpreter is asked for

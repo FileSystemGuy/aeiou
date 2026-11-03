@@ -1052,6 +1052,33 @@ fn a_traces_close_of_an_object_sends_it() {
     }
 }
 
+/// A trace whose writes to an object are not in order from 0 (a multipart upload's parts as
+/// they came, `FS_API_SWEEP.md` S-29) is refused before the gate: an upload is written in order
+/// (V18), so the run would fail at the first write out of order; nothing is sent.
+#[test]
+fn a_trace_writing_an_object_out_of_order_is_refused_before_the_gate() {
+    let m = minio("a_trace_writing_an_object_out_of_order_is_refused_before_the_gate");
+    let dir = tmpdir("trace-unordered");
+    let lines = [
+        r#"{"aeiou_trace":1,"lanes":1,"creates":["o/p"]}"#,
+        r#"{"lane":0,"op":"open","fd":0,"path":"o/p","flags":["WRONLY","CREAT","TRUNC"]}"#,
+        r#"{"lane":0,"op":"write","fd":0,"offset":10,"len":5,"ret":5}"#,
+        r#"{"lane":0,"op":"write","fd":0,"offset":0,"len":10,"ret":10}"#,
+        r#"{"lane":0,"op":"close","fd":0}"#,
+    ]
+    .join("\n");
+    let ast = trace_on_objects(&dir, &lines);
+    let (a, root) = (ast.to_str().unwrap(), dir.join("root"));
+    let r = root.to_str().unwrap();
+    ok(&aeiou(Some(&m), &["datagen", a, "--root", r, "--endpoint", "d=s3://bench/tu/d", "--endpoint", "o=s3://bench/tu/o"]));
+    let o = aeiou(Some(&m), &["run", a, "--gpus", "1", "--root", r, "--endpoint", "d=s3://bench/tu/d", "--endpoint", "o=s3://bench/tu/o", "--time-scale", "0"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    assert!(err.contains("trace `t.jsonl`: o/p (s3://bench/tu/o/p) is written out of order (a write at 10 after the end at 0)"), "{err}");
+    let listed = String::from_utf8_lossy(&curl(&m, "/bench?list-type=2&prefix=tu/o/", &[]).stdout).to_string();
+    assert!(!listed.contains("<Key>tu/o/p</Key>") && open_uploads(&m, "tu/o/p") == 0, "nothing was sent: {listed}");
+}
+
 /// A trace replays what the application called, whatever it was, so on a name placed in an
 /// object store it issues what an abstract may not (V18): each is answered the object way,
 /// with the errno its trace line expects. An upload is written in order from 0 (`ESPIPE`

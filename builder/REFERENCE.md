@@ -869,8 +869,17 @@ turns each request (`Request`, from `minio_request` or `s3_request`) into the ca
 object engine issues for it through the strace `Exporter`, so the header and events are the
 exported trace file's, with `source` the log's format: GET open/read/close with the Range's
 offset when the log has it, PUT open-create/write/close, HEAD stat, DELETE unlink, listing
-open-directory/readdir/close of the prefix, multipart open at the start, a write per part
-(their positions resolved across lanes by the exporter), close at completion, unlink on abort;
+open-directory/readdir/close of the prefix, multipart open at the start, a write per part at
+its time and its place in the object, the sizes of the parts numbered below it whatever order
+they came in (the sizes learned in the first pass; a failed part a failed write that moves
+nothing; a part out of order or retried noted `multipart_parts_out_of_order`), the upload
+named by its `uploadId` (an id not seen before the oldest upload of the key not yet named),
+close at completion; an abort a close noted `multipart_aborted` that removes nothing, S3
+keeping the object there, and an upload never completed closed at the log's end on its own
+lane, noted (2026-11-02, `FS_API_SWEEP.md` S-29, S-31, S-32: parts were written in log order,
+a second upload of a key replaced the first, an abort exported an `unlink`, an upload never
+completed was closed at the trace's start; a discard and part numbers for the object engine
+wait on brief item 58);
 a lane per client host; errors by status (404 `ENOENT`, 403 `EACCES`, else `EIO`) as the
 open's or the stat's `ret`, and a failed completion or abort's as the close's, a failed abort
 removing nothing; a GET or HEAD answered 304 Not Modified a stat that succeeded, counted under

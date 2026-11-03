@@ -274,14 +274,30 @@ work item of its own.
 ### The object-log reader
 
 - **S-29** (A) Multipart parts written in log (completion) order, `partNumber` ignored, a failed
-  or retried part advancing the offset (`objectlog.rs:390-397`). *Status: open.*
+  or retried part advancing the offset (`objectlog.rs:390-397`). *Status: fixed 2026-11-02 (the
+  user chose (a)): each part is written at its time and at its place in the object, the sizes
+  of the parts numbered below it (learned in the first pass, `objectlog::Parts`), a failed part
+  a failed write that moves nothing, a part out of order or retried noted
+  `multipart_parts_out_of_order`; a trace that writes an object out of order is refused before
+  the gate (`trace::check_root`, `OpenInfo::unordered`), the object engine writing an upload
+  in order (V18) until brief item 58 gives a write its part number; tests
+  `a_multipart_upload_is_exported_as_the_object_it_makes`,
+  `a_trace_writing_an_object_out_of_order_is_refused_before_the_gate`.*
 - **S-30** (A) A suffix range `bytes=-N` (Parquet footers) and a `partNumber` GET exported as
   reads at 0 with no note (`objectlog.rs:192-204`). *Status: open.*
 - **S-31** (A) Two multipart uploads to one key: the second's start overwrites the first's
-  (`objectlog.rs:434`), whose open is never closed. *Status: open.*
+  (`objectlog.rs:434`), whose open is never closed. *Status: fixed 2026-11-02: an upload is
+  named by the `uploadId` its parts and completion carry, an id not seen before naming the
+  oldest upload of the key not yet named (the start's response, which holds the id, is in no
+  log); same test.*
 - **S-32** (A) An upload never completed is closed at t0 on lane 0, before its open
   (`objectlog.rs:441-447`); NewMultipartUpload is an `O_TRUNC` open at the start where S3 keeps
-  the old object until Complete; an Abort unlinks an object that existed. *Status: open.*
+  the old object until Complete; an Abort unlinks an object that existed. *Status: fixed
+  2026-11-02 (the user's choice of the recommendation): an upload never completed is closed at
+  the log's end on its own lane; an abort is a close noted `multipart_aborted` and no `unlink`;
+  both still replay as an upload sent at its close, an object S3 never made, until brief item
+  58 adds a discard. The start stays an `O_TRUNC` open: on the object engine it is S3's (the
+  object replaced at the close), on a file the truncate comes at the start; same test.*
 - **S-33** (A) Each ListObjects page is its own listing (continuation, `max-keys`, `delimiter`
   ignored; a non-directory prefix becomes a directory): replayed as about N² requests.
   *Status: open.*

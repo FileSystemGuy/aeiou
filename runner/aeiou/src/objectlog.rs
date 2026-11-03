@@ -6,8 +6,10 @@
 //! metrics, and the runner's `trace` node take it unchanged: a GET is an open, one read (at the
 //! Range's start when the log has it), and a close; a PUT an open that creates, one write, and
 //! a close; a HEAD a stat; a DELETE an unlink; a listing an open of the prefix, a readdir, and a
-//! close; a multipart upload an open at its start, a write per part, and a close at its
-//! completion (a failed completion or abort a failed close). A GET or HEAD answered 304 Not
+//! close; a multipart upload an open at its start, a write per part at its place in the object
+//! (after the parts numbered below it), and a close at its completion (a failed completion or
+//! abort a failed close; an abort or an upload never completed a close with a note, removing
+//! nothing). A GET or HEAD answered 304 Not
 //! Modified is a stat that succeeded: the client's copy was current and nothing was read. A lane is a client host, since the log knows no thread. The root is
 //! `BUCKET[/PREFIX]`; keys outside it are left out and counted.
 //!
@@ -18,7 +20,7 @@
 //! the object holds is read from 0 and counted under `ranges_unknown`). Ceph's RGW ops log and
 //! a lab proxy's log are not read yet (`PROJECT_BRIEF.md` item 49).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::Write;
 
 use anyhow::{anyhow, bail, Result};
@@ -169,6 +171,9 @@ struct Request {
     offset: Option<i64>,
     length: Option<i64>,
     prefix: Option<String>,
+    /// A multipart request's upload id and part number (the query's `uploadId`, `partNumber`).
+    upload: Option<String>,
+    part: Option<i64>,
 }
 
 /// Python's `int(v)` with a default: a number (truncated), a numeric string, a bool.
@@ -224,6 +229,8 @@ fn minio_request(doc: &Value, no: usize) -> Result<Request> {
         offset,
         length,
         prefix: q.and_then(|q| q.get("prefix")).and_then(Value::as_str).map(str::to_string),
+        upload: text(q.and_then(|q| q.get("uploadId"))),
+        part: q.and_then(|q| q.get("partNumber")).map(|v| int_of(Some(v), 0)).filter(|n| *n > 0),
     })
 }
 
@@ -316,6 +323,8 @@ fn s3_request(line: &str, no: usize) -> Result<Request> {
         offset: None,
         length: None,
         prefix: query_value(query, "prefix"),
+        upload: query_value(query, "uploadId"),
+        part: query_value(query, "partNumber").and_then(|v| v.parse().ok()).filter(|n: &i64| *n > 0),
     })
 }
 
@@ -323,15 +332,66 @@ fn under(path: &str, root: &str) -> bool {
     path == root || path.starts_with(&format!("{root}/"))
 }
 
+/// A multipart upload begun: its order among them, its open, its client's lane, and the
+/// numbers of the parts that succeeded, in the order they came.
+struct Upload {
+    seq: u64,
+    oid: usize,
+    tid: i64,
+    parts: Vec<i64>,
+}
+
+impl Upload {
+    /// Each part after the one numbered below it, none twice: what an upload written in order
+    /// from 0 can replay (V18 on an object store).
+    fn in_order(&self) -> bool {
+        self.parts.windows(2).all(|w| w[0] < w[1])
+    }
+}
+
+/// The key in `bound` of the upload a request names: its id, else the object's key; an id not
+/// seen before names the oldest upload of the key not yet named.
+fn bind(pending: &mut HashMap<String, VecDeque<Upload>>, bound: &mut HashMap<String, Upload>, upload: Option<&str>, full: &str) -> Option<String> {
+    let k = upload.map_or_else(|| format!("\0{full}"), str::to_string);
+    if !bound.contains_key(&k) {
+        let up = pending.get_mut(full).and_then(VecDeque::pop_front)?;
+        bound.insert(k.clone(), up);
+    }
+    Some(k)
+}
+
+/// The size of each part of each upload, by its number, the last that succeeded: learned in
+/// the first pass and fixed for the second, which writes each part at the sum of the sizes
+/// below it (S-29).
+#[derive(Default)]
+struct Parts {
+    sizes: HashMap<u64, BTreeMap<i64, i64>>,
+    fixed: bool,
+}
+
+impl Parts {
+    fn sized(&mut self, upload: u64, part: i64, size: i64) {
+        if !self.fixed {
+            self.sizes.entry(upload).or_default().insert(part, size);
+        }
+    }
+
+    fn offset(&self, upload: u64, part: i64) -> i64 {
+        self.sizes.get(&upload).map_or(0, |m| m.range(..part).map(|(_, s)| s).sum())
+    }
+}
+
 /// One pass over the log: every request through the exporter; the requests read and the
 /// log's own notes.
-fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, mut drain: impl FnMut(&mut Exporter) -> Result<()>) -> Result<(u64, BTreeMap<String, u64>)> {
+fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, parts: &mut Parts, mut drain: impl FnMut(&mut Exporter) -> Result<()>) -> Result<(u64, BTreeMap<String, u64>)> {
     let mut notes: BTreeMap<String, u64> = BTreeMap::new();
     let mut note = |k: &str| *notes.entry(k.to_string()).or_insert(0) += 1;
     let mut hosts: HashMap<String, i64> = HashMap::new();
-    // the object's full key -> (order, open id, bytes so far) of the upload in progress (the
-    // upload id is in the start's response, which no log has)
-    let mut uploads: HashMap<String, (u64, usize, i64)> = HashMap::new();
+    // uploads begun and not yet named by a request carrying their id, by the object's full key,
+    // oldest first (the id is in the start's response, which no log has), and those named
+    let mut pending: HashMap<String, VecDeque<Upload>> = HashMap::new();
+    let mut bound: HashMap<String, Upload> = HashMap::new();
+    let mut last: Option<f64> = None;
     let mut seq = 0u64;
     let mut n = 0u64;
     let mut no = 0usize;
@@ -357,6 +417,10 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, mut drain: i
         let k = hosts.len() as i64;
         let tid = *hosts.entry(r.host.clone()).or_insert(k);
         let when: When = (tid, r.start, r.end);
+        last = match (last, r.end.or(r.start)) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
         let full = if r.key.is_empty() { r.bucket.clone() } else { format!("{}/{}", r.bucket, r.key) };
         let err = if (200..300).contains(&r.status) { None } else { Some(errno(r.status)) };
         let op = r.op.as_str();
@@ -388,25 +452,34 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, mut drain: i
             return drain(ex);
         }
         if MP_DONE.contains(&op) || MP_ABORT.contains(&op) {
-            match uploads.remove(&full) {
+            match bind(&mut pending, &mut bound, r.upload.as_deref(), &full).and_then(|k| bound.remove(&k)) {
                 None => note(if under(&full, root) { "multipart_without_start" } else { "requests_outside_root" }),
-                Some((_, oid, _)) => {
-                    // a failed completion or abort is a failed close; a failed abort removed nothing
-                    ex.op(when, "close", oid, err, Value::Null, vec![]);
+                Some(up) => {
+                    if !up.in_order() {
+                        note("multipart_parts_out_of_order");
+                    }
+                    // a failed completion or abort is a failed close; an abort keeps the object
+                    // S3 holds there, so it removes nothing (a discard waits on brief item 58)
+                    ex.op(when, "close", up.oid, err, Value::Null, vec![]);
                     if err.is_none() && MP_ABORT.contains(&op) {
-                        ex.path_event(when, "unlink", &full, None)?;
+                        note("multipart_aborted");
                     }
                 }
             }
             return drain(ex);
         }
         if MP_PART.contains(&op) {
-            match uploads.get_mut(&full) {
+            match bind(&mut pending, &mut bound, r.upload.as_deref(), &full).and_then(|k| bound.get_mut(&k)) {
                 None => note(if under(&full, root) { "multipart_without_start" } else { "requests_outside_root" }),
                 Some(up) => {
-                    // parts in the order logged, each after the last
-                    ex.data(when, "write", up.1, up.2, r.rx, false, r.rx, err);
-                    up.2 += r.rx;
+                    // each part at its place in the object, after the parts numbered below it,
+                    // whatever order they came in (S-29); a part with no number after the last
+                    let n = r.part.unwrap_or_else(|| up.parts.iter().max().map_or(1, |m| m + 1));
+                    ex.data(when, "write", up.oid, parts.offset(up.seq, n), r.rx, true, r.rx, err);
+                    if err.is_none() {
+                        up.parts.push(n);
+                        parts.sized(up.seq, n, r.rx);
+                    }
                 }
             }
             return drain(ex);
@@ -444,19 +517,23 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, mut drain: i
             let oid = ex.open(when, &full, "O_WRONLY|O_CREAT|O_TRUNC", Some("644"), err)?;
             if let (None, Some(oid)) = (err, oid) {
                 seq += 1;
-                uploads.insert(full, (seq, oid, 0));
+                pending.entry(full).or_default().push_back(Upload { seq, oid, tid, parts: vec![] });
             }
         } else {
             note(&format!("requests_not_exported:{op}"));
         }
         drain(ex)
     })?;
-    let mut left: Vec<(u64, usize)> = uploads.values().map(|(s, oid, _)| (*s, *oid)).collect();
-    left.sort_unstable();
-    for (_, oid) in left {
+    // an upload never completed: closed at the log's end on its own lane, with a note (S3 made
+    // no object of it; a discard waits on brief item 58)
+    let mut left: Vec<Upload> = pending.into_values().flatten().chain(bound.into_values()).collect();
+    left.sort_unstable_by_key(|u| u.seq);
+    for up in left {
         note("multipart_not_completed");
-        let t0 = ex.t0();
-        ex.op((0, t0, t0), "close", oid, None, Value::Null, vec![]);
+        if !up.in_order() {
+            note("multipart_parts_out_of_order");
+        }
+        ex.op((up.tid, last, last), "close", up.oid, None, Value::Null, vec![]);
     }
     drain(ex)?;
     Ok((n, notes))
@@ -474,9 +551,11 @@ fn check(root: &str, format: &str) -> Result<String> {
 }
 
 /// The first pass: the plan of the second and the header.
-fn plan(open: &Opener, root: &str, format: &str) -> Result<(export::Plan, Value)> {
+fn plan(open: &Opener, root: &str, format: &str) -> Result<(export::Plan, Value, Parts)> {
     let mut ex = Exporter::new(root);
-    let (n, notes) = pass(open, root, format, &mut ex, |_| Ok(()))?;
+    let mut parts = Parts::default();
+    let (n, notes) = pass(open, root, format, &mut ex, &mut parts, |_| Ok(()))?;
+    parts.fixed = true;
     let (plan, mut header) = ex.finish(root, format, &BTreeMap::new());
     header["requests"] = json!(n);
     let h = header["notes"].as_object_mut().unwrap();
@@ -487,13 +566,13 @@ fn plan(open: &Opener, root: &str, format: &str) -> Result<(export::Plan, Value)
         h.entry("time_is_response_end").or_insert(json!("a MinIO audit entry's time is taken as when the response completed; the request starts timeToResponse earlier"));
     }
     h.entry("lanes").or_insert(json!("one per client host; the log knows no thread"));
-    Ok((plan, header))
+    Ok((plan, header, parts))
 }
 
 /// Export an object log under `root` = `BUCKET[/PREFIX]`.
 pub fn export(open: &Opener, root: &str, format: &str, out: &mut dyn Write) -> Result<Summary> {
     let root = check(root, format)?;
-    let (plan, header) = plan(open, &root, format)?;
+    let (plan, header, mut parts) = plan(open, &root, format)?;
     let lines = header["lines"].as_u64().unwrap_or(0) as usize;
     let seen = Seen { lines: header["requests"].as_u64().unwrap_or(0), calls: header["requests"].as_u64().unwrap_or(0) };
     if lines == 0 {
@@ -501,7 +580,7 @@ pub fn export(open: &Opener, root: &str, format: &str, out: &mut dyn Write) -> R
     }
     let sha256 = export::write_file(out, &header, |write| {
         let mut ex = Exporter::emitting(&root, plan);
-        pass(open, &root, format, &mut ex, |ex| {
+        pass(open, &root, format, &mut ex, &mut parts, |ex| {
             let q = std::mem::take(&mut ex.queue);
             if q.is_empty() { Ok(()) } else { write(q) }
         })
@@ -513,11 +592,11 @@ pub fn export(open: &Opener, root: &str, format: &str, out: &mut dyn Write) -> R
 /// The `aeiou_metrics: 2` document of an object log, and the requests it read.
 pub fn metrics(open: &Opener, root: &str, format: &str, block: Option<u64>) -> Result<(Value, u64)> {
     let root = check(root, format)?;
-    let (plan, header) = plan(open, &root, format)?;
+    let (plan, header, mut parts) = plan(open, &root, format)?;
     let mut fm = export::FileMetrics::new(block);
     let mut ex = Exporter::emitting(&root, plan);
     let mut buf = Vec::new();
-    pass(open, &root, format, &mut ex, |ex| {
+    pass(open, &root, format, &mut ex, &mut parts, |ex| {
         let q: Vec<Event> = std::mem::take(&mut ex.queue);
         for e in q {
             buf.clear();
