@@ -959,7 +959,7 @@ building it is `DESIGN_REVIEW.md` §3.25.
 - **Reduction.** Each host sends its report (stats, histograms, per-take records, created
   and removed objects, its rank record) and prints its own; the server merges them
   (`Report::merge_all`: fingerprint modulo 2^64, histograms bucket-wise, created objects net
-  of every host's removals, elapsed the longest host's). Rank 0 prints the merged report,
+  of every host's removals in the order they happened, elapsed the longest host's). Rank 0 prints the merged report,
   writes the namespace manifests with every rank's host and GPU range, applies
   `--expect-fingerprint` to the merged fingerprint, and sends the verdict (`Result`) to every
   host, which exits with it. A host's own fingerprint line is its partial sum; the "all
@@ -1791,7 +1791,13 @@ instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_recor
   `run.rs`). The quantiles are bucket lower bounds, as in the text report, so a tool that wants
   other quantiles or merges runs uses the buckets.
 - **Nothing per file.** Created objects are a count; the namespace manifest has the list
-  when the namespace records one. `instances` has one entry per actor instance (the
+  when the namespace records one. Each create (an `O_CREAT` open, a `mkdir`, a rename's
+  target) and each removal (an `unlink`, an `rmdir`, a rename's source) carries when it
+  returned, wall-clock nanoseconds made strictly increasing on each host (`run::stamp`), and a
+  path is listed when its latest create is later than its latest removal on any host
+  (`run::net`), so a path removed and made again is there and one made and removed is not
+  (2026-11-02, `FS_API_SWEEP.md` S-20; removals were subtracted whatever their order, and an
+  `rmdir` was never recorded). Across hosts the clocks are compared as they are. `instances` has one entry per actor instance (the
   per-instance elapsed time and take sums); `--report-takes` adds every take as
   `[stall_ns, compute_ns]`, which is steps × instances pairs and is off by default.
 - **Outside the run.** The document is built and written after the verdict, so it costs

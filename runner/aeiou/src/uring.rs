@@ -772,16 +772,20 @@ impl Engine for LoopIo {
             OpKind::Write => Ok(res as i64),
             OpKind::Fstat | OpKind::Stat => Ok(t.statx.stx_size as i64),
             OpKind::Unlink => {
-                t.a.removed.push(op.path.to_string());
+                t.a.remove(op.path);
                 Ok(0)
             }
             OpKind::Mkdir => {
-                t.a.created.push((op.path.to_string(), t.a.actor));
+                t.a.create(op.path);
                 Ok(0)
             }
             OpKind::Rename => {
-                t.a.removed.push(op.path.to_string());
-                t.a.created.push((op.path2.unwrap_or("").to_string(), t.a.actor));
+                t.a.remove(op.path);
+                t.a.create(op.path2.unwrap_or(""));
+                Ok(0)
+            }
+            OpKind::Rmdir => {
+                t.a.remove(op.path);
                 Ok(0)
             }
             _ => Ok(0),

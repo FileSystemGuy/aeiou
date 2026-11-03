@@ -421,6 +421,45 @@ pub fn unix_now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
+/// When a create or a removal happened (`FS_API_SWEEP.md` S-20): wall-clock nanoseconds, made
+/// strictly increasing on this host, so two of one host are never equal and a host's order is
+/// the order its calls returned; across hosts the clocks are compared as they are.
+pub(crate) fn stamp() -> u64 {
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+    let mut last = LAST.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(last + 1);
+        match LAST.compare_exchange_weak(last, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(seen) => last = seen,
+        }
+    }
+}
+
+/// What a run leaves existing, in the order it happened: a path is there when its latest create
+/// is later than its latest removal; each (path, GPU id) that made it once more is kept with its
+/// latest stamp, and each removal with its path's latest, so a merge can net them again.
+fn net(created: Vec<(String, i64, u64)>, removed: Vec<(String, u64)>) -> (Vec<(String, i64, u64)>, Vec<(String, u64)>) {
+    let mut gone: HashMap<String, u64> = HashMap::new();
+    for (p, t) in removed {
+        let e = gone.entry(p).or_insert(t);
+        *e = (*e).max(t);
+    }
+    let mut made: HashMap<(String, i64), u64> = HashMap::new();
+    for (p, g, t) in created {
+        if gone.get(&p).is_none_or(|&r| t > r) {
+            let e = made.entry((p, g)).or_insert(t);
+            *e = (*e).max(t);
+        }
+    }
+    let mut created: Vec<(String, i64, u64)> = made.into_iter().map(|((p, g), t)| (p, g, t)).collect();
+    created.sort();
+    let mut removed: Vec<(String, u64)> = gone.into_iter().collect();
+    removed.sort();
+    (created, removed)
+}
+
 // ---------------------------------------------------------------- statistics
 
 /// Log-linear latency histogram: four buckets per octave of nanoseconds.
@@ -1004,8 +1043,8 @@ pub(crate) struct Shared {
     pub(crate) input_objects: HashMap<String, Option<String>>,
     /// Objects this run created (path, creating GPU id), for the namespace manifests, and
     /// paths it removed (unlink, the source of a rename).
-    pub(crate) created: Mutex<Vec<(String, i64)>>,
-    pub(crate) removed: Mutex<Vec<String>>,
+    pub(crate) created: Mutex<Vec<(String, i64, u64)>>,
+    pub(crate) removed: Mutex<Vec<(String, u64)>>,
     /// What the `mmap` backends count (zero under the others).
     pub(crate) mmap_stats: Arc<MmapStats>,
 }
@@ -1264,8 +1303,8 @@ pub(crate) struct ActorState {
     pub(crate) filler: Filler,
     pub(crate) st: Stats,
     pub(crate) takes: Vec<TakeRec>,
-    pub(crate) created: Vec<(String, i64)>,
-    pub(crate) removed: Vec<String>,
+    pub(crate) created: Vec<(String, i64, u64)>,
+    pub(crate) removed: Vec<(String, u64)>,
     /// The actor instance's main line (not a sub-actor).
     pub(crate) main: bool,
     /// The forks from the main line to this sub-actor: per fork, its instance (`Instance::fork`
@@ -1337,6 +1376,16 @@ impl ActorState {
         Ok(())
     }
 
+    /// A path this actor made (an `O_CREAT` open, a `mkdir`, a rename's target), and when.
+    pub(crate) fn create(&mut self, path: &str) {
+        self.created.push((path.to_string(), self.actor, stamp()));
+    }
+
+    /// A path this actor removed (an `unlink`, an `rmdir`, a rename's source), and when.
+    pub(crate) fn remove(&mut self, path: &str) {
+        self.removed.push((path.to_string(), stamp()));
+    }
+
     pub(crate) fn fd(&self, path: &str) -> std::io::Result<Arc<OpenFile>> {
         self.fds.get(path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))
     }
@@ -1345,7 +1394,7 @@ impl ActorState {
     pub(crate) fn opened(&mut self, sh: &Shared, path: &str, aux: u64, file: OpenFile) {
         self.fds.own.insert(Arc::from(path), Arc::new(file));
         if aux & (1 << (crate::ast::OpenFlag::CREAT as u8)) != 0 {
-            self.created.push((path.to_string(), self.actor));
+            self.create(path);
         }
         if let Some(writer) = sh.input_objects.get(path) {
             self.st.input_opens += 1;
@@ -1633,7 +1682,7 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
         }
         OpKind::Unlink => {
             be.unlink(&full(op.path))?;
-            a.removed.push(op.path.to_string());
+            a.remove(op.path);
             Ok(0)
         }
         OpKind::Truncate => {
@@ -1650,14 +1699,18 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
         }
         OpKind::Mkdir => {
             be.mkdir(&full(op.path), op.aux as u32)?;
-            a.created.push((op.path.to_string(), a.actor));
+            a.create(op.path);
             Ok(0)
         }
-        OpKind::Rmdir => be.rmdir(&full(op.path)).map(|_| 0),
+        OpKind::Rmdir => {
+            be.rmdir(&full(op.path))?;
+            a.remove(op.path);
+            Ok(0)
+        }
         OpKind::Rename => {
             be.rename(&full(op.path), &full(op.path2.unwrap_or("")))?;
-            a.removed.push(op.path.to_string());
-            a.created.push((op.path2.unwrap_or("").to_string(), a.actor));
+            a.remove(op.path);
+            a.create(op.path2.unwrap_or(""));
             Ok(0)
         }
         OpKind::Readdir => {
@@ -2569,7 +2622,7 @@ pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &(i
         let prefix = if rel.is_empty() { String::new() } else { format!("{rel}/") };
         let mut seen = HashSet::new();
         let mut objects: Vec<(String, i64)> = Vec::new();
-        for (path, gpu) in &report.created {
+        for (path, gpu, _) in &report.created {
             if path.starts_with(&prefix) && seen.insert(path.clone()) {
                 objects.push((path.clone(), *gpu));
             }
@@ -2766,10 +2819,11 @@ pub struct Report {
     /// Filled by the caller that ran `cold::start` before the gate; empty otherwise.
     #[serde(default)]
     pub cold: Vec<crate::cold::ColdStart>,
-    /// Objects created (path, creating GPU id) net of this host's removals, and the paths
-    /// removed, so a merge can drop what another host created and this one removed.
-    pub created: Vec<(String, i64)>,
-    pub removed: Vec<String>,
+    /// Objects created (path, creating GPU id, when) net of this host's removals in the order
+    /// they happened, and the paths removed (path, when), so a merge can net what one host
+    /// created and another removed (`net`, `stamp`).
+    pub created: Vec<(String, i64, u64)>,
+    pub removed: Vec<(String, u64)>,
     /// The host, or the hosts joined with `,` once merged.
     pub host: String,
     /// `--time-scale` (the same on every host: it is in the coordinator's identity), which
@@ -2863,10 +2917,7 @@ impl Report {
             m.removed.extend(r.removed);
             hosts.push(r.host);
         }
-        let removed: HashSet<&String> = m.removed.iter().collect();
-        m.created.retain(|(p, _)| !removed.contains(p));
-        m.created.sort();
-        m.created.dedup();
+        (m.created, m.removed) = net(std::mem::take(&mut m.created), std::mem::take(&mut m.removed));
         m.ranks.sort_by_key(|r| r.rank);
         m.actors.sort_by(|a, b| a.template.cmp(&b.template).then(a.actor.cmp(&b.actor)));
         m.departure_releases = departures.into_iter().collect();
@@ -3014,12 +3065,7 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
     let stats = std::mem::take(&mut *sh.stats.lock().unwrap());
     let mut actors = std::mem::take(&mut *sh.actors.lock().unwrap());
     actors.sort_by(|a, b| a.template.cmp(&b.template).then(a.actor.cmp(&b.actor)));
-    let mut removed: Vec<String> = std::mem::take(&mut *sh.removed.lock().unwrap());
-    removed.sort();
-    removed.dedup();
-    let removed_set: HashSet<&String> = removed.iter().collect();
-    let mut created: Vec<(String, i64)> = std::mem::take(&mut *sh.created.lock().unwrap()).into_iter().filter(|(p, _)| !removed_set.contains(p)).collect();
-    created.sort();
+    let (created, removed) = net(std::mem::take(&mut *sh.created.lock().unwrap()), std::mem::take(&mut *sh.removed.lock().unwrap()));
     Ok(Report {
         elapsed,
         threads_peak: stats.threads,

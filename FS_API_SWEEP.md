@@ -193,7 +193,13 @@ work item of its own.
   whatever their offset (`vm.rs:1683, 1850-1871`). *Status: open.*
 - **S-20** (A) The namespace manifest never records an `rmdir` (`run.rs:1638`; `uring.rs:788`
   `_ => Ok(0)`), and subtracts removals without regard to order (`run.rs:2849, 3003`): a path
-  unlinked and created again is dropped from the manifest. *Status: open.*
+  unlinked and created again is dropped from the manifest. *Status: fixed 2026-11-02: each
+  create and removal carries a stamp, wall-clock nanoseconds strictly increasing per host
+  (`run::stamp`), and a path is left when its latest create is later than its latest removal,
+  within a host (`assemble`) and across hosts (`Report::merge_all`), both through `run::net`;
+  an `rmdir` is recorded under `sync` and `io_uring` (the object engine's records neither a
+  `mkdir` nor an `rmdir`, a prefix being no object); test
+  `what_a_run_leaves_is_netted_in_the_order_it_happened`.*
 - **S-21** (A) An open's explicit mode 0 becomes 0644 (`run.rs:1550`, `uring.rs:606`); absent and
   0 hash the same (`vm.rs:1711`). *Status: fixed 2026-11-02: an explicit 0 carries a mark of
   its own in the mode field (`vm::open_aux`, `open_mode`), so it creates mode 0 on every path

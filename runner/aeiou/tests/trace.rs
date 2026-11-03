@@ -183,7 +183,7 @@ fn runs_with_the_dry_runs_fingerprint_under_every_backend() {
         assert_eq!(rep.stats.bytes_written, 1000);
         assert_eq!(rep.stats.expected_errors, 1);
         assert_eq!(std::fs::metadata(root.join("out/final")).unwrap().len(), 1000);
-        assert!(rep.created.iter().any(|(p, _)| p == "out/final"), "{:?}", rep.created);
+        assert!(rep.created.iter().any(|(p, _, _)| p == "out/final"), "{:?}", rep.created);
         if be.event_loop() {
             // the lanes are tasks on the loop, not threads
             assert_eq!(rep.stats.threads, 1, "{}", be.describe());
@@ -676,6 +676,45 @@ fn an_explicit_mode_0_is_mode_0() {
         let _ = std::fs::remove_file(root.join("f"));
         run::run(model, opts(&root, be, false), Default::default()).unwrap();
         assert_eq!(std::fs::metadata(root.join("f")).unwrap().permissions().mode() & 0o7777, 0, "{}", be.describe());
+    }
+}
+
+/// What a run leaves existing is netted in order (`FS_API_SWEEP.md` S-20): a path removed and
+/// made again is there, one made and removed is not, a directory's `rmdir` removes it; within
+/// a host and across hosts' reports alike. The paths a namespace manifest lists come from this.
+#[test]
+fn what_a_run_leaves_is_netted_in_the_order_it_happened() {
+    let lines = r#"
+{"aeiou_trace":1,"lanes":1,"creates":["f","d","g"]}
+{"lane":0,"op":"open","fd":0,"path":"f","flags":["WRONLY","CREAT","EXCL"],"mode":420}
+{"lane":0,"op":"close","fd":0}
+{"lane":0,"op":"unlink","path":"f"}
+{"lane":0,"op":"open","fd":1,"path":"f","flags":["WRONLY","CREAT","EXCL"],"mode":420}
+{"lane":0,"op":"close","fd":1}
+{"lane":0,"op":"mkdir","path":"d","mode":493}
+{"lane":0,"op":"rmdir","path":"d"}
+{"lane":0,"op":"open","fd":2,"path":"g","flags":["WRONLY","CREAT","EXCL"],"mode":420}
+{"lane":0,"op":"close","fd":2}
+{"lane":0,"op":"unlink","path":"g"}
+"#;
+    let d = tmpdir("netted");
+    let p = abstract_with(&d, lines, Some(1));
+    let (_, model) = leaked(&p, 1);
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    for be in [BackendKind::Sync, BackendKind::Uring] {
+        let _ = std::fs::remove_file(root.join("f"));
+        let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap();
+        let left: Vec<&str> = rep.created.iter().map(|(p, _, _)| p.as_str()).collect();
+        assert_eq!(left, ["f"], "{}", be.describe());
+        // across hosts: a removal on one host after a create on another takes the path away,
+        // one before it does not
+        let t = rep.created[0].2;
+        let host = |created: Vec<(String, i64, u64)>, removed: Vec<(String, u64)>| run::Report { created, removed, ..rep.clone() };
+        let later = run::Report::merge_all(vec![host(vec![("x".into(), 0, t)], vec![]), host(vec![], vec![("x".into(), t + 1)])]);
+        assert!(later.created.is_empty(), "{:?}", later.created);
+        let earlier = run::Report::merge_all(vec![host(vec![("x".into(), 0, t)], vec![]), host(vec![], vec![("x".into(), t - 1)])]);
+        assert_eq!(earlier.created.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["x"]);
     }
 }
 

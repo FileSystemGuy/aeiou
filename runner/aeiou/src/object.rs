@@ -391,7 +391,7 @@ pub(crate) fn settle(a: &mut crate::run::ActorState, op: &crate::vm::Op, answer:
         Answer::Read(r, buf) => (r, buf),
         Answer::Removed(r) => {
             if r.is_ok() {
-                a.removed.push(op.path.to_string());
+                a.remove(op.path);
             }
             (r.map(|_| 0), None)
         }
@@ -403,8 +403,8 @@ pub(crate) fn settle(a: &mut crate::run::ActorState, op: &crate::vm::Op, answer:
                 if let Some(h) = a.fds.get(to).as_deref().and_then(|f| f.as_object()).filter(|h| h.upload.is_some()) {
                     h.unlinked.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
-                a.removed.push(op.path.to_string());
-                a.created.push((op.path2.unwrap_or("").to_string(), a.actor));
+                a.remove(op.path);
+                a.create(op.path2.unwrap_or(""));
             }
             (r.map(|_| 0), None)
         }
