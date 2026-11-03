@@ -217,7 +217,12 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   fingerprint are the same and the storage sees another workload, so the run prints `posix X
   cache Y  s3 Z is not the abstract's (…)` (naming only the protocols with names) and the
   report carries both (§12); `--cache direct` against the abstract's `per-open` is such a
-  difference. `--cache direct` under `mmap` is refused, and so is `mmap` for an abstract with
+  difference. Under `mmap` a `truncate` or `ftruncate` shortens the mapping of every open of
+  the path in the process, whichever actor, sub-actor, or trace lane holds it (`run::Mapped`,
+  weak references by path, swept when they double; `Backend::resized`; 2026-11-02,
+  `FS_API_SWEEP.md` S-42: another actor's mapping stayed at the old size and a read past the
+  new end was a SIGBUS); a host cannot know of a truncate on another, so a file truncated on
+  one host and read through a mapping on another can still fault. `--cache direct` under `mmap` is refused, and so is `mmap` for an abstract with
   an open whose own flags have `DIRECT`, or a trace with one, naming the first (2026-11-02,
   `FS_API_SWEEP.md` S-24: its reads were page faults through the page cache with nothing
   said); an abstract that declares `posix: mmap` with such an open is refused by the validator. An option for a protocol the
@@ -1883,7 +1888,7 @@ Lines: a header, then one op per line in the order the calls returned.
   reclaiming them, deferred, is a load of its own. The runner issues both as the trace made
   them under every API (`truncate` inline under `io_uring`, which has no opcode for a path;
   under `mmap` the mapping of every open of the path the trace holds, in any lane, stops at the
-  new size: `Backend::resized`, from the trace's open table, `OpenTable::opens_of`; until
+  new size: `Backend::resized` over the files open under `mmap`, `run::Mapped`; until
   2026-11-02 the lane's own files were looked up, which a lane has none of, and a read through
   a mapping made at the old size faulted, `FS_API_SWEEP.md` S-23). A descriptor used
   without the open that made it (held from before `strace` began) gets an open written at its

@@ -1175,6 +1175,51 @@ fn least_over(limit: std::time::Duration, mut measure: impl FnMut() -> std::time
     least
 }
 
+/// A `truncate` or `ftruncate` by one actor shortens every mapping of the path in the process,
+/// another actor's included (`FS_API_SWEEP.md` S-42): the reader's mapping, made at the old
+/// size before the writer cut the file, stops at the new end, where a read through it past
+/// that end was a SIGBUS that killed the runner. The object is declared 100 bytes, its size
+/// after the cut, so the reads' expected counts do not lean on the VM's sizes (S-19): the first
+/// read maps the 16 KiB written and reads 100 of it; the second asks for 16 KiB.
+#[test]
+fn a_truncate_shortens_another_actor_s_mapping() {
+    for cut in [r#"{"truncate": {"file": {"ref": "f"}, "len": 100}}"#, r#"{"ftruncate": {"file": {"ref": "f"}, "len": 100}}"#] {
+        let ast = format!(
+            r#"{{"ast": "0.14", "name": "cut", "params": {{}}, "datasets": {{}},
+            "namespaces": {{"o": {{"pattern": "o/{{k}}", "fields": {{"k": "int"}}, "size": 100, "seed": 1}}}},
+            "actors": {{
+              "w": {{"count": 1, "body": [
+                {{"let": {{"name": "f", "value": {{"object": {{"namespace": "o", "fields": {{"k": 0}}}}}}}}}},
+                {{"open": {{"file": {{"ref": "f"}}, "flags": ["RDWR", "CREAT", "TRUNC"]}}}},
+                {{"write": {{"file": {{"ref": "f"}}, "len": 16384, "offset": 0}}}},
+                {{"barrier": {{"scope": "global"}}}},
+                {{"barrier": {{"scope": "global"}}}},
+                {cut},
+                {{"barrier": {{"scope": "global"}}}},
+                {{"close": {{"file": {{"ref": "f"}}}}}}]}},
+              "r": {{"count": 1, "body": [
+                {{"let": {{"name": "f", "value": {{"object": {{"namespace": "o", "fields": {{"k": 0}}}}}}}}}},
+                {{"barrier": {{"scope": "global"}}}},
+                {{"open": {{"file": {{"ref": "f"}}, "flags": ["RDONLY"]}}}},
+                {{"read": {{"file": {{"ref": "f"}}, "len": 100, "offset": 0}}}},
+                {{"barrier": {{"scope": "global"}}}},
+                {{"barrier": {{"scope": "global"}}}},
+                {{"read": {{"file": {{"ref": "f"}}, "len": 16384, "offset": 0}}}},
+                {{"close": {{"file": {{"ref": "f"}}}}}}]}}}}}}"#
+        );
+        let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(&ast).unwrap()));
+        let cfg: &'static Config = Box::leak(Box::new(config(1, 0, &[])));
+        let p: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+        let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, p).unwrap()));
+        for be in [BackendKind::Mmap, BackendKind::Sync] {
+            let data = tmpdir("cut-mapped");
+            std::fs::create_dir_all(data.join("o")).unwrap();
+            let r = go(model, opts(&data, be));
+            assert_eq!(r.stats.bytes_read, 100 + 100, "{cut} {}", be.describe());
+        }
+    }
+}
+
 /// A thread's buffer ring is grown and faulted in before an op's clock starts: the first read
 /// larger than the ring is not charged its allocation and page faults (RC1 review: the first
 /// 32 MiB read of a `sync` run took 3.6 to 3.7× the mean of the others, about 1.2× with the

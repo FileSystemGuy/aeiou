@@ -218,7 +218,8 @@ work item of its own.
   (`run.rs:1622`, `a.fds` is empty in a lane; REFERENCE §13 says otherwise): SIGBUS risk.
   *Status: fixed 2026-11-02: after a `truncate` by path succeeds, every open of the path in the
   trace's open table, whichever lane holds it, is told its new size (`OpenTable::opens_of`, the
-  open ids by path made at the first truncate; `Backend::resized`, which only `mmap` keeps);
+  open ids by path made at the first truncate, replaced the same day by `run::Mapped` with
+  S-42; `Backend::resized`, which only `mmap` keeps);
   test `a_truncate_by_path_shortens_every_mapping_the_trace_holds`, a SIGBUS before. An
   abstract's `truncate` still reaches only the actor's own open of the path (another actor's
   mapping of it is the same risk, `findings.md` line 77, not in the register).*
@@ -236,7 +237,14 @@ work item of its own.
   the same path keeps a mapping at the old size, and a read through it past the new end is a
   SIGBUS that kills the runner. In the sweep's raw findings (`findings.md` line 77) and
   missed by this register; added 2026-11-02 at the user's request, found again while fixing
-  S-23, the same fault in the trace node. *Status: open.*
+  S-23, the same fault in the trace node. *Status: fixed 2026-11-02: every file opened under
+  `mmap` is listed by path in `run::Mapped` (weak references, so a closed file goes with its last
+  holder; the dead swept when the entries double, so it holds about twice the files open, never
+  one per file ever opened), and after a `truncate` or `ftruncate` succeeds every open of the
+  path, whichever actor, sub-actor, or trace lane holds it, gets its new size
+  (`Backend::resized`); this replaces S-23's lookup in the trace's open table; test
+  `a_truncate_shortens_another_actor_s_mapping`, a SIGBUS before. Not fixable in one process:
+  a truncate on another host, of a file on shared storage this host maps.*
 - **S-25** (A) A rename from outside the root into it is dropped with no note, and the name then
   counts as an input that must exist (`strace.rs:1630`). *Status: noted 2026-11-02
   (`not_exported:rename:source outside the root`, `calls_not_exported`; test

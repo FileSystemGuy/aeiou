@@ -1041,6 +1041,9 @@ pub(crate) struct Shared {
     pub(crate) host: String,
     /// Objects of input namespaces: path → the host that wrote it (when recorded).
     pub(crate) input_objects: HashMap<String, Option<String>>,
+    /// The files open under `mmap`, by path, so a `truncate` or `ftruncate` by any actor or
+    /// lane shortens every mapping of the path (`Mapped`; `None` under every other API).
+    pub(crate) mapped: Option<Mutex<Mapped>>,
     /// Objects this run created (path, creating GPU id), for the namespace manifests, and
     /// paths it removed (unlink, the source of a rename).
     pub(crate) created: Mutex<Vec<(String, i64, u64)>>,
@@ -1392,7 +1395,11 @@ impl ActorState {
 
     /// After a successful open: own the handle, note a creation, count an input open.
     pub(crate) fn opened(&mut self, sh: &Shared, path: &str, aux: u64, file: OpenFile) {
-        self.fds.own.insert(Arc::from(path), Arc::new(file));
+        let file = Arc::new(file);
+        if let Some(m) = &sh.mapped {
+            m.lock().unwrap_or_else(|e| e.into_inner()).add(path, &file);
+        }
+        self.fds.own.insert(Arc::from(path), file);
         if aux & (1 << (crate::ast::OpenFlag::CREAT as u8)) != 0 {
             self.create(path);
         }
@@ -1687,11 +1694,15 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
         }
         OpKind::Truncate => {
             let open = a.fds.get(op.path);
-            be.truncate(&full(op.path), op.len, open.as_deref()).map(|_| 0)
+            be.truncate(&full(op.path), op.len, open.as_deref())?;
+            resized(be, sh, op);
+            Ok(0)
         }
         OpKind::Ftruncate => {
             let fd = a.fd(op.path)?;
-            be.ftruncate(&fd, op.len).map(|_| 0)
+            be.ftruncate(&fd, op.len)?;
+            resized(be, sh, op);
+            Ok(0)
         }
         OpKind::Fallocate => {
             let fd = a.fd(op.path)?;
@@ -1747,6 +1758,46 @@ fn reserve(sh: &Shared, rbuf: &mut Ring, wbuf: &mut Ring, op: &Op) -> std::io::R
 }
 
 /// `issue_blocking` timed: its result and nanoseconds, the buffers sized before the clock.
+/// The files open under `mmap` (`Shared::mapped`), by path: each a weak reference, so a closed
+/// file is gone with its last holder; the dead are swept when the entries double, so the table
+/// holds at most about twice the files open (`FS_API_SWEEP.md` S-23, S-42).
+#[derive(Default)]
+pub(crate) struct Mapped {
+    by_path: HashMap<String, Vec<std::sync::Weak<OpenFile>>>,
+    entries: usize,
+    swept: usize,
+}
+
+impl Mapped {
+    fn add(&mut self, path: &str, file: &Arc<OpenFile>) {
+        self.by_path.entry(path.to_string()).or_default().push(Arc::downgrade(file));
+        self.entries += 1;
+        if self.entries > 2 * self.swept.max(1024) {
+            self.by_path.retain(|_, v| {
+                v.retain(|w| w.strong_count() > 0);
+                !v.is_empty()
+            });
+            self.entries = self.by_path.values().map(Vec::len).sum();
+            self.swept = self.entries;
+        }
+    }
+
+    fn live(&self, path: &str) -> Vec<Arc<OpenFile>> {
+        self.by_path.get(path).into_iter().flatten().filter_map(std::sync::Weak::upgrade).collect()
+    }
+}
+
+/// After a `truncate` or `ftruncate` of `op.path` succeeded: every open of the path, whichever
+/// actor, sub-actor, or trace lane holds it, learns its new size (a mapping's, under `mmap`).
+fn resized(be: &mut dyn Backend, sh: &Shared, op: &Op) {
+    if let Some(m) = &sh.mapped {
+        let live = m.lock().unwrap_or_else(|e| e.into_inner()).live(op.path);
+        for f in live {
+            be.resized(&f, op.len);
+        }
+    }
+}
+
 pub(crate) fn issue_timed(be: &mut dyn Backend, sh: &Shared, a: &mut ActorState, rbuf: &mut Ring, wbuf: &mut Ring, op: &Op) -> (std::io::Result<i64>, u64) {
     if let Err(e) = reserve(sh, rbuf, wbuf, op) {
         return (Err(e), 0);
@@ -2963,8 +3014,10 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
     let scopes = barrier_scopes(model.ast)?;
     let (glo, ghi) = gpu_range(model.cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
     let rank_record = RankRecord { rank: opts.rank, host: hostname(), gpus: [glo, ghi] };
+    let mapped = (opts.backend.api == crate::backend::Api::Mmap).then(|| Mutex::new(Mapped::default()));
     let sh = Arc::new(Shared {
         opts,
+        mapped,
         coord,
         aborted,
         stats: Mutex::new(Stats::default()),
@@ -3302,8 +3355,6 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
 pub(crate) struct OpenTable {
     slots: Mutex<Vec<Slot>>,
     cv: Condvar,
-    /// The open ids of each path, made at the first `truncate` by path (`opens_of`).
-    by_path: std::sync::OnceLock<HashMap<String, Vec<usize>>>,
 }
 
 struct Slot {
@@ -3317,21 +3368,7 @@ struct Slot {
 impl OpenTable {
     fn new(tf: &crate::trace::TraceFile) -> Self {
         let slots = tf.opens.iter().map(|o| Slot { fd: None, failed: false, uses_left: o.uses, closes_left: o.closes }).collect();
-        OpenTable { slots: Mutex::new(slots), cv: Condvar::new(), by_path: std::sync::OnceLock::new() }
-    }
-
-    /// The descriptors open now on `path`, whichever lane opened them (`FS_API_SWEEP.md` S-23:
-    /// a `truncate` by path changes the state each keeps, a mapping's size).
-    fn opens_of(&self, tf: &crate::trace::TraceFile, path: &str) -> Vec<Arc<OpenFile>> {
-        let by_path = self.by_path.get_or_init(|| {
-            let mut m: HashMap<String, Vec<usize>> = HashMap::new();
-            for (oid, o) in tf.opens.iter().enumerate() {
-                m.entry(o.path.clone()).or_default().push(oid);
-            }
-            m
-        });
-        let s = self.slots.lock().unwrap_or_else(|e| e.into_inner());
-        by_path.get(path).into_iter().flatten().filter_map(|&oid| s[oid].fd.clone()).collect()
+        OpenTable { slots: Mutex::new(slots), cv: Condvar::new() }
     }
 
     fn publish(&self, oid: usize, fd: Option<Arc<OpenFile>>) {
@@ -3470,13 +3507,12 @@ impl Runner {
         let key: Arc<str> = Arc::from(o.path);
         let table = &tables.opens;
         tables.before(tf, g, o.path, &self.sh.aborted)?;
-        let resize = if o.kind == OpKind::Truncate { table.opens_of(tf, o.path) } else { vec![] };
-        let r = self.trace_issue(o, b.oid, table, ctx, &key, &resize);
+        let r = self.trace_issue(o, b.oid, table, ctx, &key);
         tables.after(tf, g);
         r
     }
 
-    fn trace_issue(&mut self, o: &Op, oid: Option<usize>, table: &OpenTable, ctx: &OpCtx, key: &Arc<str>, resize: &[Arc<OpenFile>]) -> Result<()> {
+    fn trace_issue(&mut self, o: &Op, oid: Option<usize>, table: &OpenTable, ctx: &OpCtx, key: &Arc<str>) -> Result<()> {
         let b_oid = oid;
         match o.kind {
             OpKind::Open => {
@@ -3516,11 +3552,6 @@ impl Runner {
                 }
                 None => {
                     let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
-                    if r.is_ok() {
-                        for f in resize {
-                            self.be.resized(f, o.len);
-                        }
-                    }
                     self.a.settle_line(o, ctx, r, ns)
                 }
             },
