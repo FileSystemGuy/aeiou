@@ -32,7 +32,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
 
 **`ckpt_dir`**, a namespace: objects written by this workload, empty at the start. Named `ckpt/step_{step:06}` by `step`; an object's size is 0 bytes. Content seed `0x5eedda82`.
 
-**`ckpt`**, a namespace: objects written by this workload, empty at the start. Named `ckpt/step_{step:06}/__{rank}_0.distcp` by `step`, `rank`; an object's size is the sum of the writes that create it. Content seed `0x5eedda82`.
+**`ckpt`**, a namespace: objects written by this workload, empty at the start. Named `ckpt/step_{step:06}/__{rank}_0.distcp` by `step`, `rank`; an object's size is the size the writes that create it leave. Content seed `0x5eedda82`.
 
 **`ckpt_meta`**, a namespace: objects written by this workload, empty at the start. Named `ckpt/step_{step:06}/{name}` by `step`, `name`; an object's size is 2 MiB (`meta_bytes`). Content seed `0x5eedda82`.
 

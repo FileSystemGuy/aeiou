@@ -151,7 +151,7 @@ large corpus; under `aeiou run --subset` its reads are issued no further than it
 run's count.
 
 **Namespaces**: `{pattern, fields, size, seed, input, same_run, protocol, doc}`. `size` is an expression or
-`as_written`, the sum of the writes that created the object. `input` marks objects a previous
+`as_written`, the size the writes that created the object leave it (the end of the furthest). `input` marks objects a previous
 run wrote, read-only here; `same_run` marks a namespace read under names the writing run
 drew, so a run without the writer's seed, instance count, and common parameters is refused.
 

@@ -194,7 +194,12 @@ work item of its own.
   lost. *Status: open.* (Changes measured shapes: the catalog is re-measured.)
 - **S-19** (A) The VM's size of a file (`as_written`, `until_eof`, `lseek END`) ignores
   `truncate`, `ftruncate`, and an extending `fallocate`, and sums rewrites without `TRUNC`
-  whatever their offset (`vm.rs:1683, 1850-1871`). *Status: open.*
+  whatever their offset (`vm.rs:1683, 1850-1871`). *Status: fixed 2026-11-03 (the user's
+  choice): an as_written object's size is the one POSIX gives, the end of its furthest write
+  (`Vm::add_written`), set by `truncate` and `ftruncate`, extended by a `fallocate` without
+  `KEEP_SIZE`, shrunk and grown by `COLLAPSE_RANGE` and `INSERT_RANGE`
+  (`Vm::fallocate_written`); V4 and `runner/REFERENCE.md` §4 reworded, the golden fingerprints
+  unchanged (every committed writer appends in order); test `an_as_written_size_is_the_files_size`.*
 - **S-20** (A) The namespace manifest never records an `rmdir` (`run.rs:1638`; `uring.rs:788`
   `_ => Ok(0)`), and subtracts removals without regard to order (`run.rs:2849, 3003`): a path
   unlinked and created again is dropped from the manifest. *Status: fixed 2026-11-02: each

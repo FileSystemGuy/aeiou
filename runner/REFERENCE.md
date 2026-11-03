@@ -172,8 +172,9 @@ each is a recorded decision and the golden tests pin them.
   `write` without `offset` uses and advances it; `lseek` moves it. A read's expected count is
   `clamp(size − offset, 0, len)` when the size is known. `until_eof` issues reads of `len`
   until the known size is exhausted, then one more (returning 0). An `as_written` object's
-  size is the sum of the write lengths this actor issued to it through the same path at this
-  position (rule V4 guarantees a reader that uses `until_eof` on one is the writer).
+  size is the end of the furthest write this actor issued to it through the same path at this
+  position, as truncates and fallocates since change it (rule V4; the sum of the write lengths
+  until 2026-11-03, `FS_API_SWEEP.md` S-19) (rule V4 guarantees a reader that uses `until_eof` on one is the writer).
 - **A divisor named by a parameter** (contract 0.10, `DESIGN_REVIEW.md` §3.75). In `{id div
   files_per_directory:05}` the name is bound to the parameter's value when the model is built
   (`eval::bind_pattern`), so names, `dirs`, datagen's runs, and `--subset`'s rounding see the

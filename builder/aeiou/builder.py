@@ -404,7 +404,8 @@ class Workload:
                   input: bool = False, same_run: bool = False, protocol: str | None = None,
                   doc: str | None = None) -> Namespace:
         """Workload-created objects. `size` is an expression over the fields and params, or
-        "as_written" (the sum of the writes that create the object; schema/README.md V4).
+        "as_written" (the size the writes that create the object leave it, the end of the
+        furthest; schema/README.md V4).
         `input=True`: a previous run wrote the objects and this abstract only reads them; the
         runner requires that run's `.aeiou-namespace.json` (schema/README.md V14).
         `same_run=True` (with `input`): the names read are positional draws of the writing run,

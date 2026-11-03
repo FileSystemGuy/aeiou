@@ -289,7 +289,11 @@ checkers enforce.
   nested inside it. An `at` naming a binding its body defines more than once is refused:
   which of the two it reads is not defined.
 - **V4 Sizes are computed, never observed.** For a namespace with `size: as_written`, an
-  object's size is the sum of the write lengths in the sequence that created it. `until_eof`
+  object's size is ~~the sum of the write lengths in the sequence that created it~~ the size
+  POSIX gives the file the sequence that created it makes (revised 2026-11-03,
+  `FS_API_SWEEP.md` S-19): the end of its furthest write, set by a `truncate` or `ftruncate`,
+  extended by a `fallocate` without `KEEP_SIZE`, shrunk by a `COLLAPSE_RANGE` and grown by an
+  `INSERT_RANGE` of its length. `until_eof`
   on such an object is allowed only through the handle binding those writes used, which pins
   it to the creator's position. Elsewhere a reader states its length. `fstat` results are
   never consumed by the abstract.

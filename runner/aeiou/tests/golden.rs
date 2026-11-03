@@ -435,6 +435,51 @@ fn until_eof_and_positions() {
     assert!(ops.iter().all(|o| o.3 == "d/2"));
 }
 
+const AS_WRITTEN: &str = r#"{
+  "ast": "0.14", "name": "as_written_test",
+  "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": "as_written", "seed": 3}},
+  "actors": {"gpu": {"count": 1, "body": [
+    {"loop": {"index": "i", "to": 1, "body": [
+      {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"v": 1}}}}},
+      {"open": {"file": {"ref": "f"}, "flags": ["RDWR", "CREAT"]}},
+      {"write": {"file": {"ref": "f"}, "len": 100, "offset": 0}},
+      {"write": {"file": {"ref": "f"}, "len": 100, "offset": 0}},
+      {"lseek": {"file": {"ref": "f"}, "offset": 0, "whence": "END"}},
+      {"write": {"file": {"ref": "f"}, "len": 50, "offset": 1000}},
+      {"lseek": {"file": {"ref": "f"}, "offset": 0, "whence": "END"}},
+      {"ftruncate": {"file": {"ref": "f"}, "len": 500}},
+      {"lseek": {"file": {"ref": "f"}, "offset": 0, "whence": "END"}},
+      {"fallocate": {"file": {"ref": "f"}, "offset": 0, "len": 2000}},
+      {"lseek": {"file": {"ref": "f"}, "offset": 0, "whence": "END"}},
+      {"fallocate": {"file": {"ref": "f"}, "offset": 0, "len": 4000, "mode": ["KEEP_SIZE"]}},
+      {"fallocate": {"file": {"ref": "f"}, "offset": 0, "len": 3000, "mode": ["KEEP_SIZE", "PUNCH_HOLE"]}},
+      {"lseek": {"file": {"ref": "f"}, "offset": 0, "whence": "END"}},
+      {"fallocate": {"file": {"ref": "f"}, "offset": 0, "len": 100, "mode": ["COLLAPSE_RANGE"]}},
+      {"lseek": {"file": {"ref": "f"}, "offset": 0, "whence": "END"}},
+      {"fallocate": {"file": {"ref": "f"}, "offset": 0, "len": 300, "mode": ["INSERT_RANGE"]}},
+      {"lseek": {"file": {"ref": "f"}, "offset": 0, "whence": "END"}},
+      {"fallocate": {"file": {"ref": "f"}, "offset": 2000, "len": 100, "mode": ["ZERO_RANGE"]}},
+      {"lseek": {"file": {"ref": "f"}, "offset": 0, "whence": "END"}},
+      {"truncate": {"file": {"ref": "f"}, "len": 10}},
+      {"lseek": {"file": {"ref": "f"}, "offset": 0, "whence": "END"}},
+      {"read": {"file": {"ref": "f"}, "len": 8, "offset": 0, "repeat": "until_eof"}},
+      {"close": {"file": {"ref": "f"}}}
+    ]}}
+  ]}}
+}"#;
+
+/// An as_written object's size is the one POSIX gives (FS_API_SWEEP.md S-19): the end of its
+/// furthest write, set by a truncate, extended by a fallocate that does not keep the size,
+/// shrunk and grown by a collapsed and an inserted range; a rewrite adds nothing.
+#[test]
+fn an_as_written_size_is_the_files_size() {
+    let ops = collect(AS_WRITTEN, &config(1, 0, &[]), "gpu", 1);
+    let ends: Vec<i64> = ops.iter().filter(|o| o.2 == OpKind::Lseek).map(|o| o.6).collect();
+    assert_eq!(ends, vec![100, 1050, 500, 2000, 2000, 1900, 2200, 2200, 10]);
+    let reads: Vec<(i64, i64)> = ops.iter().filter(|o| o.2 == OpKind::Read).map(|o| (o.4, o.6)).collect();
+    assert_eq!(reads, vec![(0, 8), (8, 2), (10, 0)]);
+}
+
 fn rejects(text: &str, needle: &str) {
     match aeiou::load_str(text) {
         Ok(_) => panic!("accepted an abstract that should fail with `{needle}`"),

@@ -1674,7 +1674,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         let (seed, expect, positioned, as_written, capped) = (io.seed, io.expect, io.positioned, io.as_written, io.capped);
         if kind == OpKind::Write && as_written {
             let path = io.path.clone();
-            self.add_written(path, len)?;
+            self.add_written(path, off, len)?;
         }
         self.set_pending(Pending { kind, path: None, path2: None, offset: off, len, bytes, aux: 0, expect, positioned, seed, capped });
         Ok(Some(Next::Op))
@@ -1703,11 +1703,35 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     }
 
     /// Bytes written to an `as_written` object, its size; checked, never wrapped (RC1 review).
-    fn add_written(&mut self, path: Arc<str>, len: i64) -> ER<()> {
+    /// A write of `len` at `off`: the size is the end of the furthest write (a rewrite adds
+    /// nothing, a write past the end leaves a hole).
+    fn add_written(&mut self, path: Arc<str>, off: i64, len: i64) -> ER<()> {
+        let Some(end) = off.checked_add(len) else {
+            return other(format!("write: its end, {off} + {len} bytes, passes 2^63-1"));
+        };
         let n = self.written.entry(path).or_insert(0);
-        match n.checked_add(len) {
+        *n = (*n).max(end);
+        Ok(())
+    }
+
+    /// A `fallocate` of `[off, off + len)` with `mode` on an as_written object: a collapsed range
+    /// shrinks it by `len`, an inserted one grows it by `len`, any other mode without
+    /// `KEEP_SIZE` extends it to the range's end.
+    fn fallocate_written(&mut self, path: Arc<str>, off: i64, len: i64, mode: u64) -> ER<()> {
+        use crate::ast::FallocFlag as F;
+        let n = self.written.entry(path).or_insert(0);
+        let size = if mode & F::COLLAPSE_RANGE.bit() != 0 {
+            Some((*n - len).max(0))
+        } else if mode & F::INSERT_RANGE.bit() != 0 {
+            n.checked_add(len)
+        } else if mode & F::KEEP_SIZE.bit() == 0 {
+            off.checked_add(len).map(|e| (*n).max(e))
+        } else {
+            Some(*n)
+        };
+        match size {
             Some(v) => *n = v,
-            None => return other(format!("write: the size written, {n} + {len} bytes, passes 2^63-1")),
+            None => return other(format!("fallocate: the size, {n} and {off} + {len} bytes, passes 2^63-1")),
         }
         Ok(())
     }
@@ -1798,7 +1822,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 past_end(OpKind::Write, off, len)?;
                 if n == 1 {
                     if st.as_written {
-                        self.add_written(t.path.clone(), len)?;
+                        self.add_written(t.path.clone(), off, len)?;
                     }
                     if positioned.is_none() {
                         self.open.get_mut(&t.path).unwrap().pos = off + len;
@@ -1873,12 +1897,17 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             Node::Truncate { file, len, expect } => {
                 let t = self.target(file)?;
                 let len = self.expr(len)?.as_int()?;
+                if t.as_written && len >= 0 {
+                    self.written.insert(t.path.clone(), len);
+                }
                 self.emit(OpKind::Truncate, t, None, 0, len, 0, 0, expect, false)
             }
             Node::Ftruncate { file, len, expect } => {
                 let t = self.target(file)?;
                 let len = self.expr(len)?.as_int()?;
-                self.opened(&t.path, "ftruncate")?;
+                if self.opened(&t.path, "ftruncate")?.as_written && len >= 0 {
+                    self.written.insert(t.path.clone(), len);
+                }
                 self.emit(OpKind::Ftruncate, t, None, 0, len, 0, 0, expect, false)
             }
             Node::Fallocate { file, offset, len, mode, expect } => {
@@ -1888,9 +1917,12 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     None => 0,
                 };
                 let len = self.expr(len)?.as_int()?;
-                self.opened(&t.path, "fallocate")?;
+                let bits = crate::ast::FallocFlag::mode(mode);
+                if self.opened(&t.path, "fallocate")?.as_written && off >= 0 && len >= 0 {
+                    self.fallocate_written(t.path.clone(), off, len, bits)?;
+                }
                 // the mode's bits: 0, the only mode before contract 0.14, hashes as it did
-                self.emit(OpKind::Fallocate, t, None, off, len, 0, crate::ast::FallocFlag::mode(mode), expect, false)
+                self.emit(OpKind::Fallocate, t, None, off, len, 0, bits, expect, false)
             }
             Node::Mkdir { dir, mode, expect } => {
                 let t = self.target(dir)?;

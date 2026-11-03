@@ -591,7 +591,7 @@ class Describer:
                     else "read, written by an earlier run")
         else:
             role = "written by this workload, empty at the start"
-        sz = "the sum of the writes that create it" if n["size"] == "as_written" else self.value(n["size"], "bytes")
+        sz = "the size the writes that create it leave" if n["size"] == "as_written" else self.value(n["size"], "bytes")
         fields = ", ".join(f"`{f}`" for f in n["fields"])
         out = [f"**`{name}`**, a namespace{where}: objects {role}. Named `{n['pattern']}` by {fields}; an object's size is {sz}.",
                f"Content seed `{n['seed']:#x}`." + (f" {n['doc']}" if n.get("doc") else "")]

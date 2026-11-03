@@ -571,6 +571,11 @@ not obvious:
   so the VM keeps the sum of write lengths it issued per object path (reset by `TRUNC`,
   moved by `rename`, dropped by `unlink`) and resolves `until_eof` from it. Nothing is
   observed; a different actor or position cannot see the sum, which is what V4 requires.
+  *(Revised 2026-11-03, `FS_API_SWEEP.md` S-19, the user's choice: the sum counted a rewrite
+  twice and ignored a write past the end, `truncate`, `ftruncate`, and `fallocate`; the VM
+  keeps the size POSIX gives instead, the end of the furthest write, set by a truncate,
+  extended by a `fallocate` without `KEEP_SIZE`, shrunk and grown by a collapsed and an
+  inserted range. A writer appending in order has the same size either way.)*
 - **`zipf` without a table.** A rank comes from the inverse CDF of the continuous envelope
   of `r^-s` on `[1, N+1)`, O(1) per draw with no per-dataset array, and ranks map to ids
   through a permutation keyed by the *dataset* seed, so which ids are popular is a property

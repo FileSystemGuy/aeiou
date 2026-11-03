@@ -38,9 +38,9 @@ The API the traced application used: `posix` sync (none declared); a run under a
 
 **`base`**, a dataset (`array`, `indexed`): 1,000,000 samples (`n`), one file of 1,000,000 slots of 512 bytes (`dim × 4`) each; looked up by id, never consumed. Named `base/base.fbin`. Sample sizes: always 512 bytes. At these parameters `aeiou datagen` writes 1 file in 0 directories, 488.3 MiB in all (a mean file of 488.3 MiB). Dataset seed `0x5eedda7f`.
 
-**`tmp`**, a namespace: objects written by this workload, empty at the start. Named `diskann/tmp_subshard-{k}_{part}` by `k`, `part`; an object's size is the sum of the writes that create it. Content seed `0x5eedda83`.
+**`tmp`**, a namespace: objects written by this workload, empty at the start. Named `diskann/tmp_subshard-{k}_{part}` by `k`, `part`; an object's size is the size the writes that create it leave. Content seed `0x5eedda83`.
 
-**`out`**, a namespace: objects written by this workload, empty at the start. Named `diskann/{name}` by `name`; an object's size is the sum of the writes that create it. Content seed `0x5eedda83`.
+**`out`**, a namespace: objects written by this workload, empty at the start. Named `diskann/{name}` by `name`; an object's size is the size the writes that create it leave. Content seed `0x5eedda83`.
 
 ### The `gpu` actor (1 instances)
 
