@@ -391,6 +391,58 @@ fn a_get_s_bytes_are_where_the_answer_says() {
     assert!(notes.get("ranges_unknown").is_none(), "{notes}");
 }
 
+/// What a MinIO audit entry says of its request is read as it means it (`FS_API_SWEEP.md` S-35):
+/// an aws-chunked body's object bytes are its `X-Amz-Decoded-Content-Length`, not `rx`, which
+/// counts the chunks' framing; a duration only in `timeToResponse` (a Go duration) is read
+/// from it, and one in neither field is noted; a request a replication target took from its
+/// source, or one MinIO made itself, is exported and noted; and entries whose times go back
+/// are counted, with the largest step back.
+#[test]
+fn a_minio_entry_is_read_as_it_means() {
+    let entry = |ms: u32, api: &str, object: &str, rx: u32, timing: &str, query: &str, headers: &str, trigger: &str| {
+        format!(
+            r#"{{"version": "1", "time": "2026-10-29T12:00:00.{ms:03}000000Z", "trigger": "{trigger}", "api": {{"name": "{api}", "bucket": "b", "object": "{object}", "statusCode": 200, "rx": {rx}, "tx": 0{timing}}}, "requestQuery": {{{query}}}, "requestHeader": {{{headers}}}, "remotehost": "10.0.0.5:1"}}"#
+        )
+    };
+    let ns = r#", "timeToResponseInNS": "1000000""#;
+    let chunked = r#""Content-Encoding": "aws-chunked", "X-Amz-Decoded-Content-Length": "100000""#;
+    let log = [
+        entry(10, "PutObject", "r/a", 100053, ns, "", chunked, "incoming"),
+        entry(20, "NewMultipartUpload", "r/m", 0, ns, "", "", "incoming"),
+        entry(30, "PutObjectPart", "r/m", 70, ns, r#""uploadId": "u", "partNumber": "1""#, r#""X-Amz-Decoded-Content-Length": "50""#, "incoming"),
+        entry(40, "CompleteMultipartUpload", "r/m", 0, ns, r#""uploadId": "u""#, "", "incoming"),
+        entry(50, "HeadObject", "r/a", 0, r#", "timeToResponse": "1.5ms""#, "", "", "incoming"),
+        entry(60, "HeadObject", "r/a", 0, "", "", "", "incoming"),
+        entry(70, "PutObject", "r/c", 9, ns, "", r#""X-Minio-Source-Replication-Request": "true""#, "incoming"),
+        entry(80, "DeleteObject", "r/c", 0, ns, "", "", "internal-scanner"),
+        entry(55, "HeadObject", "r/a", 0, ns, "", "", "incoming"),
+        entry(90, "HeadObject", "r/a", 0, ns, "", "", ""),
+    ]
+    .join("\n");
+    let d = tmp("minio-entries");
+    let (input, out) = (d.join("audit.log"), d.join("t.jsonl"));
+    std::fs::write(&input, log + "\n").unwrap();
+    let o = tool(&["export", s(&input), "--root", "b/r", "-o", s(&out)]);
+    assert!(o.status.success(), "{:?}", text(&o));
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let writes: Vec<i64> = lines[1..].iter().filter(|e| e["op"] == "write").map(|e| e["len"].as_i64().unwrap()).collect();
+    assert_eq!(writes, [100000, 50, 9], "{lines:#?}");
+    let stats: Vec<&Value> = lines[1..].iter().filter(|e| e["op"] == "stat").collect();
+    assert_eq!(stats.len(), 4, "{lines:#?}");
+    assert!((stats[0]["dur"].as_i64().unwrap() - 1_500_000).abs() < 1000, "{:?}", stats[0]);
+    assert!(lines[1..].iter().any(|e| e["op"] == "unlink" && e["path"] == "c"), "{lines:#?}");
+    let notes = &lines[0]["notes"];
+    for (k, n) in [
+        ("durations_unknown", 1),
+        ("requests_replicated", 1),
+        ("requests_internal:internal-scanner", 1),
+        ("records_out_of_order", 1),
+        ("records_out_of_order_max_back_us", 25000),
+    ] {
+        assert_eq!(notes[k], n, "{k}: {notes}");
+    }
+}
+
 /// A listing is one readdir however many pages it took (`FS_API_SWEEP.md` S-33): the object
 /// engine's readdir lists every page, so a page that continues one (a continuation token, a
 /// marker) is counted and exports nothing; a listing without a delimiter, which S3 answers with

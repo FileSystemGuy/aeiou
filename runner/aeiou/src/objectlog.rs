@@ -19,10 +19,13 @@
 //! object; `time` taken as when the response completed, so the request starts
 //! `timeToResponse` earlier; the response's `Content-Range` gives a GET's offset, a suffix
 //! range's and a part GET's included, else the request's `Range` from a start, a suffix range,
-//! a part GET, or several ranges without it read from 0 with a note) and Amazon S3's server
+//! a part GET, or several ranges without it read from 0 with a note; a PUT's bytes its
+//! `X-Amz-Decoded-Content-Length`, an aws-chunked `rx` counting the framing; a replicated or
+//! internal request exported and noted) and Amazon S3's server
 //! access log (space-delimited, to the second, no Range, so a GET that sent fewer bytes than
 //! the object holds is read from 0 and counted under `ranges_unknown`). Ceph's RGW ops log and
-//! a lab proxy's log are not read yet (`PROJECT_BRIEF.md` item 49).
+//! a lab proxy's log are not read yet (`PROJECT_BRIEF.md` item 49). A log is read in the order
+//! of its lines; records whose own times go back are counted, with the largest step back.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::Write;
@@ -183,6 +186,38 @@ struct Request {
     /// A listing's later page (a continuation token or a marker) and its delimiter (S-33).
     continued: bool,
     delimiter: Option<String>,
+    /// The record's own time (MinIO's the response's end, S3's the request's arrival), to tell
+    /// a log whose times go back; whether the log gave a duration; and the note of a request
+    /// not the application's (S-35).
+    logged: Option<f64>,
+    timed: bool,
+    foreign: Option<String>,
+}
+
+/// A Go duration (`1.5ms`, `80939ns`, `1m2.5s`) in seconds.
+fn go_duration(s: &str) -> Option<f64> {
+    let mut rest = s.trim();
+    let mut total = 0.0;
+    if rest.is_empty() {
+        return None;
+    }
+    while !rest.is_empty() {
+        let n = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).filter(|n| *n > 0)?;
+        let v: f64 = rest[..n].parse().ok()?;
+        rest = &rest[n..];
+        let u = rest.find(|c: char| c.is_ascii_digit() || c == '.').unwrap_or(rest.len());
+        total += v * match &rest[..u] {
+            "ns" => 1e-9,
+            "us" | "\u{b5}s" | "\u{3bc}s" => 1e-6,
+            "ms" => 1e-3,
+            "s" => 1.0,
+            "m" => 60.0,
+            "h" => 3600.0,
+            _ => return None,
+        };
+        rest = &rest[u..];
+    }
+    Some(total)
 }
 
 /// Python's `int(v)` with a default: a number (truncated), a numeric string, a bool.
@@ -203,8 +238,18 @@ fn minio_request(doc: &Value, no: usize) -> Result<Request> {
     let api = doc.get("api").filter(|a| a.is_object()).ok_or_else(|| anyhow!("line {no}: no api.name"))?;
     let name = api.get("name").and_then(Value::as_str).ok_or_else(|| anyhow!("line {no}: no api.name"))?;
     let end = doc.get("time").and_then(Value::as_str).and_then(iso_seconds);
-    let ns = int_of(api.get("timeToResponseInNS"), 0);
-    let start = end.map(|e| e - ns as f64 / 1e9);
+    // an older MinIO gives the duration only as a Go duration (S-35)
+    let took = match api.get("timeToResponseInNS") {
+        Some(v) => Some(int_of(Some(v), 0) as f64 / 1e9),
+        None => api.get("timeToResponse").and_then(Value::as_str).and_then(go_duration),
+    };
+    let start = end.map(|e| e - took.unwrap_or(0.0));
+    let header = |k: &str| doc.get("requestHeader").and_then(|h| h.get(k)).and_then(Value::as_str);
+    let foreign = match doc.get("trigger").and_then(Value::as_str).unwrap_or("") {
+        "" | "incoming" if header("X-Minio-Source-Replication-Request").is_some() => Some("requests_replicated".to_string()),
+        "" | "incoming" => None,
+        t => Some(format!("requests_internal:{t}")),
+    };
     let q = doc.get("requestQuery");
     let part = q.and_then(|q| q.get("partNumber")).map(|v| int_of(Some(v), 0)).filter(|n| *n > 0);
     let (mut offset, mut length, mut unplaced) = (None, None, None);
@@ -240,7 +285,8 @@ fn minio_request(doc: &Value, no: usize) -> Result<Request> {
         bucket: text(api.get("bucket")).unwrap_or_default(),
         key: text(api.get("object")).unwrap_or_default(),
         status: int_of(api.get("statusCode"), 0),
-        rx: int_of(api.get("rx"), 0),
+        // an aws-chunked body's rx counts its framing; the object's bytes are the header's (S-35)
+        rx: header("X-Amz-Decoded-Content-Length").and_then(|v| v.trim().parse().ok()).unwrap_or_else(|| int_of(api.get("rx"), 0)),
         tx: int_of(api.get("tx"), 0),
         size: None,
         start,
@@ -254,6 +300,9 @@ fn minio_request(doc: &Value, no: usize) -> Result<Request> {
         unplaced,
         continued: ["continuation-token", "marker"].iter().any(|k| text(q.and_then(|q| q.get(*k))).is_some()),
         delimiter: text(q.and_then(|q| q.get("delimiter"))),
+        logged: end,
+        timed: took.is_some(),
+        foreign,
     })
 }
 
@@ -351,6 +400,9 @@ fn s3_request(line: &str, no: usize) -> Result<Request> {
         unplaced: None,
         continued: ["continuation-token", "marker"].iter().any(|k| query_value(query, k).is_some()),
         delimiter: query_value(query, "delimiter"),
+        logged: start,
+        timed: true,
+        foreign: None,
     })
 }
 
@@ -418,6 +470,8 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, parts: &mut 
     let mut pending: HashMap<String, VecDeque<Upload>> = HashMap::new();
     let mut bound: HashMap<String, Upload> = HashMap::new();
     let mut last: Option<f64> = None;
+    // the latest of the records' own times, and the largest step back from it (S-35)
+    let (mut latest, mut back) = (None::<f64>, 0.0f64);
     let mut seq = 0u64;
     let mut n = 0u64;
     let mut no = 0usize;
@@ -439,6 +493,20 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, parts: &mut 
         n += 1;
         if r.start.is_none() {
             note("requests_without_time");
+        } else if !r.timed {
+            note("durations_unknown");
+        }
+        if let Some(k) = &r.foreign {
+            note(k);
+        }
+        if let Some(t) = r.logged {
+            match latest {
+                Some(l) if t < l => {
+                    note("records_out_of_order");
+                    back = back.max(l - t);
+                }
+                _ => latest = Some(t),
+            }
         }
         let k = hosts.len() as i64;
         let tid = *hosts.entry(r.host.clone()).or_insert(k);
@@ -583,6 +651,9 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, parts: &mut 
         ex.op((up.tid, last, last), "close", up.oid, None, Value::Null, vec![]);
     }
     drain(ex)?;
+    if back > 0.0 {
+        notes.insert("records_out_of_order_max_back_us".into(), (back * 1e6).round() as u64);
+    }
     Ok((n, notes))
 }
 
@@ -674,6 +745,14 @@ mod tests {
         assert_eq!(access_seconds("06/Fex/2019:00:00:38 +0000"), None);
         assert_eq!(access_seconds("06/Feb/2019:00:00:38 *0000"), None);
         assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(go_duration("80939ns"), Some(80939e-9));
+        assert_eq!(go_duration("3µs"), Some(3e-6));
+        assert_eq!(go_duration("3μs"), Some(3e-6));
+        assert_eq!(go_duration("2us"), Some(2e-6));
+        assert_eq!(go_duration("1h1m1.5s"), Some(3661.5));
+        for bad in ["", "ms", "5", "5xs", "1..2s"] {
+            assert_eq!(go_duration(bad), None, "{bad}");
+        }
     }
 
     #[test]

@@ -320,7 +320,19 @@ work item of its own.
   their unlinks and their targets lost. Copy is S-40's copy op. *Status: open.*
 - **S-35** (A) Unchecked, to verify: replicated PUTs (MinIO `trigger`, replication headers)
   counted as client writes; aws-chunked bodies (`X-Amz-Decoded-Content-Length` unread); old
-  MinIO `timeToResponse`; S3 access logs not sorted by time. *Status: open.*
+  MinIO `timeToResponse`; S3 access logs not sorted by time. *Status: fixed 2026-11-03 (the
+  user's choices): an aws-chunked PUT's `rx` is its framed body (checked against the pinned
+  MinIO: 100053 for a 100000-byte object, `X-Amz-Decoded-Content-Length: 100000` in the
+  request header), so a PUT or part is that header's bytes when it has one; a duration only in
+  `timeToResponse` is read as a Go duration, one in neither field noted `durations_unknown`; a
+  replicated request (`X-Minio-Source-Replication-Request`, the header's name from MinIO's
+  source, not checked against a replicating pair) or one whose `trigger` is not `incoming` is
+  exported and noted `requests_replicated`, `requests_internal:<trigger>` (export over leave
+  out, the user's choice); records whose own times go back are counted
+  (`records_out_of_order`, `records_out_of_order_max_back_us`) and the man page gives the
+  sort, the log streamed in the order of its lines. Test `a_minio_entry_is_read_as_it_means`;
+  one golden (`objectlog-ed8029fe`, whose log steps back a second) gains the two order notes
+  alone.*
 - **S-36** (A) Object engine: a read-only open of a missing key succeeds (ENOENT at the first
   read), a HEAD 404 replays as HEAD + LIST, `BLKGETSIZE64` succeeds, and `SYNC`/`DSYNC`/
   `DIRECT` are ignored without being listed in REFERENCE §16. *Status: open.*

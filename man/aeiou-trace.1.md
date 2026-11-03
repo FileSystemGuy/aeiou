@@ -295,14 +295,32 @@ log is an ordinary trace file: the `trace` node runs it against the declared end
   for several ranges is read from offset 0 and counted under `ranges_suffix_unknown`,
   `ranges_part_unknown`, or `ranges_multiple`. An entry's `time` is taken as when the
   response completed, the request starting `timeToResponse` earlier (noted as
-  `time_is_response_end`). Enabled as MinIO's audit webhook or Kafka target, or its audit
-  event queue, in MinIO's own documentation.
+  `time_is_response_end`; `timeToResponseInNS`, else the Go duration `timeToResponse` of an
+  older MinIO, else a duration of 0 counted under `durations_unknown`). A PUT's or a
+  part's bytes are its `X-Amz-Decoded-Content-Length` when it has one: the aws-chunked body
+  most AWS SDKs send is counted in `rx` with its chunks' framing. A request a replication
+  target took from its source (`X-Minio-Source-Replication-Request`) or one with a
+  `trigger` other than `incoming` (work MinIO did itself) is exported like any other and
+  counted under `requests_replicated` or `requests_internal:<trigger>`. Enabled as MinIO's
+  audit webhook or Kafka target, or its audit event queue, in MinIO's own documentation.
 - **Amazon S3 server access log** (space-delimited records: bucket owner, bucket, `[time]`
   to the second, remote IP, requester, request id, `REST.<METHOD>.<RESOURCE>`, key,
   "request URI", status, error, bytes sent, object size, total time in milliseconds, ...).
   It carries no Range, so a GET that sent fewer bytes than the object holds is read from
   offset 0 and counted under `ranges_unknown`; its times are to the second. AWS delivers
   these logs best-effort and late; CloudTrail data events are the complete source.
+
+A log is read in the order of its lines, which the trace file keeps: a record whose own
+time (MinIO's `time`, S3's `[time]`) is earlier than one before it is counted under
+`records_out_of_order`, the largest step back under `records_out_of_order_max_back_us`,
+and a GET listed before the PUT it read replays as `ENOENT`. Sort such a log by its time
+first. The time fields do not sort as text (MinIO drops a fraction's trailing zeros, S3
+writes `dd/Mon/yyyy`); with `jq` and GNU `sort`:
+
+    jq -rc '"\(.time | sub("Z$"; "") | if test("\\.") then . else . + "." end
+        | (. + "000000000") | .[0:29])\t\(tojson)"' audit.log |
+      LC_ALL=C sort -s -t"$(printf '\t')" -k1,1 | cut -f2- > sorted.log
+    LC_ALL=C sort -s -t' ' -k3.9,3.12n -k3.5,3.7M -k3.2,3.3n -k3.14,3.21 access.log > sorted.log
 
 Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49).
 

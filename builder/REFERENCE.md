@@ -895,7 +895,14 @@ for an access log's partial GET. A MinIO GET is placed by the response's `Conten
 the request's `Range` from a start; a suffix range, a part GET, or several ranges with neither
 place is read from 0 and counted under `ranges_suffix_unknown`, `ranges_part_unknown`, or
 `ranges_multiple` (2026-11-02, `FS_API_SWEEP.md` S-30: a suffix range and a part GET were read
-from 0 with no note). ~~`trace.metrics_of_events` gives the metrics of events in memory,
+from 0 with no note). A MinIO PUT or part is its `X-Amz-Decoded-Content-Length` when it has one
+(an aws-chunked `rx` counts the chunks' framing); a duration only in the Go duration
+`timeToResponse` is read from it, one in neither field counted under `durations_unknown`; a
+replicated request (`X-Minio-Source-Replication-Request`) or one whose `trigger` is not
+`incoming` is exported and counted under `requests_replicated` or `requests_internal:<trigger>`;
+and a record whose own time is earlier than one before it is counted under
+`records_out_of_order`, the largest step back under `records_out_of_order_max_back_us`, the log
+read in the order of its lines (2026-11-03, S-35; the man page gives the sort). ~~`trace.metrics_of_events` gives the metrics of events in memory,
 `trace.object_log_events` is the commands' hook, and `digest.analyze` detects the log itself.~~
 Since the port, the binary tells a log from an strace by its first line, in `metrics` and `export`
 alike, and `digest.analyze` takes a log's calls from `aeiou-trace export` as it takes an
