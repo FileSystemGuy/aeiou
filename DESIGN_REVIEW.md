@@ -9015,7 +9015,7 @@ maps local files. Where the suite stands for such an application:
   open read at many offsets) are POSIX-shaped; item 61 adds object sites, and a digest of a
   merged trace has sites of both.
 
-### 3.96 The capture: what strace costs, what eBPF and a shim reach, and the kit item 54 builds (debated with the user and measured, 2026-11-03; partly decided, not started)
+### 3.96 The capture: what strace costs, what eBPF and a shim reach, and the kit item 54 builds (debated with the user and measured, 2026-11-03; decided, not started)
 
 **How it came up.** The user took up brief item 54 to be able to ask a trace's owner for one
 capture holding both POSIX calls and object requests. This side proposed the strace line with
@@ -9171,9 +9171,17 @@ item 55's `fstat` shim; the anchor requests (an unsigned `HEAD` shows as a 403 i
 audit log) or a command the owner supplies; and the measurements on a real Linux client node
 first. *Decided by the user the same day:* the ptrace source is strace with `--seccomp-bpf`,
 a tracer of ours only if a need appears; the anchors are the unsigned `HEAD`s; the
-measurements on a real Linux node wait until one is available (none now). Still open: aya
-(the user's leaning, for BPF programs that stay simple) or libbpf-rs, and whether the shim
-shares a library with item 55's.
+measurements on a real Linux node wait until one is available (none now). Then, the same
+day: **aya**, both sides in Rust, the BPF object embedded in `aeiou-trace` so an owner needs
+only the release tarball (the user's leaning for programs that stay simple, this side
+agreeing); its costs a nightly toolchain and `bpf-linker` in CI and `pt_regs` offsets per
+architecture; the later probes on kernel structures (mapping faults, `io_uring`) need CO-RE
+relocations, which aya loads from a C-built object (medium confidence, checked when they are
+built). **The shim: shared code, two libraries.** One crate holds the interposition machinery
+(the real symbol found past `RTLD_LOCAL`, the reentrancy guard, logging without allocation),
+built as two shared objects, the capture's and item 55's `fstat` one: the capture observes and
+item 55's changes what the application sees, so the capture's library holds no code that can
+alter a result, and no stray variable turns a capture into an experiment.
 
 ## 4. Plan changes
 
