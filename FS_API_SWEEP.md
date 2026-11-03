@@ -223,7 +223,13 @@ work item of its own.
   abstract's `truncate` still reaches only the actor's own open of the path (another actor's
   mapping of it is the same risk, `findings.md` line 77, not in the register).*
 - **S-24** (A) A per-open `O_DIRECT` under `--posix mmap` is read through the page cache with
-  nothing said (`validate.rs:568` refuses only `--cache direct`). *Status: open.*
+  nothing said (`validate.rs:568` refuses only `--cache direct`). *Status: fixed 2026-11-02
+  (refuse, the user's choice over a warning): `aeiou run` under `mmap` refuses an abstract
+  with an open whose flags have `DIRECT`, or a trace with one, before the gate, naming the
+  first (`Loaded::direct_opens`, `OpenInfo::direct`); the validator refuses such an open in an
+  abstract that declares `posix: mmap`, and the builder at the open; tests
+  `a_traced_direct_open_is_refused_under_mmap`, the usage and golden refusals, and
+  `test_a_workload_may_declare_its_apis_and_cache`.*
 - **S-25** (A) A rename from outside the root into it is dropped with no note, and the name then
   counts as an input that must exist (`strace.rs:1630`). *Status: noted 2026-11-02
   (`not_exported:rename:source outside the root`, `calls_not_exported`; test

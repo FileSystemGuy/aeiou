@@ -1045,6 +1045,9 @@ class Cursor:
 
     def open(self, file, flags, *, mode: int | None = None, expect=None):
         flags = _flags(flags)
+        if "DIRECT" in flags and self.wl.posix == "mmap":
+            # an open's own O_DIRECT, which a mapping cannot carry out (FS_API_SWEEP.md S-24)
+            raise BuildError(f"workload {self.wl.name}: open with DIRECT under posix `mmap`: its reads are page faults on a mapping, through the page cache")
         if set(flags) & WRITE_FLAGS:
             self._read_only(file, "open for writing")
         for f in flags:

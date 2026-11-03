@@ -606,6 +606,12 @@ def test_a_workload_may_declare_its_apis_and_cache():
         Workload("w", s3="threads")
     with pytest.raises(BuildError, match="page faults"):
         Workload("w", posix="mmap", cache="direct")
+    # nor an open's own DIRECT (FS_API_SWEEP.md S-24)
+    m = Workload("m", posix="mmap")
+    md = m.dataset("d", pattern="d/f_{id:06}", layout="whole", access="map", count=1, size=const(1), seed=1)
+    with m.actor("a", count=1) as a:
+        with pytest.raises(BuildError, match="open with DIRECT under posix `mmap`: its reads are page faults on a mapping"):
+            a.open(md.file(0), "RDONLY|DIRECT")
     w = Workload("w", posix="libaio", cache="direct")
     d = w.dataset("d", pattern="d/f_{id:06}", layout="whole", access="map", count=1, size=const(1), seed=1)
     with w.actor("a", count=1) as a:

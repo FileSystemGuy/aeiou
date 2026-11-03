@@ -88,7 +88,8 @@ builder/.venv/bin/python schema/check.py path/to/x.ast.json   # one file
   traced application issues the I/O of its `posix` names through (`sync`, `io_uring`,
   `posix-aio`, `libaio`, `mmap`); absent means `sync`. The optional `cache` is `direct` for
   an application that opens every regular file `O_DIRECT`, never under `mmap` (the schema
-  and the validator refuse the pair); absent means `per-open`, the open flags of the ops.
+  and the validator refuse the pair, and the validator an open with `DIRECT` under `mmap`,
+  2026-11-02); absent means `per-open`, the open flags of the ops.
   The optional `s3` says how its S3 client uses the store for its `s3` names: `blocking`
   (absent) or `async`. V19 (§4) relates the three to the protocols the abstract has names on.
   They are part of the document and of its hash, and of nothing else: the op stream and the

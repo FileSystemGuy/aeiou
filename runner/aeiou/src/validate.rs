@@ -38,17 +38,18 @@ pub fn protocols(ast: &Ast, traces: bool) -> Protocols {
 }
 
 pub fn check(ast: &Ast) -> Vec<String> {
-    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()) };
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()), direct: Vec::new() };
     c.run();
     c.errors
 }
 
-/// Validate and return the op-kind counts (as `check.py` prints them) when there are no errors.
-pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<String>> {
-    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()) };
+/// Validate and return the op-kind counts (as `check.py` prints them) and where the opens with
+/// `DIRECT` are, when there are no errors.
+pub fn check_with_ops(ast: &Ast) -> Result<(BTreeMap<&'static str, usize>, Vec<String>), Vec<String>> {
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()), direct: Vec::new() };
     c.run();
     if c.errors.is_empty() {
-        Ok(c.ops)
+        Ok((c.ops, c.direct))
     } else {
         Err(c.errors)
     }
@@ -59,7 +60,7 @@ pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<St
 /// replace that distribution with one whose minimum is lower. Without this an `at` offset
 /// of zero is a loop in the VM. Called from `Params::new`, so every subcommand gets it.
 pub fn check_given(ast: &Ast, given: &BTreeMap<String, PValue>) -> Vec<String> {
-    let mut c = Checker { ast, given: Some(given), errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()) };
+    let mut c = Checker { ast, given: Some(given), errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()), direct: Vec::new() };
     c.run();
     c.errors
 }
@@ -155,6 +156,9 @@ struct Checker<'a> {
     given: Option<&'a BTreeMap<String, PValue>>,
     errors: Vec<String>,
     ops: BTreeMap<&'static str, usize>,
+    /// Where the opens with `DIRECT` are (`actors/0/body/2`), for a run under `--posix mmap`
+    /// to refuse (`FS_API_SWEEP.md` S-24).
+    direct: Vec<String>,
     /// A `trace` node was seen: its files are under `--root`, POSIX names (V19).
     traces: bool,
     /// The `consume`s inside a loop, by dataset, in actor-name then document order, each with
@@ -1247,6 +1251,14 @@ impl<'a> Checker<'a> {
             }
         }
         if let Node::Open { file, flags, .. } = node {
+            if flags.contains(&OpenFlag::DIRECT) {
+                // an open's own O_DIRECT, which a mapping cannot carry out (S-24), as `cache:
+                // direct` is refused under `mmap`
+                if self.ast.posix.as_deref() == Some("mmap") {
+                    self.err(&p(pp, &["flags"]), "open with DIRECT under `mmap`: its reads are page faults on a mapping, through the page cache");
+                }
+                self.direct.push(pp.join("/"));
+            }
             let writes = flags.iter().any(|f| matches!(f, OpenFlag::WRONLY | OpenFlag::RDWR | OpenFlag::CREAT | OpenFlag::TRUNC | OpenFlag::APPEND));
             if writes {
                 if let Some(ds) = self.dataset_of(file, scope) {

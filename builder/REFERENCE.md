@@ -643,7 +643,7 @@ container datasets to object stores too, streaming each file into an upload (§6
 `cache` since contract 0.6, `posix`, `cache`, and `s3` since 0.7, 2026-10-09):
 `Workload("safetensors_load", posix="mmap")`. Leave `posix` out for an application that calls
 `read` and `write`. `cache="direct"` declares an application that opens every regular file
-`O_DIRECT` (refused under `mmap`); leave it out when the open flags of the ops say what it
+`O_DIRECT` (refused under `mmap`, as is an open with `DIRECT` there); leave it out when the open flags of the ops say what it
 does. `s3="async"` declares an application whose S3 client keeps many requests in flight
 per thread; leave it out for one that blocks on each. V19 refuses an API for a protocol the
 workload has no names on, and, with both, APIs of different kinds. The runner uses them as

@@ -53,6 +53,8 @@ pub struct Loaded {
     pub ast: ast::Ast,
     pub sha256: String,
     pub ops: std::collections::BTreeMap<&'static str, usize>,
+    /// Where the abstract's opens with `DIRECT` are (`actors/0/body/2`), each once.
+    pub direct_opens: Vec<String>,
     /// The document as parsed, for the resolved dataset definitions of the manifest.
     pub doc: serde_json::Value,
     /// The files of the `trace` nodes, by the `file` the node names (`trace.rs`); loaded
@@ -98,6 +100,6 @@ pub fn load_str(text: &str) -> anyhow::Result<Loaded> {
     let sha256 = canon::sha256_hex(&doc);
     let ast = ast::parse(text)?;
     sites::annotate(&ast);
-    let ops = validate::check_with_ops(&ast).map_err(|errs| anyhow::anyhow!("invalid abstract:\n  {}", errs.join("\n  ")))?;
-    Ok(Loaded { ast, sha256, ops, doc, traces: Default::default() })
+    let (ops, direct_opens) = validate::check_with_ops(&ast).map_err(|errs| anyhow::anyhow!("invalid abstract:\n  {}", errs.join("\n  ")))?;
+    Ok(Loaded { ast, sha256, ops, direct_opens, doc, traces: Default::default() })
 }

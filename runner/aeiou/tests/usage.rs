@@ -100,6 +100,11 @@ fn the_parsers_own_errors_and_the_layers_refusals_wear_the_frame() {
     assert!(run(&["--posix", "nope"]).starts_with("--posix nope: not one of "));
     assert!(run(&["--cache", "nope"]).starts_with("--cache nope: not one of "));
     assert_eq!(run(&["--posix", "mmap", "--cache", "direct"]), "--cache direct under --posix mmap: its reads are page faults on a mapping");
+    // nor an open's own O_DIRECT (FS_API_SWEEP.md S-24): diskann_search opens its index DIRECT
+    let ast = example("diskann_search.ast.json");
+    let (message, _) = frame(&mut aeiou(&["run", &ast, "--gpus", "1", "--root", "/tmp", "--posix", "mmap"]), "aeiou run");
+    assert!(message.starts_with("--posix mmap: the abstract opens with DIRECT (actors/"), "{message}");
+    assert!(message.ends_with("), and its reads would be page faults on a mapping, through the page cache"), "{message}");
 }
 
 #[test]

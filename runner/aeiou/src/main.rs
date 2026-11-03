@@ -1591,6 +1591,14 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     }
     let declared = aeiou::backend::declared(&loaded.ast)?;
     let backend = run_backend(a, declared)?;
+    if backend.api == Api::Mmap {
+        // an open's own O_DIRECT, which a mapping cannot carry out, refused as --cache direct is
+        // (FS_API_SWEEP.md S-24)
+        let traced = loaded.traces.iter().flat_map(|(name, tf)| tf.opens.iter().filter(|o| o.direct).map(move |o| format!("trace `{name}`: {}", o.path)));
+        if let Some(at) = loaded.direct_opens.iter().cloned().chain(traced).next() {
+            aeiou::usage!("--posix mmap: the abstract opens with DIRECT ({at}), and its reads would be page faults on a mapping, through the page cache{}", layers.from(&["posix"]));
+        }
+    }
     let declared_s3 = aeiou::backend::declared_s3(&loaded.ast)?;
     let s3 = if used.s3 { run_s3(a, declared_s3)? } else { S3Api::Blocking };
     if used.posix && used.s3 && backend.event_loop() != s3.event_loop() {

@@ -501,6 +501,10 @@ fn validator_rejects_what_check_py_rejects() {
     rejects(&declared(r#""posix": "pread""#), "is not one of");
     rejects(&declared(r#""cache": "dontcache""#), "is not one of");
     rejects(&declared(r#""posix": "mmap", "cache": "direct""#), "page faults on a mapping");
+    // nor an open's own `DIRECT` under `mmap` (FS_API_SWEEP.md S-24)
+    let direct = r#"{"loop": {"index": "i", "to": 1, "body": [{"open": {"file": {"file": {"dataset": "d", "id": 0}}, "flags": ["RDONLY", "DIRECT"]}}]}}"#;
+    rejects(&base(ds, direct).replacen(r#""name": "t","#, r#""name": "t", "posix": "mmap","#, 1), "open with DIRECT under `mmap`: its reads are page faults on a mapping, through the page cache");
+    aeiou::load_str(&base(ds, direct).replacen(r#""name": "t","#, r#""name": "t", "posix": "sync","#, 1)).unwrap();
     rejects(&declared(r#""api": "sync""#), "api");
     rejects(&declared(r#""backend": "sync""#), "backend");
     // V19: an API only for a protocol with names (the dataset `d` is posix)

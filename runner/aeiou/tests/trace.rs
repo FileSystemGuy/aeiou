@@ -597,6 +597,30 @@ fn a_truncate_by_path_shortens_every_mapping_the_trace_holds() {
     }
 }
 
+/// A trace whose open has `DIRECT` is refused under `--posix mmap` before anything is touched
+/// (`FS_API_SWEEP.md` S-24): the mapping would read it through the page cache, another
+/// workload; under `sync` it runs.
+#[test]
+fn a_traced_direct_open_is_refused_under_mmap() {
+    let lines = r#"
+{"aeiou_trace":1,"lanes":1,"creates":["f"]}
+{"lane":0,"op":"open","fd":0,"path":"f","flags":["WRONLY","CREAT","TRUNC","DIRECT"],"mode":420}
+{"lane":0,"op":"close","fd":0}
+"#;
+    let d = tmpdir("direct-mmap");
+    let p = abstract_with(&d, lines, Some(1));
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let run = |posix: &str| std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["run", "--gpus", "1", "--posix", posix, "--root"]).arg(&root).arg(&p).env_remove("AEIOU_CONFIG").output().unwrap();
+    let o = run("mmap");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(err.contains("--posix mmap: the abstract opens with DIRECT (trace `t.jsonl`: f)"), "{err}");
+    assert!(!root.join("f").exists());
+    let o = run("sync");
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+}
+
 /// A `fallocate` runs with its mode (`DESIGN_REVIEW.md` §3.92): a hole punched frees the range
 /// and keeps the size, never an allocation, under every API; the mode is in the fingerprint.
 #[test]

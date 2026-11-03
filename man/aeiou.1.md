@@ -577,8 +577,9 @@ turns it off, and the last one on the line wins.
   The API the operations on `posix` names are issued through: `sync`, `io_uring`,
   `posix-aio`, `libaio`, or `mmap`; see BACKENDS. Default: the API the abstract declares,
   `sync` when it declares none. Any other is a different workload on the storage, and the
-  run says so and records both. Refused when no dataset or namespace is `posix`; the value
-  is required.
+  run says so and records both. Refused when no dataset or namespace is `posix`, and `mmap`
+  when an open of the abstract or of its traces has `DIRECT`, whose reads a mapping takes
+  through the page cache; the value is required.
 - **--cache** *MODE*
 
   The `posix` names' cache mode: `per-open` (each open's own flags decide whether it

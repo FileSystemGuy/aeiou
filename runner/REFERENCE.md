@@ -217,7 +217,10 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   fingerprint are the same and the storage sees another workload, so the run prints `posix X
   cache Y  s3 Z is not the abstract's (…)` (naming only the protocols with names) and the
   report carries both (§12); `--cache direct` against the abstract's `per-open` is such a
-  difference. `--cache direct` under `mmap` is refused. An option for a protocol the
+  difference. `--cache direct` under `mmap` is refused, and so is `mmap` for an abstract with
+  an open whose own flags have `DIRECT`, or a trace with one, naming the first (2026-11-02,
+  `FS_API_SWEEP.md` S-24: its reads were page faults through the page cache with nothing
+  said); an abstract that declares `posix: mmap` with such an open is refused by the validator. An option for a protocol the
   abstract has no names on (`--posix`, `--cache`, the ring, AIO, and `mmap` knobs without a
   `posix` name; `--s3` without an `s3` name) is refused, since it would change nothing, and a
   run with both protocols whose APIs are of different kinds (`--posix sync --s3 async`) is

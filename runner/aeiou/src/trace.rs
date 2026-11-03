@@ -196,6 +196,8 @@ pub struct OpenInfo {
     pub closes: usize,
     /// Set when the open itself failed in the trace (no fd ever exists).
     pub failed: bool,
+    /// Opened with `DIRECT`.
+    pub direct: bool,
 }
 
 /// A loaded trace file.
@@ -308,7 +310,7 @@ impl TraceFile {
                         bail!("trace `{name}`: line {}: open id {fd} out of order (expected {})", no, opens.len());
                     }
                     let failed = matches!(ret, Ret::Err(_));
-                    opens.push(OpenInfo { path: path.clone(), uses: 0, closes: 0, failed });
+                    opens.push(OpenInfo { path: path.clone(), uses: 0, closes: 0, failed, direct: flags.contains(&OpenFlag::DIRECT) });
                     pos.push(0);
                     if !failed {
                         live += 1;
