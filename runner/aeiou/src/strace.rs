@@ -1456,6 +1456,13 @@ impl Tracer {
                 if let Some(oid) = self.oid_or_note(f.as_ref(), "lseek", when)? {
                     let ex = self.export.as_mut().unwrap();
                     match (a.len() > 2).then(|| int0(&a[1])).flatten() {
+                        Some(_) if matches!(a[2].as_str(), "SEEK_DATA" | "SEEK_HOLE") => {
+                            // no whence of the trace file's yet (FS_API_SWEEP.md S-28, S-40): left
+                            // out, and the open's later calls carry the offsets it moved them to
+                            ex.note("calls_not_exported", 1);
+                            ex.note(&format!("not_exported:lseek:{}", a[2]), 1);
+                            ex.pin(oid);
+                        }
                         Some(off) => {
                             let whence = a[2].replace("SEEK_", "");
                             ex.op(when, "lseek", oid, err, json!(ret), vec![("offset", json!(off)), ("whence", json!(whence))]);
@@ -1769,12 +1776,32 @@ impl Tracer {
                 kind = "rmdir";
             }
             let p = self.under(path.as_deref());
+            // renameat2's flags (exchange, no-replace, whiteout): no rename of the trace file's
+            // yet (FS_API_SWEEP.md S-27, S-40)
+            let flags = (name == "renameat2").then(|| a.get(4).map(|f| f.trim()).filter(|f| *f != "0")).flatten();
             if let (0, Some(p)) = (ret, &p) {
                 self.known_size(tid, name, kind, p, a, di, pi);
             }
+            if p.is_none() && kind == "rename" && inst.is_some() && self.export.is_some() {
+                // from outside the root into it: the name appears with nothing the runner can make
+                // it from (FS_API_SWEEP.md S-25)
+                let j = if di.is_none() { pi + 1 } else { pi + 2 };
+                if a.len() > j {
+                    let d = if di.is_some() { Some(a[j - 1].clone()) } else { None };
+                    let r = self.resolve(tid, d.as_deref(), c_string(&a[j]));
+                    if self.under(r.as_deref()).is_some() {
+                        let ex = self.export.as_mut().unwrap();
+                        ex.note("calls_not_exported", 1);
+                        ex.note("not_exported:rename:source outside the root", 1);
+                    }
+                }
+            }
             if let (Some(_), Some(p)) = (inst, &p) {
                 self.count(tid, kind);
-                if self.export.is_some() {
+                if let (Some(f), Some(ex)) = (flags, self.export.as_mut()) {
+                    ex.note("calls_not_exported", 1);
+                    ex.note(&format!("not_exported:renameat2:{f}"), 1);
+                } else if self.export.is_some() {
                     let mut to = None;
                     if kind == "rename" {
                         let j = if di.is_none() { pi + 1 } else { pi + 2 };
@@ -1815,6 +1842,17 @@ impl Tracer {
             } else {
                 None
             };
+            if let (true, Some(to)) = (name == "renameat2" && a.get(4).is_some_and(|f| f.contains("RENAME_EXCHANGE")), &to) {
+                // the two names trade files
+                let (x, y) = (self.extent.remove(p), self.extent.remove(to));
+                if let Some(y) = y {
+                    self.extent.insert(p.to_string(), y);
+                }
+                if let Some(x) = x {
+                    self.extent.insert(to.clone(), x);
+                }
+                return;
+            }
             let size = self.extent.remove(p);
             if let Some(to) = to {
                 match size {

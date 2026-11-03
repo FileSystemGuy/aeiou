@@ -963,6 +963,51 @@ fn export_leaves_out_o_path_and_o_tmpfile_opens_and_names_dropped_flags() {
     assert!(lines[0].get("missing_opens").is_none(), "{}", lines[0]);
 }
 
+/// Calls the trace file cannot say yet are noted and left out, never exported as another call
+/// or as a word the runner refuses (`FS_API_SWEEP.md` S-27, S-28, S-25): an `lseek` to
+/// `SEEK_DATA` or `SEEK_HOLE` (the open's later reads and writes then carry their offsets), a
+/// `renameat2` with a flag, and a rename into the root from outside it.
+#[test]
+fn export_notes_and_leaves_out_what_the_trace_file_cannot_say() {
+    let d = tmp("cannot-say");
+    let trace = d.join("t.strace");
+    std::fs::write(
+        &trace,
+        [
+            r#"100 1700000000.000000 openat(AT_FDCWD</d>, "/d/f", O_RDONLY) = 3</d/f> <0.000010>"#,
+            r#"100 1700000000.000100 lseek(3</d/f>, 4096, SEEK_DATA) = 8192 <0.000010>"#,
+            r#"100 1700000000.000200 read(3</d/f>, "x"..., 4096) = 4096 <0.000010>"#,
+            r#"100 1700000000.000300 lseek(3</d/f>, 12288, SEEK_HOLE) = 16384 <0.000010>"#,
+            r#"100 1700000000.000400 close(3</d/f>) = 0 <0.000010>"#,
+            r#"100 1700000000.000500 renameat2(AT_FDCWD</d>, "/d/a", AT_FDCWD</d>, "/d/b", RENAME_EXCHANGE) = 0 <0.000010>"#,
+            r#"100 1700000000.000600 renameat2(AT_FDCWD</d>, "/d/c", AT_FDCWD</d>, "/d/e", RENAME_NOREPLACE) = 0 <0.000010>"#,
+            r#"100 1700000000.000700 renameat2(AT_FDCWD</d>, "/d/g", AT_FDCWD</d>, "/d/h", 0) = 0 <0.000010>"#,
+            r#"100 1700000000.000800 rename("/tmp/x", "/d/y") = 0 <0.000010>"#,
+            "",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let out = d.join("t.jsonl");
+    let o = tool(&["export", s(&trace), "--root", "/d", "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let ops: Vec<(&str, &Value)> = lines[1..].iter().map(|l| (l["op"].as_str().unwrap(), &l["offset"])).collect();
+    assert_eq!(ops, [("open", &Value::Null), ("read", &json!(8192)), ("close", &Value::Null), ("rename", &Value::Null)], "{lines:#?}");
+    assert_eq!((&lines[4]["path"], &lines[4]["to"]), (&json!("g"), &json!("h")));
+    let notes = &lines[0]["notes"];
+    for (k, n) in [
+        ("not_exported:lseek:SEEK_DATA", 1),
+        ("not_exported:lseek:SEEK_HOLE", 1),
+        ("not_exported:renameat2:RENAME_EXCHANGE", 1),
+        ("not_exported:renameat2:RENAME_NOREPLACE", 1),
+        ("not_exported:rename:source outside the root", 1),
+        ("calls_not_exported", 5),
+    ] {
+        assert_eq!(notes[k], n, "{k}: {notes}");
+    }
+}
+
 /// The digest records per template what its calls did to the space its files hold
 /// (`DESIGN_REVIEW.md` §3.92): truncating opens, of a path the trace wrote before and of one it
 /// had not seen, truncates by path and descriptor, those to 0, `fallocate` by mode, and the

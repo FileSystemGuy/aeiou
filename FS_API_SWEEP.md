@@ -220,15 +220,24 @@ work item of its own.
 - **S-24** (A) A per-open `O_DIRECT` under `--posix mmap` is read through the page cache with
   nothing said (`validate.rs:568` refuses only `--cache direct`). *Status: open.*
 - **S-25** (A) A rename from outside the root into it is dropped with no note, and the name then
-  counts as an input that must exist (`strace.rs:1630`). *Status: open.*
+  counts as an input that must exist (`strace.rs:1630`). *Status: noted 2026-11-02
+  (`not_exported:rename:source outside the root`, `calls_not_exported`; test
+  `export_notes_and_leaves_out_what_the_trace_file_cannot_say`); whether the name is then an
+  input the run must find, or a state the run prepares, waits on brief item 60 with S-17.*
 - **S-26** (A) The digest's rename moves state for the exact path only: a directory rename
   leaves its files behind, a rename over a file is not a removal (`digest.rs:949-965`).
   *Status: open.*
 - **S-27** (A) `renameat2` `RENAME_EXCHANGE`/`NOREPLACE`/`WHITEOUT` exported as a plain rename
-  (an exchange destroys a name). Noted and not exported until B (S-40). *Status: open.*
+  (an exchange destroys a name). Noted and not exported until B (S-40). *Status: fixed
+  2026-11-02: a `renameat2` with any flag is noted by its flags (`not_exported:renameat2:
+  RENAME_EXCHANGE`) and left out, still counted among the metrics' renames; an exchange trades
+  the two names' known sizes; test `export_notes_and_leaves_out_what_the_trace_file_cannot_say`;
+  two corpus goldens lose a failed `RENAME_NOREPLACE` rename line for the note.*
 - **S-28** (A) `lseek` `SEEK_DATA`/`SEEK_HOLE` are exported as `DATA`/`HOLE`, which the runner's
   `Whence` refuses, so the whole trace file is unusable. Exported only once B adds them (S-40);
-  until then noted and left out. *Status: open.*
+  until then noted and left out. *Status: fixed 2026-11-02: noted
+  (`not_exported:lseek:SEEK_DATA`, `…:SEEK_HOLE`) and left out, and the open is pinned, so its
+  later reads and writes carry the offsets the seek moved them to; same test.*
 
 ### The object-log reader
 

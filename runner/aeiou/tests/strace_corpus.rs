@@ -14,7 +14,10 @@
 //! covers that names a path under the root noted by name (`not_counted:<call>`, the same day,
 //! `FS_API_SWEEP.md` S-1; three cases, each a `realpath` walk's `readlink`s under the root,
 //! their notes the only difference); and an open's dropped flag noted by name
-//! (`open_flags_dropped:O_NONBLOCK`, S-10; three cases, the note's name the only difference).
+//! (`open_flags_dropped:O_NONBLOCK`, S-10; three cases, the note's name the only difference);
+//! and a `renameat2` with a flag noted by name and left out, not exported as a plain rename
+//! (`not_exported:renameat2:RENAME_NOREPLACE`, S-27; two cases, the one line and its note the
+//! only difference).
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths
