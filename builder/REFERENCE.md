@@ -423,7 +423,7 @@ the export (the Python 50 s and 1.46 GB). The reasoning is in `DESIGN_REVIEW.md`
 and confirmed by the user the same day (decided 2026-10-01).**
 
 ```
-strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
+strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
 aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--metrics-block BYTES]
             [--instance-root PID]… [--chain-gap-us US] [--cwd DIR] -o trace.metrics.json
 aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --metrics-json abstract.metrics.json
@@ -435,7 +435,9 @@ What a trace needs: the command started under `strace`, never `strace -p` attach
 running, which misses the opens made before it attached (2026-11-02: an export gives such a
 descriptor an open at its first use, `"synthesized": true`, and every tool reading it warns
 that the trace is incomplete, naming the opens, `DESIGN_REVIEW.md` §3.92); `%network` where
-descriptors pass over a socket; `-f` (threads and children), `-yy` (the path behind every descriptor,
+descriptors pass over a socket; `-f` (threads and children), `--seccomp-bpf` (a thread stopped
+only at the calls traced, not at every call; the same trace, 3.6 times faster on a
+microbenchmark, `DESIGN_REVIEW.md` §3.96), `-yy` (the path behind every descriptor,
 which is how a call is known to be on the storage under test), `%process` (the `clone`s,
 so descriptor tables and process trees are followed; without it a thread that uses a
 descriptor it did not open is attached to the table that has that descriptor and path, and

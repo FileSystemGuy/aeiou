@@ -2005,7 +2005,7 @@ pub fn nothing_counted(roots: &[String], seen: Seen) -> String {
     let why = if seen.calls > 0 {
         "check --root against the paths the trace shows"
     } else {
-        "not an strace (strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,... -o FILE)"
+        "not an strace (strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,... -o FILE)"
     };
     format!("no call under --root {} ({} line(s) read, {} parsed as strace calls): {why}", roots.join(", "), seen.lines, seen.calls)
 }

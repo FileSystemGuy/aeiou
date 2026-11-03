@@ -1384,7 +1384,7 @@ fn export_synthesizes_the_open_a_trace_is_missing_and_warns() {
     let (_, err) = text(&o);
     assert!(err.starts_with("aeiou-trace export: WARNING: the trace is incomplete: 2 descriptor(s) were used without the open that made them, held from before strace began"), "{err}");
     assert!(err.contains("  held (first used by read in lane 0)\n  x (first used by close in lane 0)\n"), "{err}");
-    assert!(err.contains("trace the command from its start: strace -f ... -o FILE COMMAND"), "{err}");
+    assert!(err.contains("trace the command from its start: strace -f --seccomp-bpf ... -o FILE COMMAND"), "{err}");
     // the runner replays it, an open of an existing path; the digest and metrics warn too
     for cmd in [vec!["digest", s(&trace), "--root", "/d", "--no-questions"], vec!["metrics", s(&trace), "--root", "/d"]] {
         let o = tool(&cmd);

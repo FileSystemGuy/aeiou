@@ -127,6 +127,7 @@ def test_every_flag_named_in_any_page_exists():
             flags |= help_flags(help_text(module, *([sub] if sub else [])))
     booleans = {f[5:] for f in flags if f.startswith("[no-]")}
     allowed = {f.removeprefix("[no-]") for f in flags} | {f"no-{b}" for b in booleans} | {"x", "no-x", "help", "version"}
+    allowed |= {"seccomp-bpf"}  # strace's, in the capture line of aeiou-trace(1)
     for name in PAGES + ["README.md"]:
         unknown = mentioned(read(name)) - allowed
         assert not unknown, f"man/{name} names options no tool has: {sorted(unknown)}"

@@ -97,7 +97,7 @@ order, another reader), not just in sizes, it is path C.
    storage you will name with `--root`:
 
    ```
-   strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy \
+   strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy \
        -o trace.txt <command>
    aeiou-trace metrics trace.txt --root /mnt/data -o trace.metrics.json
    ```
@@ -332,7 +332,7 @@ needs h5py, and the release ships it as one PyInstaller file carrying Python, nu
 **Contract.** JSON Schema draft 2020-12 for the AST and the parameter file; canonical JSON
 (sorted keys, no whitespace, shortest-round-trip floats) under SHA-256 for identities.
 
-**Calibration.** `strace -f -ttt -T -yy -v` of the real applications: PyTorch `DataLoader`,
+**Calibration.** `strace -f --seccomp-bpf -ttt -T -yy -v` of the real applications: PyTorch `DataLoader`,
 NumPy, `torch.distributed.checkpoint`, safetensors, DiskANN, FAISS, vLLM with LMCache.
 
 **CI.** GitHub Actions, four jobs: the builder tests with the hermetic rebuild of every

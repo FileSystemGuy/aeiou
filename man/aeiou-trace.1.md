@@ -37,7 +37,7 @@ in the time it takes to read it.
 The trace is taken with
 
 ```
-strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
+strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
 ```
 
 Start the command under `strace`, never attach to it running (`strace -p`): a descriptor
@@ -45,7 +45,10 @@ the command opened before `strace` attached has no open in the trace (see **What
 Add `%network` to `-e trace=` when the application passes descriptors over a socket
 (`SCM_RIGHTS`), so the `recvmsg` that delivers one is seen.
 
-`-f` follows threads and children; `-yy` puts the path behind every descriptor on the
+`-f` follows threads and children; `--seccomp-bpf` (strace 5.3 and later) stops a thread only
+at the calls traced, where `strace -f` otherwise stops it at every call, traced or not (3.6
+times slower without it on a microbenchmark, `DESIGN_REVIEW.md` §3.96; the trace is the same,
+and where the filter cannot be installed `strace` proceeds without it); `-yy` puts the path behind every descriptor on the
 line, which is how a call is known to be on the storage under test; `%process` records the
 `clone`s, so descriptor tables and process trees are followed; the AIO calls are named
 because `strace` classes none of them in `%desc`, and without them every libaio read and
@@ -611,7 +614,7 @@ Measure a trace of the application, measure the abstract at its fitted parameter
 the abstract against three other seeds of itself:
 
 ```
-strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt python train.py /mnt/data/train
+strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt python train.py /mnt/data/train
 aeiou-trace metrics trace.txt --root /mnt/data -o trace.metrics.json
 aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed 1 --metrics-json abstract.metrics.json
 for s in 2 3 4; do aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed $s --metrics-json self$s.json; done

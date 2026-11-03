@@ -29,7 +29,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Compute the metrics of a trace (strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o FILE)
+    /// Compute the metrics of a trace (strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o FILE)
     #[command(override_usage = "aeiou-trace metrics [OPTIONS] <TRACE>")]
     Metrics(MetricsArgs),
     /// Write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root
@@ -261,7 +261,7 @@ fn incomplete(prog: &str, count: u64, missing: Option<&Value>, what: &str) -> St
     for m in missing.and_then(Value::as_array).into_iter().flatten() {
         out += &format!("  {} (first used by {} in lane {})\n", m["path"].as_str().unwrap_or(""), m["first"].as_str().unwrap_or(""), m["lane"]);
     }
-    out + "  trace the command from its start: strace -f ... -o FILE COMMAND\n"
+    out + "  trace the command from its start: strace -f --seccomp-bpf ... -o FILE COMMAND\n"
 }
 
 /// The warning for a header (an export's, a trace file's) that lists synthesized opens.
