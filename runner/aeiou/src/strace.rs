@@ -669,13 +669,16 @@ pub struct File {
     pub held: bool,
     /// An open under the root the export left out (`O_PATH`, `O_TMPFILE`, the root itself).
     pub unexported: bool,
+    /// The file the open holds, for the metrics (`metrics::Metrics::file`): its calls reach it
+    /// whatever happens to its name after.
+    pub file: Option<u64>,
 }
 
 type FileRef = Rc<RefCell<File>>;
 type Table = Rc<RefCell<HashMap<i64, FileRef>>>;
 
 fn new_file(path: Option<String>, pos: i64, append: bool) -> FileRef {
-    Rc::new(RefCell::new(File { path, pos, append, listed: false, oid: None, held: false, unexported: false }))
+    Rc::new(RefCell::new(File { path, pos, append, listed: false, oid: None, held: false, unexported: false, file: None }))
 }
 
 const OPENS: [&str; 4] = ["open", "openat", "openat2", "creat"];
@@ -759,6 +762,7 @@ struct Waiting {
     inst: i64,
     tid: i64,
     path: String,
+    file: Option<u64>,
     off: i64,
     nbytes: i64,
     member: Option<(usize, usize)>,
@@ -1298,9 +1302,10 @@ impl Tracer {
         }
     }
 
-    fn data(&mut self, kind: usize, inst: i64, tid: i64, p: &str, off: i64, len: i64, n: i64) -> Result<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn data(&mut self, kind: usize, inst: i64, tid: i64, p: &str, file: Option<u64>, off: i64, len: i64, n: i64) -> Result<()> {
         match self.metrics.as_mut() {
-            Some(m) => m.data(kind, inst, tid, p, off, len, n),
+            Some(m) => m.data(kind, inst, tid, p, file, off, len, n),
             None => Ok(()),
         }
     }
@@ -1364,6 +1369,14 @@ impl Tracer {
                     }
                 }
                 let file = new_file(path.clone(), 0, flags.contains("O_APPEND"));
+                if let (Some(p), Some(m)) = (&p, self.metrics.as_mut()) {
+                    // what a path holds (FS_API_SWEEP.md S-18): the open holds the file its name is
+                    let held = m.m.file(p);
+                    file.borrow_mut().file = Some(held);
+                    if flags.contains("O_TRUNC") {
+                        m.m.ended(held, 0, None);
+                    }
+                }
                 self.table(tid).borrow_mut().insert(ret, file.clone());
                 f = Some(file);
             }
@@ -1541,7 +1554,8 @@ impl Tracer {
                 if offset < 0 {
                     self.note("data_ops_without_offset", 1);
                 }
-                self.data(kind, inst, tid, p, offset, length, ret.max(0))?;
+                let held = f.as_ref().and_then(|f| f.borrow().file);
+                self.data(kind, inst, tid, p, held, offset, length, ret.max(0))?;
                 if let (Some(oid), true) = (self.oid_or_note(f.as_ref(), KINDS[kind], when)?, offset >= 0) {
                     let ex = self.export.as_mut().unwrap();
                     if base.is_some() {
@@ -1599,7 +1613,7 @@ impl Tracer {
             }
             // the kernel takes the first `ret` requests of the array and none past them
             let taken = ret.max(0) as usize;
-            let mut got: Vec<(String, usize, String, i64, i64)> = Vec::new();
+            let mut got: Vec<(String, usize, String, Option<u64>, i64, i64)> = Vec::new();
             for cb in cbs.iter().take(taken) {
                 let path = cb.path.clone().filter(|p| !p.is_empty());
                 let f = self.file(tid, Some(cb.fd), path.as_deref());
@@ -1609,7 +1623,8 @@ impl Tracer {
                     self.note("aio_requests_not_counted", 1);
                     continue;
                 };
-                got.push((cb.data.clone(), if read { R } else { W }, p, cb.offset, cb.nbytes));
+                let held = f.as_ref().and_then(|f| f.borrow().file);
+                got.push((cb.data.clone(), if read { R } else { W }, p, held, cb.offset, cb.nbytes));
             }
             let Some(inst) = inst else { return Ok(()) };
             if got.is_empty() || ret <= 0 {
@@ -1652,7 +1667,7 @@ impl Tracer {
                     members = Some(self.export.as_mut().unwrap().submit(when, &mem));
                 }
             }
-            for (j, (data, kind, p, off, nbytes)) in got.into_iter().enumerate() {
+            for (j, (data, kind, p, file, off, nbytes)) in got.into_iter().enumerate() {
                 // counted when its result is reaped (`io_getevents`), with the bytes it moved
                 let member = members.as_ref().and_then(|m| m.get(j).copied());
                 let seq = &mut self.aio_seq;
@@ -1663,7 +1678,7 @@ impl Tracer {
                         (*seq, Vec::new())
                     })
                     .1
-                    .push(Waiting { kind, inst, tid, path: p, off, nbytes, member });
+                    .push(Waiting { kind, inst, tid, path: p, file, off, nbytes, member });
             }
             return Ok(());
         }
@@ -1687,7 +1702,7 @@ impl Tracer {
                 if waiting.is_empty() {
                     self.aio.remove(&key);
                 }
-                self.data(w.kind, w.inst, w.tid, &w.path, w.off, w.nbytes, res.max(0))?;
+                self.data(w.kind, w.inst, w.tid, &w.path, w.file, w.off, w.nbytes, res.max(0))?;
                 if w.kind == W && res > 0 {
                     if let Some(e) = self.extent.get_mut(&w.path) {
                         *e = (*e).max(w.off + res);
@@ -1706,6 +1721,19 @@ impl Tracer {
                 path = f.as_ref().and_then(|f| f.borrow().path.clone());
             }
             let p = self.under(path.as_deref());
+            if let (0, Some(p), Some(m), "ftruncate" | "fallocate") = (ret, &p, self.metrics.as_mut(), name) {
+                // what the file holds (FS_API_SWEEP.md S-18), the open's file
+                let held = f.as_ref().and_then(|f| f.borrow().file).unwrap_or_else(|| m.m.file(p));
+                let int = |i: usize| a.get(i).and_then(|x| int0(x));
+                // a length the trace does not show ends nothing
+                if name == "ftruncate" {
+                    if let Some(n) = int(1) {
+                        m.m.ended(held, n.max(0) as u64, None);
+                    }
+                } else if let (Some(mode), Some(o), Some(l)) = (a.get(1).and_then(|x| crate::export::falloc_bits(x)), int(2), int(3)) {
+                    m.m.fallocated(held, o, l, mode);
+                }
+            }
             if let (0, Some(p)) = (ret, &p) {
                 if self.extent.contains_key(p) {
                     let v = match name {
@@ -1782,18 +1810,32 @@ impl Tracer {
             if let (0, Some(p)) = (ret, &p) {
                 self.known_size(tid, name, kind, p, a, di, pi);
             }
+            if ret == 0 && self.metrics.is_some() {
+                // what a path holds (FS_API_SWEEP.md S-18), a rename's either name may be outside the root
+                if kind == "rename" {
+                    let to = self.rename_target(tid, a, di, pi);
+                    let exchange = name == "renameat2" && a.get(4).is_some_and(|f| f.contains("RENAME_EXCHANGE"));
+                    self.metrics.as_mut().unwrap().m.renamed(p.as_deref(), to.as_deref(), exchange);
+                } else if let Some(p) = &p {
+                    let m = &mut self.metrics.as_mut().unwrap().m;
+                    match kind {
+                        "unlink" => m.unlinked(p),
+                        "truncate" => {
+                            if let Some(n) = a.get(pi + 1).and_then(|x| int0(x)) {
+                                m.ended_name(p, n.max(0) as u64, None);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             if p.is_none() && kind == "rename" && inst.is_some() && self.export.is_some() {
                 // from outside the root into it: the name appears with nothing the runner can make
                 // it from (FS_API_SWEEP.md S-25)
-                let j = if di.is_none() { pi + 1 } else { pi + 2 };
-                if a.len() > j {
-                    let d = if di.is_some() { Some(a[j - 1].clone()) } else { None };
-                    let r = self.resolve(tid, d.as_deref(), c_string(&a[j]));
-                    if self.under(r.as_deref()).is_some() {
-                        let ex = self.export.as_mut().unwrap();
-                        ex.note("calls_not_exported", 1);
-                        ex.note("not_exported:rename:source outside the root", 1);
-                    }
+                if self.rename_target(tid, a, di, pi).is_some() {
+                    let ex = self.export.as_mut().unwrap();
+                    ex.note("calls_not_exported", 1);
+                    ex.note("not_exported:rename:source outside the root", 1);
                 }
             }
             if let (Some(_), Some(p)) = (inst, &p) {
@@ -1802,21 +1844,24 @@ impl Tracer {
                     ex.note("calls_not_exported", 1);
                     ex.note(&format!("not_exported:renameat2:{f}"), 1);
                 } else if self.export.is_some() {
-                    let mut to = None;
-                    if kind == "rename" {
-                        let j = if di.is_none() { pi + 1 } else { pi + 2 };
-                        if a.len() > j {
-                            let d = if di.is_some() { Some(a[j - 1].clone()) } else { None };
-                            let r = self.resolve(tid, d.as_deref(), c_string(&a[j]));
-                            to = self.under(r.as_deref());
-                        }
-                    }
+                    let to = if kind == "rename" { self.rename_target(tid, a, di, pi) } else { None };
                     self.export.as_mut().unwrap().path_op(when, kind, name, p, a, pi, to.as_deref(), err)?;
                 }
             }
             return Ok(());
         }
         Ok(())
+    }
+
+    /// A rename's destination, under the root.
+    fn rename_target(&mut self, tid: i64, a: &[String], di: Option<usize>, pi: usize) -> Option<String> {
+        let j = if di.is_none() { pi + 1 } else { pi + 2 };
+        if a.len() <= j {
+            return None;
+        }
+        let d = if di.is_some() { Some(a[j - 1].clone()) } else { None };
+        let r = self.resolve(tid, d.as_deref(), c_string(&a[j]));
+        self.under(r.as_deref())
     }
 
     /// What a successful path call does to the sizes the trace knows (`extent`).
@@ -1834,14 +1879,7 @@ impl Tracer {
                 }
             }
         } else if kind == "rename" {
-            let j = if di.is_none() { pi + 1 } else { pi + 2 };
-            let to = if a.len() > j {
-                let d = if di.is_some() { Some(a[j - 1].clone()) } else { None };
-                let r = self.resolve(tid, d.as_deref(), c_string(&a[j]));
-                self.under(r.as_deref())
-            } else {
-                None
-            };
+            let to = self.rename_target(tid, a, di, pi);
             if let (true, Some(to)) = (name == "renameat2" && a.get(4).is_some_and(|f| f.contains("RENAME_EXCHANGE")), &to) {
                 // the two names trade files
                 let (x, y) = (self.extent.remove(p), self.extent.remove(to));
@@ -1880,7 +1918,7 @@ impl Tracer {
         for (_, k) in keys {
             for w in self.aio.remove(&k).unwrap().1 {
                 self.note("aio_results_assumed_complete", 1);
-                self.data(w.kind, w.inst, w.tid, &w.path, w.off, w.nbytes, w.nbytes)?;
+                self.data(w.kind, w.inst, w.tid, &w.path, w.file, w.off, w.nbytes, w.nbytes)?;
             }
         }
         // contexts made and never submitted to: unused, or `io_submit` left out of the trace's

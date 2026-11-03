@@ -430,8 +430,11 @@ fn positions_and_lengths_outside_what_a_file_holds_are_refused_when_walked() {
     refused(opened(&o, json!(["RDWR", "CREAT"]), vec![json!({"lseek": {"file": h, "offset": 0, "whence": "END"}})]), "lseek END on `o/1`: size unknown");
     refused(opened(&f, json!(["RDONLY"]), vec![json!({"lseek": {"file": h, "offset": -5, "whence": "CUR"}})]), "lseek to -5 on `d/0`");
     refused(opened(&f, json!(["RDONLY"]), vec![json!({"fadvise": {"file": h, "advice": "WILLNEED", "len": {"neg": 1}}})]), "fadvise: offset 0, len -1");
-    refused(opened(&o, json!(["WRONLY", "CREAT"]), vec![json!({"write": {"file": h, "len": i64::MAX, "offset": 0}}), json!({"write": {"file": h, "len": i64::MAX, "offset": 0}})]),
-        "write: the size written, 9223372036854775807 + 9223372036854775807 bytes, passes 2^63-1");
+    // a size past 2^63-1 (a write's end is past_end's), by a range inserted or allocated
+    refused(opened(&o, json!(["WRONLY", "CREAT"]), vec![json!({"write": {"file": h, "len": i64::MAX, "offset": 0}}), json!({"fallocate": {"file": h, "offset": 0, "len": 1, "mode": ["INSERT_RANGE"]}})]),
+        "fallocate: the size, 9223372036854775807 and 0 + 1 bytes, passes 2^63-1");
+    refused(opened(&o, json!(["WRONLY", "CREAT"]), vec![json!({"fallocate": {"file": h, "offset": i64::MAX, "len": 1}})]),
+        "fallocate: the size, 0 and 9223372036854775807 + 1 bytes, passes 2^63-1");
     // a known size: an `END` seek from it, and an ioctl and fadvise with their codes
     let ops = walk(&doc(json!({}), d(), ns.clone(), opened(&f, json!(["RDONLY"]), vec![
         json!({"lseek": {"file": h, "offset": -1, "whence": "END"}}), json!({"read": {"file": h, "len": 4}}),

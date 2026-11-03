@@ -23,7 +23,10 @@
 //! gone, noted `multipart_aborted`); and an object listing without a delimiter noted
 //! `list_recursive` (S-33; two cases, the note in the header and the metrics the only
 //! difference); and a log whose records' times go back noted `records_out_of_order` with
-//! the largest step back (S-35; one case, the two notes the only difference).
+//! the largest step back (S-35; one case, the two notes the only difference); and a path's
+//! history kept by the file it names and the data that file holds (S-18; two cases of one
+//! strace, its object popularity the only difference: a file renamed and written again is the
+//! one object, a new file under the name after its `unlink` another).
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths

@@ -1674,7 +1674,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         let (seed, expect, positioned, as_written, capped) = (io.seed, io.expect, io.positioned, io.as_written, io.capped);
         if kind == OpKind::Write && as_written {
             let path = io.path.clone();
-            self.add_written(path, off, len)?;
+            self.add_written(path, off, len);
         }
         self.set_pending(Pending { kind, path: None, path2: None, offset: off, len, bytes, aux: 0, expect, positioned, seed, capped });
         Ok(Some(Next::Op))
@@ -1703,15 +1703,11 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     }
 
     /// Bytes written to an `as_written` object, its size; checked, never wrapped (RC1 review).
-    /// A write of `len` at `off`: the size is the end of the furthest write (a rewrite adds
-    /// nothing, a write past the end leaves a hole).
-    fn add_written(&mut self, path: Arc<str>, off: i64, len: i64) -> ER<()> {
-        let Some(end) = off.checked_add(len) else {
-            return other(format!("write: its end, {off} + {len} bytes, passes 2^63-1"));
-        };
+    /// A write of `len` at `off`, whose end `past_end` has checked: the size is the end of the
+    /// furthest write (a rewrite adds nothing, a write past the end leaves a hole).
+    fn add_written(&mut self, path: Arc<str>, off: i64, len: i64) {
         let n = self.written.entry(path).or_insert(0);
-        *n = (*n).max(end);
-        Ok(())
+        *n = (*n).max(off + len);
     }
 
     /// A `fallocate` of `[off, off + len)` with `mode` on an as_written object: a collapsed range
@@ -1822,7 +1818,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 past_end(OpKind::Write, off, len)?;
                 if n == 1 {
                     if st.as_written {
-                        self.add_written(t.path.clone(), off, len)?;
+                        self.add_written(t.path.clone(), off, len);
                     }
                     if positioned.is_none() {
                         self.open.get_mut(&t.path).unwrap().pos = off + len;

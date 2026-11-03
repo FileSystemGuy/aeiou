@@ -74,7 +74,7 @@
           "class": null
         },
         "skew": {
-          "value": 0.01,
+          "value": 0.0139726,
           "spread": 0.0,
           "class": "uniform"
         }

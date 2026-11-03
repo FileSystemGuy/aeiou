@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::ast::FallocFlag;
+use crate::ast::{FallocFlag, OpenFlag};
 use crate::metrics::{Opts as MetricsOpts, TraceMetrics};
 use crate::strace::{self, for_each_line, int0, normpath, Seen, Tracer, When, R, W};
 use crate::trace::{Line, LineOp, Ret};
@@ -66,6 +66,14 @@ fn falloc_mode(m: &str) -> Option<Vec<&'static str>> {
         return FallocFlag::of_mode(u64::try_from(n).ok()?).map(|f| f.into_iter().map(FallocFlag::name).collect());
     }
     m.split('|').map(|p| p.trim().strip_prefix("FALLOC_FL_").and_then(FallocFlag::from_name).map(FallocFlag::name)).collect()
+}
+
+/// `fallocate`'s mode as strace prints it, as its bits; `None` for a bit with no flag.
+pub(crate) fn falloc_bits(m: &str) -> Option<u64> {
+    if let Some(n) = int0(m) {
+        return FallocFlag::of_mode(u64::try_from(n).ok()?).map(|f| FallocFlag::mode(&f));
+    }
+    m.split('|').map(|p| p.trim().strip_prefix("FALLOC_FL_").and_then(FallocFlag::from_name).map(FallocFlag::bit)).sum()
 }
 
 /// A request of a `submit` line.
@@ -774,16 +782,29 @@ pub struct FileMetrics {
     pub m: TraceMetrics,
     pos: HashMap<usize, i64>,
     paths: HashMap<usize, String>,
+    /// The file each open holds (`metrics::Metrics::file`).
+    files: HashMap<usize, u64>,
     lanes: HashSet<usize>,
 }
 
 impl FileMetrics {
     pub fn new(block: Option<u64>) -> FileMetrics {
-        FileMetrics { m: TraceMetrics::new(MetricsOpts { block }), pos: HashMap::new(), paths: HashMap::new(), lanes: HashSet::new() }
+        FileMetrics { m: TraceMetrics::new(MetricsOpts { block }), pos: HashMap::new(), paths: HashMap::new(), files: HashMap::new(), lanes: HashSet::new() }
     }
 
     fn path(&self, fd: usize) -> Result<String> {
         self.paths.get(&fd).cloned().ok_or_else(|| anyhow!("an op on open {fd}, which no line opened"))
+    }
+
+    /// The file open `fd` holds, else the one its path names.
+    fn file(&mut self, fd: usize) -> Result<u64> {
+        match self.files.get(&fd) {
+            Some(f) => Ok(*f),
+            None => {
+                let p = self.path(fd)?;
+                Ok(self.m.m.file(&p))
+            }
+        }
     }
 
     fn data(&mut self, lane: usize, kind: usize, fd: usize, offset: Option<i64>, len: i64, ret: &Value) -> Result<()> {
@@ -798,7 +819,8 @@ impl FileMetrics {
             }
         };
         let path = self.path(fd)?;
-        self.m.data(kind, 0, lane as i64, &path, off, len, n)
+        let file = self.files.get(&fd).copied();
+        self.m.data(kind, 0, lane as i64, &path, file, off, len, n)
     }
 
     /// One line, as the runner reads it (`trace::Line`).
@@ -810,10 +832,18 @@ impl FileMetrics {
             Ret::Err(_) => Value::Null,
         };
         match &l.op {
-            LineOp::Open { fd, path, .. } => {
+            LineOp::Open { fd, path, flags, ret: r, .. } => {
                 self.paths.insert(*fd, path.clone());
                 self.pos.insert(*fd, 0);
                 self.m.op("open");
+                if matches!(r, Ret::Int(_)) {
+                    // what a path holds (FS_API_SWEEP.md S-18): the open holds the file its name is
+                    let f = self.m.m.file(path);
+                    self.files.insert(*fd, f);
+                    if flags.contains(&OpenFlag::TRUNC) {
+                        self.m.m.ended(f, 0, None);
+                    }
+                }
             }
             LineOp::Read { fd, offset, len, ret: r } => self.data(lane, R, *fd, *offset, *len, &ret(r))?,
             LineOp::Write { fd, offset, len, ret: r } => self.data(lane, W, *fd, *offset, *len, &ret(r))?,
@@ -844,14 +874,42 @@ impl FileMetrics {
             LineOp::Readdir { .. } => self.m.op("readdir"),
             LineOp::Ioctl { .. } => self.m.op("ioctl"),
             LineOp::Fadvise { .. } => self.m.op("fadvise"),
-            LineOp::Ftruncate { .. } => self.m.op("ftruncate"),
-            LineOp::Truncate { .. } => self.m.op("truncate"),
-            LineOp::Fallocate { .. } => self.m.op("fallocate"),
+            // what a path holds (FS_API_SWEEP.md S-18), from the calls that succeeded
+            LineOp::Ftruncate { fd, len, ret: r } => {
+                self.m.op("ftruncate");
+                if matches!(r, Ret::Int(_)) {
+                    let f = self.file(*fd)?;
+                    self.m.m.ended(f, (*len).max(0) as u64, None);
+                }
+            }
+            LineOp::Truncate { path, len, ret: r } => {
+                self.m.op("truncate");
+                if matches!(r, Ret::Int(_)) {
+                    self.m.m.ended_name(path, (*len).max(0) as u64, None);
+                }
+            }
+            LineOp::Fallocate { fd, offset, len, mode, ret: r } => {
+                self.m.op("fallocate");
+                if matches!(r, Ret::Int(_)) {
+                    let f = self.file(*fd)?;
+                    self.m.m.fallocated(f, *offset, *len, FallocFlag::mode(mode));
+                }
+            }
             LineOp::Stat { .. } => self.m.op("stat"),
-            LineOp::Unlink { .. } => self.m.op("unlink"),
+            LineOp::Unlink { path, ret: r } => {
+                self.m.op("unlink");
+                if matches!(r, Ret::Int(_)) {
+                    self.m.m.unlinked(path);
+                }
+            }
             LineOp::Mkdir { .. } => self.m.op("mkdir"),
             LineOp::Rmdir { .. } => self.m.op("rmdir"),
-            LineOp::Rename { .. } => self.m.op("rename"),
+            LineOp::Rename { path, to, ret: r } => {
+                self.m.op("rename");
+                if matches!(r, Ret::Int(_)) {
+                    self.m.m.renamed(Some(path), Some(to), false);
+                }
+            }
         }
         Ok(())
     }

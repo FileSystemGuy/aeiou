@@ -94,8 +94,8 @@
           "class": "repeated"
         },
         "skew": {
-          "value": 0.0624535,
-          "spread": 0.00502399,
+          "value": 0.068279,
+          "spread": 0.00401617,
           "class": "uniform"
         }
       }

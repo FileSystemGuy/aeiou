@@ -196,6 +196,15 @@ pub struct Metrics {
     /// instances interleave in time (`aeiou-trace --instance-root`), the dry run's never do.
     cur: i64,
     parked: HashMap<i64, (Instance, Extents)>,
+    /// What a path holds (`FS_API_SWEEP.md` S-18): the file each name is, as a directory
+    /// entry, taken away by an `unlink` and moved by a rename; an open holds the file, not the
+    /// name, so its calls reach the file whatever happens to the name after.
+    names: BTreeMap<Box<str>, u64>,
+    /// The key of a file's data, the histories of bytes and blocks and the popularity of
+    /// objects being kept by it, where it is not the file's own id: a file emptied whole
+    /// (`O_TRUNC`, a truncate to 0) holds new data, a new object.
+    data_keys: HashMap<u64, u64>,
+    next_key: u64,
 }
 
 impl std::fmt::Debug for Instance {
@@ -399,6 +408,28 @@ impl Extents {
         p
     }
 
+    /// The pieces of `path` in `[from, to)` move to `dead`, at their times.
+    fn rekey(&mut self, path: u64, from: u64, to: u64, dead: u64) {
+        let mut over: Vec<u64> = Vec::new();
+        if let Some((&(p, s), piece)) = self.pieces.range(..(path, from)).next_back() {
+            if p == path && piece.end > from {
+                over.push(s);
+            }
+        }
+        over.extend(self.pieces.range((path, from)..(path, to)).map(|(k, _)| k.1));
+        for s in over {
+            let old = self.take(path, s);
+            let (a, b) = (s.max(from), old.end.min(to));
+            if s < a {
+                self.put(path, s, Piece { end: a, ..old });
+            }
+            self.put(dead, a, Piece { end: b, ..old });
+            if old.end > b {
+                self.put(path, b, Piece { end: old.end, ..old });
+            }
+        }
+    }
+
     fn live_of(&self, run: u64) -> u64 {
         self.runs.get(&run).copied().unwrap_or(0)
     }
@@ -523,6 +554,113 @@ impl Metrics {
         Metrics { opts_block: o.block.map(|b| b.max(1)), ..Default::default() }
     }
 
+    fn fresh(&mut self) -> u64 {
+        self.next_key += 1;
+        self.next_key
+    }
+
+    /// The file `path` names, a new one if it names none: what an open holds.
+    pub fn file(&mut self, path: &str) -> u64 {
+        if let Some(f) = self.names.get(path) {
+            return *f;
+        }
+        let f = self.fresh();
+        self.names.insert(path.into(), f);
+        f
+    }
+
+    /// The key of the data `file` holds.
+    pub fn data_key(&self, file: u64) -> u64 {
+        self.data_keys.get(&file).copied().unwrap_or(file)
+    }
+
+    /// What `file` held in `[from, to)` (`to` `None`: to its end) is gone, for every instance:
+    /// all of it, and the file holds new data; a range, and its bytes, and the blocks wholly in
+    /// it, move to a key no file has, still touched when they were and never touched again.
+    pub fn ended(&mut self, file: u64, from: u64, to: Option<u64>) {
+        if from == 0 && to.is_none() {
+            let k = self.fresh();
+            self.data_keys.insert(file, k);
+            return;
+        }
+        let to = to.unwrap_or(u64::MAX);
+        if to <= from {
+            return;
+        }
+        let (key, dead, block) = (self.data_key(file), self.fresh(), self.opts_block);
+        let one = |inst: &mut Instance, ext: &mut Extents| {
+            if let Some(b) = block {
+                // the blocks wholly in the range, a last one the data ends inside included
+                let end = ext.pieces.range((key, 0)..=(key, u64::MAX)).next_back().map_or(0, |(_, p)| p.end);
+                let upto = if to >= end { end.div_ceil(b) } else { to / b };
+                for blk in from.div_ceil(b)..upto {
+                    if let Some(slot) = inst.last.remove(&block_key(key, blk)) {
+                        inst.last.insert(block_key(dead, blk), slot);
+                    }
+                }
+            }
+            ext.rekey(key, from, to, dead);
+        };
+        one(&mut self.inst, &mut self.ext);
+        for (inst, ext) in self.parked.values_mut() {
+            one(inst, ext);
+        }
+    }
+
+    /// `ended` of the file `path` names, if it names one (a truncate by path).
+    pub fn ended_name(&mut self, path: &str, from: u64, to: Option<u64>) {
+        if let Some(&f) = self.names.get(path) {
+            self.ended(f, from, to);
+        }
+    }
+
+    /// An `unlink`: the name names no file; an open of it keeps it.
+    pub fn unlinked(&mut self, path: &str) {
+        self.names.remove(path);
+    }
+
+    /// A `fallocate` of `[off, off + len)` with `mode` (`linux/falloc.h` bits): a hole punched
+    /// and a range zeroed end what the range held, a range collapsed or inserted what the file
+    /// held from `off` on (its bytes move, and their history is not moved with them); an
+    /// allocation changes no data.
+    pub fn fallocated(&mut self, file: u64, off: i64, len: i64, mode: u64) {
+        use crate::ast::FallocFlag as F;
+        if off < 0 || len <= 0 {
+            return;
+        }
+        let (off, len) = (off as u64, len as u64);
+        if mode & (F::COLLAPSE_RANGE.bit() | F::INSERT_RANGE.bit()) != 0 {
+            self.ended(file, off, None);
+        } else if mode & (F::PUNCH_HOLE.bit() | F::ZERO_RANGE.bit() | F::WRITE_ZEROES.bit()) != 0 {
+            self.ended(file, off, Some(off.saturating_add(len)));
+        }
+    }
+
+    /// A rename of `from` to `to` (`None`: a name outside the root): the file `from` and every
+    /// path under it names is `to`'s and the paths under it, and the file `to` named is
+    /// unlinked, or, under `exchange`, `from`'s.
+    pub fn renamed(&mut self, from: Option<&str>, to: Option<&str>, exchange: bool) {
+        fn take(names: &mut BTreeMap<Box<str>, u64>, p: Option<&str>) -> Vec<(String, u64)> {
+            let Some(p) = p else { return Vec::new() };
+            let (lo, hi) = (format!("{p}/"), format!("{p}0"));
+            let under: Vec<Box<str>> = names.range::<str, _>((std::ops::Bound::Included(lo.as_str()), std::ops::Bound::Excluded(hi.as_str()))).map(|(k, _)| k.clone()).collect();
+            let mut out: Vec<(String, u64)> = names.remove(p).map(|k| (String::new(), k)).into_iter().collect();
+            for k in under {
+                let v = names.remove(&k).unwrap();
+                out.push((k[p.len()..].to_string(), v));
+            }
+            out
+        }
+        let (a, b) = (take(&mut self.names, from), take(&mut self.names, to));
+        for (dst, moved) in [(to, a), (from, if exchange { b } else { Vec::new() })] {
+            if let Some(d) = dst {
+                for (rest, k) in moved {
+                    self.names.insert(format!("{d}{rest}").into(), k);
+                }
+            }
+        }
+    }
+
     fn new_run(&mut self) -> u64 {
         self.next_run += 1;
         self.next_run
@@ -615,8 +753,8 @@ impl Metrics {
     }
 
     fn check_size(&self) -> Result<()> {
-        if self.blocks.len() > MAX_ENTRIES || self.objects.len() > MAX_ENTRIES || self.bytes.pieces.len() > MAX_ENTRIES {
-            bail!("--metrics: more than {MAX_ENTRIES} distinct byte ranges, blocks, or objects over all instances");
+        if self.blocks.len() > MAX_ENTRIES || self.objects.len() > MAX_ENTRIES || self.bytes.pieces.len() > MAX_ENTRIES || self.names.len() > MAX_ENTRIES || self.data_keys.len() > MAX_ENTRIES {
+            bail!("--metrics: more than {MAX_ENTRIES} distinct byte ranges, blocks, objects, or names over all instances");
         }
         Ok(())
     }
@@ -751,6 +889,8 @@ struct Stream<'m, 'a> {
     done: bool,
     /// Open runs by `(path hash, kind)`.
     runs: HashMap<(u64, usize), Run>,
+    /// The file each path this context has open is (`record`).
+    files: HashMap<u64, u64>,
     chain: u64,
     /// The context's lane in an emitted trace (`DryRun::new_lane`), unique within its instance.
     lane: usize,
@@ -758,7 +898,7 @@ struct Stream<'m, 'a> {
 
 impl<'m, 'a: 'm> Stream<'m, 'a> {
     fn new(vm: Vm<'m, 'a>, role: Role, lane: usize) -> Self {
-        Stream { vm, role, par: Vec::new(), par_n: 0, par_at: 0, bg: Vec::new(), at: 0, own_done: false, done: false, runs: HashMap::new(), chain: 0, lane }
+        Stream { vm, role, par: Vec::new(), par_n: 0, par_at: 0, bg: Vec::new(), at: 0, own_done: false, done: false, runs: HashMap::new(), files: HashMap::new(), chain: 0, lane }
     }
 
     fn end_chain(&mut self, m: &mut Metrics) {
@@ -774,25 +914,64 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
         }
     }
 
-    fn record(runs: &mut HashMap<(u64, usize), Run>, m: &mut Metrics, op: &Op) -> Result<()> {
+    /// One op: its data, and what it does to what a path holds. `files` holds the file each
+    /// open path of the context is (`Metrics::names`), a path opened by another context
+    /// reaching the file its name is.
+    fn record(runs: &mut HashMap<(u64, usize), Run>, files: &mut HashMap<u64, u64>, m: &mut Metrics, op: &Op) -> Result<()> {
+        let path = xxh3_64(op.path.as_bytes());
+        let file = |m: &mut Metrics| files.get(&path).copied().unwrap_or_else(|| m.file(op.path));
         let kind = match op.kind {
             OpKind::Read => R,
             OpKind::Write => W,
             OpKind::Close => {
-                let p = xxh3_64(op.path.as_bytes());
+                files.remove(&path);
                 for k in 0..2 {
-                    if let Some(r) = runs.remove(&(p, k)) {
+                    if let Some(r) = runs.remove(&(path, k)) {
                         m.run_done(k, &r);
                     }
                 }
                 return Ok(());
             }
+            // unless the op may fail (a `trace` node's failed call carries its errno), as the
+            // trace's own metrics take only the calls that succeeded
+            _ if !op.expect.is_empty() => return Ok(()),
+            OpKind::Open => {
+                let f = m.file(op.path);
+                files.insert(path, f);
+                if op.aux & crate::vm::flag_bits(&[crate::ast::OpenFlag::TRUNC]) != 0 {
+                    m.ended(f, 0, None);
+                }
+                return Ok(());
+            }
+            OpKind::Ftruncate => {
+                let f = file(m);
+                m.ended(f, op.len.max(0) as u64, None);
+                return Ok(());
+            }
+            OpKind::Truncate => {
+                m.ended_name(op.path, op.len.max(0) as u64, None);
+                return Ok(());
+            }
+            OpKind::Fallocate => {
+                let f = file(m);
+                m.fallocated(f, op.offset, op.len, op.aux);
+                return Ok(());
+            }
+            OpKind::Unlink => {
+                m.unlinked(op.path);
+                return Ok(());
+            }
+            OpKind::Rename => {
+                m.renamed(Some(op.path), op.path2, false);
+                return Ok(());
+            }
             _ => return Ok(()),
         };
-        let path = xxh3_64(op.path.as_bytes());
+        let f = file(m);
+        let key = m.data_key(f);
         let bytes = op.bytes;
         if bytes <= 0 {
-            return m.data(kind, path, op.offset, op.len, bytes, 0);
+            return m.data(kind, key, op.offset, op.len, bytes, 0);
         }
         // a run ends before the op that does not continue it
         let r = runs.entry((path, kind)).or_default();
@@ -803,7 +982,7 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
         if r.ops == 0 {
             r.id = m.new_run();
         }
-        m.data(kind, path, op.offset, op.len, bytes, r.id)?;
+        m.data(kind, key, op.offset, op.len, bytes, r.id)?;
         if kind == R {
             for h in &m.hits {
                 match r.again.iter_mut().find(|(x, _)| *x == h.run) {
@@ -890,7 +1069,7 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
                 Some(Event::Op(op, ctx)) => {
                     sink.lane = self.lane;
                     sink.op(&op, &ctx)?;
-                    Self::record(&mut self.runs, m, &op)?;
+                    Self::record(&mut self.runs, &mut self.files, m, &op)?;
                     self.end_chain(m);
                     return Ok(true);
                 }
@@ -953,6 +1132,8 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
 fn trace_walk(tf: &crate::trace::TraceFile, base: &crate::trace::OwnedCtx, sink: &mut DryRun, m: &mut Metrics) -> Result<()> {
     use crate::trace::Step;
     let mut runs: Vec<HashMap<(u64, usize), Run>> = (0..tf.lanes()).map(|_| HashMap::new()).collect();
+    // the file's opens are the process's, every lane's
+    let mut files: HashMap<u64, u64> = HashMap::new();
     let lanes: Vec<usize> = (0..tf.lanes()).map(|_| sink.new_lane()).collect();
     crate::trace::walk(tf, &base.indices, |step| match step {
         Step::Gap { ns, .. } => {
@@ -966,7 +1147,7 @@ fn trace_walk(tf: &crate::trace::TraceFile, base: &crate::trace::OwnedCtx, sink:
         Step::Op { lane, op, indices } => {
             sink.lane = lanes[lane];
             sink.op(&op, &base.ctx(indices))?;
-            Stream::record(&mut runs[lane], m, &op)
+            Stream::record(&mut runs[lane], &mut files, m, &op)
         }
     })?;
     for r in runs.iter_mut() {
@@ -1063,14 +1244,17 @@ impl TraceMetrics {
     }
 
     /// One `read` or `write`: `length` requested at `offset`, `nbytes` moved, by `context` of
-    /// `instance`. A run ends before the op that does not continue it.
+    /// `instance`, on `file` (`Metrics::file` at its open; `None`: the file `path` names). A run
+    /// ends before the op that does not continue it.
     #[allow(clippy::too_many_arguments)]
-    pub fn data(&mut self, kind: usize, instance: i64, context: i64, path: &str, offset: i64, length: i64, nbytes: i64) -> Result<()> {
+    pub fn data(&mut self, kind: usize, instance: i64, context: i64, path: &str, file: Option<u64>, offset: i64, length: i64, nbytes: i64) -> Result<()> {
         self.op(if kind == R { "read" } else { "write" });
         self.bytes[kind] += nbytes.max(0) as u64;
         let pid = xxh3_64(path.as_bytes());
+        let file = file.unwrap_or_else(|| self.m.file(path));
+        let key = self.m.data_key(file);
         if nbytes <= 0 || offset < 0 {
-            return self.m.data(kind, pid, offset, length, nbytes, 0);
+            return self.m.data(kind, key, offset, length, nbytes, 0);
         }
         let runs = self.runs.entry(context).or_default();
         if runs.get(&(pid, kind)).is_some_and(|(r, _)| r.end != offset) {
@@ -1086,7 +1270,7 @@ impl TraceMetrics {
         let id = runs[&(pid, kind)].0.id;
         self.m.use_instance(instance);
         self.instances.insert(instance);
-        self.m.data(kind, pid, offset, length, nbytes, id)?;
+        self.m.data(kind, key, offset, length, nbytes, id)?;
         let (r, _) = self.runs.get_mut(&context).unwrap().get_mut(&(pid, kind)).unwrap();
         if kind == R {
             for h in &self.m.hits {

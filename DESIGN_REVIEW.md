@@ -7412,6 +7412,16 @@ against them.
 or nothing); a per-mechanism block (a knob that extents make unnecessary); a larger guard (20 GB
 for a unit no application reads in).
 
+*Revised 2026-11-03 (`FS_API_SWEEP.md` S-18, the user's choices): the pieces were keyed by the
+path's hash and never reset, so a file rewritten under its name (an `O_TRUNC` checkpoint, a
+truncate, a punched hole) showed false reuse, and a write-to-a-temporary-then-rename-then-read
+lost its write-then-read link. They are keyed by the data a file holds: a path names a file, an
+open holds the file (its calls reach it after an `unlink` or `rename` of the name, as the
+kernel's do), and what ends the data, whole or a range, ends it in every instance; the ended
+bytes stay touched when they were, so distances do not shrink. An object of the popularity is a
+file's data, so an `O_TRUNC` rewrite is a new object and a renamed file the same one.
+`runner/REFERENCE.md` §10.*
+
 ### 3.80 Listing the use cases: `aeiou cases` (raised by the user 2026-10-23; the shape decided and built the same day)
 
 **The problem.** A use case runs by name (`--case NAME`, §3.78), but nothing tells a user which

@@ -191,7 +191,22 @@ work item of its own.
 - **S-18** (A) Locality history is keyed by path hash and never reset or moved by an `O_TRUNC`
   open, `truncate`, `ftruncate`, a punched hole, `unlink`, or `rename` (`metrics.rs:777-791`,
   both sides): false reuse for a file rewritten under its name, the write-tmp-rename-read link
-  lost. *Status: open.* (Changes measured shapes: the catalog is re-measured.)
+  lost. *Status: fixed 2026-11-03 (the user's choices: per op and precise, every instance,
+  an object the data): a path names a file (`Metrics::names`), an open holds the file and its
+  calls reach it whatever happens to the name after, and the histories are kept by the key of
+  the file's data (`Metrics::data_key`): an `O_TRUNC` open and a truncate to 0 give the file new
+  data, a truncate to `L` ends its bytes from `L`, a punched or zeroed range the bytes in it, a
+  collapsed or inserted range the bytes from its offset (`Metrics::ended`, `fallocated`), in
+  every instance; an `unlink` takes the name away and a `rename` moves it, a directory's with
+  every path under it, `RENAME_EXCHANGE` trading two (`Metrics::renamed`); the same calls from
+  the dry run (`Stream::record`), an strace, and a trace file, those that succeeded only;
+  `runner/REFERENCE.md` §10. Two strace goldens of one trace change in object popularity alone
+  (a file renamed and written again is one object); the catalog re-measured: LMCache shared-fs's
+  `reads_own_writes` becomes yes (its write-to-a-temporary-then-rename-then-read), and the skew
+  of dcp-save, dcp-load, and LMCache local-disk moves (an `O_TRUNC` rewrite a new object); tests
+  `what_a_path_holds_ends_and_moves_its_history`,
+  `a_traces_renames_move_history_and_failed_calls_change_nothing`,
+  `a_truncate_ends_the_block_the_data_ended_inside`.*
 - **S-19** (A) The VM's size of a file (`as_written`, `until_eof`, `lseek END`) ignores
   `truncate`, `ftruncate`, and an extending `fallocate`, and sums rewrites without `TRUNC`
   whatever their offset (`vm.rs:1683, 1850-1871`). *Status: fixed 2026-11-03 (the user's

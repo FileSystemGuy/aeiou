@@ -1218,7 +1218,7 @@
             "request_size_write": "large",
             "read_share": "mixed",
             "metadata": "high",
-            "reads_own_writes": "no",
+            "reads_own_writes": "yes",
             "reread": "repeated",
             "skew": "uniform"
           }
@@ -1281,7 +1281,7 @@
             "request_size_write": "medium",
             "read_share": "mixed",
             "metadata": "high",
-            "reads_own_writes": "no",
+            "reads_own_writes": "yes",
             "reread": "repeated",
             "skew": "uniform"
           }

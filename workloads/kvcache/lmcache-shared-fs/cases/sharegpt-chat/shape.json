@@ -89,9 +89,9 @@
           "class": "high"
         },
         "reads_own_writes": {
-          "value": 0.0,
+          "value": 1.0,
           "spread": 0.0,
-          "class": "no"
+          "class": "yes"
         },
         "reread": {
           "value": 0.619756,
@@ -99,8 +99,8 @@
           "class": "repeated"
         },
         "skew": {
-          "value": 0.038791,
-          "spread": 0.0070952,
+          "value": 0.0273258,
+          "spread": 0.0035716,
           "class": "uniform"
         }
       }
