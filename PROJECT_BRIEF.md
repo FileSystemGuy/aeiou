@@ -1224,7 +1224,9 @@ numbers; the order is this note's.
     forked lane, every close line a real `close(2)`, the implicit closes recorded; S-11, S-12,
     S-14, decided 2026-11-02, §3.93 note): copy, link and symlink and readlink, setattr and xattrs, locks, `syncfs`
     and `sync_file_range`, `msync`, `readahead` and `madvise`, `access`, `statfs`, `lstat`,
-    `SEEK_DATA`/`SEEK_HOLE`, the rename and `RWF_*` flags, `O_PATH`, `O_TMPFILE`, `F_SETFL`, the
+    `SEEK_DATA`/`SEEK_HOLE` (left out of exports until then, S-28), `renameat2` with its flags
+    (exchange, no-replace, whiteout; left out of exports until then, S-27, the user's reminder
+    2026-11-02 that it must come back), `RWF_*` flags, `O_PATH`, `O_TMPFILE`, `F_SETFL`, the
     IOCB fsyncs and vectored requests, batch deletes; and `compare` judging a kind on one side
     only, the flags, and the notes (S-37 to S-39). mmap's page references (S-41) wait on item 54.
 

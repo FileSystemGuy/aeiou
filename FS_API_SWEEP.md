@@ -254,12 +254,14 @@ work item of its own.
   2026-11-02: a `renameat2` with any flag is noted by its flags (`not_exported:renameat2:
   RENAME_EXCHANGE`) and left out, still counted among the metrics' renames; an exchange trades
   the two names' known sizes; test `export_notes_and_leaves_out_what_the_trace_file_cannot_say`;
-  two corpus goldens lose a failed `RENAME_NOREPLACE` rename line for the note.*
+  two corpus goldens lose a failed `RENAME_NOREPLACE` rename line for the note. Left out because
+  the language has no `renameat2` yet: it is implemented with S-40, brief item 58, contract 0.15.*
 - **S-28** (A) `lseek` `SEEK_DATA`/`SEEK_HOLE` are exported as `DATA`/`HOLE`, which the runner's
   `Whence` refuses, so the whole trace file is unusable. Exported only once B adds them (S-40);
   until then noted and left out. *Status: fixed 2026-11-02: noted
   (`not_exported:lseek:SEEK_DATA`, `…:SEEK_HOLE`) and left out, and the open is pinned, so its
-  later reads and writes carry the offsets the seek moved them to; same test.*
+  later reads and writes carry the offsets the seek moved them to; same test. Implemented with
+  S-40, brief item 58, contract 0.15.*
 
 ### The object-log reader
 
