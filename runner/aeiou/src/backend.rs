@@ -324,6 +324,9 @@ pub trait Backend: Send {
     /// `truncate(2)`; `open` is this actor's open of the path, if it has one, for a backend
     /// that keeps state per open (a mapping's size).
     fn truncate(&mut self, path: &Path, len: i64, open: Option<&OpenFile>) -> io::Result<()>;
+    /// Another open of a path a `truncate(2)` just set to `len` (a trace's, held by any lane),
+    /// for a backend that keeps state per open; nothing to do for the others.
+    fn resized(&mut self, _file: &OpenFile, _len: i64) {}
     fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()>;
     /// `mode` is `fallocate(2)`'s (`ast::FallocFlag` bits).
     fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64, mode: u64) -> io::Result<()>;
@@ -1028,9 +1031,13 @@ impl Backend for Mmap {
         self.sync.truncate(path, len, None)?;
         // as at `ftruncate`: this actor's mapping of the path stops at the new size
         if let Some(file) = open {
-            file.size.store(len, Ordering::Release);
+            self.resized(file, len);
         }
         Ok(())
+    }
+
+    fn resized(&mut self, file: &OpenFile, len: i64) {
+        file.size.store(len, Ordering::Release);
     }
 
     fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()> {

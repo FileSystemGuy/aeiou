@@ -216,7 +216,12 @@ work item of its own.
   `op_codes_come_back_as_the_values_they_were_made_from`, which had pinned the default.*
 - **S-23** (A) A trace `truncate` under `--posix mmap` never updates the lane's mapping
   (`run.rs:1622`, `a.fds` is empty in a lane; REFERENCE §13 says otherwise): SIGBUS risk.
-  *Status: open.*
+  *Status: fixed 2026-11-02: after a `truncate` by path succeeds, every open of the path in the
+  trace's open table, whichever lane holds it, is told its new size (`OpenTable::opens_of`, the
+  open ids by path made at the first truncate; `Backend::resized`, which only `mmap` keeps);
+  test `a_truncate_by_path_shortens_every_mapping_the_trace_holds`, a SIGBUS before. An
+  abstract's `truncate` still reaches only the actor's own open of the path (another actor's
+  mapping of it is the same risk, `findings.md` line 77, not in the register).*
 - **S-24** (A) A per-open `O_DIRECT` under `--posix mmap` is read through the page cache with
   nothing said (`validate.rs:568` refuses only `--cache direct`). *Status: open.*
 - **S-25** (A) A rename from outside the root into it is dropped with no note, and the name then

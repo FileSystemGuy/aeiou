@@ -3302,6 +3302,8 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
 pub(crate) struct OpenTable {
     slots: Mutex<Vec<Slot>>,
     cv: Condvar,
+    /// The open ids of each path, made at the first `truncate` by path (`opens_of`).
+    by_path: std::sync::OnceLock<HashMap<String, Vec<usize>>>,
 }
 
 struct Slot {
@@ -3315,7 +3317,21 @@ struct Slot {
 impl OpenTable {
     fn new(tf: &crate::trace::TraceFile) -> Self {
         let slots = tf.opens.iter().map(|o| Slot { fd: None, failed: false, uses_left: o.uses, closes_left: o.closes }).collect();
-        OpenTable { slots: Mutex::new(slots), cv: Condvar::new() }
+        OpenTable { slots: Mutex::new(slots), cv: Condvar::new(), by_path: std::sync::OnceLock::new() }
+    }
+
+    /// The descriptors open now on `path`, whichever lane opened them (`FS_API_SWEEP.md` S-23:
+    /// a `truncate` by path changes the state each keeps, a mapping's size).
+    fn opens_of(&self, tf: &crate::trace::TraceFile, path: &str) -> Vec<Arc<OpenFile>> {
+        let by_path = self.by_path.get_or_init(|| {
+            let mut m: HashMap<String, Vec<usize>> = HashMap::new();
+            for (oid, o) in tf.opens.iter().enumerate() {
+                m.entry(o.path.clone()).or_default().push(oid);
+            }
+            m
+        });
+        let s = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        by_path.get(path).into_iter().flatten().filter_map(|&oid| s[oid].fd.clone()).collect()
     }
 
     fn publish(&self, oid: usize, fd: Option<Arc<OpenFile>>) {
@@ -3454,12 +3470,13 @@ impl Runner {
         let key: Arc<str> = Arc::from(o.path);
         let table = &tables.opens;
         tables.before(tf, g, o.path, &self.sh.aborted)?;
-        let r = self.trace_issue(o, b.oid, table, ctx, &key);
+        let resize = if o.kind == OpKind::Truncate { table.opens_of(tf, o.path) } else { vec![] };
+        let r = self.trace_issue(o, b.oid, table, ctx, &key, &resize);
         tables.after(tf, g);
         r
     }
 
-    fn trace_issue(&mut self, o: &Op, oid: Option<usize>, table: &OpenTable, ctx: &OpCtx, key: &Arc<str>) -> Result<()> {
+    fn trace_issue(&mut self, o: &Op, oid: Option<usize>, table: &OpenTable, ctx: &OpCtx, key: &Arc<str>, resize: &[Arc<OpenFile>]) -> Result<()> {
         let b_oid = oid;
         match o.kind {
             OpKind::Open => {
@@ -3499,6 +3516,11 @@ impl Runner {
                 }
                 None => {
                     let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
+                    if r.is_ok() {
+                        for f in resize {
+                            self.be.resized(f, o.len);
+                        }
+                    }
                     self.a.settle_line(o, ctx, r, ns)
                 }
             },

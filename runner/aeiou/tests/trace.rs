@@ -565,6 +565,38 @@ fn a_truncate_by_path_runs_as_traced_under_every_backend() {
     assert!(err.contains("is --root itself, and the trace changes it"), "{err}");
 }
 
+/// A `truncate` by path shortens the mapping of every open of the path the trace holds, in
+/// this lane and in another (`FS_API_SWEEP.md` S-23): a lane's files are the trace's open
+/// table, not the lane's own, and a read through a mapping made before the truncate at the old
+/// size would fault past the new end (SIGBUS) where it should find the shorter file.
+#[test]
+fn a_truncate_by_path_shortens_every_mapping_the_trace_holds() {
+    let lines = r#"
+{"aeiou_trace":1,"lanes":2,"creates":["f"]}
+{"lane":0,"t":0,"op":"open","fd":0,"path":"f","flags":["RDWR","CREAT","TRUNC"],"mode":420}
+{"lane":0,"t":1,"op":"write","fd":0,"offset":0,"len":16384,"ret":16384}
+{"lane":0,"t":2,"op":"read","fd":0,"offset":0,"len":16384,"ret":16384}
+{"lane":1,"t":3,"op":"open","fd":1,"path":"f","flags":["RDONLY"]}
+{"lane":1,"t":4,"op":"read","fd":1,"offset":0,"len":16384,"ret":16384}
+{"lane":0,"t":5,"op":"truncate","path":"f","len":100}
+{"lane":0,"t":6,"op":"read","fd":0,"offset":0,"len":16384,"ret":100}
+{"lane":1,"t":7,"op":"read","fd":1,"offset":0,"len":16384,"ret":100}
+{"lane":1,"t":8,"op":"close","fd":1}
+{"lane":0,"t":9,"op":"close","fd":0}
+"#;
+    let d = tmpdir("truncate-mapped");
+    let p = abstract_with(&d, lines, Some(1));
+    let (_, model) = leaked(&p, 1);
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    for be in [BackendKind::Mmap, BackendKind::Sync] {
+        let _ = std::fs::remove_file(root.join("f"));
+        let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap_or_else(|e| panic!("{}: {e:#}", be.describe()));
+        assert_eq!(rep.stats.bytes_read, 2 * 16384 + 2 * 100, "{}", be.describe());
+        assert!(rep.stats.unreproduced_errors.is_empty(), "{}: {:?}", be.describe(), rep.stats.unreproduced_errors);
+    }
+}
+
 /// A `fallocate` runs with its mode (`DESIGN_REVIEW.md` §3.92): a hole punched frees the range
 /// and keeps the size, never an allocation, under every API; the mode is in the fingerprint.
 #[test]

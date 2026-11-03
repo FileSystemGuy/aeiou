@@ -1879,7 +1879,10 @@ Lines: a header, then one op per line in the order the calls returned.
   file's space is dropped: the filesystem's work of taking a file's extents apart and
   reclaiming them, deferred, is a load of its own. The runner issues both as the trace made
   them under every API (`truncate` inline under `io_uring`, which has no opcode for a path;
-  under `mmap` this lane's mapping of the path stops at the new size). A descriptor used
+  under `mmap` the mapping of every open of the path the trace holds, in any lane, stops at the
+  new size: `Backend::resized`, from the trace's open table, `OpenTable::opens_of`; until
+  2026-11-02 the lane's own files were looked up, which a lane has none of, and a read through
+  a mapping made at the old size faulted, `FS_API_SWEEP.md` S-23). A descriptor used
   without the open that made it (held from before `strace` began) gets an open written at its
   first use, `{"op":"open",…,"synthesized":true}`, its flags its use (`RDONLY`, `WRONLY`,
   `RDWR`), its position 0; the header lists each (`"missing_opens":[{"path","lane","first"}]`)
