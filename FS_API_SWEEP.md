@@ -230,6 +230,13 @@ work item of its own.
   abstract that declares `posix: mmap`, and the builder at the open; tests
   `a_traced_direct_open_is_refused_under_mmap`, the usage and golden refusals, and
   `test_a_workload_may_declare_its_apis_and_cache`.*
+- **S-42** (A) An abstract's `truncate` by path, or `ftruncate`, under `--posix mmap` updates
+  only the issuing actor's own open of the path (`run.rs` `OpKind::Truncate`, `a.fds.get`;
+  `Mmap::truncate`, `Mmap::ftruncate`): another actor, not a sub-actor, holding its own open of
+  the same path keeps a mapping at the old size, and a read through it past the new end is a
+  SIGBUS that kills the runner. In the sweep's raw findings (`findings.md` line 77) and
+  missed by this register; added 2026-11-02 at the user's request, found again while fixing
+  S-23, the same fault in the trace node. *Status: open.*
 - **S-25** (A) A rename from outside the root into it is dropped with no note, and the name then
   counts as an input that must exist (`strace.rs:1630`). *Status: noted 2026-11-02
   (`not_exported:rename:source outside the root`, `calls_not_exported`; test
