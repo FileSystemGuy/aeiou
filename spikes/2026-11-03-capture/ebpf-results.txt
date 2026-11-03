@@ -1,0 +1,43 @@
+bpftrace v0.20.2
+6.18.54.1-microsoft-standard-WSL2
+== sanity: each probe once on 1000 preads (expect about 2000 events: 1000 pread entries + exits)
+preads=1000 k=0 secs=0.001 us_per_pread=0.923
+
+
+@n: 2030
+
+preads=1000 k=0 secs=0.001 us_per_pread=0.687
+
+
+rec lines: 2031, pread entries: 1002
+230272316626743 24625 e 17 4 7ffc99de0340 310 40
+230272316628020 24625 e 17 4 7ffc99de0210 310 40
+== microbenchmark: 100000 preads of 4 KiB + 4 untraced getppid each; us per pread, best of 3
+untraced                                         0.88 us
+bpftrace count only                              1.07 us
+bpftrace record every call (text, async)         1.24 us
+  recorded: 74789 pread entries of 100000 (fewer = lost)
+Lost 46786 events
+strace man line --seccomp-bpf                   89.93 us
+minimal binary ptrace tracer -s                 56.53 us
+== S3 GET load (200 x 4 KiB + 8 x 8 MiB, twice); median of 5, seconds
+boto3  untraced         median 0.952 s
+boto3  bpf-count        median 0.947 s
+boto3  bpf-record       median 0.973 s
+boto3  strace-seccomp   median 1.295 s
+boto3  mtrace           median 1.110 s
+  last bpf-record of boto3: 21057 lines; lost: 0
+crt    untraced         median 0.387 s
+crt    bpf-count        median 0.382 s
+crt    bpf-record       median 0.478 s
+crt    strace-seccomp   median 3.005 s
+crt    mtrace           median 1.475 s
+  last bpf-record of crt: 46518 lines; lost: 0
+== uprobe on /usr/lib/x86_64-linux-gnu/libssl.so.3 SSL_write_ex (plaintext head) + SSL_read_ex count, boto3 over TLS (system python, 100 x 4 KiB + 4 x 8 MiB put and get); median of 5
+boto3-tls untraced   median 0.634 s
+boto3-tls uprobe     median 0.648 s
+boto3-tls shim       median 0.640 s
+  uprobe lines: 677
+230403324964625 25779 w PUT /bkt HTTP/1.1
+230403329052405 25779 w PUT /bkt/s/0 HTTP/1.1
+done

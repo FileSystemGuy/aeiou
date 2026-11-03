@@ -1,0 +1,15 @@
+bench
+mtrace
+*.so
+data.bin
+venv/
+sysvenv/
+certs/
+*.log
+*.pid
+*.txt
+!*-results.txt
+*.bin
+*.bt
+res-*
+perf.data*

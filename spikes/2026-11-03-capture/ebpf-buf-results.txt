@@ -1,0 +1,31 @@
+bpftrace v0.20.2
+20
+  perf_event_array: yes
+  ringbuf: yes
+  perf_event: yes
+pages    records                  us/pread       kept       lost
+64       entry+exit                  1.453      78418      40611
+64       entry+exit                  1.256      72321      51714
+64       entry+exit                  1.306      73801      49333
+64       one per call                1.501     100002          0
+64       one per call                1.542     100002          0
+64       one per call                1.524      97432       2570
+1024     entry+exit                  1.254     100002          0
+1024     entry+exit                  1.218     100002          0
+1024     entry+exit                  1.260     100002          0
+1024     one per call                1.522     100002          0
+1024     one per call                1.616     100002          0
+1024     one per call                1.471     100002          0
+4096     entry+exit                  1.271     100002          0
+4096     entry+exit                  1.254     100002          0
+4096     entry+exit                  1.246     100002          0
+4096     one per call                1.587     100002          0
+4096     one per call                1.460     100002          0
+4096     one per call                1.578     100002          0
+16384    entry+exit                  1.276     100002          0
+16384    entry+exit                  1.269     100002          0
+16384    entry+exit                  1.280     100002          0
+16384    one per call                1.499     100002          0
+16384    one per call                1.545     100002          0
+16384    one per call                1.479     100002          0
+done

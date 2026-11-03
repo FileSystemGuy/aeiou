@@ -9015,7 +9015,7 @@ maps local files. Where the suite stands for such an application:
   open read at many offsets) are POSIX-shaped; item 61 adds object sites, and a digest of a
   merged trace has sites of both.
 
-### 3.96 The capture: what strace costs, what eBPF and a shim reach, and the kit item 54 builds (debated with the user and measured, 2026-11-03; decisions open, not started)
+### 3.96 The capture: what strace costs, what eBPF and a shim reach, and the kit item 54 builds (debated with the user and measured, 2026-11-03; partly decided, not started)
 
 **How it came up.** The user took up brief item 54 to be able to ask a trace's owner for one
 capture holding both POSIX calls and object requests. This side proposed the strace line with
@@ -9030,7 +9030,8 @@ day.
 eBPF runs by the user, as root), MinIO RELEASE.2025-09-07 on 127.0.0.1 with its data in
 `/dev/shm`, boto3 1.43.123, `s3torchconnectorclient` 1.5.0 (the AWS CRT, no torch), the
 system's Python 3.12.3 (OpenSSL 3.0.13, shared) and uv's standalone Python 3.12.13. Programs
-written for it, kept outside the repository: a microbenchmark (cached 4 KiB `pread`s of one
+written for it, in `spikes/2026-11-03-capture/` with their raw results and a `setup.sh` to
+repeat them (spike code, not tested, part of no tool): a microbenchmark (cached 4 KiB `pread`s of one
 file, each followed by K untraced `getppid`s), a minimal ptrace tracer (`PTRACE_GET_SYSCALL_INFO`,
 an optional seccomp filter on the strace set's calls, binary records of time, tid, number, and
 six arguments at entry and the return at exit, a path read with `process_vm_readv` at entry,
@@ -9139,7 +9140,10 @@ million events a second, about 1 µs of CPU each; a larger buffer only delays th
   owner's contents in the trace, 5.7 times its size); the object requests come from the shim,
   a uprobe, or the store's log instead. And the man page's strace line lacks `--seccomp-bpf`,
   3.6 times slower without it on the microbenchmark (the DiskANN kit used it, §3.42's capture
-  notes).
+  notes). *Added the same day* to every capture line (the man page, both references, the
+  README, `ABSTRACTS.md` §11, the workloads' recipes, `aeiou-trace`'s help and messages):
+  strace prints the same lines with it, and proceeds without it where the filter cannot be
+  installed.
 - *Object-store logs need a reader per format.* No standard exists: S3's server access log and
   CloudTrail differ, MinIO's audit log, Ceph RGW's ops log, Azure's resource logs or Storage
   Analytics, GCS's audit logs, and OCI's service logs each have their own (from knowledge,
@@ -9165,7 +9169,11 @@ side (gcc cannot build BPF programs; clang with the BPF target or aya's toolchai
 a ptrace tracer of ours or strace with `--seccomp-bpf`; whether the shim shares a library with
 item 55's `fstat` shim; the anchor requests (an unsigned `HEAD` shows as a 403 in the owner's
 audit log) or a command the owner supplies; and the measurements on a real Linux client node
-first.
+first. *Decided by the user the same day:* the ptrace source is strace with `--seccomp-bpf`,
+a tracer of ours only if a need appears; the anchors are the unsigned `HEAD`s; the
+measurements on a real Linux node wait until one is available (none now). Still open: aya
+(the user's leaning, for BPF programs that stay simple) or libbpf-rs, and whether the shim
+shares a library with item 55's.
 
 ## 4. Plan changes
 

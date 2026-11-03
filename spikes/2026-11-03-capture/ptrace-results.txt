@@ -1,0 +1,21 @@
+Unprivileged runs of 2026-11-03 (WSL2, kernel 6.18.54.1, i7-13800H, 20 cores; strace 6.8), as reported
+in the session; the script lines are in README.md. E is the man page's -e trace= set.
+
+bench data.bin 100000 4, us per pread, best of 3
+  untraced                                        0.88
+  strace -f -ttt -T -yy -v -e E (no seccomp)    320.40
+  strace -f --seccomp-bpf -ttt -T -yy -v -e E    88.43
+  the same, -o /dev/null                         66.55
+  strace -f --seccomp-bpf -e E                   80.74
+  strace -f --seccomp-bpf -yy -e E               84.85
+  the man line with --seccomp-bpf and -s 512     93.13   (trace 158,615,546 bytes against 27,897,313)
+  mtrace (no filter)                            279.85
+  mtrace -s                                      55.86   (12,801,670 bytes)
+  LD_PRELOAD recorder (pshim.so)                  1.02   (untraced 0.87 in that run)
+  taskset -c 5: strace --seccomp-bpf man line    32.92
+  taskset -c 5: mtrace -s                         6.47
+  taskset -c 5,6: strace --seccomp-bpf man line  87.56
+
+strace -c of strace (taskset -c 5, the man line with --seccomp-bpf, bench 100000 4): calls of strace's own
+  write 200047 (53.6 % of its system-call time), wait4 400120, ptrace 400120, newfstatat 300069,
+  readlink 100019, process_vm_readv 100013

@@ -1135,7 +1135,7 @@ numbers; the order is this note's.
 54. **What `strace` cannot see: an eBPF capture beside it, and the instructions for a capture
     (raised by the user 2026-10-31, queued; taken up by the user 2026-11-03 for a capture with
     both POSIX calls and object requests, measured by a spike the same day, `DESIGN_REVIEW.md`
-    §3.96; decisions open, not started).** An `strace` misses three kinds of
+    §3.96; partly decided, not started).** An `strace` misses three kinds of
     I/O the abstracts model: the accesses through a mapping (it sees `mmap`, `madvise`,
     `msync`, `munmap`, never the loads; `builder/REFERENCE.md` §7), the operations of an
     `io_uring` (it sees `io_uring_setup`, `io_uring_register`, and `io_uring_enter`, never the
@@ -1201,7 +1201,8 @@ numbers; the order is this note's.
     sized to seconds of the peak, every loss counted by CPU and time range, libssl uprobes for
     request heads, and later the mapping faults and `io_uring` requests above; (2) ptrace
     where not: strace with `--seccomp-bpf` (missing from the man page's line, 3.6 times slower
-    without it), or a binary tracer of ours (1.6 to 5 times faster than strace); (3) the
+    without it; added to every capture line the same day), or a binary tracer of ours (1.6 to
+    5 times faster than strace); (3) the
     `LD_PRELOAD` shim for request heads where the client loads a shared `libssl` and eBPF is
     not granted; (4) the store's log for the rest, a reader per log format, aligned by anchor
     requests. `-s 512`, proposed earlier the same day, is withdrawn (every file buffer printed, the
@@ -1211,8 +1212,11 @@ numbers; the order is this note's.
     come from an untraced run, never a traced one's gaps. Open: aya or libbpf-rs; a ptrace
     tracer of ours or strace; the shim in one library with item 55's `fstat` shim; the anchor
     requests (a 403 in the owner's audit log) or the owner's own command; and the spike's
-    scripts re-run on a real Linux client node before a choice rests on a ratio (the numbers
-    are WSL2's, whose cross-CPU ptrace wakeups cost about 50 µs).
+    scripts (`spikes/2026-11-03-capture/`) re-run on a real Linux client node before a choice
+    rests on a ratio (the numbers are WSL2's, whose cross-CPU ptrace wakeups cost about 50 µs).
+    *Decided by the user the same day:* strace with `--seccomp-bpf` (a ptrace tracer of ours
+    only if a need appears); the unsigned anchor `HEAD`s; the real-node measurements when a
+    node is available. Still open: aya or libbpf-rs, and the shim's library.
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no
