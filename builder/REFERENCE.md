@@ -886,7 +886,11 @@ removing nothing; a GET or HEAD answered 304 Not Modified a stat that succeeded,
 `not_modified` (2026-11-02, `FS_API_SWEEP.md` S-16: it was an `EIO` open, and a failed
 completion a close that succeeded); requests outside the root, without an engine call behind them,
 without a time, or parts without a start are counted under `notes`, as is `ranges_unknown`
-for an access log's partial GET. ~~`trace.metrics_of_events` gives the metrics of events in memory,
+for an access log's partial GET. A MinIO GET is placed by the response's `Content-Range`, else
+the request's `Range` from a start; a suffix range, a part GET, or several ranges with neither
+place is read from 0 and counted under `ranges_suffix_unknown`, `ranges_part_unknown`, or
+`ranges_multiple` (2026-11-02, `FS_API_SWEEP.md` S-30: a suffix range and a part GET were read
+from 0 with no note). ~~`trace.metrics_of_events` gives the metrics of events in memory,
 `trace.object_log_events` is the commands' hook, and `digest.analyze` detects the log itself.~~
 Since the port, the binary tells a log from an strace by its first line, in `metrics` and `export`
 alike, and `digest.analyze` takes a log's calls from `aeiou-trace export` as it takes an

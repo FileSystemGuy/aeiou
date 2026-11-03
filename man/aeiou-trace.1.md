@@ -272,7 +272,8 @@ An strace never shows an application's object requests (TLS, or another process)
 store's own log does, one line per request. `metrics`, `export`, and `digest` read two such
 logs in place of an strace, told apart by the first line, and turn each request into the
 calls the runner's object engine issues for it (`runner/REFERENCE.md` §16): a GET is an
-open, one read (at the Range header's start when the log has it, else from 0), and a
+open, one read (where the response's `Content-Range` says, else at the start of the
+`Range` asked for, else from 0), and a
 close; a PUT an open that creates, one write, and a close; a HEAD a stat; a DELETE an
 unlink; a listing an open of the prefix, a readdir, and a close; a multipart upload an open
 at its start, a write per part, and a close at its completion. A lane is a client host,
@@ -282,8 +283,12 @@ are counted and left out, as are the requests with no call of the engine behind 
 log is an ordinary trace file: the `trace` node runs it against the declared endpoint.
 
 - **MinIO audit log** (JSON lines with an `api` object: `name`, `bucket`, `object`,
-  `statusCode`, `rx`, `tx`, `timeToResponseInNS`; the `Range` request header; the
-  `prefix` and `uploadId` query parameters). An entry's `time` is taken as when the
+  `statusCode`, `rx`, `tx`, `timeToResponseInNS`; the `Content-Range` response header,
+  which places a suffix range (`bytes=-N`, a Parquet footer) and a `partNumber` GET, and
+  the `Range` request header in its absence; the `prefix`, `uploadId`, and `partNumber`
+  query parameters). Without a `Content-Range`, a suffix range, a part GET, or a request
+  for several ranges is read from offset 0 and counted under `ranges_suffix_unknown`,
+  `ranges_part_unknown`, or `ranges_multiple`. An entry's `time` is taken as when the
   response completed, the request starting `timeToResponse` earlier (noted as
   `time_is_response_end`). Enabled as MinIO's audit webhook or Kafka target, or its audit
   event queue, in MinIO's own documentation.

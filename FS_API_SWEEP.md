@@ -284,7 +284,14 @@ work item of its own.
   `a_multipart_upload_is_exported_as_the_object_it_makes`,
   `a_trace_writing_an_object_out_of_order_is_refused_before_the_gate`.*
 - **S-30** (A) A suffix range `bytes=-N` (Parquet footers) and a `partNumber` GET exported as
-  reads at 0 with no note (`objectlog.rs:192-204`). *Status: open.*
+  reads at 0 with no note (`objectlog.rs:192-204`). *Status: fixed 2026-11-02 (the user's
+  choice of the recommendation): a GET is placed by the response's `Content-Range` (`bytes
+  a-b/total`), which the pinned MinIO's audit log records on every 206 (checked against it:
+  `bytes=-10`, `partNumber=2`, `bytes=100-` all carry it), else by the request's `Range` from a
+  start; with neither, a suffix range, a part GET, or several ranges is read from 0 and noted
+  `ranges_suffix_unknown`, `ranges_part_unknown`, `ranges_multiple`; test
+  `a_get_s_bytes_are_where_the_answer_says`. No golden changes (the corpus logs carry no
+  `Content-Range`).*
 - **S-31** (A) Two multipart uploads to one key: the second's start overwrites the first's
   (`objectlog.rs:434`), whose open is never closed. *Status: fixed 2026-11-02: an upload is
   named by the `uploadId` its parts and completion carry, an id not seen before naming the

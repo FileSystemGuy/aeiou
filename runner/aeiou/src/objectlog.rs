@@ -4,7 +4,7 @@
 //! and duration. Each request becomes the calls the runner's object engine issues for it
 //! (`runner/REFERENCE.md` §16), through the exporter of `export.rs`, so the trace file, the
 //! metrics, and the runner's `trace` node take it unchanged: a GET is an open, one read (at the
-//! Range's start when the log has it), and a close; a PUT an open that creates, one write, and
+//! answer's `Content-Range`, else the `Range` asked for, when the log has either), and a close; a PUT an open that creates, one write, and
 //! a close; a HEAD a stat; a DELETE an unlink; a listing an open of the prefix, a readdir, and a
 //! close; a multipart upload an open at its start, a write per part at its place in the object
 //! (after the parts numbered below it), and a close at its completion (a failed completion or
@@ -15,7 +15,9 @@
 //!
 //! Two formats, told apart by the first line: MinIO's audit log (JSON lines with an `api`
 //! object; `time` taken as when the response completed, so the request starts
-//! `timeToResponse` earlier; the `Range` header gives a GET's offset) and Amazon S3's server
+//! `timeToResponse` earlier; the response's `Content-Range` gives a GET's offset, a suffix
+//! range's and a part GET's included, else the request's `Range` from a start, a suffix range,
+//! a part GET, or several ranges without it read from 0 with a note) and Amazon S3's server
 //! access log (space-delimited, to the second, no Range, so a GET that sent fewer bytes than
 //! the object holds is read from 0 and counted under `ranges_unknown`). Ceph's RGW ops log and
 //! a lab proxy's log are not read yet (`PROJECT_BRIEF.md` item 49).
@@ -174,6 +176,8 @@ struct Request {
     /// A multipart request's upload id and part number (the query's `uploadId`, `partNumber`).
     upload: Option<String>,
     part: Option<i64>,
+    /// The note of a GET the log asked for a range of and did not say where (S-30).
+    unplaced: Option<&'static str>,
 }
 
 /// Python's `int(v)` with a default: a number (truncated), a numeric string, a bool.
@@ -196,19 +200,30 @@ fn minio_request(doc: &Value, no: usize) -> Result<Request> {
     let end = doc.get("time").and_then(Value::as_str).and_then(iso_seconds);
     let ns = int_of(api.get("timeToResponseInNS"), 0);
     let start = end.map(|e| e - ns as f64 / 1e9);
-    let (mut offset, mut length) = (None, None);
-    if let Some(rng) = doc.get("requestHeader").and_then(|h| h.get("Range")).and_then(Value::as_str) {
-        if let Some(r) = rng.trim().strip_prefix("bytes=") {
-            if let Some((a, z)) = r.split_once('-') {
-                if !a.is_empty() && a.bytes().all(|c| c.is_ascii_digit()) && z.bytes().all(|c| c.is_ascii_digit()) {
-                    let o: i64 = a.parse()?;
-                    offset = Some(o);
-                    length = if z.is_empty() { None } else { Some(z.parse::<i64>()? - o + 1) };
-                }
-            }
-        }
-    }
     let q = doc.get("requestQuery");
+    let part = q.and_then(|q| q.get("partNumber")).map(|v| int_of(Some(v), 0)).filter(|n| *n > 0);
+    let (mut offset, mut length, mut unplaced) = (None, None, None);
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+    // the answer's Content-Range ("bytes a-b/total") places any range, a suffix and a part
+    // GET's included (S-30); without it, only a range from a start is placed
+    let answer = doc.get("responseHeader").and_then(|h| h.get("Content-Range")).and_then(Value::as_str);
+    if let Some((a, z)) = answer.and_then(|c| c.trim().strip_prefix("bytes ")).and_then(|c| c.split('/').next()?.split_once('-')).filter(|(a, z)| digits(a) && digits(z)) {
+        let o: i64 = a.parse()?;
+        (offset, length) = (Some(o), Some(z.parse::<i64>()? - o + 1));
+    } else if let Some(r) = doc.get("requestHeader").and_then(|h| h.get("Range")).and_then(Value::as_str).and_then(|r| r.trim().strip_prefix("bytes=")) {
+        match r.split_once('-') {
+            _ if r.contains(',') => unplaced = Some("ranges_multiple"),
+            Some(("", _)) => unplaced = Some("ranges_suffix_unknown"),
+            Some((a, z)) if digits(a) && (z.is_empty() || digits(z)) => {
+                let o: i64 = a.parse()?;
+                offset = Some(o);
+                length = if z.is_empty() { None } else { Some(z.parse::<i64>()? - o + 1) };
+            }
+            _ => {}
+        }
+    } else if part.is_some() {
+        unplaced = Some("ranges_part_unknown");
+    }
     let text = |v: Option<&Value>| v.and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
     let host = match doc.get("remotehost") {
         Some(Value::String(s)) if !s.is_empty() => s.clone(),
@@ -230,7 +245,8 @@ fn minio_request(doc: &Value, no: usize) -> Result<Request> {
         length,
         prefix: q.and_then(|q| q.get("prefix")).and_then(Value::as_str).map(str::to_string),
         upload: text(q.and_then(|q| q.get("uploadId"))),
-        part: q.and_then(|q| q.get("partNumber")).map(|v| int_of(Some(v), 0)).filter(|n| *n > 0),
+        part,
+        unplaced,
     })
 }
 
@@ -325,6 +341,7 @@ fn s3_request(line: &str, no: usize) -> Result<Request> {
         prefix: query_value(query, "prefix"),
         upload: query_value(query, "uploadId"),
         part: query_value(query, "partNumber").and_then(|v| v.parse().ok()).filter(|n: &i64| *n > 0),
+        unplaced: None,
     })
 }
 
@@ -497,7 +514,9 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, parts: &mut 
             if let (None, Some(oid)) = (err, oid) {
                 let off = r.offset.unwrap_or(0);
                 let length = r.length.unwrap_or(r.tx);
-                if r.offset.is_none() && r.size.is_some_and(|s| r.tx < s) {
+                if let Some(k) = r.unplaced {
+                    note(k);
+                } else if r.offset.is_none() && r.size.is_some_and(|s| r.tx < s) {
                     note("ranges_unknown");
                 }
                 ex.data(when, "read", oid, off, length, r.offset.is_some(), r.tx, None);

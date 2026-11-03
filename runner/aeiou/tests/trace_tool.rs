@@ -337,6 +337,60 @@ fn a_multipart_upload_is_exported_as_the_object_it_makes() {
     assert!(notes.get("multipart_without_start").is_none(), "{notes}");
 }
 
+/// A GET's bytes are where the answer says they are (`FS_API_SWEEP.md` S-30): the response's
+/// `Content-Range` places a suffix range (a Parquet footer), an open range, and a part GET; with
+/// none, the request's `Range` places a range from a start, and a suffix range, a part GET, or a
+/// request for several ranges is read from the start with a note.
+#[test]
+fn a_get_s_bytes_are_where_the_answer_says() {
+    let entry = |ms: u32, query: &str, range: &str, content: &str, tx: u32| {
+        let request = if range.is_empty() { String::new() } else { format!(r#""Range": "{range}""#) };
+        let response = if content.is_empty() { String::new() } else { format!(r#""Content-Range": "{content}""#) };
+        format!(
+            r#"{{"version": "1", "time": "2026-10-29T12:00:00.{ms:03}000000Z", "trigger": "incoming", "api": {{"name": "GetObject", "bucket": "b", "object": "r/a", "statusCode": 206, "rx": 0, "tx": {tx}, "timeToResponseInNS": "1000000"}}, "requestQuery": {{{query}}}, "requestHeader": {{{request}}}, "responseHeader": {{{response}}}, "remotehost": "10.0.0.5:1"}}"#
+        )
+    };
+    let log = [
+        entry(10, "", "bytes=-10", "bytes 990-999/1000", 10),
+        entry(20, r#""partNumber": "2""#, "", "bytes 600-999/1000", 400),
+        entry(30, "", "bytes=100-", "bytes 100-999/1000", 900),
+        entry(40, "", "bytes=100-199", "", 100),
+        entry(50, "", "bytes=-10", "", 10),
+        entry(60, r#""partNumber": "1""#, "", "", 600),
+        entry(70, "", "bytes=0-9,20-29", "", 220),
+    ]
+    .join("\n");
+    let d = tmp("ranges");
+    let (input, out) = (d.join("audit.log"), d.join("t.jsonl"));
+    std::fs::write(&input, log + "\n").unwrap();
+    let o = tool(&["export", s(&input), "--root", "b/r", "-o", s(&out)]);
+    assert!(o.status.success(), "{:?}", text(&o));
+    let lines: Vec<Value> = std::fs::read_to_string(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let reads: Vec<String> = lines[1..]
+        .iter()
+        .filter(|e| e["op"] == "read")
+        .map(|e| format!("offset={} len={}", e["offset"], e["len"]))
+        .collect();
+    assert_eq!(
+        reads,
+        [
+            "offset=990 len=10",
+            "offset=600 len=400",
+            "offset=100 len=900",
+            "offset=100 len=100",
+            "offset=null len=10",
+            "offset=null len=600",
+            "offset=null len=220",
+        ],
+        "{lines:#?}"
+    );
+    let notes = &lines[0]["notes"];
+    for (k, n) in [("ranges_suffix_unknown", 1), ("ranges_part_unknown", 1), ("ranges_multiple", 1)] {
+        assert_eq!(notes[k], n, "{k}: {notes}");
+    }
+    assert!(notes.get("ranges_unknown").is_none(), "{notes}");
+}
+
 #[test]
 fn compare_needs_no_python_and_lists_what_it_lacks() {
     // ported (DESIGN_REVIEW.md §3.89, stage 4): no interpreter is asked for
