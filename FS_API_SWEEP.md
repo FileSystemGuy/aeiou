@@ -226,7 +226,11 @@ work item of its own.
   input the run must find, or a state the run prepares, waits on brief item 60 with S-17.*
 - **S-26** (A) The digest's rename moves state for the exact path only: a directory rename
   leaves its files behind, a rename over a file is not a removal (`digest.rs:949-965`).
-  *Status: open.*
+  *Status: fixed 2026-11-02: a directory's rename moves the size and writes the digest knows of
+  every file under it (`Digester::below`, each path's id under each directory above it, so a
+  rename looks at no other file), and a rename over a file the trace wrote or sized is a
+  removal, which the retention of its saves counts (`Digester::renamed`); test
+  `digest_renames_move_a_directory_s_files_and_replace_their_target`; no golden changes.*
 - **S-27** (A) `renameat2` `RENAME_EXCHANGE`/`NOREPLACE`/`WHITEOUT` exported as a plain rename
   (an exchange destroys a name). Noted and not exported until B (S-40). *Status: fixed
   2026-11-02: a `renameat2` with any flag is noted by its flags (`not_exported:renameat2:

@@ -1058,6 +1058,49 @@ fn digest_records_what_freed_or_moved_space() {
     assert!(out.contains("       space: 3 truncating opens (1 of a path written before, 2 of one not seen before); truncate 2; ftruncate 1; 2 to length 0; fallocate KEEP_SIZE|PUNCH_HOLE 1; fallocate allocate 1; ranges freed 8.0 KiB; truncates discarded 132.0 KiB, 2 of a size the trace does not show\n"), "{out}");
 }
 
+/// A rename moves what the digest knows of every file it moves (`FS_API_SWEEP.md` S-26): a
+/// directory's rename moves its files' sizes, so a truncate of one under its new name knows
+/// what it discarded; and a rename over a file the trace wrote removes that file, a deletion
+/// the retention of its saves counts.
+#[test]
+fn digest_renames_move_a_directory_s_files_and_replace_their_target() {
+    let d = tmp("digest-rename");
+    let trace = d.join("t.strace");
+    let mut lines = vec![];
+    let mut t = 1700000000.0f64;
+    let mut call = |l: &str, gap: f64| {
+        t += gap;
+        lines.push(format!("100 {t:.6} {l} <0.000010>"));
+    };
+    call(r#"openat(AT_FDCWD</d>, "/d/x/a.bin", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3</d/x/a.bin>"#, 0.001);
+    call(r#"write(3</d/x/a.bin>, "x"..., 4096) = 4096"#, 0.001);
+    call(r#"close(3</d/x/a.bin>) = 0"#, 0.001);
+    call(r#"rename("/d/x", "/d/y") = 0"#, 0.001);
+    call(r#"truncate("/d/y/a.bin", 0) = 0"#, 0.001);
+    // saves of a ring of two slots, each written whole a minute apart, the third written aside
+    // and renamed over the first
+    for (i, f) in ["ck/0.bin", "ck/1.bin", "ck/new"].iter().enumerate() {
+        call(&format!(r#"openat(AT_FDCWD</d>, "/d/{f}", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3</d/{f}>"#), 60.0);
+        for _ in 0..4 {
+            call(&format!(r#"write(3</d/{f}>, "x"..., 1048576) = 1048576"#), 0.01);
+        }
+        call(&format!(r#"close(3</d/{f}>) = 0"#), 0.01);
+        let _ = i;
+    }
+    call(r#"rename("/d/ck/new", "/d/ck/0.bin") = 0"#, 0.01);
+    std::fs::write(&trace, lines.join("\n") + "\n").unwrap();
+    let o = tool(&["digest", s(&trace), "--root", "/d", "--no-questions"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let ts = doc["templates"].as_array().unwrap();
+    let by = |name: &str| ts.iter().find(|t| t["template"].as_str().unwrap().starts_with(name)).unwrap_or_else(|| panic!("{name}: {ts:?}"));
+    assert_eq!(by("y/")["space"]["truncated_bytes"], 4096, "{}", by("y/"));
+    assert_eq!(by("y/")["space"]["truncates_of_unknown_size"], 0, "{}", by("y/"));
+    let sites = doc["sites"].as_array().unwrap();
+    let ck = sites.iter().find(|s| s["kind"] == "bulk_write").unwrap_or_else(|| panic!("{sites:#?}"));
+    assert_eq!(ck["retention"]["deleted"], 1, "{ck:#}");
+}
+
 /// A descriptor whose open the trace does not show (held from before `strace` began: attached
 /// with `-p`, inherited, received over a socket; here a fork's parent closing its own descriptor 3,
 /// not the one its child opened, since a fork copies the table) gets an open synthesized at

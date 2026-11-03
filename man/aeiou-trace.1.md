@@ -181,7 +181,7 @@ path an earlier open had written and those on a path the trace had not seen befo
 `truncate` and `ftruncate` calls and those to length 0, its `fallocate` calls by mode, and the
 bytes of the ranges `PUNCH_HOLE` freed and `COLLAPSE_RANGE` removed, and the bytes its
 truncates discarded where the trace shows the size (set by a truncate and moved by every write
-and allocation after it, carried through a `rename`), with the truncates of a size it does not
+and allocation after it, carried through a `rename`, of the file or of a directory above it), with the truncates of a size it does not
 show counted apart, never guessed; an open with `TRUNC` reads
 nothing where one without may read the whole file. **Sites**: what the digest judges, a template or, where
 a template is two phases, the opens of one (`0/write`, `0/read`), of five kinds. A

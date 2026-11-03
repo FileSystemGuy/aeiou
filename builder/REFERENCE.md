@@ -700,7 +700,7 @@ its `space` (`DESIGN_REVIEW.md` §3.92): `truncating_opens` (opens with `TRUNC`)
 `truncate`, `ftruncate`, `to_zero`, `fallocate` by mode (`KEEP_SIZE|PUNCH_HOLE`, `allocate` for
 mode 0), `freed_ranges_bytes`, and `truncated_bytes`, what truncates discarded from files whose
 size the trace shows (set by a truncate, moved by every write and allocation after it, carried
-through a `rename`), beside `truncates_of_unknown_size`, never guessed, so the filesystem's deferred work of taking files apart and
+through a `rename`, a directory's to every file under it, S-26), beside `truncates_of_unknown_size`, never guessed, so the filesystem's deferred work of taking files apart and
 reclaiming their space is in the summary, and an open that truncates (it reads nothing) is told
 from one that does not. `lanes`: per traced task its `phases`, runs of units
 (the calls on one open, or one path call, or one `io_submit`) of one motif on one template,
@@ -753,7 +753,8 @@ first files within `SIMULTANEOUS` (a quarter) of its length, `one_writer`, `stag
 `mixed`, with their lanes, spread, length, and interval; every field over the part's paths
 (`fields_of`), `varies`, `constant` over two saves or more, else undecided; `rewrite`,
 whose paths written again are evidence against a checkpoint; `sync`; `retention_of` from
-the template's successful unlinks, `kept`, `keeps` N, or `unsafe`; `label`, `output` with
+the template's successful unlinks and the renames over a file of it the trace wrote or sized
+(2026-11-02, `FS_API_SWEEP.md` S-26), `kept`, `keeps` N, or `unsafe`; `label`, `output` with
 the refuting evidence (a rewrite, a read after the first write) or undecided with what
 `supports` a checkpoint; `size`), or `within` (one open read at eight or more offsets in
 more than one run: `within_of` gives reuse, span, sequential runs, `skew` against a uniform

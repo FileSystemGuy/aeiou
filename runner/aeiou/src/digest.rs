@@ -660,6 +660,9 @@ struct Phase<'a> {
 struct Digester {
     templates: HashMap<String, usize>,
     by_id: Vec<Template>,
+    /// Every path's (template, path id) under each directory above it, so a directory's rename
+    /// moves its files without a look at any other (`FS_API_SWEEP.md` S-26).
+    below: HashMap<String, Vec<(usize, u32)>>,
     opens: HashMap<i64, Open>,
     lanes: BTreeMap<i64, Vec<Option<Unit>>>,
     lane_ops: BTreeMap<i64, u64>,
@@ -756,10 +759,30 @@ impl Digester {
                 let p = t.paths.len() as u32;
                 t.paths.push(path.to_string());
                 t.index.insert(path.to_string(), p);
+                for (k, _) in path.match_indices('/') {
+                    self.below.entry(path[..k].to_string()).or_default().push((id, p));
+                }
                 p
             }
         };
         (id, p)
+    }
+
+    /// A rename's file keeps its size and its writes under its new name; a file the trace wrote
+    /// or sized there before is replaced, a removal (`FS_API_SWEEP.md` S-26).
+    fn renamed(&mut self, t: i64, (tpl, p): (usize, u32), (t2, p2): (usize, u32)) {
+        let (size, written) = (self.by_id[tpl].space.size.remove(&p), self.by_id[tpl].space.written.remove(&p));
+        let sp = &mut self.by_id[t2].space;
+        let replaced = sp.size.remove(&p2).is_some() | sp.written.remove(&p2);
+        if let Some(n) = size {
+            sp.size.insert(p2, n);
+        }
+        if written {
+            sp.written.insert(p2);
+        }
+        if replaced {
+            self.by_id[t2].removes.push((t, p2));
+        }
     }
 
     fn slot(&mut self, lane: i64) -> usize {
@@ -951,16 +974,20 @@ impl Digester {
                         let (t2, p2) = self.template(to);
                         self.by_id[t2].count("renamed_to");
                         if e.ret.as_ref().map_or(true, |r| !r.is_string()) {
-                            // the file keeps its size and its writes under its new name
-                            let (size, written) = (self.by_id[tpl].space.size.remove(&p), self.by_id[tpl].space.written.remove(&p));
-                            let sp = &mut self.by_id[t2].space;
-                            sp.size.remove(&p2);
-                            sp.written.remove(&p2);
-                            if let Some(n) = size {
-                                sp.size.insert(p2, n);
-                            }
-                            if written {
-                                sp.written.insert(p2);
+                            self.renamed(t, (tpl, p), (t2, p2));
+                            // a directory's files move with it (FS_API_SWEEP.md S-26)
+                            let (from, to) = (format!("{path}/"), to.to_string());
+                            let under: Vec<(usize, u32, String)> = self
+                                .below
+                                .get(path)
+                                .into_iter()
+                                .flatten()
+                                .filter(|&&(i, q)| self.by_id[i].space.size.contains_key(&q) || self.by_id[i].space.written.contains(&q))
+                                .map(|&(i, q)| (i, q, format!("{to}/{}", &self.by_id[i].paths[q as usize][from.len()..])))
+                                .collect();
+                            for (i, q, moved) in under {
+                                let dst = self.template(&moved);
+                                self.renamed(t, (i, q), dst);
                             }
                         }
                     }
