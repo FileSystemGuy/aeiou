@@ -103,7 +103,8 @@
   ],
   "notes": {
    "blind_spot_mmap": "the application maps its files and reads them through page faults; the trace shows the mmap and none of the reads, so the digest undercounts",
-   "blind_spot_object": "segments and index files persist on the object store (minio.rootPath 'files' in the bucket); an strace of a query node shows only what it pulls to local storage and memory, never the object requests"
+   "blind_spot_object": "segments and index files persist on the object store (minio.rootPath 'files' in the bucket); an strace of a query node shows only what it pulls to local storage and memory, never the object requests",
+   "buffer_contents_printed": 3
   },
   "open": [
    {

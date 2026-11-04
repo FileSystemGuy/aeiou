@@ -30,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Compute the metrics of a trace (strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o FILE)
+    /// Compute the metrics of a trace (strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o FILE)
     #[command(override_usage = "aeiou-trace metrics [OPTIONS] <TRACE>")]
     Metrics(MetricsArgs),
     /// Write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root
@@ -67,9 +67,12 @@ struct CaptureArgs {
     /// The size of the library's log, sparse (KiB, MiB, GiB); a request and its response take about half a KiB [default: 1GiB]
     #[arg(long, value_name = "SIZE")]
     requests_buffer: Option<String>,
-    /// The eBPF source's ring buffer, a power of two from 4KiB to 2GiB: a full one loses events, and the capture says so and suggests a larger one [default: 256MiB]
+    /// The eBPF source's ring buffer, a power of two from 64KiB to 2GiB: a full one loses events, and the capture says so and suggests a larger one [default: 256MiB]
     #[arg(long, value_name = "SIZE")]
     buffer: Option<String>,
+    /// What capture.json keeps of the command line: recorded, every argument, the value of an option or a variable named as a secret (password, token, key, auth, ...) and a URL's password replaced by <redacted>; none, the program alone, for a secret passed by position [default: recorded]
+    #[arg(long, value_name = "MODE", value_parser = ["recorded", "none"])]
+    argv: Option<String>,
     /// Start although CHECK failed (repeatable; one of the checks by name); printed and recorded
     #[arg(long, value_name = "CHECK")]
     accept: Vec<String>,
@@ -349,6 +352,17 @@ fn incomplete(prog: &str, count: u64, missing: Option<&Value>, what: &str) -> St
     out + "  trace the command from its start: strace -f --seccomp-bpf ... -o FILE COMMAND\n"
 }
 
+/// The warning that a trace prints what the capture's line keeps out, where a secret can be
+/// (brief item 62): from a metrics document's `notes`. Printed to stderr; the tool goes on.
+fn secrets(prog: &str, notes: &Value) -> String {
+    let n = |k: &str| notes.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let (args, data) = (n(strace::ARGUMENTS_PRINTED), n(strace::DATA_PRINTED));
+    if args + data == 0 {
+        return String::new();
+    }
+    format!("{prog}: WARNING: this trace may hold secrets: {args} execve(s) with their arguments and environment, {data} call(s) with their bytes; {}\n", strace::SECRETS)
+}
+
 /// The warning for a header (an export's, a trace file's) that lists synthesized opens.
 fn incomplete_of(prog: &str, header: &Value) -> String {
     let missing = header.get("missing_opens");
@@ -435,6 +449,7 @@ fn metrics(a: MetricsArgs) -> Result<()> {
         }
         None => print_out(&text),
     }
+    eprint!("{}", secrets("aeiou-trace metrics", &doc["notes"]));
     Ok(())
 }
 
@@ -673,6 +688,7 @@ fn digest_cmd(a: DigestArgs) -> Result<()> {
     } else {
         print_out(&(serde_json::to_string_pretty(&doc)? + "\n"));
     }
+    eprint!("{}", secrets("aeiou-trace digest", &doc["metrics"]["notes"]));
     for line in said {
         eprintln!("{line}");
     }
@@ -795,6 +811,7 @@ fn capture_cmd(a: CaptureArgs) -> Result<()> {
         coordinator: a.coordinator,
         out,
         command: a.command,
+        argv_recorded: a.argv.as_deref() != Some("none"),
     };
     match capture::run(o)? {
         0 => Ok(()),

@@ -64,7 +64,9 @@
     ]
    }
   ],
-  "notes": {},
+  "notes": {
+   "buffer_contents_printed": 7
+  },
   "open": [
    {
     "ask": "Is the number of bytes read from a file a property of the file (its size), or chosen per access?",

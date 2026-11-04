@@ -82,7 +82,8 @@
    }
   ],
   "notes": {
-   "blind_spot_mmap": "vectors are mapped"
+   "blind_spot_mmap": "vectors are mapped",
+   "buffer_contents_printed": 7
   },
   "open": [
    {

@@ -56,7 +56,9 @@
     ]
    }
   ],
-  "notes": {},
+  "notes": {
+   "buffer_contents_printed": 400
+  },
   "open": [
    {
     "ask": "Does this file fit in memory at the scale the application runs, so that reads after the first hit the page cache, or does it exceed it?",

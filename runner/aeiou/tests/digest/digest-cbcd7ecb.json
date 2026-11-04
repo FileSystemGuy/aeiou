@@ -50,6 +50,7 @@
    }
   ],
   "notes": {
+   "buffer_contents_printed": 12,
    "candidates": "--candidates 3 is fewer than the 12 distinct paths of template 0; the paths seen were used"
   },
   "open": [],

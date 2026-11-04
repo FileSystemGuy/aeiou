@@ -1342,7 +1342,13 @@ numbers; the order is this note's.
     First step: check whether `object_store` can issue what replay needs, else `aws-sdk-s3`
     or a small signed-HTTP client. A trace merging an strace with an object log (Milvus: a
     query node's local files and its bucket) joins item 49.
-62. **Secrets scrubbed from a capture (raised by the user 2026-11-03, queued; not started).**
+62. **Secrets scrubbed from a capture (raised by the user 2026-11-03; decided and built
+    2026-11-04, `DESIGN_REVIEW.md` §3.97: capture less, not scrub after).** Built: the strace
+    line adds `-e verbose=!execve,execveat -s 0` (no `execve` list or environment, no call's
+    bytes; `-v` kept for arrays), `capture.json` keeps the command line with values named as
+    secrets and URL passwords redacted (`--argv none` the program alone), and `metrics` and
+    `digest` note and warn of a trace that prints them. Correction: no reader uses the
+    environment or any buffer's contents. The text as queued:
     A capture is sent to people who were not there, so no secret of the owner's may be in any
     of its files. Phase 2 keeps none in `requests.jsonl` and `requests.bin` (the header
     allowlist, presigned URLs' signatures redacted; `DESIGN_REVIEW.md` §3.96), but two
@@ -1353,6 +1359,13 @@ numbers; the order is this note's.
     less (drop `-v`, losing the environment the digest and a reader use), and whether the
     raw trace is kept for the owner alone beside a scrubbed one to send; the same holds for
     the eBPF converter of phase 3, and for a trace taken by hand.
+63. **`aeiou-trace scrub`, an old trace rewritten without its secrets (queued 2026-11-04 with
+    item 62's design, approved by the user; not started).** A trace taken before 2026-11-04 or by
+    hand with another line prints `execve`'s arguments and environment and the first bytes of
+    each buffer; `metrics` and `digest` warn of it (`trace_may_hold_secrets`). To decide: a
+    command that writes the trace again as the capture's line would have (the lists as
+    addresses, every buffer `""...`), streamed, with what it replaced counted; until then the
+    owner sends the digest.
 
 ## 7. Environment
 

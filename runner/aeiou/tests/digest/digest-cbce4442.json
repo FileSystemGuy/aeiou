@@ -49,7 +49,9 @@
     ]
    }
   ],
-  "notes": {},
+  "notes": {
+   "buffer_contents_printed": 120
+  },
   "open": [],
   "ops": 480,
   "projection": {

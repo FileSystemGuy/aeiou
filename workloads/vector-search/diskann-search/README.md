@@ -9,7 +9,7 @@ one `../diskann-build/kit/build.py` wrote. What was read off the traces is in `A
 Versions: Python 3.11, diskannpy 0.7.0 (no wheel for 3.12), numpy 1.25.0, Linux 6.18.
 
 ```
-T="strace -f --seccomp-bpf -ttt -T -yy -v -o"
+T='strace -f --seccomp-bpf -ttt -T -yy -v -e verbose=!execve,execveat -s 0 -o'
 E="-e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy"
 C=cases/sift1m-nocache                                           # or cases/sift1m-cache; from this directory
 $T trace.nocache.txt $E python kit/search.py /mnt/nfs/index query.fbin --queries 1000 --threads 2 --batch

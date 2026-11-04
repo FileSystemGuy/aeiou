@@ -156,7 +156,9 @@
     "contexts": 2,
     "instances": 1,
     "notes": {
-     "threads_without_clone": 1
+     "buffer_contents_printed": 3,
+     "threads_without_clone": 1,
+     "trace_may_hold_secrets": "this trace prints execve's arguments and environment, or the bytes calls read and wrote, where a password, a token, or a key can be: keep it to yourself and send its digest, or trace again with aeiou-trace capture or the man page's line (-e verbose=!execve,execveat -s 0)"
     },
     "order": "completion",
     "roots": [
@@ -315,6 +317,7 @@
     }
    },
    "notes": {
+    "buffer_contents_printed": 3,
     "threads_without_clone": 1
    },
    "open": [

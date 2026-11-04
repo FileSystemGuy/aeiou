@@ -26,7 +26,12 @@
 //! the largest step back (S-35; one case, the two notes the only difference); and a path's
 //! history kept by the file it names and the data that file holds (S-18; two cases of one
 //! strace, its object popularity the only difference: a file renamed and written again is the
-//! one object, a new file under the name after its `unlink` another).
+//! one object, a new file under the name after its `unlink` another); and a trace that prints
+//! its calls' bytes or an `execve`'s lists, as strace does without the capture's
+//! `-e verbose=!execve,execveat -s 0`, noted `buffer_contents_printed` and
+//! `execve_arguments_printed`, the metrics' `trace_may_hold_secrets` saying not to send it
+//! (2026-11-04, brief item 62, `DESIGN_REVIEW.md` §3.97; most cases, each checked by script to
+//! differ by these notes alone).
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths

@@ -70,6 +70,69 @@ pub const NOT_SEEN_EBPF: [&str; 4] = [
     "the paths of descriptors as the kernel named them: they are resolved from the recorded opens, their directories' symbolic links as they are when the capture is converted",
 ];
 
+/// The strace source's line, less `-E` and `-o`: `-v` prints arrays whole, but
+/// `-e verbose=!execve,execveat` prints execve's argument list and environment as their
+/// addresses (as the eBPF converter does) and `-s 0` no call's bytes, so neither a secret in
+/// them nor anything a read or a write carries reaches the trace (brief item 62,
+/// `DESIGN_REVIEW.md` §3.97); paths, `-yy`'s, and arrays are printed whole.
+pub fn strace_line() -> Vec<String> {
+    ["strace", "-f", "--seccomp-bpf", "-ttt", "-T", "-yy", "-v", "-e", "verbose=!execve,execveat", "-s", "0", "-e", TRACE_SET].iter().map(|s| s.to_string()).collect()
+}
+
+/// The words of an option or a variable whose value is taken for a secret (case ignored).
+const SECRET_WORDS: [&str; 10] = ["password", "passwd", "secret", "token", "key", "credential", "auth", "signature", "session", "cookie"];
+pub const REDACTED: &str = "<redacted>";
+
+/// `name` an option's or a variable's name (`--NAME`, `NAME`; letters, digits, `_.-`), not a
+/// script's text, holding a word of `SECRET_WORDS`.
+fn secret_name(name: &str) -> bool {
+    let bare = name.trim_start_matches('-');
+    if name.len() - bare.len() > 2 || bare.is_empty() || !bare.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)) {
+        return false;
+    }
+    let n = bare.to_ascii_lowercase();
+    SECRET_WORDS.iter().any(|w| n.contains(w))
+}
+
+/// `u` with the password of its user part (`scheme://user:password@host`) replaced.
+pub fn scrub_url(u: &str) -> String {
+    let Some(s) = u.find("://") else { return u.to_string() };
+    let rest = &u[s + 3..];
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let Some(at) = rest[..host_end].rfind('@') else { return u.to_string() };
+    let Some(colon) = rest[..at].find(':') else { return u.to_string() };
+    format!("{}{REDACTED}{}", &u[..s + 3 + colon + 1], &rest[at..])
+}
+
+/// The command line as a record keeps it (brief item 62): the value of a `NAME=value`, a
+/// `--NAME=value`, or the argument after a `--NAME` (unless itself an option) whose name holds
+/// a word of `SECRET_WORDS`, and a URL's password, replaced by `<redacted>`; and the indices
+/// replaced. By name and pattern alone: a secret passed by position is not found
+/// (`--argv none`).
+pub fn scrub_argv(argv: &[String]) -> (Vec<String>, Vec<usize>) {
+    let mut out = Vec::with_capacity(argv.len());
+    let mut at = Vec::new();
+    let mut value_next = false;
+    for (i, a) in argv.iter().enumerate() {
+        let s = if i == 0 {
+            a.clone()
+        } else if value_next && !a.starts_with('-') {
+            REDACTED.to_string()
+        } else {
+            match a.split_once('=') {
+                Some((name, _)) if secret_name(name) => format!("{name}={REDACTED}"),
+                _ => scrub_url(a),
+            }
+        };
+        value_next = i > 0 && a.starts_with('-') && !a.contains('=') && secret_name(a);
+        if s != *a {
+            at.push(i);
+        }
+        out.push(s);
+    }
+    (out, at)
+}
+
 /// The environment a record keeps, a fixed list, never the whole environment.
 pub const ENVIRONMENT: [&str; 7] = ["SLURM_JOB_ID", "SLURM_NODEID", "SLURM_PROCID", "RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR"];
 
@@ -557,6 +620,8 @@ pub struct Opts {
     /// `-o` with `%h` and `%p` expanded.
     pub out: PathBuf,
     pub command: Vec<String>,
+    /// `--argv recorded`: the command line kept, its secrets redacted; `none`: its program alone.
+    pub argv_recorded: bool,
 }
 
 /// `-o`'s template: `%h` the host name, `%p` this process's id, `%%` a percent sign.
@@ -889,7 +954,7 @@ pub fn run(o: Opts) -> Result<i32> {
         let n = crate::ebpf::calls().iter().flatten().count();
         vec![format!("raw_tracepoint:sys_enter,sys_exit ({n} calls: {TRACE_SET}), raw_tracepoint:sched_process_fork,sched_process_exit; ring buffer {}", crate::ebpf::human(o.buffer))]
     } else {
-        ["strace", "-f", "--seccomp-bpf", "-ttt", "-T", "-yy", "-v", "-e", TRACE_SET].iter().map(|s| s.to_string()).collect()
+        strace_line()
     };
     // the library, unless its check failed and was waived
     let requests_check = checks.iter().find(|c| c.name == "requests").cloned();
@@ -1093,12 +1158,18 @@ pub fn run(o: Opts) -> Result<i32> {
     }
     let uid = unsafe { libc::getuid() };
     let facts = crate::run::host_facts();
+    let (argv, redacted) = if o.argv_recorded { scrub_argv(&o.command) } else { (o.command.iter().take(1).cloned().collect(), Vec::new()) };
+    // the line as run, its command as the record keeps it
+    if !ebpf {
+        line.truncate(line.len() - o.command.len());
+        line.extend(argv.iter().cloned());
+    }
     let rec = json!({
         "aeiou_capture": 1,
         "tool": {"name": "aeiou-trace", "version": env!("CARGO_PKG_VERSION")},
         "host": {"name": host, "kernel": facts["kernel"], "distribution": distribution(), "cpus": facts["cpus"], "cpus_online": facts["cpus_online"], "memory": facts["memory"], "cgroup_memory_max": facts["cgroup_memory_max"]},
         "source": {"name": o.source.name, "version": o.source.version, "why": o.source.why, "line": line, "privilege": privilege},
-        "command": {"argv": o.command, "cwd": std::env::current_dir().ok(), "uid": uid, "gid": unsafe { libc::getgid() }, "as_root": unsafe { libc::geteuid() } == 0},
+        "command": {"argv": argv, "redacted": redacted, "argv_kept": if o.argv_recorded { "recorded" } else { "none" }, "cwd": std::env::current_dir().ok(), "uid": uid, "gid": unsafe { libc::getgid() }, "as_root": unsafe { libc::geteuid() } == 0},
         "environment": environment,
         "inherited_descriptors": inherited,
         "capture_id": o.capture_id,
@@ -1112,7 +1183,7 @@ pub fn run(o: Opts) -> Result<i32> {
         "exit": exit,
         "interrupted": interrupted,
         "roots": roots,
-        "endpoints": o.endpoints.iter().map(|(u, s)| json!({"url": u, "scheme": s})).collect::<Vec<_>>(),
+        "endpoints": o.endpoints.iter().map(|(u, s)| json!({"url": scrub_url(u), "scheme": s})).collect::<Vec<_>>(),
         "cache": if cache_drop.is_some() { "dropped" } else { "not dropped" },
         "cache_drop": cache_drop,
         "losses": match &ebpf_rec {
@@ -1342,5 +1413,43 @@ mod tests {
         assert_eq!(signal_name(15), "SIGTERM");
         assert_eq!(signal_name(40), "signal 40");
         assert_eq!(unescape("a\\040b\\134c"), "a b\\c");
+    }
+
+    #[test]
+    fn the_strace_line_prints_no_argument_list_environment_or_bytes() {
+        let l = strace_line();
+        assert_eq!(&l[..3], ["strace", "-f", "--seccomp-bpf"]);
+        // -v for whole arrays, but execve's lists as addresses and every string's bytes cut at 0
+        for w in [["-v", "-e"], ["-e", "verbose=!execve,execveat"], ["-s", "0"], ["-e", TRACE_SET]] {
+            assert!(l.windows(2).any(|p| p == w), "{w:?}: {l:?}");
+        }
+    }
+
+    #[test]
+    fn secret_values_on_a_command_line_are_redacted_and_their_places_listed() {
+        let argv: Vec<String> = [
+            "env", "AWS_SECRET_ACCESS_KEY=abc", "PATH=/bin", "train.py", "--password=hunter2", "--token", "t0k", "--Auth-Header", "-v", "--batch=8",
+            "--data", "s3://user:pw@host/b", "DSN=postgres://u:p@db/x", "--session-id=1", "https://h/x?a=b", "--key-file", "/k",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (got, at) = scrub_argv(&argv);
+        assert_eq!(
+            got,
+            [
+                "env", "AWS_SECRET_ACCESS_KEY=<redacted>", "PATH=/bin", "train.py", "--password=<redacted>", "--token", "<redacted>", "--Auth-Header", "-v", "--batch=8",
+                "--data", "s3://user:<redacted>@host/b", "DSN=postgres://u:<redacted>@db/x", "--session-id=<redacted>", "https://h/x?a=b", "--key-file", "<redacted>",
+            ]
+        );
+        // an option's value is the next argument unless that is an option itself
+        assert_eq!(at, [1, 4, 6, 11, 12, 13, 16]);
+        // the program is never taken for an option, a URL's user alone is no secret
+        // nor a script's text for a name
+        let script = "echo \"$TOKEN\"; a=1";
+        let (got, at) = scrub_argv(&["--token=x".into(), "http://user@h/".into(), "http://h:9000/b".into(), script.into(), "---key=x".into()]);
+        assert_eq!((got.as_slice(), at.as_slice()), (["--token=x".to_string(), "http://user@h/".into(), "http://h:9000/b".into(), script.into(), "---key=x".into()].as_slice(), [].as_slice()));
+        assert_eq!(scrub_url("http://a:b@h:9000/p"), "http://a:<redacted>@h:9000/p");
+        assert_eq!(scrub_url("s3://bucket/pre"), "s3://bucket/pre");
     }
 }

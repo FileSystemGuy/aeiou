@@ -150,7 +150,10 @@
     "chain_gap_us": null,
     "contexts": 1,
     "instances": 1,
-    "notes": {},
+    "notes": {
+     "buffer_contents_printed": 4,
+     "trace_may_hold_secrets": "this trace prints execve's arguments and environment, or the bytes calls read and wrote, where a password, a token, or a key can be: keep it to yourself and send its digest, or trace again with aeiou-trace capture or the man page's line (-e verbose=!execve,execveat -s 0)"
+    },
     "order": "completion",
     "roots": [
      "/d"
@@ -300,6 +303,7 @@
     }
    },
    "notes": {
+    "buffer_contents_printed": 4,
     "rejected_answers": 1
    },
    "open": [

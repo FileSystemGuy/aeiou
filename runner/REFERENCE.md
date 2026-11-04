@@ -121,10 +121,10 @@ aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank
 aeiou/tests/trace.rs    the `trace` node (§13); options.rs, usage.rs: the layers (§14) and the frame (§15) through the binary
 aeiou/tests/object.rs   the object engine against a local MinIO (the default feature `object`, `TEST_MINIO_BIN`; §16)
 aeiou/tests/man.rs      man/aeiou.1.md against every subcommand's `--help`
-aeiou/tests/capture.rs  `aeiou-trace capture`: the record, the checks and waivers, a signal, two ranks
+aeiou/tests/capture.rs  `aeiou-trace capture`: the record, the checks and waivers, a signal, two ranks, no secret in any file (item 62)
 aeiou/tests/capture_requests.rs  `--requests shim`: curl against MinIO and over TLS, no secret kept, a full log
 aeiou/tests/capture_ebpf.rs  `--source ebpf`: the same exported ops and metrics as strace, a full buffer,
-                        the environment kept under secure-exec, `--convert` (a copy given its
+                        the environment kept under secure-exec, no secret, `--convert` (a copy given its
                         capabilities by `sudo -n setcap`; AEIOU_WITHOUT=ebpf leaves them out)
 interpose/              `aeiou-interpose`: the preloaded libraries' machinery (the real symbol, the guard,
                         the mapped log, the capture's records)
@@ -1867,7 +1867,7 @@ both sides. It is never CLOSED (`PROJECT_BRIEF.md` §8), it declares no dataset 
 namespace, and it is one process of the application on one host.
 
 ```
-strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>        # the application
+strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>        # the application
 aeiou-trace export trace.txt --root /mnt/data -o app.jsonl                       # prints the sha256
 # in the abstract: w.trace("app.jsonl", "<sha256>") in an actor with count=1
 aeiou dry-run app.ast.json --gpus 1 --metrics-json node.json     # equals `aeiou-trace metrics trace.txt`

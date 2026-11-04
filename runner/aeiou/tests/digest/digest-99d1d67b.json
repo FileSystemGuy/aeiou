@@ -64,7 +64,9 @@
     ]
    }
   ],
-  "notes": {},
+  "notes": {
+   "buffer_contents_printed": 7
+  },
   "open": [
    {
     "ask": "Does the application revisit a sample within one pass over the set (a draw with replacement), or touch each exactly once per pass (a permutation)?",

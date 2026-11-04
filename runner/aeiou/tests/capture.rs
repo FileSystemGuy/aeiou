@@ -166,6 +166,74 @@ fn a_capture_writes_the_trace_and_its_record_and_exits_with_the_command_s_status
     assert_eq!(m["total"]["bytes_read"], 10000);
 }
 
+/// A command with a secret in its environment, its arguments, and the bytes it writes, reads,
+/// and sends, under `source`: no file of the capture holds any of them (brief item 62).
+pub fn no_secret_reaches_a_capture_file(exe: &Path, source: &str, extra: &[&str]) {
+    let d = tmp(&format!("secret-{source}"));
+    let root = d.join("data");
+    std::fs::create_dir(&root).unwrap();
+    let out = d.join("cap");
+    let secrets = ["S1-env-a8f3c0", "S2-data-b71e22", "S3-option-c90d41", "S4-value-d0e5a7", "S5-url-e44f19"];
+    // the data's secret in a file, so it is on no command line
+    std::fs::write(d.join("src"), secrets[1]).unwrap();
+    let src = d.join("src");
+    let script = format!(
+        "cat {src} > {r}/f; cat {r}/f > /dev/null; printf %s \"$AEIOU_TEST_SECRET\" | cat > /dev/null; python3 -I -c 'import socket; a, b = socket.socketpair(); a.send(open(\"{src}\", \"rb\").read()); b.recv(64)'",
+        src = s(&src),
+        r = s(&root)
+    );
+    let env = format!("AEIOU_TEST_SECRET={}", secrets[0]);
+    let opt = format!("--password={}", secrets[2]);
+    let url = format!("https://user:{}@host/b", secrets[4]);
+    let mut args = vec!["--source", source, "--root", s(&root), "-o", s(&out)];
+    args.extend(WAIVE);
+    args.extend(extra);
+    args.extend(["--", "env", &env, "sh", "-c", &script, "sh", &opt, "--token", secrets[3], &url]);
+    let o = Command::new(exe).arg("capture").args(&args).output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let mut files = 0;
+    for e in std::fs::read_dir(&out).unwrap() {
+        let p = e.unwrap().path();
+        let bytes = std::fs::read(&p).unwrap();
+        for sec in secrets {
+            assert!(!bytes.windows(sec.len()).any(|w| w == sec.as_bytes()), "{sec} in {}", p.display());
+        }
+        files += 1;
+    }
+    assert!(files >= 2, "trace.txt and capture.json at least");
+    let rec = record(&out);
+    let argv: Vec<&str> = rec["command"]["argv"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(argv[..2], ["env", "AEIOU_TEST_SECRET=<redacted>"]);
+    assert_eq!(argv[argv.len() - 4..], ["--password=<redacted>", "--token", "<redacted>", "https://user:<redacted>@host/b"]);
+    assert_eq!(rec["command"]["redacted"], serde_json::json!([1, 6, 8, 9]));
+    assert_eq!(rec["command"]["argv_kept"], "recorded");
+    // the calls are there, as addresses where the bytes were
+    let t = std::fs::read_to_string(out.join("trace.txt")).unwrap();
+    assert!(t.contains("execve(\"") && t.contains("/f>"), "{t}");
+    // nothing a reader warns of
+    let o = Command::new(bin()).args(["metrics", s(&out.join("trace.txt")), "--root", s(&root)]).output().unwrap();
+    assert!(o.status.success() && !text(&o).1.contains("WARNING"), "{}", text(&o).1);
+    let m: Value = serde_json::from_str(&text(&o).0).unwrap();
+    assert!(m["notes"].get("trace_may_hold_secrets").is_none(), "{}", m["notes"]);
+}
+
+#[test]
+fn no_secret_reaches_a_strace_capture_and_argv_none_keeps_the_program_alone() {
+    no_secret_reaches_a_capture_file(Path::new(bin()), "strace", &[]);
+    let d = tmp("argv-none");
+    let root = d.join("data");
+    std::fs::create_dir(&root).unwrap();
+    let out = d.join("cap");
+    let mut args = vec!["--source", "strace", "--root", s(&root), "--argv", "none", "-o", s(&out)];
+    args.extend(WAIVE);
+    args.extend(["--", "true", "positional-secret-f00d"]);
+    let o = capture(&args);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let rec = record(&out);
+    assert_eq!((&rec["command"]["argv"], &rec["command"]["argv_kept"], &rec["command"]["redacted"]), (&serde_json::json!(["true"]), &serde_json::json!("none"), &serde_json::json!([])));
+    assert!(!std::fs::read_to_string(out.join("capture.json")).unwrap().contains("f00d"));
+}
+
 #[test]
 fn a_failed_check_starts_nothing_and_a_waiver_by_name_lets_it_run() {
     let d = tmp("checks");

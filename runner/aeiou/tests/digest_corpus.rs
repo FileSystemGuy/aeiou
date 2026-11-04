@@ -16,7 +16,11 @@
 //! object log has an upload never completed, closed at the log's end and not at 0, and its parts
 //! positioned (`FS_API_SWEEP.md` S-32, S-29: a phase's `last` and the note
 //! `shared_positions_resolved` the only difference), and its listing without a delimiter noted
-//! `list_recursive` (S-33, the note the only difference). One thing the
+//! `list_recursive` (S-33, the note the only difference). And every document whose trace prints
+//! its calls' bytes or an `execve`'s lists, as strace does without the capture's
+//! `-e verbose=!execve,execveat -s 0`, has the notes `buffer_contents_printed` and
+//! `execve_arguments_printed` (2026-11-04, brief item 62, `DESIGN_REVIEW.md` §3.97), each
+//! regenerated and checked by script to differ by those notes alone. One thing the
 //! port does differently: a template's ops with equal counts are listed by name in the report,
 //! where the Python listed them in the order they first appeared, which a JSON object read back
 //! does not keep; the comparison sorts both reports' op lists so.

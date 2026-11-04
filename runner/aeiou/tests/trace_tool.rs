@@ -493,6 +493,35 @@ fn a_listing_is_one_readdir_however_many_pages() {
 }
 
 #[test]
+fn a_trace_printing_arguments_or_bytes_is_warned_of_by_metrics_and_digest() {
+    let d = tmp("secrets");
+    let trace = d.join("s.txt");
+    let lines = [
+        r#"100 1700000000.000100 execve("/bin/app", ["app", "--password=p"], ["TOKEN=t"]) = 0 <0.000100>"#,
+        r#"100 1700000000.000200 openat(AT_FDCWD</d>, "/d/x", O_RDONLY) = 3</d/x> <0.000010>"#,
+        r#"100 1700000000.000300 read(3</d/x>, "x"..., 4096) = 4096 <0.000010>"#,
+        r#"100 1700000000.000400 close(3</d/x>) = 0 <0.000010>"#,
+        "",
+    ];
+    std::fs::write(&trace, lines.join("\n")).unwrap();
+    for cmd in [vec!["metrics", s(&trace), "--root", "/d"], vec!["digest", s(&trace), "--root", "/d", "--no-questions"]] {
+        let o = tool(&cmd);
+        let (out, err) = text(&o);
+        assert_eq!(o.status.code(), Some(0), "{cmd:?}: {err}");
+        assert!(err.contains(&format!("aeiou-trace {}: WARNING: this trace may hold secrets: 1 execve(s) with their arguments and environment, 1 call(s) with their bytes;", cmd[0])), "{cmd:?}: {err}");
+        assert!(err.contains("keep it to yourself"), "{err}");
+        if cmd[0] == "metrics" {
+            let m: Value = serde_json::from_str(&out).unwrap();
+            assert_eq!((&m["notes"]["execve_arguments_printed"], &m["notes"]["buffer_contents_printed"]), (&serde_json::json!(1), &serde_json::json!(1)));
+        }
+    }
+    // the capture's line prints neither: no warning
+    std::fs::write(&trace, lines.join("\n").replace(r#"["app", "--password=p"], ["TOKEN=t"]"#, "0x7ffe, 0x7fff").replace(r#""x"..."#, r#"""..."#)).unwrap();
+    let o = tool(&["metrics", s(&trace), "--root", "/d"]);
+    assert!(o.status.success() && !text(&o).1.contains("secrets"), "{}", text(&o).1);
+}
+
+#[test]
 fn compare_needs_no_python_and_lists_what_it_lacks() {
     // ported (DESIGN_REVIEW.md §3.89, stage 4): no interpreter is asked for
     let o = Command::new(bin()).args(["compare"]).env("AEIOU_PYTHON", "/no/such/python").output().unwrap();
@@ -559,7 +588,9 @@ fn digest_prints_the_document_the_report_or_writes_the_file() {
     let (out, _) = text(&o);
     assert!(out.starts_with("digest of "), "{out}");
     assert!(out.contains(&format!("\nwritten: {}\n", s(&file))), "{out}");
-    assert!(out.contains("note: candidates: --candidates 40") || !out.contains("note: "), "{out}");
+    // the trace's fixture prints its reads' bytes, as strace does without -s 0
+    let notes: Vec<&str> = out.lines().filter(|l| l.starts_with("note: ") && !l.starts_with("note: buffer_contents_printed:") && !l.starts_with("note: trace_may_hold_secrets:")).collect();
+    assert!(out.contains("note: candidates: --candidates 40") || notes.is_empty(), "{out}");
     let doc: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(doc["projection"], serde_json::json!({"epochs": 3, "candidates": 40}));
     assert_eq!(doc["templates"][0]["raw_paths"].as_array().unwrap().len(), 12);
@@ -687,7 +718,9 @@ fn digest_asks_nothing_with_no_questions_and_keeps_answers_where_it_is_told() {
     corpus_trace("trace-1b35ac0c.in", &tr);
     let o = on_terminal(&["digest", s(&tr), "--root", "/d", "--no-questions"], &["100"]);
     assert_eq!(o.status.code(), Some(0));
-    assert_eq!(text(&o).1, "");
+    // asked nothing: the one line is the warning that the trace prints its calls' bytes
+    let err = text(&o).1;
+    assert!(err.starts_with("aeiou-trace digest: WARNING: this trace may hold secrets:") && err.lines().count() == 1, "{err}");
     assert_eq!(serde_json::from_slice::<Value>(&o.stdout).unwrap()["asserted"], serde_json::json!([]));
     // a terminal, no -o and no --answers: the answers are in the document only, and it says so
     let o = on_terminal(&["digest", s(&tr), "--root", "/d", "--text"], &["8", "", "", "1", "", "3", "", "3", ""]);

@@ -9517,6 +9517,59 @@ Not built in phase 3: the `sudo -n` helper (phase 3b); the request heads by upro
 faults, and `io_uring` (phase 4); aarch64 run only in the release's build (its tests run when
 an aarch64 CI job exists).
 
+### 3.97 No secret in a capture: capture less, not scrub after (brief item 62; designed and approved by the user 2026-11-04, built the same day)
+
+**How it came up.** Queued by the user on 2026-11-03 (brief item 62). A capture is sent to
+people who were not there, so no secret of its owner's may be in any of its files. Phase 2
+already kept none in `requests.jsonl` (§3.96), and the eBPF source copies no `execve`
+argument, but the strace line's `-v` printed every `execve`'s whole argument list and
+environment into `trace.txt`, and `capture.json` recorded `argv` as given.
+
+**What was found first.** No reader uses `execve`'s arguments or environment, or the contents
+of any string or buffer: `strace.rs`, the digest, `applications.rs`, export, and compare read
+paths, `-yy`'s annotations, sizes, results, and arrays (checked 2026-11-04). The brief's
+worry that dropping `-v` loses "the environment the digest and a reader use" was wrong on
+the readers' side, but `-v` cannot go: it is what prints an `io_submit`'s requests and a
+`readv`'s iovecs past the 32nd. And a second leak the item had not named: strace's default
+`-s 32` prints the first 32 bytes of every read, write, and send buffer, so a credentials file
+read (`[default]\naws_access_key_id = AK...`), a configuration's password, or, under
+`%network`, an `Authorization` header a client writes as its own iovec reached the trace in
+part.
+
+**Decided (the user approved all, 2026-11-04).**
+
+- *Capture less, not scrub after.* The strace line keeps `-v` and adds
+  `-e verbose=!execve,execveat` and `-s 0`: strace 6.8 prints `execve("/bin/x", 0x7ffe...,
+  0x7fff...)`, the eBPF converter's own form, and every buffer as `""...`, with paths, `-yy`'s,
+  and a 40-element `writev` whole (tried 2026-11-04). Nothing secret is taken, so there is
+  nothing to scrub and no raw trace to keep for the owner beside a scrubbed one. The man
+  page's line for a trace by hand, and every kit's, gets the same flags.
+- *The command line kept, redacted.* `capture.json`'s `command.argv` (and the command at the
+  end of `source.line`) keeps every argument but replaces by `<redacted>` the value of a
+  `NAME=value`, a `--NAME=value`, or the argument after a `--NAME` (unless itself an option)
+  whose name (letters, digits, `_.-`, at most two dashes, so a script's text is never taken
+  for one) holds password, passwd, secret, token, key, credential, auth, signature, session,
+  or cookie, and the password of any URL (`scheme://user:password@host`, in `--endpoint` too);
+  `command.redacted` lists the places. Pattern matching misses a secret passed by position, so
+  `--argv none` keeps the program's name alone; `recorded` is the default, since the arguments
+  say what the job was.
+- *A trace by hand warned of.* The parser notes a line that prints an `execve` argument list
+  (`execve_arguments_printed`) or a call's bytes (`buffer_contents_printed`, a quoted
+  argument after `, ` or `iov_base=`, or at a resumed line's start, not `""`; a `-yy` path
+  escapes its quotes and a `sun_path="` follows no `, `), counted by call, and
+  `trace_may_hold_secrets` in the metrics says to keep it and send its digest; `metrics` and
+  `digest` warn on standard error after their output is written. The golden corpus prints
+  bytes as strace does by default, so 260 of its files were regenerated, each difference
+  checked by script to be these notes alone (`runner/aeiou/tests/strace_corpus.rs`).
+- *Rewriting an old trace* (an `aeiou-trace scrub`) is not built: queued as brief item 63.
+
+**Built (2026-11-04).** `capture::strace_line`, `scrub_argv`, `scrub_url`, `--argv`;
+`strace::printed`, the notes and `SECRETS`; the warning in `aeiou_trace.rs`. Tests: the unit
+tests of each; `tests/capture.rs` and `tests/capture_ebpf.rs` run a command with a secret in
+its environment, its options, a URL, and the bytes it writes, reads, and sends over a socket,
+under each source, and find none in any file of the capture; `tests/trace_tool.rs` the
+warning and its absence.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

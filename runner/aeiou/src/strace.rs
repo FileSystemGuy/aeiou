@@ -43,6 +43,16 @@ const UNFINISHED: &str = "<unfinished ...>";
 /// The note of the events an eBPF capture lost (its `--- aeiou: N event(s) lost` lines): the
 /// numbers come from an incomplete trace.
 pub const EVENTS_LOST: &str = "events_lost";
+/// The notes of what the capture's line keeps out of a trace and this one prints (brief item 62,
+/// `DESIGN_REVIEW.md` §3.97): `execve`'s arguments and environment (`-v` without
+/// `-e verbose=!execve,execveat`), and a call's bytes (without `-s 0`), either of which can hold
+/// the owner's secrets. Counted by call; nothing read uses them.
+pub const ARGUMENTS_PRINTED: &str = "execve_arguments_printed";
+pub const DATA_PRINTED: &str = "buffer_contents_printed";
+/// The calls whose bytes strace prints as a string.
+const DATA_CALLS: [&str; 16] = ["read", "write", "pread64", "pwrite64", "readv", "writev", "preadv", "pwritev", "preadv2", "pwritev2", "sendto", "recvfrom", "sendmsg", "recvmsg", "sendmmsg", "recvmmsg"];
+/// Why a trace that prints them is not to be sent (`trace_may_hold_secrets`).
+pub const SECRETS: &str = "this trace prints execve's arguments and environment, or the bytes calls read and wrote, where a password, a token, or a key can be: keep it to yourself and send its digest, or trace again with aeiou-trace capture or the man page's line (-e verbose=!execve,execveat -s 0)";
 const UNDER_CACHE: usize = 1 << 20;
 
 /// What the metrics and the exporter are told about a trace.
@@ -560,6 +570,21 @@ pub(crate) fn int0(s: &str) -> Option<i64> {
         t.parse().ok()?
     };
     Some(if neg { -v } else { v })
+}
+
+/// The note for a line that prints what the capture's line keeps out (`ARGUMENTS_PRINTED`,
+/// `DATA_PRINTED`): `args` from the call's `(`, or a resumed line's rest. A quoted argument
+/// begins after `, ` or `iov_base=`, or a resumed line's rest; `-s 0` prints each as `""...`.
+/// A `-yy` path escapes its quotes, and a socket address's `sun_path="` follows no `, `.
+fn printed(name: &str, args: &str) -> Option<&'static str> {
+    if name == "execve" || name == "execveat" {
+        return args.contains("\", [").then_some(ARGUMENTS_PRINTED);
+    }
+    if !DATA_CALLS.contains(&name) {
+        return None;
+    }
+    let quoted = |m: &str| args.match_indices(m).any(|(j, _)| args.as_bytes().get(j + m.len()) != Some(&b'"'));
+    (quoted(", \"") || quoted("iov_base=\"") || (args.starts_with('"') && !args.starts_with("\"\""))).then_some(DATA_PRINTED)
 }
 
 fn digits_only(s: &str) -> bool {
@@ -1209,6 +1234,13 @@ impl Tracer {
         }
         if body.starts_with("---") || body.is_empty() {
             return;
+        }
+        let call = match resumed(body) {
+            Some((name, rest)) => Some((name, rest)),
+            None => body.find('(').map(|i| (&body[..i], &body[i..])),
+        };
+        if let Some(k) = call.and_then(|(name, args)| printed(name, args)) {
+            self.note(k, 1);
         }
         let mut issued = ts;
         let owned: String;
@@ -2013,6 +2045,9 @@ pub fn metrics_document(t: &Tracer, o: &Opts) -> Value {
     if notes.contains_key(EVENTS_LOST) {
         notes.insert("trace_incomplete".into(), json!("the eBPF capture lost events when its ring buffer was full: a call whose open fell in a gap has no path, and every number here is short; capture again with a larger --buffer, or --source strace"));
     }
+    if notes.contains_key(ARGUMENTS_PRINTED) || notes.contains_key(DATA_PRINTED) {
+        notes.insert("trace_may_hold_secrets".into(), json!(SECRETS));
+    }
     if ["aio_requests_truncated", "aio_events_truncated", "iov_arrays_truncated"].iter().any(|k| notes.contains_key(*k)) {
         notes.insert("arrays_truncated".into(), json!("trace again with strace -v: without it strace prints only the first 32 elements of an array"));
     }
@@ -2036,7 +2071,7 @@ pub fn nothing_counted(roots: &[String], seen: Seen) -> String {
     let why = if seen.calls > 0 {
         "check --root against the paths the trace shows"
     } else {
-        "not an strace (strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,... -o FILE)"
+        "not an strace (strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 -e trace=%file,%desc,%process,... -o FILE)"
     };
     format!("no call under --root {} ({} line(s) read, {} parsed as strace calls): {why}", roots.join(", "), seen.lines, seen.calls)
 }
@@ -2064,6 +2099,45 @@ mod tests {
         assert_eq!(t.notes.get(EVENTS_LOST), Some(&77));
         let doc = metrics_document(&t, &Opts::default());
         assert!(doc["notes"]["trace_incomplete"].as_str().unwrap().contains("--buffer"));
+    }
+
+    #[test]
+    fn a_trace_printing_arguments_or_bytes_is_noted_and_the_capture_s_is_not() {
+        let o = Opts { roots: vec!["/d".into()], ..Opts::default() };
+        let clean = [
+            r#"1 1.000000 execve("/bin/x", 0x7ffe, 0x7fff) = 0 <0.000100>"#,
+            r#"1 1.000000 execveat(3</bin>, "x", 0x7ffe, 0x7fff, 0) = 0 <0.000100>"#,
+            r#"1 1.000000 write(1</d/a, \"b\">, ""..., 5) = 5 <0.000010>"#,
+            r#"1 1.000000 write(1</d/a>, "", 0) = 0 <0.000010>"#,
+            r#"1 1.000000 writev(3</d/a>, [{iov_base=""..., iov_len=1}, {iov_base=""..., iov_len=2}], 2) = 3 <0.000010>"#,
+            r#"1 1.000000 sendto(4<UNIX-STREAM:[9,"/run/s"]>, ""..., 3, 0, {sa_family=AF_UNIX, sun_path="/run/s"}, 9) = 3 <0.000010>"#,
+            r#"1 1.000000 read(3</d/a>,  <unfinished ...>"#,
+            r#"1 1.000100 <... read resumed>""..., 5) = 5 <0.000100>"#,
+            r#"1 1.000000 openat(AT_FDCWD</d>, "/d/a", O_RDONLY) = 3</d/a> <0.000010>"#,
+        ];
+        let mut t = Tracer::new(&o, true, None);
+        for l in clean {
+            t.line(&format!("{l}\n"));
+        }
+        assert!(!t.notes.contains_key(ARGUMENTS_PRINTED) && !t.notes.contains_key(DATA_PRINTED), "{:?}", t.notes);
+        assert!(metrics_document(&t, &o)["notes"].get("trace_may_hold_secrets").is_none());
+        let printing = [
+            (r#"1 1.000000 execve("/bin/x", ["x", "--password=p"], ["TOKEN=t"]) = 0 <0.000100>"#, ARGUMENTS_PRINTED),
+            (r#"1 1.000000 execveat(3</bin>, "x", ["x"], 0x7fff, 0) = 0 <0.000100>"#, ARGUMENTS_PRINTED),
+            (r#"1 1.000000 write(1</d/a>, "key=v"..., 5) = 5 <0.000010>"#, DATA_PRINTED),
+            (r#"1 1.000000 writev(3</d/a>, [{iov_base=""..., iov_len=1}, {iov_base="Authorization: x", iov_len=16}], 2) = 17 <0.000010>"#, DATA_PRINTED),
+            (r#"1 1.000100 <... read resumed>"secret"..., 5) = 5 <0.000100>"#, DATA_PRINTED),
+        ];
+        for (l, k) in printing {
+            let mut t = Tracer::new(&o, true, None);
+            if l.contains("resumed") {
+                t.line("1 1.000000 read(3</d/a>,  <unfinished ...>\n");
+            }
+            t.line(&format!("{l}\n"));
+            assert_eq!(t.notes.get(k), Some(&1), "{l}: {:?}", t.notes);
+            let doc = metrics_document(&t, &o);
+            assert!(doc["notes"]["trace_may_hold_secrets"].as_str().unwrap().contains("verbose=!execve,execveat -s 0"), "{l}");
+        }
     }
 
     #[test]

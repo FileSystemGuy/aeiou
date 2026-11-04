@@ -49,7 +49,9 @@
     ]
    }
   ],
-  "notes": {},
+  "notes": {
+   "buffer_contents_printed": 8
+  },
   "open": [
    {
     "ask": "Within a pass, does the application take the files in their sorted order, or in a shuffled one?",

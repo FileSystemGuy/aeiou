@@ -97,7 +97,7 @@ order, another reader), not just in sizes, it is path C.
    storage you will name with `--root`:
 
    ```
-   strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy \
+   strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy \
        -o trace.txt <command>
    aeiou-trace metrics trace.txt --root /mnt/data -o trace.metrics.json
    ```
@@ -396,7 +396,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-11-03)
+## Status (2026-11-04)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -464,6 +464,11 @@ calls with probes the binary carries (aya, on the raw tracepoints, the BPF objec
 `runner/capture-ebpf/` with a pinned nightly), at a fraction of strace's cost a call, the
 records converted to strace's own text so every reader is unchanged; it needs root or the
 file capabilities `cap_bpf,cap_perfmon` once per node, and any lost event is loud.
+Since 2026-11-04 (brief item 62, §3.97) no secret of the owner's is in a capture: the strace
+line prints `execve`'s arguments and environment as addresses and no call's bytes, as the
+eBPF source already did, `capture.json` keeps the command line with every value named as a
+secret and every URL's password redacted (`--argv none` the program alone), and `metrics`
+and `digest` warn of a trace taken by hand that prints them.
 
 `aeiou cases` (2026-10-23, item 40) lists the use cases a binary can run by `--case NAME`,
 filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows

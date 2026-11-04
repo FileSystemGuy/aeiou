@@ -82,6 +82,16 @@ def compare(a, b):
     return [(x["metric"], x["a"], x["b"], x["distance"]) for x in json.loads(r.stdout)["rows"]]
 
 
+# The notes of a trace that prints its calls' bytes or an execve's lists, as these fixtures
+# do as strace does by default (brief item 62, DESIGN_REVIEW.md §3.97; runner/aeiou/tests hold
+# them): set aside where a test is about the other notes.
+SECRET_NOTES = ("buffer_contents_printed", "execve_arguments_printed", "trace_may_hold_secrets")
+
+
+def other_notes(notes):
+    return {k: v for k, v in notes.items() if k not in SECRET_NOTES}
+
+
 def metrics_of_export(lines):
     """The metrics of an exported trace file given as lines."""
     return metrics_of(lines, [])
@@ -201,7 +211,7 @@ def test_positions_runs_and_reuse():
     assert b["reuse_distance_bytes"]["read_after_read"]["buckets"] == [[2 * 4096, 1], [3 * 4096, 1]]
     assert b["popularity_blocks"]["counts"] == [[2, 2], [1, 1]]
     # tid 101 appears with no clone in the trace: noted, and harmless here
-    assert d["notes"] == {"threads_without_clone": 1}
+    assert other_notes(d["notes"]) == {"threads_without_clone": 1}
 
 
 THREADS = """
@@ -1044,7 +1054,7 @@ def test_metrics_and_export_give_an_escaped_file_one_name():
     pop = d["total"]["popularity_objects"]
     assert pop["distinct"] == 5 and pop["counts"] == [[2, 1], [1, 4]]   # café twice, the rest once
     header, events = trace.export_of(lines, "/r/été")
-    assert header["creates"] == ["c<d>e"] and header["opens"] == 6 and header["notes"] == {}
+    assert header["creates"] == ["c<d>e"] and header["opens"] == 6 and other_notes(header["notes"]) == {}
     paths = [e["path"] for e in events if "path" in e]
     assert paths == ["café", "café", "c<d>e", "x\\y", "a b", "n,m", "café"]
 
@@ -1102,12 +1112,12 @@ def test_an_append_to_a_file_the_trace_made_starts_at_its_end():
     lines = APPENDS.strip().splitlines()
     d = metrics_of(lines, ["/d"])
     t = d["total"]
-    assert d["notes"] == {}
+    assert other_notes(d["notes"]) == {}
     assert t["reuse_extents"]["first_touch"] == {"read": 0, "write": 4 * 4096}
     assert t["popularity_bytes"]["counts"] == [[1, 4 * 4096]]
     header, events = trace.export_of(lines, "/d")
     assert [e["offset"] for e in events if e["op"] == "write"] == [0, 4096, 8192, 12288]
-    assert header["notes"] == {"append_positions_resolved": 4}
+    assert other_notes(header["notes"]) == {"append_positions_resolved": 4}
     # the exported file measures as the strace does
     assert metrics_of_export([json.dumps(header)] + [json.dumps(e) for e in events])["total"] == t
 
@@ -1116,7 +1126,7 @@ def test_an_append_whose_base_the_trace_cannot_know_is_noted():
     # no truncation, no creation the trace saw; then a rename and an unlink end what is known
     known = APPENDS.replace("|O_TRUNC", "")
     d = metrics_of(known.strip().splitlines(), ["/d"])
-    assert d["notes"] == {"append_to_unknown_size": 4}
+    assert other_notes(d["notes"]) == {"append_to_unknown_size": 4}
     lines = (APPENDS + '\n300 1700000008.000000 truncate("/d/log", 100) = 0 <0.000010>'
              '\n300 1700000008.000100 rename("/d/log", "/d/old") = 0 <0.000010>'
              '\n300 1700000008.000200 openat(AT_FDCWD</d>, "/d/old", O_WRONLY|O_APPEND) = 4</d/old> <0.000010>'
@@ -1126,7 +1136,7 @@ def test_an_append_whose_base_the_trace_cannot_know_is_noted():
              '\n300 1700000008.000600 write(5</d/old>, "x"..., 10) = 10 <0.000010>').strip().splitlines()
     header, events = trace.export_of(lines, "/d")
     assert [e.get("offset") for e in events if e["op"] == "write"] == [0, 4096, 8192, 12288, 100, None]
-    assert metrics_of(lines, ["/d"])["notes"] == {"append_to_unknown_size": 1}
+    assert other_notes(metrics_of(lines, ["/d"])["notes"]) == {"append_to_unknown_size": 1}
 
 
 # strace prints the first 32 elements of an array unless given `-v`: a 40-request

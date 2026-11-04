@@ -49,7 +49,9 @@
     ]
    }
   ],
-  "notes": {},
+  "notes": {
+   "buffer_contents_printed": 2
+  },
   "open": [
    {
     "ask": "Is this kind of file a checkpoint (the application's state, written to survive a failure and read back only after one), or output (an index build, a dataset, results)?",

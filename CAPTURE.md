@@ -130,6 +130,16 @@ The digest carries the structure a fit is made from, path templates and counts, 
 raw paths unless you add `--paths` (**aeiou-trace**(1), digest); on a terminal it asks you
 what the trace cannot decide, and records your answers as yours.
 
+No file of a capture holds a secret of yours (**aeiou-trace**(1), capture, No secret in a
+capture): `trace.txt` has no `execve` argument list or environment and none of the bytes the
+application read, wrote, or sent; `capture.json` has the command line with the value of every
+option or variable named as a secret (`--password=...`, `--token ...`,
+`AWS_SECRET_ACCESS_KEY=...`) and every URL's password replaced by `<redacted>`. A secret your
+command takes by position is not recognized: capture with `--argv none`, and the record keeps
+the program's name alone. Look at `capture.json` before you send it. A trace you took by hand
+with another line may print all of these, and `aeiou-trace metrics` and `digest` warn when it
+does: send its digest, not the trace.
+
 ## Not implemented yet
 
 - For the eBPF source on hosts where file capabilities cannot be granted, a password-less

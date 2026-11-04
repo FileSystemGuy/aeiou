@@ -433,7 +433,7 @@ request and response heads into `requests.jsonl` (no credential kept), and sends
 and its `requests.jsonl` for a bucket's.
 
 ```
-strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
+strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
 aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--metrics-block BYTES]
             [--instance-root PID]… [--chain-gap-us US] [--cwd DIR] -o trace.metrics.json
 aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --metrics-json abstract.metrics.json
@@ -465,7 +465,11 @@ and the trace does not show (not counted: their file, offset, and size are not i
 trace, and the fan-out is short by them), `aio_events_truncated` the results it does not
 show (their requests are taken as complete at the end), and `iov_arrays_truncated` the
 vector calls whose length is taken as the larger of the shown iovecs' sum and the bytes
-the call moved (fixed 2026-10-14).
+the call moved (fixed 2026-10-14). `-e 'verbose=!execve,execveat'` and `-s 0` (2026-11-04, brief item 62,
+`DESIGN_REVIEW.md` §3.97): `execve`'s argument list and environment printed as addresses,
+and no call's bytes, so no password, token, or key in them reaches the trace; nothing read
+uses them. A trace that prints them is noted (`execve_arguments_printed`,
+`buffer_contents_printed`, `trace_may_hold_secrets`), and `metrics` and `digest` warn.
 
 - **Which calls count.** Calls on paths under `--root`, less `--exclude` (a glob on the
   part below the root). Library loading, `/proc`, pipes, and sockets are not the workload.

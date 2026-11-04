@@ -40,7 +40,7 @@ after checking the node, and keeps the record of the capture beside the trace; o
 with
 
 ```
-strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
+strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
 ```
 
 Start the command under `strace`, never attach to it running (`strace -p`): a descriptor
@@ -64,8 +64,16 @@ the root returned; `-v` prints whole arrays, where `strace` otherwise cuts
 one at 32 elements and the requests of a larger `io_submit`, the results of an
 `io_getevents`, and the iovecs of a `readv` or `writev` past the 32nd are lost (noted,
 `aio_requests_truncated`, `aio_events_truncated`, `iov_arrays_truncated`, with
-`arrays_truncated` saying to trace again); `-ttt -T` are needed only for `--chain-gap-us`
-and for `export`'s timings.
+`arrays_truncated` saying to trace again); `-e 'verbose=!execve,execveat'` prints
+`execve`'s argument list and environment as their addresses, where `-v` would print them
+whole, and `-s 0` no call's bytes (a read's, a write's, a `sendto`'s: `""...`), where strace
+otherwise prints the first 32 of each, so neither a password on a command line, a token in
+the environment, nor a credentials file read, nor a header sent, reaches the trace; no reader
+uses either (paths, `-yy`'s, and arrays are printed whole). A trace that prints them is
+noted (`execve_arguments_printed`, `buffer_contents_printed`, counted by call, with
+`trace_may_hold_secrets` saying not to send it), and `metrics` and `digest` warn on standard
+error once their output is written; the trace's digest holds none of it. `-ttt -T` are needed
+only for `--chain-gap-us` and for `export`'s timings.
 
 **What counts.** Calls on paths under `--root`, less `--exclude`. Library loading, `/proc`,
 pipes, and sockets are not the workload. `open`, `openat`, `creat` are `open`; `read`,
@@ -277,7 +285,7 @@ comparison after the fit and a re-run with answers read it again.
 Start *COMMAND* under a trace and write the capture directory (`-o DIR`): `trace.txt`, the
 strace text every other subcommand reads (`aeiou-trace metrics DIR/trace.txt --root ...`),
 and `capture.json`, the record of what was captured and how (FILES). The source is strace,
-`strace -f --seccomp-bpf -ttt -T -yy -v -e trace=...,%network,... -o DIR/trace.txt --
+`strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 -e trace=...,%network,... -o DIR/trace.txt --
 COMMAND`, the line above with `%network` always (an owner cannot know whether descriptors
 pass over a socket), or eBPF (below); `--source auto` takes eBPF where this binary can load
 its probes and strace elsewhere, and says why. The command
@@ -305,7 +313,16 @@ descriptor's path from the opens, `dup`s, forks, `chdir`s, and `exec`s before it
 at each thread's end), so every subcommand reads it unchanged; what the readers never use is
 printed as the address strace prints when it cannot read a buffer (a read's bytes, a `stat`'s
 structure, and `execve`'s arguments and environment, which are not copied: no secret in them
-reaches the trace). `--convert DIR` writes `trace.txt` again from `syscalls.bin`. It needs
+reaches the trace). **No secret in a capture** (brief item 62, `DESIGN_REVIEW.md` §3.97): under either
+source `trace.txt` holds no `execve` argument list or environment and no call's bytes (the
+line above), `requests.jsonl` no header that carries one (Object requests, below), and
+`capture.json` the command line with the value of every option or variable named as a secret
+(an option `password=X`, or `token` followed by `X`, written with its dashes, or
+`AWS_SECRET_ACCESS_KEY=X`; a name holding password, passwd,
+secret, token, key, credential, auth, signature, session, or cookie) and the password of
+every URL (`scheme://user:password@host`, in `--endpoint` too) replaced by `<redacted>`, the
+places listed; a secret passed by position is not recognized, and `--argv none` keeps the
+program's name alone. `--convert DIR` writes `trace.txt` again from `syscalls.bin`. It needs
 root, or the file capabilities `cap_bpf,cap_perfmon` (`cap_sys_admin` before Linux 5.8) granted
 once by an administrator on a node-local copy of `aeiou-trace` (`setcap
 cap_bpf,cap_perfmon+ep`; not over NFS, which carries no capabilities), and a kernel with BTF
@@ -720,6 +737,13 @@ command's working directory in the record (`command.cwd`) is the default `--cwd`
   `KiB`, `MiB`, or `GiB`. A full buffer loses events, and the capture says so and suggests a
   larger one. Default `256MiB`, about two seconds of one thread's cached calls; not with
   `--source strace`.
+- **--argv** *MODE*
+
+  What `capture.json` keeps of the command line (`command.argv`, and the command in
+  `source.line`): `recorded`, every argument, with the value of an option or a variable named
+  as a secret and a URL's password replaced by `<redacted>` (No secret in a capture, above);
+  `none`, the program's name alone, for a command that takes a secret by position. Default
+  `recorded`.
 - **--convert** *DIR*
 
   Write `DIR/trace.txt` again from `DIR/syscalls.bin` with this binary's converter, and update
@@ -823,7 +847,7 @@ command's working directory in the record (`command.cwd`) is the default `--cwd`
 
   A capture's record, `aeiou_capture: 1`: `tool` and its version; `host` (name, kernel,
   distribution, CPUs, memory); `source` (`name`, `version`, `why` it was chosen, and the exact
-  `line` run, and under eBPF the `privilege` it loaded with); `command` (`argv`, `cwd`, `uid`, `gid`, `as_root`); `environment`, a fixed list
+  `line` run, its command as `command.argv` keeps it, and under eBPF the `privilege` it loaded with); `command` (`argv`, its secrets redacted, `redacted`, their indices, `argv_kept`, `recorded` or `none`, `cwd`, `uid`, `gid`, `as_root`); `environment`, a fixed list
   only (`SLURM_JOB_ID`, `SLURM_NODEID`, `SLURM_PROCID`, `RANK`, `LOCAL_RANK`, `WORLD_SIZE`,
   `MASTER_ADDR`); `inherited_descriptors`, the descriptors the command inherited, which no open
   in the trace made; `capture_id`, `rank`, `ranks`, `coordinator`, `captures_on_host`;
@@ -918,7 +942,7 @@ Measure a trace of the application, measure the abstract at its fitted parameter
 the abstract against three other seeds of itself:
 
 ```
-strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt python train.py /mnt/data/train
+strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt python train.py /mnt/data/train
 aeiou-trace metrics trace.txt --root /mnt/data -o trace.metrics.json
 aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed 1 --metrics-json abstract.metrics.json
 for s in 2 3 4; do aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed $s --metrics-json self$s.json; done

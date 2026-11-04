@@ -298,3 +298,8 @@ fn convert_writes_the_trace_again_from_the_records() {
     assert!(o.status.success(), "{}", text(&o));
     assert_eq!(std::fs::read(eb.join("trace.txt")).unwrap(), before);
 }
+
+#[test]
+fn no_secret_reaches_an_ebpf_capture() {
+    crate::capture::no_secret_reaches_a_capture_file(&privileged(), "ebpf", &[]);
+}

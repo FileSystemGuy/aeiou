@@ -400,15 +400,15 @@ fn https_head(_: &str, _: u16, _: &str) -> std::result::Result<u16, String> {
 /// it, 403, and logs it with its time).
 pub fn anchor(url: &str, name: &str) -> Value {
     let Some((tls, host, port, path)) = http_parts(url) else {
-        return json!({"url": url, "name": name, "not_sent": "the URL names no HTTP host (s3://BUCKET does not): give the store's http:// or https:// URL to anchor its log"});
+        return json!({"url": crate::capture::scrub_url(url), "name": name, "not_sent": "the URL names no HTTP host (s3://BUCKET does not): give the store's http:// or https:// URL to anchor its log"});
     };
     let target = if path.is_empty() { format!("/{name}") } else { format!("/{path}/{name}") };
     let sent = crate::run::unix_now();
     let r = if tls { https_head(&host, port, &target) } else { connect(&host, port).and_then(|s| head(s, &host, port, 80, &target)) };
     let received = crate::run::unix_now();
     match r {
-        Ok(status) => json!({"url": url, "name": name, "target": target, "sent": sent, "received": received, "status": status}),
-        Err(e) => json!({"url": url, "name": name, "target": target, "sent": sent, "error": e}),
+        Ok(status) => json!({"url": crate::capture::scrub_url(url), "name": name, "target": target, "sent": sent, "received": received, "status": status}),
+        Err(e) => json!({"url": crate::capture::scrub_url(url), "name": name, "target": target, "sent": sent, "error": e}),
     }
 }
 
@@ -437,6 +437,8 @@ mod tests {
         assert_eq!(http_parts("http:///b"), None);
         assert_eq!(http_parts("s3://bucket"), None);
         assert!(anchor("s3://bucket", "n")["not_sent"].as_str().unwrap().contains("names no HTTP host"));
+        // the record keeps no password a URL carries (brief item 62)
+        assert_eq!(anchor("s3://u:pw@bucket", "n")["url"], "s3://u:<redacted>@bucket");
         // nothing listens on port 1
         assert!(anchor("http://127.0.0.1:1", "n")["error"].is_string());
     }

@@ -56,7 +56,9 @@
     ]
    }
   ],
-  "notes": {},
+  "notes": {
+   "buffer_contents_printed": 30
+  },
   "open": [
    {
     "ask": "Are the offsets read spread evenly over the file, or do a few parts of it take most of the reads?",

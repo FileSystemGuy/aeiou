@@ -78,7 +78,9 @@
     ]
    }
   ],
-  "notes": {},
+  "notes": {
+   "buffer_contents_printed": 3
+  },
   "open": [
    {
     "ask": "Is a key read again after its first read (a request repeating a prefix, a neighbor found again), or is each key read once?",
