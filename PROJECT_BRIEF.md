@@ -1331,6 +1331,17 @@ numbers; the order is this note's.
     First step: check whether `object_store` can issue what replay needs, else `aws-sdk-s3`
     or a small signed-HTTP client. A trace merging an strace with an object log (Milvus: a
     query node's local files and its bucket) joins item 49.
+62. **Secrets scrubbed from a capture (raised by the user 2026-11-03, queued; not started).**
+    A capture is sent to people who were not there, so no secret of the owner's may be in any
+    of its files. Phase 2 keeps none in `requests.jsonl` and `requests.bin` (the header
+    allowlist, presigned URLs' signatures redacted; `DESIGN_REVIEW.md` §3.96), but two
+    places do not scrub yet: strace's `-v` prints every `execve`'s whole argument list and
+    environment into `trace.txt` (an `AWS_SECRET_ACCESS_KEY`, a token, a password on a
+    command line), and `capture.json` records the command's `argv`. To decide: scrub after
+    the capture (by name and pattern, values replaced, what was replaced recorded) or capture
+    less (drop `-v`, losing the environment the digest and a reader use), and whether the
+    raw trace is kept for the owner alone beside a scrubbed one to send; the same holds for
+    the eBPF converter of phase 3, and for a trace taken by hand.
 
 ## 7. Environment
 
