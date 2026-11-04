@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "aeiou"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aeiou-interpose",
  "anyhow",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "aeiou-capture-shim"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aeiou-interpose",
  "libc",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "aeiou-interpose"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libc",
 ]

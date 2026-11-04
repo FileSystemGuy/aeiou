@@ -1,7 +1,7 @@
 [package]
 name = "aeiou-capture-ebpf"
 description = "The capture's BPF programs (aeiou-trace capture --source ebpf): system calls of the traced process tree on the raw tracepoints, copied into a ring buffer as variable-length records; built for bpfel-unknown-none by ../aeiou/build.rs and embedded in aeiou-trace"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/FileSystemGuy/aeiou"
