@@ -94,6 +94,8 @@ aeiou/src/
   emit.rs      `aeiou dry-run --emit-trace`: the op stream as a trace file (§13)
   capture.rs   `aeiou-trace capture`: the command under strace, the record, the checks, several
                nodes over the coordinator (`DESIGN_REVIEW.md` §3.96)
+  requests.rs  the capture's library: its log made and read into `requests.jsonl`, the processes
+               it missed, the anchor `HEAD`s (§3.96 phase 2)
   bin/aeiou_trace.rs  the `aeiou-trace` binary (`DESIGN_REVIEW.md` §3.89)
   options.rs   the option layers (§14)
   usage.rs     the usage-error frame (§15)
@@ -114,6 +116,11 @@ aeiou/tests/trace.rs    the `trace` node (§13); options.rs, usage.rs: the layer
 aeiou/tests/object.rs   the object engine against a local MinIO (the default feature `object`, `TEST_MINIO_BIN`; §16)
 aeiou/tests/man.rs      man/aeiou.1.md against every subcommand's `--help`
 aeiou/tests/capture.rs  `aeiou-trace capture`: the record, the checks and waivers, a signal, two ranks
+aeiou/tests/capture_requests.rs  `--requests shim`: curl against MinIO and over TLS, no secret kept, a full log
+interpose/              `aeiou-interpose`: the preloaded libraries' machinery (the real symbol, the guard,
+                        the mapped log, the capture's records)
+capture-shim/           `libaeiou_capture.so`, the capture's library (hooks over libc's socket calls and libssl);
+                        tests/preload.rs: the system's Python through each hook
 aeiou-launch            the ssh loop: one rank per host (the rank flags after `capture` for a capture)
 ```
 

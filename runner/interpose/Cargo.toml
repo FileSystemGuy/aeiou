@@ -1,0 +1,10 @@
+[package]
+name = "aeiou-interpose"
+description = "The interposition machinery of aeiou's preloaded libraries: the real symbol past RTLD_LOCAL, the reentrancy guard, and an appending log in a mapped file written without a system call"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libc = "0.2"

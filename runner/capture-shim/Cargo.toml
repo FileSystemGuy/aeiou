@@ -1,0 +1,15 @@
+[package]
+name = "aeiou-capture-shim"
+description = "The capture's LD_PRELOAD library (aeiou-trace capture --requests shim): records the HTTP request and response heads an application's object client sends and receives, through a shared libssl or libc's socket calls, into the capture's log; it only observes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "aeiou_capture"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libc = "0.2"
+aeiou-interpose = { path = "../interpose" }

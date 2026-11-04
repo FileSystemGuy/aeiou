@@ -426,7 +426,11 @@ and confirmed by the user the same day (decided 2026-10-01).**
 --root DIR -o DIR -- COMMAND` takes the trace: it checks the node (and, with `--ranks`, every
 node and across them), runs the line below with `%network` added, and writes `trace.txt`
 beside `capture.json`, the record of the capture (**aeiou-trace**(1), capture; the owner's
-guide `CAPTURE.md`). The line by hand stays valid.
+guide `CAPTURE.md`). The line by hand stays valid. *Since phase 2, the same day:* with an
+`--endpoint` it also preloads the capture's library, which records the application's HTTP
+request and response heads into `requests.jsonl` (no credential kept), and sends anchor
+`HEAD`s; the readers take the capture directory, its `trace.txt` for a directory's `--root`
+and its `requests.jsonl` for a bucket's.
 
 ```
 strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>

@@ -42,7 +42,7 @@ enum Cmd {
     /// Write the structural digest of a trace: path templates, lanes and their phases, a verdict per site on what the trace decides (permutation or draw, order, size), and the open questions ranked by their divergence at scale
     #[command(override_usage = "aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>")]
     Digest(DigestArgs),
-    /// Start COMMAND under a trace (strace -f --seccomp-bpf ...) after checking this node (and, with --ranks, every node), and write the capture directory: trace.txt, the trace every subcommand reads, and capture.json, the record of what was captured and how
+    /// Start COMMAND under a trace (strace -f --seccomp-bpf ...) after checking this node (and, with --ranks, every node), and write the capture directory: trace.txt, the trace every subcommand reads, capture.json, the record of what was captured and how, and with an --endpoint requests.jsonl, the object requests the capture's library saw
     #[command(override_usage = "aeiou-trace capture [OPTIONS] -o <DIR> -- <COMMAND>...")]
     Capture(CaptureArgs),
 }
@@ -55,12 +55,18 @@ struct CaptureArgs {
     /// A directory the application's data is under (repeatable): its mount is recorded and compared across nodes. At least one --root or --endpoint
     #[arg(long, value_name = "DIR")]
     root: Vec<String>,
-    /// An object store the application talks to, as a URL (s3://BUCKET[/PREFIX], http://HOST:PORT; repeatable): recorded with its scheme
+    /// An object store the application talks to, as a URL (s3://BUCKET[/PREFIX], http://HOST:PORT[/BUCKET]; repeatable): recorded with its scheme, sent an anchor HEAD at the start and the end when http(s)
     #[arg(long, value_name = "URL")]
     endpoint: Vec<String>,
     /// Sync and drop the page cache (3 into /proc/sys/vm/drop_caches, root only) before the command starts; recorded either way
     #[arg(long)]
     cold: bool,
+    /// shim: preload the capture's library into the command, recording the heads of its HTTP requests and responses (a shared libssl's or libc's socket calls) into requests.jsonl; none: no library [default: shim with an --endpoint, else none]
+    #[arg(long, value_name = "MODE", value_parser = ["shim", "none"])]
+    requests: Option<String>,
+    /// The size of the library's log, sparse (KiB, MiB, GiB); a request and its response take about half a KiB [default: 1GiB]
+    #[arg(long, value_name = "SIZE")]
+    requests_buffer: Option<String>,
     /// Start although CHECK failed (repeatable; one of the checks by name); printed and recorded
     #[arg(long, value_name = "CHECK")]
     accept: Vec<String>,
@@ -89,7 +95,7 @@ struct CaptureArgs {
 
 #[derive(clap::Args)]
 struct MetricsArgs {
-    /// The strace output file, an exported trace file, an object-store request log (MinIO audit, S3 server access), or - for stdin
+    /// The strace output file, an exported trace file, an object-store request log (MinIO audit, S3 server access, a capture's requests.jsonl), a capture directory, or - for stdin
     trace: Option<String>,
     /// Count only calls on paths under DIR (repeatable; required for an strace, not for an exported trace file)
     #[arg(long, value_name = "DIR")]
@@ -116,7 +122,7 @@ struct MetricsArgs {
 
 #[derive(clap::Args)]
 struct ExportArgs {
-    /// The strace output file, an object-store request log (MinIO audit, S3 server access), or - for stdin
+    /// The strace output file, an object-store request log (MinIO audit, S3 server access, a capture's requests.jsonl), a capture directory, or - for stdin
     trace: Option<String>,
     /// Required: export only calls on paths under DIR, written relative to it
     #[arg(long, value_name = "DIR")]
@@ -134,7 +140,7 @@ struct ExportArgs {
 
 #[derive(clap::Args)]
 struct DigestArgs {
-    /// The strace output file, an exported trace file, or an object-store request log (MinIO audit, S3 server access); a file, never stdin: the comparison after the fit and a re-run with answers read it again
+    /// The strace output file, an exported trace file, an object-store request log (MinIO audit, S3 server access, a capture's requests.jsonl), or a capture directory; a file, never stdin: the comparison after the fit and a re-run with answers read it again
     trace: Option<String>,
     /// Digest only calls on paths under DIR, written relative to it (required for an strace, not for an exported trace file)
     #[arg(long, value_name = "DIR")]
@@ -272,6 +278,35 @@ impl Drop for Input {
     }
 }
 
+/// A capture directory (`aeiou-trace capture -o DIR`) read in place of a trace: its trace.txt
+/// when the roots are directories, its requests.jsonl when they name a bucket; the command's
+/// working directory the default `--cwd`. Anything else is read as it is.
+fn in_capture(trace: String, roots: &[&str], cwd: Option<String>) -> Result<(String, Option<String>)> {
+    let dir = std::path::Path::new(&trace);
+    if !dir.is_dir() {
+        return Ok((trace, cwd));
+    }
+    let rec: Value = match std::fs::read_to_string(dir.join("capture.json")) {
+        Ok(t) => serde_json::from_str(&t).map_err(|e| anyhow!("{trace}/capture.json: {e}"))?,
+        Err(_) => return Err(anyhow!("{trace}: a directory, and not a capture's (no capture.json)")),
+    };
+    let is_dir = |r: &&&str| std::path::Path::new(r).is_absolute() || r.starts_with('.') || std::path::Path::new(r).is_dir();
+    let dirs = roots.iter().filter(is_dir).count();
+    let file = if dirs == roots.len() {
+        "trace.txt"
+    } else if dirs == 0 {
+        aeiou::requests::FILE
+    } else {
+        return Err(usage::err(format!("{trace}: a capture directory's roots are all directories (its trace.txt) or all one bucket (its requests.jsonl)")));
+    };
+    let path = dir.join(file);
+    if !path.exists() {
+        return Err(anyhow!("{}: no such file: {}", path.display(), if file == "trace.txt" { "not a whole capture" } else { "captured without the library (--requests none)" }));
+    }
+    let cwd = cwd.or_else(|| rec["command"]["cwd"].as_str().map(str::to_string));
+    Ok((path.to_string_lossy().into_owned(), cwd))
+}
+
 fn write_out(path: &PathBuf, text: &str) -> Result<()> {
     std::fs::write(path, text).map_err(|e| anyhow!("{}: {}", path.display(), cause(&e)))
 }
@@ -325,7 +360,8 @@ fn metrics(a: MetricsArgs) -> Result<()> {
     let mut m = Missing::new();
     let trace = m.want(a.trace, "<TRACE>", "the strace output file, or - for stdin", None);
     m.check()?;
-    let trace = trace.unwrap();
+    let roots: Vec<&str> = a.root.iter().map(String::as_str).collect();
+    let (trace, cwd) = in_capture(trace.unwrap(), &roots, a.cwd.clone())?;
     if a.metrics_block.is_some_and(|b| b < 1) {
         return Err(usage::err("--metrics-block must be at least 1"));
     }
@@ -359,7 +395,7 @@ fn metrics(a: MetricsArgs) -> Result<()> {
         let o = strace::Opts {
             roots: a.root.iter().map(|r| strace::abspath(r)).collect(),
             exclude: a.exclude,
-            cwd: a.cwd,
+            cwd,
             instance_roots: a.instance_root,
             chain_gap_us: a.chain_gap_us,
             block,
@@ -403,6 +439,7 @@ fn export_cmd(a: ExportArgs) -> Result<()> {
     let out = m.want(a.out, "-o <FILE>", "the trace file to write", None);
     m.check()?;
     let (trace, root, out) = (trace.unwrap(), root.unwrap(), out.unwrap());
+    let (trace, cwd) = in_capture(trace, &[root.as_str()], a.cwd.clone())?;
     let input = Input::open(&trace)?;
     let first = input.first_line()?;
     let opener = || input.reader();
@@ -418,7 +455,7 @@ fn export_cmd(a: ExportArgs) -> Result<()> {
             }
             s
         } else {
-            let s = export::strace(&opener, &strace::abspath(&root), &a.exclude, a.cwd.as_deref(), &mut w).map_err(|e| anyhow!("{trace}: {e:#}"))?;
+            let s = export::strace(&opener, &strace::abspath(&root), &a.exclude, cwd.as_deref(), &mut w).map_err(|e| anyhow!("{trace}: {e:#}"))?;
             if s.lines == 0 {
                 // never an empty trace file: a `trace` node of it would run nothing
                 let r = s.header["root"].as_str().unwrap_or("").to_string();
@@ -505,7 +542,8 @@ fn digest_cmd(a: DigestArgs) -> Result<()> {
     let mut m = Missing::new();
     let trace = m.want(a.trace.clone(), "<TRACE>", "the strace output file, or an exported trace file", None);
     m.check()?;
-    let trace = trace.unwrap();
+    let roots: Vec<&str> = a.root.iter().map(String::as_str).collect();
+    let (trace, cwd) = in_capture(trace.unwrap(), &roots, a.cwd.clone())?;
     let epochs = a.epochs.unwrap_or(1);
     if epochs < 1 {
         return Err(usage::err("--epochs must be at least 1"));
@@ -544,7 +582,7 @@ fn digest_cmd(a: DigestArgs) -> Result<()> {
         m.check()?;
     }
     let opener = || input.reader();
-    let an = digest::analyze(&opener, &first, a.root.as_deref(), &a.exclude, a.cwd.as_deref(), &mo).map_err(|e| anyhow!("{trace}: {e:#}"))?;
+    let an = digest::analyze(&opener, &first, a.root.as_deref(), &a.exclude, cwd.as_deref(), &mo).map_err(|e| anyhow!("{trace}: {e:#}"))?;
     eprint!("{}", incomplete_of("aeiou-trace digest", &an.header));
     let sha = sha256_of(&trace)?;
     let (mut by, mut at) = (a.answered_by.clone().unwrap_or_else(who), now());
@@ -711,6 +749,11 @@ fn capture_cmd(a: CaptureArgs) -> Result<()> {
             None => return Err(usage::err(format!("--endpoint {u}: expected a URL, SCHEME://HOST[/PATH] (s3://BUCKET/PREFIX, http://HOST:PORT)"))),
         }
     }
+    let requests_buffer = match &a.requests_buffer {
+        Some(b) => aeiou::requests::parse_size(b).map_err(usage::err)?,
+        None => aeiou::requests::DEFAULT_BUFFER,
+    };
+    let requests = a.requests.as_deref().map_or(!endpoints.is_empty(), |r| r == "shim");
     let source = match a.source.as_deref().unwrap_or("auto") {
         "ebpf" => return Err(usage::err("--source ebpf: not implemented yet; it comes in phase 3 of brief item 54 (DESIGN_REVIEW.md §3.96); --source strace runs as any user")),
         "strace" => capture::strace_source("--source strace"),
@@ -726,6 +769,8 @@ fn capture_cmd(a: CaptureArgs) -> Result<()> {
         cold: a.cold,
         accept: a.accept,
         check_only: a.check,
+        requests,
+        requests_buffer,
         capture_id: a.capture_id.or_else(|| std::env::var("SLURM_JOB_ID").ok().filter(|v| !v.is_empty())),
         ranks,
         rank,

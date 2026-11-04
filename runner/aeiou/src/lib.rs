@@ -37,6 +37,7 @@ pub mod pattern;
 pub mod project;
 pub mod payload;
 pub mod report;
+pub mod requests;
 pub mod rng;
 pub mod run;
 pub mod sites;

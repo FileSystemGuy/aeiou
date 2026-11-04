@@ -12,10 +12,12 @@
 //! (after the parts numbered below it), and a close at its completion (a failed completion or
 //! abort a failed close; an abort or an upload never completed a close with a note, removing
 //! nothing). A GET or HEAD answered 304 Not
-//! Modified is a stat that succeeded: the client's copy was current and nothing was read. A lane is a client host, since the log knows no thread. The root is
+//! Modified is a stat that succeeded: the client's copy was current and nothing was read. A lane is a client host in a store's log, which knows no thread. The root is
 //! `BUCKET[/PREFIX]`; keys outside it are left out and counted.
 //!
-//! Two formats, told apart by the first line: MinIO's audit log (JSON lines with an `api`
+//! Three formats, told apart by the first line: the capture's own requests (`requests.jsonl`,
+//! `requests.rs`: each named as the S3 REST API names it, its lane the client thread, its end
+//! the response's head), MinIO's audit log (JSON lines with an `api`
 //! object; `time` taken as when the response completed, so the request starts
 //! `timeToResponse` earlier; the response's `Content-Range` gives a GET's offset, a suffix
 //! range's and a part GET's included, else the request's `Range` from a start, a suffix range,
@@ -36,7 +38,7 @@ use serde_json::{json, Value};
 use crate::export::{self, Event, Exporter, Opener, Summary};
 use crate::strace::{for_each_line, Seen, When};
 
-pub const FORMATS: [&str; 2] = ["minio-audit", "s3-access"];
+pub const FORMATS: [&str; 3] = ["minio-audit", "s3-access", "aeiou-requests"];
 
 const GET: [&str; 2] = ["GetObject", "REST.GET.OBJECT"];
 const PUT: [&str; 2] = ["PutObject", "REST.PUT.OBJECT"];
@@ -79,6 +81,9 @@ fn s3_first(s: &str) -> bool {
 /// The log format of a first line, or `None` when it is not an object log.
 pub fn source_of(first: &str) -> Option<&'static str> {
     let s = first.trim();
+    if s.starts_with("{\"aeiou_requests\"") {
+        return Some("aeiou-requests");
+    }
     if s.starts_with('{') && s.contains("\"api\"") {
         let doc: Value = serde_json::from_str(s).ok()?;
         return doc.get("api").filter(|a| a.is_object()).map(|_| "minio-audit");
@@ -234,6 +239,108 @@ fn int_text(s: &str) -> i64 {
     s.trim().parse().unwrap_or(0)
 }
 
+/// Where a GET read: the answer's `Content-Range` ("bytes a-b/total") places any range, a
+/// suffix and a part GET's included (S-30); without it, only a `Range` from a start is placed,
+/// and the note says why another was not.
+fn place(answer: Option<&str>, range: Option<&str>, part: Option<i64>) -> Result<(Option<i64>, Option<i64>, Option<&'static str>)> {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+    if let Some((a, z)) = answer.and_then(|c| c.trim().strip_prefix("bytes ")).and_then(|c| c.split('/').next()?.split_once('-')).filter(|(a, z)| digits(a) && digits(z)) {
+        let o: i64 = a.parse()?;
+        return Ok((Some(o), Some(z.parse::<i64>()? - o + 1), None));
+    }
+    if let Some(r) = range.and_then(|r| r.trim().strip_prefix("bytes=")) {
+        return Ok(match r.split_once('-') {
+            _ if r.contains(',') => (None, None, Some("ranges_multiple")),
+            Some(("", _)) => (None, None, Some("ranges_suffix_unknown")),
+            Some((a, z)) if digits(a) && (z.is_empty() || digits(z)) => {
+                let o: i64 = a.parse()?;
+                (Some(o), if z.is_empty() { None } else { Some(z.parse::<i64>()? - o + 1) }, None)
+            }
+            _ => (None, None, None),
+        });
+    }
+    Ok((None, None, part.map(|_| "ranges_part_unknown")))
+}
+
+/// The total of a `Content-Range` ("bytes a-b/total"), when it says.
+fn range_total(c: &str) -> Option<i64> {
+    c.rsplit_once('/').and_then(|(_, t)| t.trim().parse().ok())
+}
+
+/// A request of the capture's library (`requests.jsonl`, `requests.rs`), as the S3 REST API
+/// names it from its method, path, query, and headers; `None` for one never answered. The
+/// bucket is the path's first segment, or the host's first label under an `s3.` host
+/// (virtual-hosted style); the lane is the client's process and thread.
+fn library_request(doc: &Value, no: usize) -> Result<Option<Request>> {
+    let method = doc["method"].as_str().ok_or_else(|| anyhow!("line {no}: no method"))?;
+    let target = doc["target"].as_str().ok_or_else(|| anyhow!("line {no}: no target"))?;
+    let Some(status) = doc["status"].as_i64() else { return Ok(None) };
+    let req = |k: &str| doc["request"].get(k).and_then(Value::as_str);
+    let resp = |k: &str| doc["response"].get(k).and_then(Value::as_str);
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let path = unquote(path.split('#').next().unwrap_or(""), false);
+    let host = req("host").unwrap_or("");
+    let name = host.rsplit_once(':').map_or(host, |(h, p)| if p.bytes().all(|c| c.is_ascii_digit()) { h } else { host });
+    let virtual_bucket = name.split_once('.').filter(|(b, rest)| !b.is_empty() && *b != "s3" && (rest.starts_with("s3.") || rest.starts_with("s3-"))).map(|(b, _)| b.to_string());
+    let path = path.trim_start_matches('/');
+    let (bucket, key) = match virtual_bucket {
+        Some(b) => (b, path.to_string()),
+        None => path.split_once('/').map_or((path.to_string(), String::new()), |(b, k)| (b.to_string(), k.to_string())),
+    };
+    let has = |k: &str| query.split('&').any(|p| p.split('=').next() == Some(k));
+    let listing = ["list-type", "prefix", "delimiter", "marker", "continuation-token", "max-keys", "start-after", "encoding-type"];
+    let object_subresources = ["acl", "tagging", "attributes", "retention", "legal-hold", "torrent", "restore", "select"];
+    let other = || format!("{method}?{}", query.split('&').filter_map(|p| p.split('=').next()).filter(|k| !k.is_empty()).collect::<Vec<_>>().join("&"));
+    let op = match (method, key.is_empty()) {
+        ("GET", true) if has("uploads") => "ListMultipartUploads".to_string(),
+        ("GET", true) if query.is_empty() || listing.iter().any(|k| has(k)) => if has("list-type") { "ListObjectsV2" } else { "ListObjects" }.to_string(),
+        ("GET", false) if has("uploadId") => "ListParts".to_string(),
+        ("GET", false) if !object_subresources.iter().any(|k| has(k)) => "GetObject".to_string(),
+        ("HEAD", true) => "HeadBucket".to_string(),
+        ("HEAD", false) => "HeadObject".to_string(),
+        ("PUT", true) if query.is_empty() => "MakeBucket".to_string(),
+        ("PUT", false) if has("partNumber") && has("uploadId") => "PutObjectPart".to_string(),
+        ("PUT", false) if req("x-amz-copy-source").is_some() => "CopyObject".to_string(),
+        ("PUT", false) if !object_subresources.iter().any(|k| has(k)) => "PutObject".to_string(),
+        ("POST", false) if has("uploads") => "NewMultipartUpload".to_string(),
+        ("POST", false) if has("uploadId") => "CompleteMultipartUpload".to_string(),
+        ("POST", true) if has("delete") => "DeleteMultipleObjects".to_string(),
+        ("DELETE", false) if has("uploadId") => "AbortMultipartUpload".to_string(),
+        ("DELETE", true) => "DeleteBucket".to_string(),
+        ("DELETE", false) if query.is_empty() => "DeleteObject".to_string(),
+        _ => other(),
+    };
+    let int = |v: Option<&str>| v.and_then(|v| v.trim().parse::<i64>().ok());
+    let part = query_value(query, "partNumber").and_then(|v| v.parse().ok()).filter(|n: &i64| *n > 0);
+    let (offset, length, unplaced) = place(resp("content-range"), req("range"), part)?;
+    let size = resp("content-range").and_then(range_total).or_else(|| if status == 200 && (op == "GetObject" || op == "HeadObject") { int(resp("content-length")) } else { None });
+    let start = doc["start"].as_f64();
+    let end = doc["end"].as_f64();
+    Ok(Some(Request {
+        bucket,
+        key,
+        status,
+        rx: if op == "PutObject" || op == "PutObjectPart" { int(req("x-amz-decoded-content-length")).or(int(req("content-length"))).unwrap_or(0) } else { 0 },
+        tx: if method == "HEAD" { 0 } else { int(resp("content-length")).unwrap_or(0) },
+        size,
+        start,
+        end,
+        host: format!("{}/{}", doc["pid"], doc["tid"]),
+        offset,
+        length,
+        prefix: query_value(query, "prefix"),
+        upload: query_value(query, "uploadId"),
+        part,
+        unplaced,
+        continued: ["continuation-token", "marker"].iter().any(|k| query_value(query, k).is_some()),
+        delimiter: query_value(query, "delimiter"),
+        logged: start,
+        timed: end.is_some(),
+        foreign: None,
+        op,
+    }))
+}
+
 fn minio_request(doc: &Value, no: usize) -> Result<Request> {
     let api = doc.get("api").filter(|a| a.is_object()).ok_or_else(|| anyhow!("line {no}: no api.name"))?;
     let name = api.get("name").and_then(Value::as_str).ok_or_else(|| anyhow!("line {no}: no api.name"))?;
@@ -252,28 +359,8 @@ fn minio_request(doc: &Value, no: usize) -> Result<Request> {
     };
     let q = doc.get("requestQuery");
     let part = q.and_then(|q| q.get("partNumber")).map(|v| int_of(Some(v), 0)).filter(|n| *n > 0);
-    let (mut offset, mut length, mut unplaced) = (None, None, None);
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
-    // the answer's Content-Range ("bytes a-b/total") places any range, a suffix and a part
-    // GET's included (S-30); without it, only a range from a start is placed
     let answer = doc.get("responseHeader").and_then(|h| h.get("Content-Range")).and_then(Value::as_str);
-    if let Some((a, z)) = answer.and_then(|c| c.trim().strip_prefix("bytes ")).and_then(|c| c.split('/').next()?.split_once('-')).filter(|(a, z)| digits(a) && digits(z)) {
-        let o: i64 = a.parse()?;
-        (offset, length) = (Some(o), Some(z.parse::<i64>()? - o + 1));
-    } else if let Some(r) = doc.get("requestHeader").and_then(|h| h.get("Range")).and_then(Value::as_str).and_then(|r| r.trim().strip_prefix("bytes=")) {
-        match r.split_once('-') {
-            _ if r.contains(',') => unplaced = Some("ranges_multiple"),
-            Some(("", _)) => unplaced = Some("ranges_suffix_unknown"),
-            Some((a, z)) if digits(a) && (z.is_empty() || digits(z)) => {
-                let o: i64 = a.parse()?;
-                offset = Some(o);
-                length = if z.is_empty() { None } else { Some(z.parse::<i64>()? - o + 1) };
-            }
-            _ => {}
-        }
-    } else if part.is_some() {
-        unplaced = Some("ranges_part_unknown");
-    }
+    let (offset, length, unplaced) = place(answer, doc.get("requestHeader").and_then(|h| h.get("Range")).and_then(Value::as_str), part)?;
     let text = |v: Option<&Value>| v.and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
     let host = match doc.get("remotehost") {
         Some(Value::String(s)) if !s.is_empty() => s.clone(),
@@ -481,7 +568,19 @@ fn pass(open: &Opener, root: &str, format: &str, ex: &mut Exporter, parts: &mut 
         if line.is_empty() {
             return Ok(());
         }
-        let r = if format == "minio-audit" {
+        let r = if format == "aeiou-requests" {
+            if no == 1 {
+                return Ok(());
+            }
+            let doc: Value = serde_json::from_str(line).map_err(|e| anyhow!("line {no}: {e}"))?;
+            match library_request(&doc, no)? {
+                Some(r) => r,
+                None => {
+                    note("requests_unanswered");
+                    return Ok(());
+                }
+            }
+        } else if format == "minio-audit" {
             let doc: Value = serde_json::from_str(line).map_err(|e| anyhow!("line {no}: {e}"))?;
             if !doc.is_object() {
                 bail!("line {no}: not a JSON object");
@@ -683,7 +782,12 @@ fn plan(open: &Opener, root: &str, format: &str) -> Result<(export::Plan, Value,
     if format == "minio-audit" {
         h.entry("time_is_response_end").or_insert(json!("a MinIO audit entry's time is taken as when the response completed; the request starts timeToResponse earlier"));
     }
-    h.entry("lanes").or_insert(json!("one per client host; the log knows no thread"));
+    if format == "aeiou-requests" {
+        h.entry("lanes").or_insert(json!("one per client thread (pid/tid)"));
+        h.entry("end_is_response_head").or_insert(json!("a request's end is when its response's head arrived; the body's end is not seen"));
+    } else {
+        h.entry("lanes").or_insert(json!("one per client host; the log knows no thread"));
+    }
     Ok((plan, header, parts))
 }
 
@@ -762,6 +866,79 @@ mod tests {
         assert_eq!(query_value("list-type=2&prefix=d%2Fe&x=", "prefix"), Some("d/e".into()));
         assert_eq!(query_value("prefix=", "prefix"), None);
         assert_eq!(query_value("", "prefix"), None);
+    }
+
+    fn lib(method: &str, target: &str, status: Option<i64>, request: Value, response: Value) -> Value {
+        json!({"start": 1.0, "end": 1.5, "pid": 7, "tid": 8, "method": method, "target": target, "request": request, "status": status, "response": response})
+    }
+
+    #[test]
+    fn the_library_s_requests_are_named_as_the_s3_api_names_them() {
+        let op = |m: &str, t: &str, req: Value| library_request(&lib(m, t, Some(200), req, json!({})), 2).unwrap().unwrap().op;
+        let h = json!({"host": "127.0.0.1:9000"});
+        for (m, t, want) in [
+            ("GET", "/b/k%20x", "GetObject"),
+            ("GET", "/b?list-type=2&prefix=d", "ListObjectsV2"),
+            ("GET", "/b", "ListObjects"),
+            ("GET", "/b?uploads", "ListMultipartUploads"),
+            ("GET", "/b/k?uploadId=u", "ListParts"),
+            ("GET", "/b/k?tagging", "GET?tagging"),
+            ("GET", "/b?location", "GET?location"),
+            ("HEAD", "/b", "HeadBucket"),
+            ("HEAD", "/b/k", "HeadObject"),
+            ("PUT", "/b", "MakeBucket"),
+            ("PUT", "/b/k?partNumber=2&uploadId=u", "PutObjectPart"),
+            ("PUT", "/b/k", "PutObject"),
+            ("PUT", "/b/k?acl", "PUT?acl"),
+            ("POST", "/b/k?uploads", "NewMultipartUpload"),
+            ("POST", "/b/k?uploadId=u", "CompleteMultipartUpload"),
+            ("POST", "/b?delete", "DeleteMultipleObjects"),
+            ("POST", "/b/k", "POST?"),
+            ("DELETE", "/b/k?uploadId=u", "AbortMultipartUpload"),
+            ("DELETE", "/b", "DeleteBucket"),
+            ("DELETE", "/b/k", "DeleteObject"),
+            ("DELETE", "/b/k?versionId=1", "DELETE?versionId"),
+        ] {
+            assert_eq!(op(m, t, h.clone()), want, "{m} {t}");
+        }
+        assert_eq!(op("PUT", "/b/k", json!({"x-amz-copy-source": "/b/j"})), "CopyObject");
+        // virtual-hosted style under an s3. host; a port is not part of the name
+        let r = library_request(&lib("GET", "/k/x", Some(206), json!({"host": "data.s3.us-east-1.amazonaws.com:443", "range": "bytes=10-19"}), json!({"content-range": "bytes 10-19/100", "content-length": "10"})), 2).unwrap().unwrap();
+        assert_eq!((r.bucket.as_str(), r.key.as_str(), r.offset, r.length, r.size, r.tx, r.host.as_str()), ("data", "k/x", Some(10), Some(10), Some(100), 10, "7/8"));
+        let r = library_request(&lib("GET", "/b/k%2Fx", Some(200), h.clone(), json!({"content-length": "4"})), 2).unwrap().unwrap();
+        assert_eq!((r.bucket.as_str(), r.key.as_str(), r.size, r.offset), ("b", "k/x", Some(4), None));
+        // a PUT's bytes: the decoded length of an aws-chunked body, else its length
+        let r = library_request(&lib("PUT", "/b/k", Some(200), json!({"content-length": "120", "x-amz-decoded-content-length": "100"}), json!({})), 2).unwrap().unwrap();
+        assert_eq!((r.rx, r.tx), (100, 0));
+        assert_eq!(library_request(&lib("HEAD", "/b/k", Some(200), h.clone(), json!({"content-length": "4"})), 2).unwrap().unwrap().tx, 0);
+        // never answered: left out, and the pass notes it
+        assert!(library_request(&lib("GET", "/b/k", None, h.clone(), Value::Null), 2).unwrap().is_none());
+        assert!(library_request(&json!({"target": "/"}), 3).unwrap_err().to_string().contains("line 3: no method"));
+        assert!(library_request(&json!({"method": "GET"}), 3).unwrap_err().to_string().contains("line 3: no target"));
+        assert_eq!(range_total("bytes 0-1/*"), None);
+    }
+
+    #[test]
+    fn the_library_s_requests_export_on_a_lane_per_thread() {
+        let lines = [
+            json!({"aeiou_requests": 1, "requests": 4}),
+            lib("GET", "/bench/a", Some(206), json!({"host": "h", "range": "bytes=0-99"}), json!({"content-range": "bytes 0-99/4096", "content-length": "100"})),
+            json!({"start": 2.0, "end": 2.1, "pid": 7, "tid": 9, "method": "PUT", "target": "/bench/b", "request": {"content-length": "5"}, "status": 200, "response": {}}),
+            lib("GET", "/bench/c", None, json!({}), Value::Null),
+            lib("GET", "/other/d", Some(200), json!({}), json!({"content-length": "1"})),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        assert_eq!(source_of(text.lines().next().unwrap()), Some("aeiou-requests"));
+        let open = || -> std::io::Result<Box<dyn std::io::BufRead>> { Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes()))) };
+        let (doc, requests) = metrics(&open, "bench", "aeiou-requests", None).unwrap();
+        assert_eq!(requests, 3);
+        assert_eq!((doc["total"]["bytes_read"].as_u64(), doc["total"]["bytes_written"].as_u64()), (Some(100), Some(5)), "{}", doc["total"]);
+        assert_eq!(doc["notes"]["requests_unanswered"], 1, "{}", doc["notes"]);
+        assert_eq!(doc["notes"]["requests_outside_root"], 1, "{}", doc["notes"]);
+        assert!(doc["notes"]["end_is_response_head"].is_string());
+        let mut out = Vec::new();
+        let s = export(&open, "bench", "aeiou-requests", &mut out).unwrap();
+        assert_eq!(s.header["lanes"], 2, "{}", s.header);
     }
 
     #[test]

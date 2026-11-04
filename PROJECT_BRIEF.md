@@ -1135,7 +1135,8 @@ numbers; the order is this note's.
 54. **What `strace` cannot see: an eBPF capture beside it, and the instructions for a capture
     (raised by the user 2026-10-31, queued; taken up by the user 2026-11-03 for a capture with
     both POSIX calls and object requests, measured by a spike the same day, `DESIGN_REVIEW.md`
-    §3.96; decided; phase 1, the capture under strace, built 2026-11-03).** An `strace` misses three kinds of
+    §3.96; decided; phase 1, the capture under strace, and phase 2, the HTTP-head shim and the
+    anchors, built 2026-11-03).** An `strace` misses three kinds of
     I/O the abstracts model: the accesses through a mapping (it sees `mmap`, `madvise`,
     `msync`, `munmap`, never the loads; `builder/REFERENCE.md` §7), the operations of an
     `io_uring` (it sees `io_uring_setup`, `io_uring_register`, and `io_uring_enter`, never the
@@ -1241,7 +1242,17 @@ numbers; the order is this note's.
     capture, `CAPTURE.md`). Not in phase 1, and not implemented yet: a node's interruption
     stopping the others (each node stops on its own signal, which `aeiou-launch` sends to every
     rank), the cross-node comparison made afterward from records taken without a coordinator,
-    and the sources' raw files (none under strace). Next: phase 2, the HTTP-head shim.
+    and the sources' raw files (none under strace). ~~Next: phase 2, the HTTP-head shim.~~
+    *Phase 2 built the same day, as proposed and approved* (`DESIGN_REVIEW.md` §3.96 "Phase 2
+    as built"): `--requests shim|none` (`shim` with an `--endpoint`) preloads
+    `libaeiou_capture.so` (`runner/capture-shim/`, its machinery `runner/interpose/`, shared
+    with item 55's library to come), which records request and response heads through a
+    shared libssl or libc's socket calls into a mapped log (`requests.bin`) with no system call
+    per request and no credential kept; the tool writes `requests.jsonl`, names the processes
+    the library missed, and sends the anchor `HEAD`s; `objectlog.rs` reads `requests.jsonl` as
+    a third format, and the readers take the capture directory; the tarball's `lib/` holds the
+    library. Not in phase 2: the join of requests to calls (items 49, 61). Next: phase 3, eBPF
+    with aya (nightly and `bpf-linker`, the user to approve installing them).
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no

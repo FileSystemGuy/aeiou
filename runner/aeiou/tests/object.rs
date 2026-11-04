@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-const USER: &str = "aeiou";
+pub(crate) const USER: &str = "aeiou";
 /// Each server's secret is its own, so a request that reaches another test's server is refused
 /// (403), never answered for it.
 static SERVERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -50,10 +50,10 @@ fn object_variant(example: &str, names: &[&str], dir: &Path) -> PathBuf {
 }
 
 /// A MinIO server on a free port with a directory of its own, killed when dropped.
-struct Minio {
+pub(crate) struct Minio {
     child: Child,
-    url: String,
-    secret: String,
+    pub(crate) url: String,
+    pub(crate) secret: String,
     _dir: crate::common::TempDir,
 }
 
@@ -64,7 +64,7 @@ impl Drop for Minio {
     }
 }
 
-fn minio(test: &str) -> Minio {
+pub(crate) fn minio(test: &str) -> Minio {
     let Some(bin) = std::env::var_os("TEST_MINIO_BIN") else {
         panic!("{test}: TEST_MINIO_BIN is not set: it names a MinIO server binary, the pinned release .github/workflows/ci.yml downloads (runner/REFERENCE.md §16)");
     };
@@ -109,7 +109,7 @@ fn minio(test: &str) -> Minio {
 }
 
 /// A request for `path` on the server, signed with the test's credentials; fails on an HTTP error.
-fn curl(m: &Minio, path: &str, args: &[&str]) -> Output {
+pub(crate) fn curl(m: &Minio, path: &str, args: &[&str]) -> Output {
     Command::new("curl").args(["-sf", "--aws-sigv4", "aws:amz:us-east-1:s3", "--user", &format!("{USER}:{}", m.secret)]).args(args).arg(format!("{}{path}", m.url)).env_remove("http_proxy").output().unwrap()
 }
 

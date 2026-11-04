@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["aeiou"]
+members = ["aeiou", "interpose", "capture-shim"]
 
 [workspace.package]
 version = "0.3.0"

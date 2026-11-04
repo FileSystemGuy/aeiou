@@ -289,6 +289,40 @@ time limit) is passed to the command, and the record says the capture was interr
 terminal's Ctrl-C already reaches the command's process group. Messages go to standard error,
 prefixed, so the command's standard output stays its own.
 
+**Object requests.** With an `--endpoint`, the command also runs with the capture's library
+preloaded (`--requests shim`, the default then; `--requests none` leaves it out), put in the
+command's environment alone by strace's `-E`, before any `LD_PRELOAD` of the user's:
+`libaeiou_capture.so`, which records the head of each HTTP request the application's object
+client sends and of each response it gets, where it can see them in plaintext, through a
+shared libssl (`SSL_write`, `SSL_read`, their `_ex` forms) or libc's calls on a socket a
+`connect` made (`send`, `write`, `recv`, `read`, their vector and fortified forms). It only
+observes: every call passes on unchanged. It records into a log in the capture directory
+(`requests.bin`, sized by `--requests-buffer`, sparse) that each process maps once, so a
+request costs no system call the trace would show; what the trace shows of it is each
+process's start: `openat`, `fstat`, `mmap`, and `close` of `requests.bin` (named to it by
+`AEIOU_CAPTURE_LOG`), and the dynamic loader's open of the library, outside every `--root`, so
+no reader counts them. A head keeps its request line, with a presigned URL's signature,
+credential, and token redacted, and only the headers that describe the request (`Host`,
+`Range`, `Content-Length`, `Content-Range`, `Content-Type`, `ETag`, the conditionals, and
+the `x-amz-` ones but the session token, the payload hash, a customer's encryption key, and
+user metadata): never `Authorization` or a cookie. After the command, the tool pairs each
+response with its request, in order on each connection as HTTP/1.1 answers them, and writes
+`requests.jsonl` (FILES). It cannot see TLS inside the program (python-build-standalone's
+Python, the AWS CRT's s2n, rustls, the JVM), Go's clients (no libc), HTTP/2, or a static or
+setuid binary: every process the trace saw begin that the library did not is named
+(`requests.processes.not_reached`, a warning), and one that connected and showed no head is
+noted. A log that fills drops what does not fit and counts it (a warning; capture again with a
+larger `--requests-buffer`). Not implemented yet: joining the requests to the system calls
+under them, and replaying them as an object namespace (brief items 49 and 61).
+
+**Anchors.** For each `--endpoint` given as an `http://` or `https://` URL, the tool sends an
+unsigned `HEAD` of `aeiou-anchor-ID-start` under the URL's path just before the command starts
+and of `aeiou-anchor-ID-end` after it ends (*ID* the `--capture-id`, else the host and the
+tool's pid), and records when each was sent and answered (`anchors`): the store refuses them
+(a 403 in MinIO's audit log, or the S3 access log) and logs them with its own times, which
+aligns the store's log with the capture's clock. An `s3://BUCKET` URL names no host and sends
+none (`not_sent`, and why).
+
 **The checks** are the first step of every capture: when one fails, and is not waived by
 name with `--accept`, nothing starts and the exit status is 1. Each node checks itself:
 
@@ -304,11 +338,14 @@ name with `--accept`, nothing starts and the exit status is 1. Each node checks 
 - `alone`: no other capture runs on the host, but captures of the same `--capture-id`
   (every probe and tracer slows every traced call on the host).
 - `cold`: with `--cold`, the tool can drop the page cache (root).
+- `requests`: with `--requests shim`, the library is found: in a build tree beside the
+  binary (`target/release/deps/`, `target/release/`), else in the release's `lib/` beside its
+  `bin/`. Waived, the capture runs without it and the record says why.
 
 With `--ranks` above 1, rank 0 compares the nodes as well and prints one table:
 
 - `release`: one `aeiou-trace` version on every node.
-- `same-source`: one source and version on every node (one node under a slower source slows a
+- `same-source`: one source and version, and one `--requests`, on every node (one node under a slower source slows a
   synchronized job and distorts every node's trace).
 - `mounts`: every `--root` mounted alike on every node, file system, source, and options, a
   client's own address (`clientaddr`) aside: a node mounted with another `vers`, `rsize`, or
@@ -341,8 +378,8 @@ coordinator.
 ## OBJECT LOGS
 
 An strace never shows an application's object requests (TLS, or another process), but the
-store's own log does, one line per request. `metrics`, `export`, and `digest` read two such
-logs in place of an strace, told apart by the first line, and turn each request into the
+store's own log does, one line per request, and so does the capture's library. `metrics`,
+`export`, and `digest` read three such logs in place of an strace, told apart by the first line, and turn each request into the
 calls the runner's object engine issues for it (`runner/REFERENCE.md` §16): a GET is an
 open, one read (where the response's `Content-Range` says, else at the start of the
 `Range` asked for, else from 0), and a
@@ -381,6 +418,14 @@ log is an ordinary trace file: the `trace` node runs it against the declared end
   It carries no Range, so a GET that sent fewer bytes than the object holds is read from
   offset 0 and counted under `ranges_unknown`; its times are to the second. AWS delivers
   these logs best-effort and late; CloudTrail data events are the complete source.
+- **The capture's requests** (`requests.jsonl`, written by `capture --requests shim`; FILES).
+  Each request is named as the S3 REST API names it from its method, path, query, and headers
+  (`GetObject`, `PutObjectPart`, `ListObjectsV2`, ...), its bucket the path's first segment,
+  or the host's first label under an `s3.` host (virtual-hosted style); a GET is placed by
+  the response's `Content-Range`, else the request's `Range`, as MinIO's are; a request never
+  answered is left out and counted under `requests_unanswered`. A lane is a client thread
+  (`pid/tid`); a request's end is when its response's head arrived, the body's end not seen
+  (`end_is_response_head`).
 
 A log is read in the order of its lines, which the trace file keeps: a record whose own
 time (MinIO's `time`, S3's `[time]`) is earlier than one before it is counted under
@@ -396,13 +441,22 @@ writes `dd/Mon/yyyy`); with `jq` and GNU `sort`:
 
 Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49).
 
+## CAPTURE DIRECTORIES
+
+`metrics`, `export`, and `digest` take a capture directory (`capture -o DIR`) in place of a
+file: its `trace.txt` when every `--root` is a directory (an absolute path, one beginning with
+`.`, or one that exists), its `requests.jsonl` when every `--root` names a bucket; roots of
+both kinds at once are a usage error, and a directory without `capture.json` is refused. The
+command's working directory in the record (`command.cwd`) is the default `--cwd`.
+
 ## OPTIONS
 
 ### aeiou-trace metrics
 
 - *TRACE*
 
-  The strace output file, or an exported trace file, or `-` for stdin.
+  The strace output file, an exported trace file, an object-store request log (OBJECT
+  LOGS), a capture directory (CAPTURE DIRECTORIES), or `-` for stdin.
 - **--root** *DIR*
 
   Count only calls on paths under *DIR*. Repeatable. Required for an strace, not for an
@@ -435,7 +489,8 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
 - *TRACE*
 
-  The strace output file, or `-` for stdin.
+  The strace output file, an object-store request log (OBJECT LOGS), a capture directory
+  (CAPTURE DIRECTORIES), or `-` for stdin.
 - **--root** *DIR*
 
   Required. Export only calls on paths under *DIR*, written relative to it.
@@ -507,9 +562,9 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
 - *TRACE*
 
-  The strace output file, an exported trace file, or an object-store request log (see
-  OBJECT LOGS). A file, never stdin (`-` is refused): the comparison after the fit and a
-  re-run with answers read it again. Its SHA-256 is recorded in the document and in the
+  The strace output file, an exported trace file, an object-store request log (see
+  OBJECT LOGS), or a capture directory (CAPTURE DIRECTORIES). A file, never stdin (`-` is
+  refused): the comparison after the fit and a re-run with answers read it again. Its SHA-256 is recorded in the document and in the
   answers file.
 - **--root** *DIR*
 
@@ -604,8 +659,17 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 - **--endpoint** *URL*
 
   An object store the application talks to, as a URL (`s3://BUCKET/PREFIX`,
-  `http://HOST:PORT`). Repeatable. Recorded with its scheme; its requests come with the shim,
-  phase 2 of brief item 54.
+  `http://HOST:PORT[/BUCKET]`, `https://...`). Repeatable. Recorded with its scheme; an
+  `http://` or `https://` one is sent the anchors; any makes `--requests shim` the default.
+- **--requests** *MODE*
+
+  `shim`: preload the capture's library into the command, recording the heads of its HTTP
+  requests and responses into `requests.jsonl` (Object requests, above). `none`: no library.
+  Default `shim` with an `--endpoint`, else `none`.
+- **--requests-buffer** *SIZE*
+
+  The size of the library's log, sparse, in bytes or with `KiB`, `MiB`, or `GiB` (at least
+  4160 bytes). A request and its response take about half a KiB. Default `1GiB`.
 - **--cold**
 
   `sync`, then `3` into `/proc/sys/vm/drop_caches` before the command starts (root only; the
@@ -717,13 +781,32 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
   `paths_not_copied`; `not_seen`, what the source cannot see; `mountstats`, never from a traced
   run; `clock` (the start's state, the end's, and `offset_to_rank_0`, `offset_s` and
   `bound_s`); `checks` (every check's `name`, `node`, `ok`, `waived`, `detail`, of every node
-  with several), `waivers`, `changes_at_end`; and `trace` (`file`, `bytes`, `sha256`).
+  with several), `waivers`, `changes_at_end`; `trace` (`file`, `bytes`, `sha256`);
+  `requests` (`source`, `shim` or `none`, and `why` when none; with the library: `library`,
+  its `path` and `sha256`; `file`; `requests`, `answered`, `unanswered`,
+  `responses_unpaired`, `heads_cut`; `log`, `requests.bin`'s `capacity`, `used`, `records`,
+  `dropped`, `dropped_bytes`, `torn`, `unreadable_bytes`; `processes`, `reached`, `forked`,
+  `not_reached` (each `pid` and `exe`; null when the log filled, `not_reached_unknown` saying
+  why), `connected_without_heads`; and `visible_calls`); and `anchors` (each `url`, `name`,
+  `target`, `sent`, `received`, `status`, or `error`, or `not_sent`).
+- `DIR/requests.jsonl`
+
+  The requests the capture's library saw, `aeiou_requests: 1` in the first line (with
+  `clock`, `CLOCK_REALTIME` seconds, and `requests`), then one request a line in the order
+  they were sent: `start` (its head sent), `end` (its response's head arrived), `pid`, `tid`,
+  `via` (`ssl` or `socket`), `fd` (the socket, learned under an SSL call), `peer` (its
+  `connect`'s address), `method`, `target`, `version`, `request` (the kept headers, names in
+  lower case), `status`, `reason`, `response`, `truncated`.
+- `DIR/requests.bin`
+
+  The library's log as it was written, cut to what was recorded, kept so that a converter's
+  bug is fixed by converting again, never by asking the owner for another capture.
 - `DIR/capture-set.json`
 
   Rank 0's record of a capture on several nodes, `aeiou_capture_set: 1`: `capture_id`,
   `ranks`, `coordinator`, `nodes` (each rank's `host`, `directory` on that host, `source`,
-  `losses`, `clock_offset_s`, `clock_bound_s`, `exit`, `interrupted`, `trace_sha256`, `waived`,
-  `changes_at_end`), `clock_end` (the offsets measured again at the end), and `status`
+  `losses`, `clock_offset_s`, `clock_bound_s`, `exit`, `interrupted`, `trace_sha256`,
+  `requests`, `requests_dropped`, `waived`, `changes_at_end`), `clock_end` (the offsets measured again at the end), and `status`
   (`complete`, or `incomplete:` and why).
 - The exported trace file
 

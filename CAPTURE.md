@@ -3,7 +3,8 @@
 This guide is for the owner of a real application whose storage workload aeiou is to
 model: a training job, a checkpointer, a vector database, a KV cache. It needs the release
 tarball's `bin/aeiou-trace` (no Python) and `strace` 5.3 or later from your distribution.
-The reference is **aeiou-trace**(1), capture (`man/aeiou-trace.1.md`); the reasoning is
+With an object store, it also needs the tarball's `lib/libaeiou_capture.so`, which the tool
+finds beside its `bin/`. The reference is **aeiou-trace**(1), capture (`man/aeiou-trace.1.md`); the reasoning is
 `DESIGN_REVIEW.md` §3.96 in the repository.
 
 A capture starts your command under a trace, as you, in your environment, and writes one
@@ -68,10 +69,28 @@ launcher's environment. Several captures on one node (one per `mpirun` rank) sha
 
 ## Objects
 
-Name each object store the application talks to with `--endpoint s3://BUCKET/PREFIX`; it is
-recorded. The trace has the sockets' calls; the requests themselves come from the store's
-own log (MinIO audit, S3 server access: `aeiou-trace metrics` reads both) until the capture
-records their heads itself.
+Name each object store the application talks to with `--endpoint`, as its URL
+(`http://HOST:PORT/BUCKET`, `https://...`, or `s3://BUCKET/PREFIX`):
+
+```
+aeiou-trace capture --endpoint https://store.example:9000/train -o /local/cap-%h -- python train.py
+```
+
+The command then runs with the capture's library preloaded, which writes down the head of
+each HTTP request your object client sends and of each response, into `requests.jsonl` in
+the capture directory: the method, the object, the range, the status, the sizes, the time,
+the process and thread. It keeps only the headers that describe a request: never your
+credentials, the request's signature, a session token, an encryption key, a cookie, or your
+objects' metadata. It sees requests made through a shared libssl or plain HTTP: the system's
+Python and boto3, curl, and most C and C++ clients. It cannot see TLS built into the program
+(a standalone Python build, the AWS CRT, Rust's rustls, Java), Go clients, or HTTP/2; the
+record names every process it missed, and `--requests none` leaves it out.
+
+For an `http://` or `https://` endpoint the tool also sends two requests of its own, at the
+start and the end: an unsigned `HEAD` of `aeiou-anchor-...`, which your store refuses (a 403
+in its log). Those two lines in the store's log tie its clock to the capture's; send that
+part of the store's log too if you can (MinIO audit, S3 server access: `aeiou-trace metrics`
+reads both).
 
 ## What to send
 
@@ -89,9 +108,9 @@ what the trace cannot decide, and records your answers as yours.
 
 - The eBPF source (`--source ebpf`), for captures that do not slow the application: phase 3
   of brief item 54. `--source auto` is strace until then.
-- The object requests' heads from the client side (phase 2), and page faults on mappings and
-  `io_uring` operations (phase 4): the record's `not_seen` lists what this capture could not
-  see.
+- Object requests over TLS inside the program, Go, or HTTP/2 (libssl uprobes come with the
+  eBPF source, phase 4), and page faults on mappings and `io_uring` operations (phase 4): the
+  record's `not_seen` lists what this capture could not see.
 - One node's interruption stopping the others (each node stops on its own signal, which
   `aeiou-launch` sends to every node), and comparing per-node records afterward for captures
   taken without a coordinator.

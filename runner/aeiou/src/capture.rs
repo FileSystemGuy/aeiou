@@ -1,7 +1,7 @@
 //! `aeiou-trace capture` (`DESIGN_REVIEW.md` §3.96, brief item 54, phase 1): start a command
 //! under a trace and keep, beside the trace, the record of what was captured and how. The
 //! source in phase 1 is strace (`strace -f --seccomp-bpf ...`, the man page's line with
-//! `%network`); eBPF is phase 3, the HTTP-head shim phase 2.
+//! `%network`); eBPF is phase 3; phase 2, the HTTP-head shim and the anchors, is `requests.rs`.
 //!
 //! The checks are the capture's first step, every time: each node checks itself (`node_checks`),
 //! rank 0 compares the nodes (`cross_checks`), and any check failing on any node, not waived by
@@ -16,6 +16,10 @@
 //!
 //! The capture directory (`-o DIR`, new or empty; `%h` the host, `%p` the pid): `trace.txt`,
 //! the strace text every reader reads, and `capture.json` (`aeiou_capture: 1`), the record.
+//! Under `--requests shim` (phase 2, the default with an `--endpoint`) the command also runs
+//! with the capture's library preloaded (`requests.rs`), and the directory holds its log,
+//! `requests.bin`, and the requests made of it, `requests.jsonl`; with an `--endpoint` an
+//! anchor is sent to each at the start and the end, with or without the library.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -30,9 +34,9 @@ use serde_json::{json, Value};
 use crate::coord::{Coordinator, Server, Tcp};
 use crate::run::{hostname, unix_now};
 
-/// Every check, by the name `--accept` waives it by. The first eight each node makes of
+/// Every check, by the name `--accept` waives it by. The first nine each node makes of
 /// itself; the last four rank 0 makes across the nodes.
-pub const CHECKS: [&str; 12] = ["source", "root", "clock", "output-local", "output-outside-roots", "space", "alone", "cold", "release", "same-source", "mounts", "clock-offset"];
+pub const CHECKS: [&str; 13] = ["source", "root", "clock", "output-local", "output-outside-roots", "space", "alone", "cold", "requests", "release", "same-source", "mounts", "clock-offset"];
 
 /// The calls strace traces: the man page's set (`aeiou-trace(1)`), and `%network`, since an
 /// owner cannot know whether descriptors pass over a socket (`SCM_RIGHTS`) or an object client
@@ -54,7 +58,7 @@ pub const CLOCK_ROUNDS: usize = 8;
 pub const NOT_SEEN_STRACE: [&str; 4] = [
     "loads and stores to mapped memory (mmap): the page faults they cause are not system calls",
     "io_uring operations: io_uring_enter is traced, the submission queue's entries are not",
-    "object-store requests: the sockets' calls are traced, the HTTP heads are not (the shim, phase 2 of brief item 54, or the store's own log)",
+    "object-store requests: the sockets' calls are traced, the HTTP heads are not (the capture's library, --requests shim, or the store's own log)",
     "which reads the page cache served",
 ];
 
@@ -318,6 +322,8 @@ pub struct NodeInput<'a> {
     pub cold: bool,
     pub capture_id: Option<&'a str>,
     pub source: &'a Source,
+    /// The library asked for (`--requests shim`).
+    pub requests: bool,
 }
 
 /// The source a capture traces with, and why it was chosen.
@@ -460,6 +466,14 @@ pub fn node_checks(i: &NodeInput<'_>) -> (Vec<Check>, Vec<Value>, usize) {
     } else {
         Check::new("cold", false, "--cold drops the page cache, which needs root (/proc/sys/vm/drop_caches); run the capture as root, or drop the cache beforehand and waive cold")
     });
+    checks.push(if !i.requests {
+        Check::new("requests", true, "not asked: no library preloaded (--requests none)")
+    } else {
+        match crate::requests::library() {
+            Ok(p) => Check::new("requests", true, format!("{} preloaded into the command", p.display())),
+            Err(e) => Check::new("requests", false, e),
+        }
+    });
     (checks, roots, siblings.len() + 1)
 }
 
@@ -474,7 +488,7 @@ pub fn cross_checks(nodes: &BTreeMap<i64, Value>, offsets: &BTreeMap<i64, (f64, 
     };
     let release = differ(&|n: &Value| n["release"].as_str().unwrap_or("?").to_string());
     checks.push(if release.is_empty() { Check::new("release", true, format!("aeiou-trace {} on every node", nodes.values().next().map(|n| n["release"].as_str().unwrap_or("?")).unwrap_or("?"))) } else { Check::new("release", false, release.join("; ")) });
-    let source = differ(&|n: &Value| format!("{} {}", n["source"]["name"].as_str().unwrap_or("?"), n["source"]["version"].as_str().unwrap_or("?")));
+    let source = differ(&|n: &Value| format!("{} {}, requests {}", n["source"]["name"].as_str().unwrap_or("?"), n["source"]["version"].as_str().unwrap_or("?"), n["source"]["requests"].as_str().unwrap_or("none")));
     checks.push(if source.is_empty() {
         Check::new("same-source", true, "one source and version on every node")
     } else {
@@ -513,6 +527,9 @@ pub struct Opts {
     pub cold: bool,
     pub accept: Vec<String>,
     pub check_only: bool,
+    /// The capture's library preloaded (`--requests shim`), and its log's size.
+    pub requests: bool,
+    pub requests_buffer: u64,
     pub capture_id: Option<String>,
     pub ranks: i64,
     pub rank: i64,
@@ -646,7 +663,7 @@ fn node_doc(o: &Opts, roots: &[Value], checks: &[Check]) -> Value {
     json!({
         "host": hostname(),
         "release": env!("CARGO_PKG_VERSION"),
-        "source": {"name": o.source.name, "version": o.source.version},
+        "source": {"name": o.source.name, "version": o.source.version, "requests": if o.requests { "shim" } else { "none" }},
         "roots": roots,
         "out": o.out,
         "checks": checks.iter().map(Check::json).collect::<Vec<_>>(),
@@ -669,7 +686,7 @@ pub fn run(o: Opts) -> Result<i32> {
     if o.out.exists() && std::fs::read_dir(&o.out).map(|mut d| d.next().is_some()).unwrap_or(true) {
         bail!("{}: is not empty: a capture directory is new or empty", o.out.display());
     }
-    let (mut checks, roots, on_host) = node_checks(&NodeInput { roots: &o.roots, out: &o.out, cold: o.cold, capture_id: o.capture_id.as_deref(), source: &o.source });
+    let (mut checks, roots, on_host) = node_checks(&NodeInput { roots: &o.roots, out: &o.out, cold: o.cold, capture_id: o.capture_id.as_deref(), source: &o.source, requests: o.requests });
     waive(&mut checks, &o.accept);
     if unsafe { libc::geteuid() } == 0 && !o.check_only {
         say("WARNING: running as root: the command runs as root too, which is another run of an application that runs as a user (the record says so)");
@@ -748,7 +765,24 @@ pub fn run(o: Opts) -> Result<i32> {
     let trace = out.join("trace.txt");
     let inherited = inherited_descriptors();
     let cache_drop = if o.cold { Some(crate::cold::drop_caches()?) } else { None };
-    let mut line: Vec<String> = ["strace", "-f", "--seccomp-bpf", "-ttt", "-T", "-yy", "-v", "-e", TRACE_SET, "-o"].iter().map(|s| s.to_string()).collect();
+    let mut line: Vec<String> = ["strace", "-f", "--seccomp-bpf", "-ttt", "-T", "-yy", "-v", "-e", TRACE_SET].iter().map(|s| s.to_string()).collect();
+    // the library, unless its check failed and was waived
+    let requests_check = checks.iter().find(|c| c.name == "requests").cloned();
+    let library = match (o.requests, crate::requests::library()) {
+        (true, Ok(lib)) => Some(lib),
+        _ => None,
+    };
+    let log = out.join(crate::requests::LOG);
+    if let Some(lib) = &library {
+        crate::requests::create_log(&log, o.requests_buffer)?;
+        // in the command's environment alone (strace's -E), the user's own preloads after it
+        let preload = match std::env::var("LD_PRELOAD") {
+            Ok(p) if !p.is_empty() => format!("{}:{p}", lib.display()),
+            _ => lib.display().to_string(),
+        };
+        line.extend(["-E".to_string(), format!("LD_PRELOAD={preload}"), "-E".to_string(), format!("AEIOU_CAPTURE_LOG={}", log.display())]);
+    }
+    line.push("-o".into());
     line.push(trace.to_string_lossy().into_owned());
     line.push("--".into());
     line.extend(o.command.iter().cloned());
@@ -760,6 +794,8 @@ pub fn run(o: Opts) -> Result<i32> {
         j.tcp.barrier(START, &AtomicBool::new(false))?;
     }
     let released = unix_now();
+    let anchor_id = o.capture_id.clone().unwrap_or_else(|| format!("{host}-{}", std::process::id()));
+    let mut anchors: Vec<Value> = o.endpoints.iter().map(|(u, _)| crate::requests::anchor(u, &format!("aeiou-anchor-{anchor_id}-start"))).collect();
     let start = json!({"realtime": unix_now(), "realtime_minus_monotonic": realtime_minus_monotonic()});
     let mut child = std::process::Command::new(&line[0]).args(&line[1..]).spawn().with_context(|| "strace".to_string())?;
     let pid = child.id() as i32;
@@ -797,6 +833,34 @@ pub fn run(o: Opts) -> Result<i32> {
     };
     let end = json!({"realtime": unix_now(), "realtime_minus_monotonic": realtime_minus_monotonic()});
     let exit = exit_of(status);
+    anchors.extend(o.endpoints.iter().map(|(u, _)| crate::requests::anchor(u, &format!("aeiou-anchor-{anchor_id}-end"))));
+    let requests = match &library {
+        Some(lib) => {
+            let mut r = crate::requests::convert(&log, &out.join(crate::requests::FILE), &crate::requests::execs(&trace)?)?;
+            let (_, sha) = sha256_file(lib)?;
+            r["source"] = json!("shim");
+            r["library"] = json!({"path": lib, "sha256": sha});
+            r["visible_calls"] = json!(crate::requests::VISIBLE);
+            let l = &r["log"];
+            if l["dropped"].as_u64().unwrap_or(0) > 0 {
+                say(&format!(
+                    "WARNING: the request log was full: {} record(s) dropped ({} bytes) of a {}-byte log; capture again with a larger --requests-buffer",
+                    l["dropped"], l["dropped_bytes"], l["capacity"]
+                ));
+            }
+            let missed = r["processes"]["not_reached"].as_array().cloned().unwrap_or_default();
+            if !missed.is_empty() {
+                let names: Vec<String> = missed.iter().map(|p| format!("{} (pid {})", p["exe"].as_str().unwrap_or("?"), p["pid"])).collect();
+                say(&format!("WARNING: {} process(es) began without the library (LD_PRELOAD dropped from its environment, or a static or setuid binary); their requests are not in {}: {}", missed.len(), crate::requests::FILE, names.join(", ")));
+            }
+            for p in r["processes"]["connected_without_heads"].as_array().cloned().unwrap_or_default() {
+                say(&format!("note: {} (pid {}) connected to {} and the library saw no HTTP head: TLS inside the program, HTTP/2, or not HTTP", p["exe"].as_str().unwrap_or("?"), p["pid"], p["peers"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default()));
+            }
+            r
+        }
+        None if o.requests => json!({"source": "none", "why": format!("the requests check failed and was waived: {}", requests_check.map(|c| c.detail).unwrap_or_default())}),
+        None => json!({"source": "none", "why": "not asked (--requests none, the default without an --endpoint)"}),
+    };
 
     // the checks again at the end: what changed during the capture
     let mounts = mounts_now();
@@ -848,7 +912,9 @@ pub fn run(o: Opts) -> Result<i32> {
         "cache_drop": cache_drop,
         "losses": {"events": 0, "note": "strace loses no call: it stops the traced thread instead, and the application is slower"},
         "paths_not_copied": 0,
-        "not_seen": NOT_SEEN_STRACE,
+        "not_seen": NOT_SEEN_STRACE.iter().map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>(),
+        "requests": requests,
+        "anchors": anchors,
         "mountstats": "not taken: a traced run's wire counts are not the application's (strace -yy adds a GETATTR to each READ); take them from an untraced run",
         "clock": clock,
         "checks": checks.iter().map(Check::json).collect::<Vec<_>>(),
@@ -874,6 +940,8 @@ pub fn run(o: Opts) -> Result<i32> {
             "exit": rec["exit"],
             "interrupted": rec["interrupted"],
             "trace_sha256": rec["trace"]["sha256"],
+            "requests": rec["requests"]["requests"],
+            "requests_dropped": rec["requests"]["log"]["dropped"],
             "waived": checks.iter().filter(|c| c.waived).map(|c| json!({"name": c.name, "node": c.node})).collect::<Vec<_>>(),
             "changes_at_end": rec["changes_at_end"],
         });

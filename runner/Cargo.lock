@@ -6,6 +6,7 @@ version = 4
 name = "aeiou"
 version = "0.3.0"
 dependencies = [
+ "aeiou-interpose",
  "anyhow",
  "bytes",
  "clap",
@@ -14,12 +15,28 @@ dependencies = [
  "io-uring",
  "libc",
  "object_store",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
  "toml",
  "xxhash-rust",
+]
+
+[[package]]
+name = "aeiou-capture-shim"
+version = "0.3.0"
+dependencies = [
+ "aeiou-interpose",
+ "libc",
+]
+
+[[package]]
+name = "aeiou-interpose"
+version = "0.3.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

@@ -25,6 +25,8 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 anyhow = "1"
 libc = "0.2"
 io-uring = "0.7"
+# the capture's library and its log (aeiou-trace capture --requests shim, DESIGN_REVIEW.md §3.96)
+aeiou-interpose = { path = "../interpose" }
 toml = { version = "1.1.6", default-features = false, features = ["parse", "serde"] }
 # the object engine (DESIGN_REVIEW.md §3.65), the `object` feature, on by default since 2026-10-16 so every
 # build reads and writes S3; `--no-default-features` builds without it (no tokio) and without `formats`
@@ -33,13 +35,16 @@ tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
 # what object_store's payloads are made of: a part buffer handed to the store comes back to its pool (`Bytes::from_owner`)
 bytes = { version = "1.9", default-features = false, optional = true }
+# the capture's anchor HEADs over https (DESIGN_REVIEW.md §3.96): the TLS object_store already brings, used
+# blocking over a std socket, so no tokio outside the object engine
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"], optional = true }
 # the container writers of `aeiou datagen` (DESIGN_REVIEW.md §3.70), the `formats` feature, on by default
 # since 2026-10-16 as `object` is
 crc32c = { version = "0.6", optional = true }
 
 [features]
 default = ["object", "formats"]
-object = ["dep:object_store", "dep:tokio", "dep:futures", "dep:bytes"]
+object = ["dep:object_store", "dep:tokio", "dep:futures", "dep:bytes", "dep:rustls"]
 formats = ["dep:crc32c"]
 
 [[test]]

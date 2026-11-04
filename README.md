@@ -454,7 +454,11 @@ across them (any failure starts no node; waivers only by name), and writes the t
 its record, `capture.json`; on several nodes, through `aeiou-launch` or inside the
 application's own launcher, the commands start at one barrier, each clock is measured
 against rank 0's, and rank 0 writes `capture-set.json`. The trace owner's guide is
-`CAPTURE.md`.
+`CAPTURE.md`. Since phase 2 (the same day) a capture with an `--endpoint` preloads the
+capture's library (`libaeiou_capture.so`, in the tarball's `lib/`), which records the heads of
+the application's HTTP requests and responses seen through a shared libssl or libc's socket
+calls, credentials never kept, into `requests.jsonl`, and sends each endpoint an anchor
+`HEAD` at the start and the end; `metrics`, `export`, and `digest` take the capture directory.
 
 `aeiou cases` (2026-10-23, item 40) lists the use cases a binary can run by `--case NAME`,
 filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows
@@ -474,9 +478,9 @@ that is not the lock's. Submitters run the release.
 
 Not built, in rough order of interest:
 
-- The capture's other sources (brief item 54): the HTTP-head shim for object requests (phase
-  2), eBPF system calls that do not slow the application (phase 3), and uprobes, faults on
-  mappings, and `io_uring` (phase 4).
+- The capture's other sources (brief item 54): ~~the HTTP-head shim for object requests (phase
+  2),~~ (built 2026-11-03) eBPF system calls that do not slow the application (phase 3), and
+  uprobes, faults on mappings, and `io_uring` (phase 4).
 
 - ~~The abstract rendered as prose (`PROJECT_BRIEF.md` §6 item 27), from the AST and the case's
   measured shape; the workload catalog it would join is built (2026-10-10, below).~~ Built

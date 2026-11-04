@@ -9337,6 +9337,78 @@ sends it to every rank; a `Halt` broadcast would deliver a second signal to a co
 had the first), the comparison afterward of records taken without a coordinator, and the
 sources' raw files (strace has none). Brief item 54.
 
+**Phase 2 as built (2026-11-03, the user: "All your recommendations are good, proceed").**
+The proposal, as made and approved: (1) the record written into a mapped log, not a `write`
+per head, since the spike's shim's `write` and its `fstat` per descriptor are calls in `%desc`
+the trace would show as the application's; (2) a header allowlist, credentials never kept;
+(3) `--requests shim|none`, `shim` the default with an `--endpoint`; (4) the library shipped
+in the tarball's `lib/` beside `bin/`, not embedded (stable cargo cannot build a `cdylib` as
+another crate's dependency); (5) ~~`reqwest`, which `object_store` already brings, for the
+anchors over `https`~~ *changed in the building:* `reqwest` is asynchronous and needs a tokio
+runtime, which the invariant keeps to the object engine (`CLAUDE.md`), so the anchors use
+`rustls`, the TLS `reqwest` itself uses, blocking over a `std` socket, under the same feature
+`object`. Built: `runner/interpose/` (`aeiou-interpose`: `next`, the real symbol
+past `RTLD_LOCAL`; `Guard`, the per-thread reentrancy guard; `log`, the appending log; and
+`capture`, the library's records, one definition for writer and reader) and
+`runner/capture-shim/` (`libaeiou_capture.so`, its hooks `connect`, `close`, `write`, `send`,
+`sendto`, `writev`, `sendmsg`, `read`, `__read_chk`, `recv`, `__recv_chk`, `recvfrom`,
+`__recvfrom_chk`, `readv`, `recvmsg`, and `SSL_write`, `SSL_write_ex`, `SSL_read`,
+`SSL_read_ex`), `runner/aeiou/src/requests.rs` (the log made, converted to `requests.jsonl`,
+the execs of the trace against the processes the library reached, the anchors), the
+`requests` check, `objectlog.rs`'s third format (`aeiou-requests`), and the readers taking
+the capture directory (`aeiou-trace(1)`, CAPTURE DIRECTORIES).
+
+Choices made in the building, each the simpler of two:
+
+- *The log.* A file in `-o`, sized by `--requests-buffer` (1 GiB by default, sparse), each
+  record's space reserved by an atomic add on the header's next offset, its length stored
+  with a pending bit at once and without it once the payload is in, so a record its process
+  died writing is told from a whole one (`torn`); a record that does not fit is dropped and
+  counted, never wraps or blocks. Named to the library by `AEIOU_CAPTURE_LOG`, a path, not an
+  inherited descriptor: Python's `subprocess` closes inherited descriptors by default, and an
+  environment survives it as `LD_PRELOAD` does. Both are put in the command's environment by
+  strace's `-E`, so strace itself runs without the library. The log is cut to what was
+  recorded at the end and kept (`requests.bin`).
+- *What the trace shows of the library.* Each process's start: `openat`, `fstat`, `mmap`, and
+  `close` of `requests.bin`, and the dynamic loader's open of the library, all outside every
+  `--root`, so no reader counts them and the readers need no filter. The program's name
+  comes from the auxiliary vector (`AT_EXECFN`), not a `readlink` of `/proc/self/exe`; the
+  thread id is asked once per thread (`gettid`, in no traced class), the parent's once per
+  process (`getppid`, likewise); a socket is known by its `connect`, never an `fstat`.
+- *An SSL connection's socket.* `SSL_get_fd` returns -1 under curl, whose OpenSSL backend
+  reads and writes through a BIO of its own, so the socket is learned from the libc call made
+  under the SSL call (the guard held across it); the head is recorded after the SSL call
+  returns, stamped as of its start for a request. `SSL_get_fd` is the fallback.
+- *Which processes it missed.* Every successful `execve` in the trace is a process the
+  library should have loaded in; each one it did not is named (`processes.not_reached`, with
+  a warning), and a process that connected and showed no head is noted. When the log filled,
+  a process's own record may be among those dropped, so `not_reached` is then null and says
+  why rather than naming processes falsely.
+- *Pairing.* Responses with requests in order per process and connection (the `SSL *` or the
+  descriptor), as HTTP/1.1 answers them; a response without a request is counted. A request's
+  end is its response's head, the body's end not seen.
+- *The readers.* A capture directory is read as its `trace.txt` when every `--root` is a
+  directory (absolute, beginning with `.`, or existing) and as its `requests.jsonl` when
+  every one names a bucket; both kinds at once is a usage error. The record's `command.cwd`
+  is the default `--cwd`. The library's requests are named by the S3 REST API from method,
+  path, query, and headers, path-style or virtual-hosted under an `s3.` host, and their lane
+  is the client thread.
+- *Finding the library.* A build tree's `target/release/deps/` (where a test build leaves it:
+  cargo builds a `cdylib` for tests only when the crate is also an `rlib`, and never uplifts
+  it), then `target/release/`, then the release's `lib/`. A missing library fails the
+  `requests` check; waived, the capture runs without it and the record says why.
+- *Anchors.* Sent whenever an `--endpoint` is an `http://` or `https://` URL, with or without
+  the library, by the tool over a plain socket or blocking `rustls` (the certificate not
+  checked, its signatures still: the anchor carries nothing but its name); an `s3://` URL names no host and records `not_sent`.
+
+Tests: the shim's own (`capture-shim/tests/preload.rs`: the system's Python through each
+hooked libc call and a fork), and `aeiou/tests/capture_requests.rs` (curl against MinIO,
+signed, with no secret in any capture file; curl over TLS through a shared libssl; a full
+log; a process without the library; `--requests none`; a binary without its library). Not
+built in phase 2: the join of requests to the calls under them and their replay (items 49
+and 61); TLS inside the program, Go, HTTP/2 (phase 4's uprobes reach only shared libssl
+too). Brief item 54.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
