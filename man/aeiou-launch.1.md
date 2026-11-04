@@ -2,7 +2,7 @@
 
 ## NAME
 
-aeiou-launch - start one `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh
+aeiou-launch - start one `aeiou run`, `aeiou datagen`, `aeiou-datagen`, or `aeiou-trace capture` rank per host over ssh
 
 ## SYNOPSIS
 
@@ -10,13 +10,14 @@ aeiou-launch - start one `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank p
 aeiou-launch [-p PORT] [-f FILE] [HOSTS...] -- aeiou run ARGS...
 aeiou-launch [-p PORT] [-f FILE] [HOSTS...] -- aeiou datagen ARGS...
 aeiou-launch [-p PORT] [-f FILE] [HOSTS...] -- aeiou-datagen ARGS...
+aeiou-launch [-p PORT] [-f FILE] [HOSTS...] -- aeiou-trace capture ARGS... -- COMMAND...
 aeiou-launch --help
 ```
 
 ## DESCRIPTION
 
 **aeiou-launch** is the multi-host launcher of the suite, a POSIX shell script. It starts
-the `aeiou run`, `aeiou datagen`, or `aeiou-datagen` command line given after `--` on every
+the `aeiou run`, `aeiou datagen`, `aeiou-datagen`, or `aeiou-trace capture` command line given after `--` on every
 host named, rank 0 first, appending `--ranks`, `--rank`, and `--coordinator` to each: the *i*-th host is rank
 *i*, and `HOST0:PORT` is the coordinator address rank 0 listens on and every rank connects
 to, so the first host must be reachable from the others under that name. Each host's output
@@ -33,6 +34,11 @@ datagen); it is the same loop with the same three flags appended. **aeiou-datage
 writer of container datasets, takes the same three flags and speaks the same coordinator
 protocol.
 
+A capture (**aeiou-trace**(1), capture) gets the three flags right after `capture`, before
+its own `--`: what follows that is the traced command's line, which would take them as its
+own. Each host checks itself, rank 0 compares the hosts, and no command starts until every
+host is ready; `-o /local/cap-%h` gives each host its own directory on its own disk.
+
 There is no MPI. Cross-host coordination is the runner's own TCP coordinator
 (**aeiou**(1), SEVERAL HOSTS); this script is the ssh loop around it. The remote shell is
 non-interactive, so a variable set in the operator's terminal is absent on the remote
@@ -47,9 +53,8 @@ the gate, show what each host resolved.
   then the file's) is rank 0 and the coordinator.
 - *ARGS...*
 
-  After `--`: the `aeiou run`, `aeiou datagen`, or `aeiou-datagen` command line every host
-  runs. `--ranks`,
-  `--rank`, and `--coordinator` are appended.
+  After `--`: the `aeiou run`, `aeiou datagen`, `aeiou-datagen`, or `aeiou-trace capture` command line every host
+  runs. `--ranks`, `--rank`, and `--coordinator` are appended, after `capture` for a capture.
 - **-p** *PORT*
 
   The coordinator's port. Default 7311.

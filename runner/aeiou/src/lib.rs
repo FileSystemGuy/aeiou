@@ -11,6 +11,7 @@ pub mod ast;
 pub mod aio;
 pub mod backend;
 pub mod canon;
+pub mod capture;
 pub mod case;
 pub mod compare;
 pub mod cold;

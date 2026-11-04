@@ -92,6 +92,8 @@ aeiou/src/
   compare.rs   `aeiou-trace compare`: two digests' structure (templates paired, verdicts, op
                kinds, motifs, peak lanes) and any two documents' numbers, the tolerances
   emit.rs      `aeiou dry-run --emit-trace`: the op stream as a trace file (§13)
+  capture.rs   `aeiou-trace capture`: the command under strace, the record, the checks, several
+               nodes over the coordinator (`DESIGN_REVIEW.md` §3.96)
   bin/aeiou_trace.rs  the `aeiou-trace` binary (`DESIGN_REVIEW.md` §3.89)
   options.rs   the option layers (§14)
   usage.rs     the usage-error frame (§15)
@@ -111,7 +113,8 @@ aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank
 aeiou/tests/trace.rs    the `trace` node (§13); options.rs, usage.rs: the layers (§14) and the frame (§15) through the binary
 aeiou/tests/object.rs   the object engine against a local MinIO (the default feature `object`, `TEST_MINIO_BIN`; §16)
 aeiou/tests/man.rs      man/aeiou.1.md against every subcommand's `--help`
-aeiou-launch            the ssh loop: one rank per host
+aeiou/tests/capture.rs  `aeiou-trace capture`: the record, the checks and waivers, a signal, two ranks
+aeiou-launch            the ssh loop: one rank per host (the rank flags after `capture` for a capture)
 ```
 
 ## 2. Definitions the runner fixes
@@ -1007,6 +1010,16 @@ building it is `DESIGN_REVIEW.md` §3.25.
   closed (§12). `Server::wait_connected` waits for every `Hello`. Since
   2026-10-13 `Welcome` may carry a document from rank 0 (`Server::start_held`, then
   `welcome` or `last_word`): at a dataset root, the manifest that only rank 0 reads (§5).
+  Since 2026-11-03 `aeiou-trace capture` on several nodes uses the coordinator too
+  (`DESIGN_REVIEW.md` §3.96, `capture.rs`): `Hello`'s options block is the node's document
+  (its facts, its roots' mounts, its checks), rank 0 waits for every `Hello`
+  (`Server::all_facts`), measures each rank's clock with `Clock { seq }`, which the client's
+  reader thread answers at once with `ClockReply { seq, t }`, its wall clock
+  (`Server::clocks`: eight rounds a rank, one rank at a time, the round with the shortest
+  trip kept, the offset `t - (t1 + t4) / 2` within half the trip), judges, and either sends
+  `Stop` with the table or `Start` sharing it; the commands then wait at the barrier
+  `capture-start`, and each rank's summary comes back with `Done`. Only a capture's rank 0
+  sends `Clock`, so the Python datagen's coordinator, which never does, needs no change.
 
 Observed on WSL2 (2026-09-30, `runner/aeiou/tests/coord.rs` and `aeiou-launch` with a local
 shim for ssh): two processes on `localhost` run `file_per_sample` to the dry-run

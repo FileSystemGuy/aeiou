@@ -1,7 +1,7 @@
 """`aeiou-launch` (`runner/aeiou-launch`, POSIX sh) with a shim for ssh that prints what it was
 asked to run: the hosts from the command line and from `-f FILE`, pdsh-style bracket ranges
 (`n[1-4]`, `n[01-10]` zero-padded, `n[1,3-4]-ib`), the rank flags appended to `aeiou run` and
-`aeiou datagen` alike, the quoting of the remote command, the exit status, and the usage frame;
+`aeiou datagen` alike (and put after `capture` in `aeiou-trace capture`), the quoting of the remote command, the exit status, and the usage frame;
 then Ctrl-C (and SIGTERM) forwarded to every rank over the session's stdin, and each rank's lines
 kept whole in a file."""
 import os
@@ -71,7 +71,7 @@ def test_a_host_file_s_ranges_are_never_file_names(tmp_path):
 def test_help(tmp_path):
     r = subprocess.run([str(LAUNCH), "--help"], capture_output=True, text=True)
     assert r.returncode == 0 and r.stderr == ""
-    assert "\nUsage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen <ARGS>...\n" in r.stdout
+    assert "\nUsage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen|aeiou-trace capture <ARGS>...\n" in r.stdout
     assert re.findall(r"^  (-\S+)", r.stdout, re.M) == ["-p", "-f", "-h,"]
     assert subprocess.run([str(LAUNCH), "-h"], capture_output=True, text=True).stdout == r.stdout
 
@@ -82,6 +82,18 @@ def test_run_and_the_default_port(tmp_path):
     assert lines == [
         "[0 a] a  'aeiou' 'run' 'x.ast.json' '--gpus' '8' --ranks 2 --rank 0 --coordinator a:7311",
         "[1 b] b  'aeiou' 'run' 'x.ast.json' '--gpus' '8' --ranks 2 --rank 1 --coordinator a:7311",
+    ]
+
+
+def test_a_capture_s_flags_go_before_its_command(tmp_path):
+    """`aeiou-trace capture ... -- COMMAND` (DESIGN_REVIEW.md §3.96): the three flags go right after
+    `capture`, before the traced command's `--`, which would take them as its own; a path to the
+    binary is the binary."""
+    code, lines, err = launch(tmp_path, "a", "b", "--", "/opt/aeiou/aeiou-trace", "capture", "-o", "/l/c-%h", "--root", "/d", "--", "python", "x.py", "--rank", "9")
+    assert code == 0, err
+    assert lines == [
+        f"[{i} {h}] {h}  '/opt/aeiou/aeiou-trace' 'capture' --ranks 2 --rank {i} --coordinator a:7311 '-o' '/l/c-%h' '--root' '/d' '--' 'python' 'x.py' '--rank' '9'"
+        for i, h in enumerate("ab")
     ]
 
 
@@ -106,13 +118,13 @@ def test_usage_errors_are_the_frame(tmp_path):
     def frame(*args):
         r = subprocess.run([str(LAUNCH), *args], capture_output=True, text=True)
         assert r.returncode == 2, r.stderr
-        assert "\nUsage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen <ARGS>...\n" in r.stderr
+        assert "\nUsage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen|aeiou-trace capture <ARGS>...\n" in r.stderr
         assert r.stderr.rstrip().endswith("For more information, try 'aeiou-launch --help'.")
         return r.stderr.split("\n\n", 1)[0]
 
     assert frame() == ("aeiou-launch: the following required arguments were not provided:\n"
                        "  [HOSTS]...  the hosts (on the command line or in -f FILE), one rank each; the first is rank 0 and the coordinator\n"
-                       "  <ARGS>...   after --: the `aeiou run` or `aeiou datagen` command line every host runs")
+                       "  <ARGS>...   after --: the `aeiou run`, `aeiou datagen`, `aeiou-datagen`, or `aeiou-trace capture` command line every host runs")
     assert frame("a", "--").startswith("aeiou-launch: the following required arguments were not provided:\n  <ARGS>...")
     assert frame("n[a-b]", "--", "aeiou", "run", "x") == "aeiou-launch: bad bracket range 'a-b' in host 'n[a-b]': want N or LO-HI, digits only"
     assert frame("n[4-1]", "--", "aeiou", "run", "x") == "aeiou-launch: bad bracket range '4-1' in host 'n[4-1]': 4 is above 1"

@@ -1,8 +1,10 @@
 #!/bin/sh
-# aeiou-launch: start one `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh (the `pdsh`/ssh
-# loop of `NAPKIN_MATH.md` §8.A), rank 0 first, with --ranks, --rank, and --coordinator appended.
+# aeiou-launch: start one `aeiou run`, `aeiou datagen`, `aeiou-datagen`, or `aeiou-trace capture` rank per host
+# over ssh (the `pdsh`/ssh loop of `NAPKIN_MATH.md` §8.A), rank 0 first, with --ranks, --rank, and --coordinator
+# appended (after `capture` for a capture, whose own `--` begins the traced command: DESIGN_REVIEW.md §3.96).
 #
 #   aeiou-launch [-p PORT] [-f FILE] [HOST...] -- aeiou run|datagen|aeiou-datagen ABSTRACT --root DIR [ARGS...]
+#   aeiou-launch [-p PORT] [-f FILE] [HOST...] -- aeiou-trace capture -o DIR --root DIR [ARGS...] -- COMMAND...
 #
 # The hosts are the command line's, then the file's (one or more per line, `#` comments); a
 # name may carry one pdsh-style bracket range, `n[1-4]`, `n[01-10]` (zero-padded to the width
@@ -22,15 +24,15 @@ set -u
 # no pathname expansion: the unquoted expansions below split host names and ranges into words,
 # and `n[1-4]` is a glob that would match a file `n1` in the working directory
 set -f
-USAGE="Usage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen <ARGS>..."
+USAGE="Usage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen|aeiou-trace capture <ARGS>..."
 usage_error() {
     printf '%s\n\n%s\n\nFor more information, try '"'"'aeiou-launch --help'"'"'.\n' "aeiou-launch: $1" "$USAGE" >&2
     exit 2
 }
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     cat <<EOT
-Start one \`aeiou run\`, \`aeiou datagen\`, or \`aeiou-datagen\` rank per host over ssh, rank 0 first, with
---ranks, --rank, and --coordinator appended
+Start one \`aeiou run\`, \`aeiou datagen\`, \`aeiou-datagen\`, or \`aeiou-trace capture\` rank per host over ssh,
+rank 0 first, with --ranks, --rank, and --coordinator appended
 
 $USAGE
 
@@ -38,8 +40,9 @@ Arguments:
   [HOSTS]...  The hosts, one rank each, the command line's then the file's; the first is rank 0 and the
               coordinator (HOST0:PORT), so it must be reachable from the others under that name. A name may
               carry one bracket range as pdsh writes it: n[1-4], n[01-10] (zero-padded), n[1,3,5-7], n[1-4]-ib
-  <ARGS>...   After --: the \`aeiou run\`, \`aeiou datagen\`, or \`aeiou-datagen\` command line every host runs
-              (--ranks, --rank, --coordinator are appended)
+  <ARGS>...   After --: the \`aeiou run\`, \`aeiou datagen\`, \`aeiou-datagen\`, or \`aeiou-trace capture\` command
+              line every host runs (--ranks, --rank, --coordinator are appended; after \`capture\` for a capture,
+              before the traced command's own --)
 
 Options:
   -p <PORT>   The coordinator's port [default: 7311]
@@ -131,7 +134,7 @@ if [ -z "$(printf '%s' "$hosts" | tr -d '\n')" ]; then
 fi
 if [ $# -lt 2 ]; then
     missing="$missing${missing:+
-}  <ARGS>...   after --: the \`aeiou run\` or \`aeiou datagen\` command line every host runs"
+}  <ARGS>...   after --: the \`aeiou run\`, \`aeiou datagen\`, \`aeiou-datagen\`, or \`aeiou-trace capture\` command line every host runs"
 fi
 if [ -n "$missing" ]; then
     usage_error "the following required arguments were not provided:
@@ -146,9 +149,22 @@ shift
 # command's stdin is /dev/null; an EOF with no line (the command ended, or ssh went away)
 # ends the watcher and signals nothing.
 cmd='exec 3<&0 </dev/null; { while read -r s <&3; do case $s in INT|TERM) kill -s $s $$ ;; esac; done; } >/dev/null 2>&1 & exec 3<&-'
+# the rank flags go at the end, or, for `aeiou-trace capture`, right after `capture`: what
+# follows its own `--` is the traced command's
+capture=
+case ${1:-} in
+aeiou-trace | */aeiou-trace) [ "${2:-}" = capture ] && capture=yes ;;
+esac
+tail=
+n=0
 for a in "$@"; do
     q=$(printf '%s' "$a" | sed "s/'/'\\\\''/g")
-    cmd="$cmd '$q'"
+    n=$((n + 1))
+    if [ -n "$capture" ] && [ $n -gt 2 ]; then
+        tail="$tail '$q'"
+    else
+        cmd="$cmd '$q'"
+    fi
 done
 set -- $hosts
 ranks=$#
@@ -187,7 +203,7 @@ for h in "$@"; do
     # in a file or a pipe
     (
         trap '' TERM
-        $rsh "$h" "$cmd --ranks $ranks --rank $rank --coordinator $host0:$port" < "$tmp/in$rank" 2>&1
+        $rsh "$h" "$cmd --ranks $ranks --rank $rank --coordinator $host0:$port$tail" < "$tmp/in$rank" 2>&1
         echo $? > "$tmp/$rank"
     ) | {
         trap '' TERM

@@ -240,6 +240,12 @@ enum Msg {
     Result { ok: bool, fingerprint: u64, error: Option<String> },
     Stop { reason: String },
     Heartbeat,
+    /// Server → one client: say what your wall clock reads (`Server::clocks`, a capture's clock
+    /// offsets, `DESIGN_REVIEW.md` §3.96); `seq` names the round.
+    Clock { seq: u64 },
+    /// Client → server, at once, from the reader thread: the answer to round `seq`, `t` its
+    /// wall clock (Unix seconds) when it read the question.
+    ClockReply { seq: u64, t: f64 },
 }
 
 /// A connection's sending half: the socket, and when this side last sent on it (what the
@@ -610,6 +616,7 @@ fn client_loop(st: &ClientState, stream: &mut TcpStream, live: &mut Liveness) ->
             }
             Msg::Stop { reason } => bail!("{reason}"),
             Msg::Heartbeat => {}
+            Msg::Clock { seq } => send(&st.writer, &Msg::ClockReply { seq, t: unix_now() })?,
             other => bail!("unexpected message from the coordinator: {other:?}"),
         }
     }
@@ -739,6 +746,9 @@ struct SState {
     claims: std::collections::VecDeque<(i64, String, u64)>,
     /// Some host sent `Halt`: a datagen is stopping, and a host going away is no failure.
     halted: bool,
+    /// Each rank's last `ClockReply`: its round, its clock, and this side's when it arrived.
+    clock: BTreeMap<i64, (u64, f64, f64)>,
+    clock_seq: u64,
 }
 
 struct ServerState {
@@ -946,6 +956,53 @@ impl Server {
         if let Some(w) = s.conns.get(&rank) {
             let _ = send(w, &Msg::Grant { dataset: dataset.to_string(), ticket, run });
         }
+    }
+
+    /// Every connected rank's clock against this one's, by rank: `(offset, bound)` in seconds,
+    /// the rank's wall clock minus rank 0's, from the round of `rounds` with the shortest round
+    /// trip, true to within `bound`, half that round trip (Cristian's method: the answer was
+    /// read somewhere between the question and its reply). Rounds go to one rank at a time, so
+    /// no rank's answer waits behind another's.
+    pub fn clocks(&self, rounds: usize) -> Result<BTreeMap<i64, (f64, f64)>> {
+        let ranks: Vec<i64> = self.st.m.lock().unwrap().conns.keys().copied().collect();
+        let mut out = BTreeMap::new();
+        for rank in ranks {
+            let mut best: Option<(f64, f64)> = None;
+            for _ in 0..rounds.max(1) {
+                let mut s = self.st.m.lock().unwrap();
+                s.clock_seq += 1;
+                let seq = s.clock_seq;
+                let Some(w) = s.conns.get(&rank).cloned() else { bail!("rank {rank}: not connected") };
+                let t1 = unix_now();
+                send(&w, &Msg::Clock { seq })?;
+                let deadline = Instant::now() + timing().1;
+                loop {
+                    if let Some(f) = &s.failed {
+                        bail!("{f}");
+                    }
+                    if let Some(&(got, t2, t4)) = s.clock.get(&rank) {
+                        if got == seq {
+                            let half = (t4 - t1).max(0.0) / 2.0;
+                            if best.is_none_or(|(_, b)| half < b) {
+                                best = Some((t2 - (t1 + t4) / 2.0, half));
+                            }
+                            break;
+                        }
+                    }
+                    if Instant::now() >= deadline {
+                        bail!("rank {rank}: no answer to the clock's round within {:?}", timing().1);
+                    }
+                    s = self.st.cv.wait_timeout(s, Duration::from_millis(20)).unwrap().0;
+                }
+            }
+            out.insert(rank, best.expect("a round at least"));
+        }
+        Ok(out)
+    }
+
+    /// The `Done` documents in so far, by rank (what a capture set records of a rank lost).
+    pub fn done_so_far(&self) -> BTreeMap<i64, Value> {
+        self.st.m.lock().unwrap().done.clone()
     }
 
     /// Some host sent `Halt`.
@@ -1220,6 +1277,10 @@ fn serve_loop(st: &ServerState, hello: Msg, stream: &mut TcpStream, writer: &Arc
             Msg::Stop { reason } => {
                 st.fail(&mut s, format!("{who}: {reason}"));
                 return Ok(());
+            }
+            Msg::ClockReply { seq, t } => {
+                s.clock.insert(rank, (seq, t, unix_now()));
+                st.cv.notify_all();
             }
             Msg::Heartbeat => {}
             other => bail!("unexpected message: {other:?}"),

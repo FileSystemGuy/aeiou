@@ -2,7 +2,7 @@
 
 The Rust half of aeiou: the binary `aeiou`, which loads, validates, and executes the AST
 contract of `../schema/`; the binary `aeiou-trace`, the trace side (an strace's or an
-object-store log's metrics and the runner's trace file, [aeiou-trace(1)](../man/aeiou-trace.1.md),
+object-store log's metrics, the runner's trace file, and the capture of a trace with its record, [aeiou-trace(1)](../man/aeiou-trace.1.md),
 `DESIGN_REVIEW.md` §3.89); and `aeiou-launch`, the ssh loop that starts one rank per host.
 Nothing here depends on Python (`aeiou-trace compare`, the last part that did, is Rust since
 2026-11-01). The manual is [aeiou(1)](../man/aeiou.1.md) and

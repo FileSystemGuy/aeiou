@@ -41,7 +41,7 @@ fn usage_errors_list_every_missing_argument_in_the_frame() {
     let o = tool(&[]);
     assert_eq!(o.status.code(), Some(2));
     let (_, err) = text(&o);
-    assert!(err.starts_with("aeiou-trace: the following required arguments were not provided:\n  <COMMAND>  one of metrics, export, compare, digest"), "{err}");
+    assert!(err.starts_with("aeiou-trace: the following required arguments were not provided:\n  <COMMAND>  one of metrics, export, compare, digest, capture\n"), "{err}");
     assert!(err.contains("\n\nUsage: aeiou-trace <COMMAND> [ARGS]...\n\nFor more information, try 'aeiou-trace --help'.\n"), "{err}");
 
     let (_, err) = text(&tool(&["export"]));

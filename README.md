@@ -298,6 +298,7 @@ one frame, listing every missing argument at once, and exits 2.
 | `runner/` | The Rust workspace: the `aeiou` binary and `aeiou-launch`. [README](runner/README.md), [reference](runner/REFERENCE.md). |
 | `man/` | The manual pages, in Markdown with man-page sections; the test suites hold them to the tools' `--help`. [index](man/README.md). |
 | `QUICKSTART.md` | The guide shipped in the release tarball: first run, first bug report. |
+| `CAPTURE.md` | The trace owner's guide to `aeiou-trace capture`, shipped in the release tarball beside it. |
 | `.github/workflows/` | CI (`ci.yml`) and the release tarball (`release.yml`). |
 | `PROJECT_BRIEF.md` | Requirements, decisions, open items (§6), and the one list of what is MLPerf-specific (§8). |
 | `NAPKIN_MATH.md` | Memory and IOPS estimates, the risk register, the spikes. |
@@ -395,7 +396,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-11-02)
+## Status (2026-11-03)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -447,6 +448,14 @@ rule V3 judges a required parameter in an `at` offset when its value is given),
 `faiss_ivf_ondisk`, its index, the search's configuration and load, and its CPU, the prefetch
 threads derived.
 
+`aeiou-trace capture` (2026-11-03, brief item 54, phase 1, `DESIGN_REVIEW.md` §3.96) starts a
+real application under strace after checking the node, and with `--ranks` every node and
+across them (any failure starts no node; waivers only by name), and writes the trace beside
+its record, `capture.json`; on several nodes, through `aeiou-launch` or inside the
+application's own launcher, the commands start at one barrier, each clock is measured
+against rank 0's, and rank 0 writes `capture-set.json`. The trace owner's guide is
+`CAPTURE.md`.
+
 `aeiou cases` (2026-10-23, item 40) lists the use cases a binary can run by `--case NAME`,
 filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows
 one with the commands that run it; it reads `workloads/catalog.json`, which `aeiou-catalog
@@ -464,6 +473,10 @@ SHA-256, for x86_64 and, since 2026-10-25, aarch64); a tool run from a checkout 
 that is not the lock's. Submitters run the release.
 
 Not built, in rough order of interest:
+
+- The capture's other sources (brief item 54): the HTTP-head shim for object requests (phase
+  2), eBPF system calls that do not slow the application (phase 3), and uprobes, faults on
+  mappings, and `io_uring` (phase 4).
 
 - ~~The abstract rendered as prose (`PROJECT_BRIEF.md` §6 item 27), from the AST and the case's
   measured shape; the workload catalog it would join is built (2026-10-10, below).~~ Built

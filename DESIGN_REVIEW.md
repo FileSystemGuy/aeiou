@@ -9184,8 +9184,9 @@ item 55's changes what the application sees, so the capture's library holds no c
 alter a result, and no stray variable turns a capture into an experiment.
 
 **The capture tool's design (debated with the user the same day, 2026-11-03; this side's
-proposal, recorded at the user's request before a context clear; not approved, nothing
-built: the user says "proceed" before any of it is coded).**
+proposal, recorded at the user's request before a context clear; ~~not approved, nothing
+built: the user says "proceed" before any of it is coded~~ approved by the user later on
+2026-11-03, defaults included, and phase 1 built the same day: below, "Phase 1 as built").**
 
 *Shape.* `aeiou-trace capture [--source auto|ebpf|strace] --root DIR... [--endpoint URL]...
 [--cold] [--accept CHECK]... -o DIR -- COMMAND [ARGS...]`, a subcommand of `aeiou-trace`
@@ -9301,6 +9302,40 @@ the container (the binary there, `--cap-add BPF --cap-add PERFMON`) or on the ho
 container it did not start, against "start the command, never attach"; the user decides
 when those workloads come. Whether `aeiou run` should compare mounts across hosts too (not
 checked whether it does; a brief item if the user wants it, not folded in here).
+
+**Phase 1 as built (2026-11-03, the user: "All your recommendations are good, proceed").**
+The defaults proposed above are decided as proposed: `%network` always in the strace set; at
+least one `--root` or `--endpoint`; `--cold` a sync and drop, which needs root (the `cold`
+check fails without it, waivable when the owner dropped the cache beforehand); `CAPTURE.md`
+in the tarball; the readers take `DIR/trace.txt` (the directory itself when phase 2 gives it
+a second file). The nightly toolchain and `bpf-linker` wait for phase 3; containers, and
+mounts compared by `aeiou run`, stay open. Built: `aeiou-trace capture` (`capture.rs`, the
+subcommand in `bin/aeiou_trace.rs`), the record and the checks as proposed, twelve by name
+(eight a node makes of itself: `source`, `root`, `clock`, `output-local`,
+`output-outside-roots`, `space` at 1 GiB, `alone`, `cold`; four rank 0 makes across nodes:
+`release`, `same-source`, `mounts`, without a client's own `clientaddr`, and `clock-offset`
+at 10 ms beyond the bound), the coordinator's clock rounds (`Clock` and `ClockReply`, new
+messages that only rank 0 of a capture sends, so the Python datagen's coordinator, which
+never sends them, is unaffected; `Server::clocks`, eight rounds, the shortest kept, Cristian's
+method), and `aeiou-launch` putting the rank flags right after `capture`, since appended
+they would follow the capture's own `--` and be the traced command's.
+
+Choices made in the building, each the simpler of two: the protocol is `Hello` (the node's
+document as its options block), rank 0 judging once every `Hello` is in, then `Stop` with the
+table or `Start` carrying it; the directory is made and the cache dropped only after
+`Start`, and the commands then wait at a coordinator barrier (`capture-start`), so a check
+failing anywhere leaves no directory anywhere. A `-o` that is not empty is an error, not a
+check: no waiver could make a capture into a used directory sound (on several nodes the
+other ranks then wait out the coordinator's connect window, as for any rank that fails
+before it connects). A signal sent to the tool alone (`si_code` not `SI_KERNEL`) is passed to
+the command, strace's child, found by its parent in `/proc`; a terminal's Ctrl-C is not
+passed again, since the command's process group had it already, and strace itself holds
+fatal signals under `-o FILE PROG` (`-I3`). The tool polls `waitpid` every 10 ms rather than
+blocking in it, since a signal may land on a coordinator thread. Not built in phase 1: a node's
+interruption stopping the others (each node stops on its own signal, and `aeiou-launch`
+sends it to every rank; a `Halt` broadcast would deliver a second signal to a command that
+had the first), the comparison afterward of records taken without a coordinator, and the
+sources' raw files (strace has none). Brief item 54.
 
 ## 4. Plan changes
 

@@ -2,7 +2,7 @@
 
 ## NAME
 
-aeiou-trace - locality metrics of a real application from an strace of it, the trace file of the runner's `trace` node, the structural digest a fit is made from, and the comparison of the application's with its abstract's
+aeiou-trace - locality metrics of a real application from an strace of it, the trace file of the runner's `trace` node, the structural digest a fit is made from, the comparison of the application's with its abstract's, and the capture of the trace with its record
 
 ## SYNOPSIS
 
@@ -11,6 +11,7 @@ aeiou-trace metrics [OPTIONS] [--root DIR]... [-o FILE] TRACE
 aeiou-trace export [OPTIONS] --root DIR -o FILE TRACE
 aeiou-trace compare [OPTIONS] A B
 aeiou-trace digest [OPTIONS] --root DIR [-o FILE] [--answers FILE] [--no-questions] TRACE
+aeiou-trace capture [OPTIONS] (--root DIR | --endpoint URL)... -o DIR -- COMMAND [ARGS]...
 aeiou-trace --help | --version
 ```
 
@@ -34,7 +35,9 @@ document and report, its questions, the application records, and the answers fil
 thread, and per path under the root, never per call, so a trace of several gigabytes is read
 in the time it takes to read it.
 
-The trace is taken with
+The trace is taken by `capture` (below), which runs the line that follows (with `%network`)
+after checking the node, and keeps the record of the capture beside the trace; or by hand,
+with
 
 ```
 strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
@@ -268,6 +271,72 @@ asked and every undecided verdict stays open. An answer a replayed file carries 
 verdict the trace decides is rejected with the evidence and listed under `rejected`; one
 agreeing with it is redundant and noted. The trace is read as a file, never from stdin: the
 comparison after the fit and a re-run with answers read it again.
+
+### capture
+
+Start *COMMAND* under a trace and write the capture directory (`-o DIR`): `trace.txt`, the
+strace text every other subcommand reads (`aeiou-trace metrics DIR/trace.txt --root ...`),
+and `capture.json`, the record of what was captured and how (FILES). The source is strace,
+`strace -f --seccomp-bpf -ttt -T -yy -v -e trace=...,%network,... -o DIR/trace.txt --
+COMMAND`, the line above with `%network` always (an owner cannot know whether descriptors
+pass over a socket). The eBPF source is not implemented yet: it comes in phase 3 of brief
+item 54 (`DESIGN_REVIEW.md` §3.96), and `--source auto` is strace until then. The command
+is always started, never attached to (no `-p`), as the invoking user in their environment;
+the tool never prompts. It exits with the command's status, and when a signal ended the
+command, the tool ends by the same signal once the record is written, as strace does. A
+`SIGINT` or `SIGTERM` sent to the tool alone (by `kill`, **aeiou-launch**(1), a scheduler's
+time limit) is passed to the command, and the record says the capture was interrupted; a
+terminal's Ctrl-C already reaches the command's process group. Messages go to standard error,
+prefixed, so the command's standard output stays its own.
+
+**The checks** are the first step of every capture: when one fails, and is not waived by
+name with `--accept`, nothing starts and the exit status is 1. Each node checks itself:
+
+- `source`: the source can trace a child here (`strace -V`, then a trace of `true` with the
+  line's filter: `kernel.yama.ptrace_scope` 3 forbids it).
+- `root`: every `--root` is a directory with a mount in `/proc/self/mountinfo`; its file
+  system, source (an NFS server and export), and options are recorded.
+- `clock`: the kernel says the clock is synchronized (`adjtimex`), with its error bounds.
+- `output-local`: `-o` is not on a network or FUSE file system (a trace written to shared
+  storage is load on it).
+- `output-outside-roots`: `-o` is under no `--root` (the trace's writes would be traced).
+- `space`: at least 1 GiB is free under `-o`.
+- `alone`: no other capture runs on the host, but captures of the same `--capture-id`
+  (every probe and tracer slows every traced call on the host).
+- `cold`: with `--cold`, the tool can drop the page cache (root).
+
+With `--ranks` above 1, rank 0 compares the nodes as well and prints one table:
+
+- `release`: one `aeiou-trace` version on every node.
+- `same-source`: one source and version on every node (one node under a slower source slows a
+  synchronized job and distorts every node's trace).
+- `mounts`: every `--root` mounted alike on every node, file system, source, and options, a
+  client's own address (`clientaddr`) aside: a node mounted with another `vers`, `rsize`, or
+  `nconnect` is the classic bad node.
+- `clock-offset`: every node's clock within 10 ms of rank 0's beyond what the measurement can
+  tell (each rank's offset is measured over its coordinator connection, eight round trips,
+  the shortest kept; the bound is half of it).
+
+A check failing on any node starts no node: every rank prints the table naming the node and
+the check, and exits 1. The checks run again at the end: a change of a root's mount or of the
+clock's state is printed and recorded (`changes_at_end`).
+
+**Several nodes.** With password-less ssh, **aeiou-launch**(1) starts one capture per host and
+puts `--ranks`, `--rank`, and `--coordinator` after `capture`: `aeiou-launch HOSTS --
+aeiou-trace capture --source strace -o /local/cap-%h --root /mnt/data -- COMMAND`. Inside an
+application's own launcher (`mpirun`, `srun`), the capture goes in its line and the three flags
+come from its environment. Rank 0 runs the runner's coordinator in-process (no MPI); every node
+connects, sends its checks, has its clock measured, and waits; rank 0 judges, and either stops
+every node or releases them; each node then makes its directory (and drops its cache with
+`--cold`), and every command starts at one barrier, after every node is ready. At the end each
+node sends rank 0 a summary, rank 0 measures the clocks again and writes `capture-set.json` in
+its directory; the traces stay on each node's disk. One capture per node is the rule, since
+every probe slows every call on the host; several (one per `mpirun` rank) share a
+`--capture-id`, and the record counts them (`captures_on_host`). `--source` is named with
+several nodes. Not implemented yet: a capture's command stopping when another node's is
+interrupted (each node stops on its own signal, which **aeiou-launch**(1) sends to every rank),
+and the comparison of per-node records made afterward for captures taken without a
+coordinator.
 
 ## OBJECT LOGS
 
@@ -517,6 +586,63 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
   its assertions apply with the record as their provenance; on a terminal, the identification
   is skipped and the options are still asked. A name no record has is a usage error.
 
+### aeiou-trace capture
+
+- *COMMAND*
+
+  After `--`: the command and its arguments, started under the trace as the invoking user.
+  Not with `--check`.
+- **--source** *SOURCE*
+
+  What traces the system calls: `strace` (any user), `ebpf` (not implemented yet; phase 3 of
+  brief item 54), or `auto`, eBPF where granted and strace elsewhere, strace until eBPF is
+  built; for one host only, so with `--ranks` above 1 the source is named. Default `auto`.
+- **--root** *DIR*
+
+  A directory the application's data is under. Repeatable. Its mount is recorded and, with
+  several nodes, compared. At least one `--root` or `--endpoint`.
+- **--endpoint** *URL*
+
+  An object store the application talks to, as a URL (`s3://BUCKET/PREFIX`,
+  `http://HOST:PORT`). Repeatable. Recorded with its scheme; its requests come with the shim,
+  phase 2 of brief item 54.
+- **--cold**
+
+  `sync`, then `3` into `/proc/sys/vm/drop_caches` before the command starts (root only; the
+  `cold` check fails otherwise). The record says `dropped`, with the drop's sizes, or `not
+  dropped`.
+- **--accept** *CHECK*
+
+  Start although *CHECK* failed. Repeatable, one check by name each; printed and recorded
+  (`waivers`). A name that is no check is a usage error.
+- **--check**
+
+  Run the checks, on every node and across them with `--ranks`, and start nothing: `-o` is
+  checked and not made. Exit status 0 when every check passed or was waived. Never required:
+  every capture runs the checks first anyway.
+- **--capture-id** *ID*
+
+  The capture this node joins, the same on every node; recorded, compared at the
+  coordinator (a node of another capture is refused), and what lets several captures share a
+  host (`alone`). Default `$SLURM_JOB_ID` when set.
+- **--ranks** *N*
+
+  Number of nodes of the capture. With more than 1, `--rank`, `--coordinator`, and
+  `--source` too; **aeiou-launch**(1) appends the first three.
+- **--rank** *R*
+
+  This node's index, 0 to *N*-1. Rank 0 runs the coordinator, compares the nodes, and writes
+  `capture-set.json`.
+- **--coordinator** *HOST:PORT*
+
+  With `--ranks` above 1, the coordinator's address: rank 0 listens on it, every rank
+  connects to it.
+- **-o**, **--out** *DIR*
+
+  The capture directory: new or empty (a directory with anything in it is refused), on a
+  node-local disk, outside every `--root`. `%h` expands to the host name, `%p` to the tool's
+  pid, `%%` to `%`, so one line serves every node.
+
 ### Common
 
 - **-h**, **--help**
@@ -574,6 +700,31 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 - `*.tolerances.json`
 
   A tolerance file, `aeiou_tolerances: 1`, kept beside a capture kit's trace document.
+- `DIR/capture.json`
+
+  A capture's record, `aeiou_capture: 1`: `tool` and its version; `host` (name, kernel,
+  distribution, CPUs, memory); `source` (`name`, `version`, `why` it was chosen, and the exact
+  `line` run); `command` (`argv`, `cwd`, `uid`, `gid`, `as_root`); `environment`, a fixed list
+  only (`SLURM_JOB_ID`, `SLURM_NODEID`, `SLURM_PROCID`, `RANK`, `LOCAL_RANK`, `WORLD_SIZE`,
+  `MASTER_ADDR`); `inherited_descriptors`, the descriptors the command inherited, which no open
+  in the trace made; `capture_id`, `rank`, `ranks`, `coordinator`, `captures_on_host`;
+  `barrier` (`arrived`, `released`), `start` and `end` (`realtime`, Unix seconds, and
+  `realtime_minus_monotonic`, which tells a step of the wall clock); `exit` (`status`, or the
+  `signal` that ended the command), `interrupted` (the signal the tool passed on, or null);
+  `roots` (each `--root`'s mount: `mount_point`, `fs_type`, `source`, `server` and `export` for
+  NFS, `options`, `super_options`); `endpoints` (`url`, `scheme`); `cache` (`dropped` or `not
+  dropped`) and `cache_drop`; `losses` (0 under strace, which slows the application instead);
+  `paths_not_copied`; `not_seen`, what the source cannot see; `mountstats`, never from a traced
+  run; `clock` (the start's state, the end's, and `offset_to_rank_0`, `offset_s` and
+  `bound_s`); `checks` (every check's `name`, `node`, `ok`, `waived`, `detail`, of every node
+  with several), `waivers`, `changes_at_end`; and `trace` (`file`, `bytes`, `sha256`).
+- `DIR/capture-set.json`
+
+  Rank 0's record of a capture on several nodes, `aeiou_capture_set: 1`: `capture_id`,
+  `ranks`, `coordinator`, `nodes` (each rank's `host`, `directory` on that host, `source`,
+  `losses`, `clock_offset_s`, `clock_bound_s`, `exit`, `interrupted`, `trace_sha256`, `waived`,
+  `changes_at_end`), `clock_end` (the offsets measured again at the end), and `status`
+  (`complete`, or `incomplete:` and why).
 - The exported trace file
 
   JSON Lines: a header `{"aeiou_trace": 1, "source", "root", "lanes", "lines", "opens",
@@ -595,7 +746,7 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
 
 - **0**
 
-  Success. For `compare`, the structure of two digests is the same; with `--judge`, at
+  Success (for `capture`, the command's status, below). For `compare`, the structure of two digests is the same; with `--judge`, at
   least one row was judged and none is outside; with `--max-distance`, no row exceeds it.
 - **1**
 
@@ -607,6 +758,10 @@ Not read yet: Ceph RGW's ops log, a lab proxy's log (`PROJECT_BRIEF.md` item 49)
   A usage error, in the frame every tool of the suite shares; a `--max-distance` or
   `--chain-gap-us` that is negative or not a finite number is one, and so is a digest's
   `--instance-root` or `--chain-gap-us` for an input that is not an strace.
+- For `capture`
+
+  The command's exit status, or the signal that ended it; 1 when a check failed (nothing
+  started), the capture directory is not empty, or the coordinator failed; 2 a usage error.
 
 ## EXAMPLES
 
@@ -649,10 +804,18 @@ aeiou-trace digest trace.txt --root /mnt/data --epochs 4 --candidates 168 -o tra
 aeiou-trace digest trace.txt --root /mnt/data --answers trace.answers.json -o trace.digest.json
 ```
 
+Capture a job on four nodes over ssh, each trace on the node's local disk, and measure one:
+
+```
+aeiou-launch n[1-4] -- aeiou-trace capture --source strace --root /mnt/data -o /local/cap-%h -- python train.py /mnt/data/train
+aeiou-trace metrics /local/cap-n1/trace.txt --root /mnt/data -o n1.metrics.json
+```
+
 ## SEE ALSO
 
-**aeiou**(1), **aeiou-build**(1), **aeiou-params**(1), **aeiou-abstract**(7),
-**strace**(1).
+**aeiou**(1), **aeiou-build**(1), **aeiou-params**(1), **aeiou-launch**(1),
+**aeiou-abstract**(7), **strace**(1). `CAPTURE.md`, the trace owner's guide in the release
+tarball.
 
 The reference: `builder/REFERENCE.md` §7 (the tool, the tolerances, the capture kits),
 `runner/REFERENCE.md` §10 (the definitions of the metrics) and §13 (the `trace` node and

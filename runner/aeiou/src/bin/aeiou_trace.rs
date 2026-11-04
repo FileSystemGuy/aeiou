@@ -4,7 +4,8 @@
 //! structural digest a fit is made from (`aeiou::digest`), with its interview, the application
 //! records, and the answers file (`aeiou::interview`, `aeiou::applications`); and the comparison
 //! of the application's document with the abstract's, two digests' structure and any two
-//! documents' numbers (`aeiou::compare`, §3.89 stage 4).
+//! documents' numbers (`aeiou::compare`, §3.89 stage 4); and the capture that starts the
+//! application under a trace and keeps the record beside it (`aeiou::capture`, §3.96).
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
@@ -15,9 +16,9 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{json, Value};
 
 use aeiou::usage::{self, Missing, UsageError};
-use aeiou::{applications, compare, digest, export, interview, objectlog, strace};
+use aeiou::{applications, capture, compare, digest, export, interview, objectlog, strace};
 
-const ABOUT: &str = "Locality metrics of a real application from an strace of it, the runner's trace file, the structural digest a fit is made from, and the comparison of the application's with its abstract's (the digest of aeiou dry-run --emit-trace, or aeiou dry-run --metrics-json)";
+const ABOUT: &str = "Locality metrics of a real application from an strace of it, the runner's trace file, the structural digest a fit is made from, the comparison of the application's with its abstract's (the digest of aeiou dry-run --emit-trace, or aeiou dry-run --metrics-json), and the capture of the trace with its record";
 const EXIT_PIPE: i32 = 141;
 
 #[derive(Parser)]
@@ -41,6 +42,49 @@ enum Cmd {
     /// Write the structural digest of a trace: path templates, lanes and their phases, a verdict per site on what the trace decides (permutation or draw, order, size), and the open questions ranked by their divergence at scale
     #[command(override_usage = "aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>")]
     Digest(DigestArgs),
+    /// Start COMMAND under a trace (strace -f --seccomp-bpf ...) after checking this node (and, with --ranks, every node), and write the capture directory: trace.txt, the trace every subcommand reads, and capture.json, the record of what was captured and how
+    #[command(override_usage = "aeiou-trace capture [OPTIONS] -o <DIR> -- <COMMAND>...")]
+    Capture(CaptureArgs),
+}
+
+#[derive(clap::Args)]
+struct CaptureArgs {
+    /// What traces the system calls: strace (any user), ebpf (not implemented yet: phase 3 of brief item 54), auto (eBPF where granted, else strace; one host only) [default: auto]
+    #[arg(long, value_name = "SOURCE", value_parser = ["auto", "ebpf", "strace"])]
+    source: Option<String>,
+    /// A directory the application's data is under (repeatable): its mount is recorded and compared across nodes. At least one --root or --endpoint
+    #[arg(long, value_name = "DIR")]
+    root: Vec<String>,
+    /// An object store the application talks to, as a URL (s3://BUCKET[/PREFIX], http://HOST:PORT; repeatable): recorded with its scheme
+    #[arg(long, value_name = "URL")]
+    endpoint: Vec<String>,
+    /// Sync and drop the page cache (3 into /proc/sys/vm/drop_caches, root only) before the command starts; recorded either way
+    #[arg(long)]
+    cold: bool,
+    /// Start although CHECK failed (repeatable; one of the checks by name); printed and recorded
+    #[arg(long, value_name = "CHECK")]
+    accept: Vec<String>,
+    /// Run the checks (with --ranks, on every node and across them) and start nothing; -o is checked and not made
+    #[arg(long)]
+    check: bool,
+    /// The capture this node joins (the same on every node); default $SLURM_JOB_ID when set. Captures of one id may share a host
+    #[arg(long, value_name = "ID")]
+    capture_id: Option<String>,
+    /// Number of nodes of the capture; with more than 1, --rank and --coordinator too (aeiou-launch appends all three)
+    #[arg(long, value_name = "N")]
+    ranks: Option<i64>,
+    /// This node's index, 0 to N-1; rank 0 runs the coordinator, compares the nodes, and writes capture-set.json
+    #[arg(long, value_name = "R")]
+    rank: Option<i64>,
+    /// With --ranks above 1: the coordinator's address. Rank 0 listens on it (in-process); every rank connects to it
+    #[arg(long, value_name = "HOST:PORT")]
+    coordinator: Option<String>,
+    /// Required: the capture directory, new or empty, on a node-local disk outside every --root; %h expands to the host, %p to the pid
+    #[arg(short, long, value_name = "DIR")]
+    out: Option<String>,
+    /// After --: the command and its arguments, started under the trace as the invoking user
+    #[arg(last = true, value_name = "COMMAND")]
+    command: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -625,9 +669,79 @@ fn compare_cmd(a: CompareArgs) -> Result<()> {
     }
 }
 
+/// A URL's scheme, lowercased: `SCHEME://` and something after it.
+fn url_scheme(u: &str) -> Option<String> {
+    let (scheme, rest) = u.split_once("://")?;
+    let ok = !scheme.is_empty() && scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c));
+    (ok && !rest.is_empty()).then(|| scheme.to_ascii_lowercase())
+}
+
+fn capture_cmd(a: CaptureArgs) -> Result<()> {
+    let ranks = a.ranks.unwrap_or(1);
+    let mut m = Missing::new();
+    let out = m.want(a.out, "-o <DIR>", "the capture directory, new or empty, on a node-local disk", None);
+    m.need(!a.root.is_empty() || !a.endpoint.is_empty(), "--root <DIR> | --endpoint <URL>", "at least one: the directories the application's data is under, or the object stores it talks to", None);
+    m.need(a.check || !a.command.is_empty(), "<COMMAND>...", "after --: the command to start under the trace", Some("not with --check, which starts nothing"));
+    let several = ranks > 1;
+    m.need(!several || a.rank.is_some(), "--rank <R>", "this node's index, 0 to N-1", Some("needed with --ranks above 1; aeiou-launch appends it"));
+    m.need(!several || a.coordinator.is_some(), "--coordinator <HOST:PORT>", "the coordinator's address: rank 0 listens on it, every rank connects to it", Some("needed with --ranks above 1; aeiou-launch appends it"));
+    m.need(!several || a.source.as_deref().is_some_and(|s| s != "auto"), "--source <SOURCE>", "strace on every node: auto may choose differently from node to node", Some("needed with --ranks above 1"));
+    m.check()?;
+    if ranks < 1 {
+        return Err(usage::err(format!("--ranks {ranks}: at least 1")));
+    }
+    let rank = a.rank.unwrap_or(0);
+    if !(0..ranks).contains(&rank) {
+        return Err(usage::err(format!("--rank {rank}: 0 to {} with --ranks {ranks}", ranks - 1)));
+    }
+    if let Some(c) = &a.coordinator {
+        if !c.rsplit_once(':').is_some_and(|(h, p)| !h.is_empty() && p.parse::<u16>().is_ok()) {
+            return Err(usage::err(format!("--coordinator {c}: expected HOST:PORT, a port number 0 to 65535")));
+        }
+    }
+    for n in &a.accept {
+        if !capture::CHECKS.contains(&n.as_str()) {
+            return Err(usage::err(format!("--accept {n}: no such check; one of {}", capture::CHECKS.join(", "))));
+        }
+    }
+    let mut endpoints = Vec::new();
+    for u in &a.endpoint {
+        match url_scheme(u) {
+            Some(s) => endpoints.push((u.clone(), s)),
+            None => return Err(usage::err(format!("--endpoint {u}: expected a URL, SCHEME://HOST[/PATH] (s3://BUCKET/PREFIX, http://HOST:PORT)"))),
+        }
+    }
+    let source = match a.source.as_deref().unwrap_or("auto") {
+        "ebpf" => return Err(usage::err("--source ebpf: not implemented yet; it comes in phase 3 of brief item 54 (DESIGN_REVIEW.md §3.96); --source strace runs as any user")),
+        "strace" => capture::strace_source("--source strace"),
+        _ => capture::strace_source("auto: the eBPF source is not built yet (phase 3 of brief item 54), and strace runs as any user"),
+    };
+    let out = capture::expand_out(&out.unwrap(), &aeiou::run::hostname(), std::process::id()).map_err(usage::err)?;
+    let out = std::path::Path::new(&out);
+    let out = if out.is_absolute() { out.to_path_buf() } else { std::env::current_dir()?.join(out) };
+    let o = capture::Opts {
+        source,
+        roots: a.root,
+        endpoints,
+        cold: a.cold,
+        accept: a.accept,
+        check_only: a.check,
+        capture_id: a.capture_id.or_else(|| std::env::var("SLURM_JOB_ID").ok().filter(|v| !v.is_empty())),
+        ranks,
+        rank,
+        coordinator: a.coordinator,
+        out,
+        command: a.command,
+    };
+    match capture::run(o)? {
+        0 => Ok(()),
+        n => std::process::exit(n),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
-    let subs = ["metrics", "export", "compare", "digest"];
+    let subs = ["metrics", "export", "compare", "digest", "capture"];
     let sub = args.iter().skip(1).find(|a| !a.starts_with('-')).filter(|a| subs.contains(&a.as_str())).cloned();
     let prog = match &sub {
         Some(s) => format!("aeiou-trace {s}"),
@@ -658,13 +772,14 @@ fn main() {
     let result = match cli.cmd {
         None => {
             let mut m = Missing::new();
-            m.need(false, "<COMMAND>", "one of metrics, export, compare, digest", None);
+            m.need(false, "<COMMAND>", "one of metrics, export, compare, digest, capture", None);
             m.check()
         }
         Some(Cmd::Metrics(a)) => metrics(a),
         Some(Cmd::Export(a)) => export_cmd(a),
         Some(Cmd::Compare(a)) => compare_cmd(a),
         Some(Cmd::Digest(a)) => digest_cmd(a),
+        Some(Cmd::Capture(a)) => capture_cmd(a),
     };
     if let Err(e) = result {
         if e.downcast_ref::<UsageError>().is_some() {

@@ -5,6 +5,7 @@ mod common;
 mod coord;
 mod cov_c2;
 mod cov_c3;
+mod capture;
 mod cases;
 mod listing;
 mod cov_c1;

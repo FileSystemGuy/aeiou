@@ -108,7 +108,7 @@ jobs:
           cp man/*.md "$d/man/"
           git ls-files workloads | grep -E '(\.ast\.json|params\.json|case\.lock\.json|README\.md|DESCRIPTION\.md|CATALOG\.md|catalog\.json|\.toml|shape\.json)$' | tar -cf - -T - | tar -xf - -C "$d"
           cp wheel/*.whl wheel/requirements.txt wheel/python-version "$d/wheel/"
-          cp QUICKSTART.md LICENSE "$d/"
+          cp QUICKSTART.md CAPTURE.md LICENSE "$d/"
           tar czf "$d.tar.gz" "$d"
           sha256sum "$d.tar.gz" > "$d.tar.gz.sha256"
           ls -l "$d.tar.gz"; tar tzf "$d.tar.gz" | sed 's,^[^/]*/,,' | sort

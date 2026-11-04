@@ -422,6 +422,12 @@ took 2.8 s and 0.15 GB for the metrics (the Python 36 s and 0.61 GB) and 3.2 s a
 the export (the Python 50 s and 1.46 GB). The reasoning is in `DESIGN_REVIEW.md` §3.42. **The choices below were made while building
 and confirmed by the user the same day (decided 2026-10-01).**
 
+*Since 2026-11-03 (`DESIGN_REVIEW.md` §3.96, brief item 54, phase 1):* `aeiou-trace capture
+--root DIR -o DIR -- COMMAND` takes the trace: it checks the node (and, with `--ranks`, every
+node and across them), runs the line below with `%network` added, and writes `trace.txt`
+beside `capture.json`, the record of the capture (**aeiou-trace**(1), capture; the owner's
+guide `CAPTURE.md`). The line by hand stays valid.
+
 ```
 strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%process,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy -o trace.txt <command>
 aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--metrics-block BYTES]
