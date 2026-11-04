@@ -1132,7 +1132,7 @@ mod tests {
     }
 
     fn gap(cpu: u32, lost: u64, first: u64, last: u64) -> Vec<u8> {
-        trailing_gaps(&[Loss::default(), Loss::default(), Loss { pending: lost, first, last, total: lost }])
+        trailing_gaps(&[Loss::default(), Loss::default(), Loss { pending: lost, first, last, total: lost, untraced: 0 }])
             .into_iter()
             .collect::<Vec<u8>>()
             .chunks(48)

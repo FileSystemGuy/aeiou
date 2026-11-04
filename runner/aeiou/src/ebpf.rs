@@ -265,6 +265,8 @@ pub fn kernel_layout() -> Result<Config> {
         level_off: off("pid", "level")?,
         numbers_off: off("pid", "numbers")?,
         upid_size: btf.size("upid").ok_or_else(|| anyhow!("{p}: no struct upid"))?,
+        signal_off: off("task_struct", "signal")?,
+        live_off: off("signal_struct", "live")?,
         ..Config::default()
     })
 }
@@ -351,6 +353,13 @@ impl Probes {
         Ok(m.get(&0, 0)?.iter().copied().collect())
     }
 
+    /// The processes still in the tree, read after the command has ended: any left behind it
+    /// (a daemon it started), since an exited one leaves.
+    pub fn traced_at_end(&self) -> Result<usize> {
+        let m: aya::maps::HashMap<_, u32, u8> = aya::maps::HashMap::try_from(self.bpf.map("TREE").expect("TREE"))?;
+        Ok(m.keys().filter(|k| k.is_ok()).count())
+    }
+
     pub fn attached(&self) -> usize {
         self.links
     }
@@ -409,7 +418,8 @@ fn read_loop(mut rb: aya::maps::RingBuf<aya::maps::MapData>, mut f: std::io::Buf
 
 /// The `losses` of `capture.json` and the buffer to suggest: `lost` per CPU with its first and
 /// last time on the monotonic clock, and a `--buffer` that would have held the reader's busiest
-/// second's bytes for the longest stretch of losses (at least twice this one), a power of two.
+/// second's bytes for the longest stretch of losses (at least twice this one), a power of two;
+/// and the processes of the command the full tree could not hold (`untraced_processes`).
 pub fn losses_record(losses: &[Loss], reading: &Reading, buffer: u64, windows: &[(u32, u64, u64, u64)]) -> Value {
     let total: u64 = losses.iter().map(|l| l.total).sum();
     let longest = windows.iter().map(|w| w.3.saturating_sub(w.2)).max().unwrap_or(0) as f64 / 1e9;
@@ -422,22 +432,42 @@ pub fn losses_record(losses: &[Loss], reading: &Reading, buffer: u64, windows: &
         "windows": windows.iter().map(|(cpu, n, a, b)| json!({"cpu": cpu, "events": n, "first_ns": a, "last_ns": b})).collect::<Vec<_>>(),
         "buffer": buffer,
         "suggested_buffer": (total > 0).then_some(suggested),
+        "untraced_processes": losses.iter().map(|l| l.untraced).sum::<u64>(),
     })
+}
+
+/// Whether a capture's `losses` leave its trace incomplete: an event lost, or a process untraced.
+pub fn incomplete(rec: &Value) -> bool {
+    rec["events"].as_u64().unwrap_or(0) > 0 || rec["untraced_processes"].as_u64().unwrap_or(0) > 0
 }
 
 /// The loud box at the end of a capture that lost events: what was lost and what to do.
 pub fn loss_box(rec: &Value) -> String {
     let n = rec["events"].as_u64().unwrap_or(0);
+    let u = rec["untraced_processes"].as_u64().unwrap_or(0);
     let cpus: Vec<String> = rec["per_cpu"].as_array().map(|a| a.iter().map(|c| format!("cpu {} ({})", c["cpu"], c["events"])).collect()).unwrap_or_default();
-    let lines = [
-        format!("THE TRACE IS INCOMPLETE: {n} event(s) lost, the ring buffer full"),
-        format!("on {}", cpus.join(", ")),
-        format!("in {} window(s), marked in trace.txt; a call whose open fell in one has no path", rec["windows"].as_array().map_or(0, |a| a.len())),
-        "capture.json says complete: false. To capture it whole:".to_string(),
-        format!("  1. a larger buffer: --buffer {}", human(rec["suggested_buffer"].as_u64().unwrap_or(0))),
-        "  2. -o on faster local storage, if the reader's write rate was the limit (capture.json reader)".to_string(),
-        "  3. --source strace, which loses nothing and slows the application".to_string(),
-    ];
+    let mut lines = vec![];
+    if n > 0 {
+        lines.extend([
+            format!("THE TRACE IS INCOMPLETE: {n} event(s) lost, the ring buffer full"),
+            format!("on {}", cpus.join(", ")),
+            format!("in {} window(s), marked in trace.txt; a call whose open fell in one has no path", rec["windows"].as_array().map_or(0, |a| a.len())),
+        ]);
+    }
+    if u > 0 {
+        lines.extend([
+            if n > 0 { "and".to_string() } else { "THE TRACE IS INCOMPLETE:".to_string() },
+            format!("{u} process(es) of the command not traced: the probes' table of {TREE_PROCESSES} live processes was full"),
+        ]);
+    }
+    lines.push("capture.json says complete: false. To capture it whole:".to_string());
+    if n > 0 {
+        lines.extend([
+            format!("  1. a larger buffer: --buffer {}", human(rec["suggested_buffer"].as_u64().unwrap_or(0))),
+            "  2. -o on faster local storage, if the reader's write rate was the limit (capture.json reader)".to_string(),
+        ]);
+    }
+    lines.push(format!("  {}. --source strace, which loses nothing and slows the application", if n > 0 { 3 } else { 1 }));
     let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
     let bar = "*".repeat(w + 4);
     let mut s = format!("{bar}\n");
@@ -446,6 +476,9 @@ pub fn loss_box(rec: &Value) -> String {
     }
     s + &bar
 }
+
+/// The most processes the probes' `TREE` holds at once (`capture-ebpf/src/main.rs`).
+pub const TREE_PROCESSES: u32 = 65536;
 
 /// Bytes in the `--buffer` notation: `512MiB`, `1GiB`.
 pub fn human(b: u64) -> String {
@@ -529,6 +562,8 @@ mod tests {
         let c = kernel_layout().unwrap();
         assert!(c.tgid_off > 0 && c.exit_code_off > 0 && c.tgid_off != c.exit_code_off && c.thread_pid_off > 0);
         assert!(c.numbers_off > c.level_off && c.upid_size >= 12);
+        // where a process's living threads are counted, so the tree can let it go
+        assert!(c.signal_off > 0 && c.signal_off != c.tgid_off);
     }
 
     #[test]
@@ -550,7 +585,7 @@ mod tests {
 
     #[test]
     fn the_loss_record_suggests_a_buffer_and_the_box_says_what_to_do() {
-        let l = [Loss { total: 0, ..Default::default() }, Loss { total: 7, pending: 0, first: 1, last: 2 }];
+        let l = [Loss { total: 0, ..Default::default() }, Loss { total: 7, pending: 0, first: 1, last: 2, untraced: 0 }];
         let r = Reading { peak_bytes_per_s: 600 << 20, ..Default::default() };
         let rec = losses_record(&l, &r, 256 << 20, &[(1, 7, 1_000_000_000, 3_500_000_000)]);
         assert_eq!(rec["events"], 7);
@@ -562,6 +597,19 @@ mod tests {
         assert!(b.lines().all(|l| l.chars().count() == b.lines().next().unwrap().chars().count()));
         let none = losses_record(&[Loss::default()], &r, 256 << 20, &[]);
         assert_eq!(none["events"], 0);
+        assert_eq!(none["untraced_processes"], 0);
         assert!(none["suggested_buffer"].is_null());
+        assert!(!incomplete(&none));
+        assert!(incomplete(&rec));
+
+        // a child the full tree could not hold: incomplete, and the box says so, with no event lost
+        let full = losses_record(&[Loss { untraced: 2, ..Default::default() }, Loss { untraced: 1, ..Default::default() }], &r, 256 << 20, &[]);
+        assert_eq!(full["events"], 0);
+        assert_eq!(full["untraced_processes"], 3);
+        assert!(incomplete(&full));
+        let b = loss_box(&full);
+        assert!(b.contains("THE TRACE IS INCOMPLETE") && b.contains("3 process(es) of the command not traced"), "{b}");
+        assert!(!b.contains("--buffer"), "a larger buffer does not help: {b}");
+        assert!(b.lines().all(|l| l.chars().count() == b.lines().next().unwrap().chars().count()));
     }
 }

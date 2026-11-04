@@ -124,8 +124,9 @@ pub const NR_MAX: u32 = 512;
 /// The reader's settings (`CONFIG`, index 0): the command's PID namespace, the process the
 /// capture starts (in that namespace's numbering; the probe adds it to `TREE` at its first
 /// call, finds the namespace's level from it, and clears `seed`), and the kernel structures' offsets the probes read, from
-/// the kernel's BTF: `task_struct`'s `tgid`, `exit_code`, and `thread_pid`, `pid`'s `level`
-/// and `numbers`, and the size of a `upid` (whose `nr` is first).
+/// the kernel's BTF: `task_struct`'s `tgid`, `exit_code`, `thread_pid`, and `signal`, `pid`'s
+/// `level` and `numbers`, the size of a `upid` (whose `nr` is first), and `signal_struct`'s
+/// `live`, its process's threads not yet exited.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Config {
@@ -139,9 +140,13 @@ pub struct Config {
     pub level_off: u32,
     pub numbers_off: u32,
     pub upid_size: u32,
+    pub signal_off: u32,
+    pub live_off: u32,
 }
 
-/// One CPU's losses (`LOSSES`): pending since the last record written, and in all.
+/// One CPU's losses (`LOSSES`): records pending since the last one written, and in all; and
+/// the children of traced processes the full `TREE` could not hold, so not traced
+/// (DESIGN_REVIEW.md §3.98).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Loss {
@@ -149,4 +154,5 @@ pub struct Loss {
     pub first: u64,
     pub last: u64,
     pub total: u64,
+    pub untraced: u64,
 }

@@ -22,6 +22,13 @@ was not there read the trace.
 - Know where your data is: each directory the application reads or writes is a `--root`.
   Only calls on paths under a root are measured, and each root's mount (file system, server,
   export, options) is recorded.
+- Start under the capture everything that does the job's I/O. Only the command and the
+  processes it starts are traced: other programs on the node (daemons, cron jobs, agents) are
+  left out, which is what you want, but so is a server you started apart (a vector database,
+  an inference server with its KV cache), work handed to `systemd-run` or `docker exec`, and a
+  FUSE or cache daemon, and nothing in the capture can tell you it missed them. Programs that
+  are not the job still load the storage while you trace: stop what you can (a backup, an
+  `updatedb` that crawls the mount).
 - Put the capture directory (`-o`) on a disk local to the node, outside every root. A trace
   grows by hundreds of megabytes a minute on a busy job; written to the storage under test,
   it is load on it, and written under a root, it traces itself. The checks refuse both.

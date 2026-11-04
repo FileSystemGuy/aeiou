@@ -540,3 +540,15 @@ fn a_rank_lost_during_the_capture_leaves_rank_0_s_set_incomplete() {
     // rank 0's own capture is whole
     assert_eq!(record(&d.join("r0"))["exit"], serde_json::json!({"status": 0}));
 }
+
+#[test]
+fn a_program_outside_the_command_is_not_in_a_strace_capture() {
+    let t = tmp("others");
+    let root = t.join("data");
+    let out = t.join("cap");
+    let o = crate::capture_ebpf::beside_an_outsider(&t, &root, |insider| capture(&[&WAIVE[..], &["--source", "strace", "--root", s(&root), "-o", s(&out), "--", "python3", s(insider), s(&root)]].concat()));
+    assert!(o.status.success(), "{:?}", text(&o));
+    let body = std::fs::read_to_string(out.join("trace.txt")).unwrap();
+    assert!(body.contains("insider-19") && body.contains("insider-child-2"), "the command's own calls: {body}");
+    assert!(!body.contains("/outsider-"), "a program outside the command reached the trace");
+}

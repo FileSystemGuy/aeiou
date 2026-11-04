@@ -1157,8 +1157,10 @@ numbers; the order is this note's.
     - **`io_uring`.** The tracepoints `io_uring:io_uring_submit_req` (named
       `io_uring_submit_sqe` before about 6.0) and `io_uring:io_uring_complete` give the
       opcode, `user_data`, and the result, not, as far as recalled, the descriptor, offset, or
-      length (medium); those need a probe on `io_issue_sqe` reading the request, whose layout
-      changes with the kernel version, so BTF and CO-RE.
+      length (medium); ~~those need a probe on `io_issue_sqe` reading the request, whose layout
+      changes with the kernel version, so BTF and CO-RE.~~ *Corrected 2026-11-04
+      (`DESIGN_REVIEW.md` §3.98):* `io_uring_submit_req`'s argument is the request after its
+      `prep`, read at offsets taken from the kernel's BTF at load; no CO-RE.
     - **Object requests (still open).** Server-side logs are read already (MinIO audit, S3
       server access, `runner/aeiou/src/objectlog.rs`). On the client, probes on OpenSSL's
       `SSL_write`/`SSL_read` (as bcc's `sslsniff`) see the plaintext request line, method,
@@ -1217,8 +1219,9 @@ numbers; the order is this note's.
     rests on a ratio (the numbers are WSL2's, whose cross-CPU ptrace wakeups cost about 50 µs).
     *Decided by the user the same day:* strace with `--seccomp-bpf` (a ptrace tracer of ours
     only if a need appears); the unsigned anchor `HEAD`s; the real-node measurements when a
-    node is available; aya for the eBPF side (the BPF object embedded in `aeiou-trace`; CO-RE
-    for kernel structures later from a C-built object, to be checked); the shim one crate of
+    node is available; aya for the eBPF side (the BPF object embedded in `aeiou-trace`; ~~CO-RE
+    for kernel structures later from a C-built object, to be checked~~ kernel structures read at
+    offsets from the kernel's BTF, no CO-RE, checked 2026-11-04, §3.98); the shim one crate of
     interposition machinery built as two libraries, the capture's (observes only) and item 55's
     `fstat` one (changes what the application sees).
     *The tool's design proposed and debated the same day (§3.96, "The capture tool's design";
@@ -1264,6 +1267,20 @@ numbers; the order is this note's.
     strace on the equivalence test; and a strace-parser bug it found (calls shorter than 40
     columns dropped) fixed. Not implemented yet: the `sudo -n` helper (phase 3b), uprobes,
     faults, `io_uring` (phase 4).
+    *Phase 4 and the trace format decided by the user 2026-11-04* (`DESIGN_REVIEW.md` §3.98,
+    after a prior-art survey, the hooks per mechanism from the kernel's BTF, and an experiment
+    of POSIX AIO under strace): one capture format, strace's text extended by records strace
+    never prints (a reserved `aeiou_` prefix, a keyed subset of strace's syntax, a versioned
+    header line, completions paired to issues by `user_data` or the request's address, object
+    requests in the same stream), so the strace source's output is a pure subset of eBPF's;
+    JSON lines an export only (`aeiou-trace export --jsonl`, with a schema). The probes in
+    order: `io_uring`, mapping faults, libaio's real completion, POSIX AIO uprobes, libssl
+    uprobes, cuFile and libnfs. Also decided and built the same day (§3.98): no merged trace of
+    several nodes (the set's directory the unit, readers to merge as they stream, events closer
+    than the clock bound in unknown order, nodes grouped by a set digest; not implemented yet);
+    and the eBPF tree's two defects fixed (an exited process leaves it, so a recycled pid is
+    not traced; a child a full tree cannot hold is counted and makes the capture incomplete).
+    Not implemented yet: all of phase 4, phase 3b, readers of a set, the set digest.
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no

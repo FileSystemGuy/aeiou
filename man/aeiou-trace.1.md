@@ -301,7 +301,9 @@ prefixed, so the command's standard output stays its own.
 carries on the raw tracepoints `sys_enter` and `sys_exit` record the same calls as the strace
 line (its classes and named calls, strace 6.8's set for this architecture, x86_64 or
 aarch64) for the command's process tree only, followed from its first instruction through
-every fork (`sched_process_fork`) to every thread's end (`sched_process_exit`): a record at
+every fork (`sched_process_fork`) to every thread's end (`sched_process_exit`; a process
+leaves the tree when the last of its threads ends, so a later program given its recycled pid
+is not traced; `DESIGN_REVIEW.md` §3.98): a record at
 each call's entry with its arguments and the paths it names, copied by the probe (a path whose
 page is not resident is read again at the return, and every one never read is counted), and
 one at its return. A probe cannot make the application wait, so it costs a fraction of
@@ -331,13 +333,19 @@ The probes are attached and every capability given up for good before the comman
 started; the command runs as the invoking user, in the environment the tool was started with
 (a binary with capabilities is secure-exec, and the variables glibc strips from it,
 `LD_PRELOAD`, `LD_LIBRARY_PATH`, `TMPDIR`, are passed on as they were). The tool waits for
-every process of the tree, as `strace -f` does, and exits with the command's status.
+every process of the tree, as `strace -f` does, and exits with the command's status. Under
+either source a program outside the command's tree (a daemon, a cron job, an agent) is never
+traced, whatever it touches; and a program that does the job's own I/O but was started apart
+(a server, work handed to `systemd-run` or `docker exec`) is not traced either, so start it
+under the capture.
 
 **Lost events are loud.** One lost `openat` leaves every later call on its descriptor without
 a path, so any loss, however small, ends the capture with a box on standard error: how many
 events, on which CPUs, in which windows, and what to do: a `--buffer` computed from the
 reader's busiest second, `-o` on faster local storage when the reader's write rate was the
-limit, or `--source strace`, which loses nothing and slows the application. `capture.json`
+limit, or `--source strace`, which loses nothing and slows the application. A child the
+probes' table of 65,536 live processes could not hold is not traced, and is counted and boxed
+the same way (`untraced_processes`; only `--source strace` helps). `capture.json`
 says `complete: false`, and `trace.txt` has a line at each window, `--- aeiou: N event(s) lost
 on cpu C from T to T: the ring buffer was full ---`. The readers still read the trace and
 count those lines (`events_lost` in the notes of `metrics`, `export`, and `digest`, with
@@ -858,8 +866,10 @@ command's working directory in the record (`command.cwd`) is the default `--cwd`
   NFS, `options`, `super_options`); `endpoints` (`url`, `scheme`); `cache` (`dropped` or `not
   dropped`) and `cache_drop`; `losses` (`events`, 0 under strace, which slows the application instead; under eBPF
   `per_cpu`, `windows`, each `cpu`, `events`, `first_ns` and `last_ns` on the monotonic clock,
-  `buffer`, and `suggested_buffer` when any was lost); `complete`, false when any event was
-  lost; `paths_not_copied`; under eBPF `reader` (`records`, `bytes`, `seconds`,
+  `buffer`, `suggested_buffer` when any was lost, and `untraced_processes`, children the full
+  tree could not hold); `complete`, false when any event was lost or any process untraced;
+  under eBPF `processes_traced_at_end`, the processes still in the tree when the command has
+  ended (0: every one has left it); `paths_not_copied`; under eBPF `reader` (`records`, `bytes`, `seconds`,
   `peak_records_per_s`, `peak_bytes_per_s`, `file`) and `conversion` (`records`, `calls`,
   `exits_without_entry`, `entries_without_exit`, `descriptors_unresolved`,
   `vectored_aio_left_out`), and after `--convert`, `converted_again`; `not_seen`, what the source cannot see; `mountstats`, never from a traced

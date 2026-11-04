@@ -28,7 +28,8 @@ static EVENTS: RingBuf = RingBuf::with_byte_size(1 << 28, 0);
 static SPECS: Array<u32> = Array::with_max_entries(NR_MAX, 0);
 #[map]
 static CONFIG: Array<Config> = Array::with_max_entries(1, 0);
-/// The traced processes, by the kernel's (the initial namespace's) process id.
+/// The traced processes, by the kernel's (the initial namespace's) process id; its size is
+/// `aeiou::ebpf::TREE_PROCESSES`.
 #[map]
 static TREE: HashMap<u32, u8> = HashMap::with_max_entries(65536, 0);
 /// The string arguments a thread's entry could not copy, retried at its exit, by thread id.
@@ -78,12 +79,22 @@ fn traced() -> bool {
     }
     match ns_ids(cfg) {
         Some((pid, _)) if pid == cfg.seed => {
-            let _ = TREE.insert(&tgid, &1, 0);
+            if TREE.insert(&tgid, &1, 0).is_err() {
+                untraced();
+            }
             cfg.ns_level = ns_level(cfg, pid);
             cfg.seed = 0;
             true
         }
         _ => false,
+    }
+}
+
+/// A process the full `TREE` could not hold, counted: it is not traced, and the capture says so.
+#[inline(always)]
+fn untraced() {
+    if let Some(loss) = LOSSES.get_ptr_mut(0) {
+        unsafe { (*loss).untraced += 1 };
     }
 }
 
@@ -309,7 +320,9 @@ pub fn sched_process_fork(ctx: RawTracePointContext) -> i32 {
     let Some(cfg) = CONFIG.get(0) else { return 0 };
     let child: *const u8 = ctx.arg(1);
     let Ok(c) = (unsafe { bpf_probe_read_kernel(child.add(cfg.tgid_off as usize) as *const u32) }) else { return 0 };
-    let _ = TREE.insert(&c, &1, 0);
+    if TREE.insert(&c, &1, 0).is_err() {
+        untraced();
+    }
     let mut nstid: u32 = 0;
     if let Ok(pid) = unsafe { bpf_probe_read_kernel(child.add(cfg.thread_pid_off as usize) as *const u64) } {
         let pid = pid as *const u8;
@@ -328,7 +341,9 @@ pub fn sched_process_fork(ctx: RawTracePointContext) -> i32 {
 }
 
 /// A traced thread's end, with its wait status, so the text says how each one ended as
-/// strace's `+++` lines do.
+/// strace's `+++` lines do; the last of a process's threads takes it out of `TREE`, so a
+/// process given its recycled pid is not traced (the leader may exit before its threads, so
+/// not at the leader's end: when `signal->live`, decremented before this tracepoint, is zero).
 #[raw_tracepoint(tracepoint = "sched_process_exit")]
 pub fn sched_process_exit(ctx: RawTracePointContext) -> i32 {
     let tgid = (bpf_get_current_pid_tgid() >> 32) as u32;
@@ -342,6 +357,12 @@ pub fn sched_process_exit(ctx: RawTracePointContext) -> i32 {
     let code = unsafe { bpf_probe_read_kernel(task.add(cfg.exit_code_off as usize) as *const i32) }.unwrap_or(0);
     unsafe { *(buf as *mut Exit) = Exit { head: head(GONE), nr: 0, pad: 0, ret: code as i64 } };
     emit(buf, size_of::<Exit>());
+    if let Ok(signal) = unsafe { bpf_probe_read_kernel(task.add(cfg.signal_off as usize) as *const u64) } {
+        let live = unsafe { bpf_probe_read_kernel((signal as *const u8).add(cfg.live_off as usize) as *const i32) };
+        if live == Ok(0) {
+            let _ = TREE.remove(&tgid);
+        }
+    }
     0
 }
 

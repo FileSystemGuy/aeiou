@@ -303,3 +303,76 @@ fn convert_writes_the_trace_again_from_the_records() {
 fn no_secret_reaches_an_ebpf_capture() {
     crate::capture::no_secret_reaches_a_capture_file(&privileged(), "ebpf", &[]);
 }
+
+/// A program outside the command, writing under the same root all through the capture: its
+/// calls are in neither source's trace (DESIGN_REVIEW.md §3.98, "Other programs on a node").
+pub const OUTSIDER: &str = r#"
+import os, sys, time
+d = sys.argv[1]
+os.makedirs(d, exist_ok=True)
+open(d + "/outsider-ready", "w").close()
+i = 0
+while not os.path.exists(d + "/outsider-stop"):
+    with open("%s/outsider-%d" % (d, i % 8), "w") as f:
+        f.write("o" * 100)
+    i += 1
+    time.sleep(0.002)
+"#;
+
+/// The command of the outsider tests: it forks children that exit, writes under the root, and
+/// waits long enough for the outsider to write many times.
+pub const INSIDER: &str = r#"
+import os, sys, time
+d = sys.argv[1]
+for k in range(3):
+    pid = os.fork()
+    if pid == 0:
+        with open("%s/insider-child-%d" % (d, k), "w") as f:
+            f.write("i")
+        os._exit(0)
+    os.waitpid(pid, 0)
+for k in range(20):
+    with open("%s/insider-%d" % (d, k), "w") as f:
+        f.write("i" * 10)
+    time.sleep(0.01)
+"#;
+
+/// Runs the outsider, then `capture` (given the root and the insider's path), then stops the
+/// outsider; the capture's output, and how many files the outsider wrote meanwhile.
+pub fn beside_an_outsider(t: &Path, root: &Path, capture: impl FnOnce(&Path) -> Output) -> Output {
+    std::fs::create_dir_all(root).unwrap();
+    let (o, i) = (t.join("outsider.py"), t.join("insider.py"));
+    std::fs::write(&o, OUTSIDER).unwrap();
+    std::fs::write(&i, INSIDER).unwrap();
+    let mut child = Command::new("python3").arg(&o).arg(root).spawn().unwrap();
+    let ready = root.join("outsider-ready");
+    for _ in 0..500 {
+        if ready.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(ready.exists(), "the outsider did not start");
+    let out = capture(&i);
+    std::fs::write(root.join("outsider-stop"), b"").unwrap();
+    assert!(child.wait().unwrap().success());
+    out
+}
+
+#[test]
+fn a_program_outside_the_command_is_not_traced_and_no_exited_process_stays_in_the_tree() {
+    let exe = privileged();
+    let t = tmp("others");
+    let root = t.join("data");
+    let out = t.join("cap");
+    let o = beside_an_outsider(&t, &root, |insider| capture(&exe, &["--source", "ebpf", "--root", s(&root), "-o", s(&out), "--", "python3", s(insider), s(&root)]));
+    assert!(o.status.success(), "{}", text(&o));
+    let body = std::fs::read_to_string(out.join("trace.txt")).unwrap();
+    assert!(body.contains("insider-19") && body.contains("insider-child-2"), "the command's own calls: {body}");
+    assert!(!body.contains("/outsider-"), "a program outside the command reached the trace");
+    let rec = record(&out);
+    assert_eq!(rec["complete"], true, "{}", rec["losses"]);
+    assert_eq!(rec["losses"]["untraced_processes"], 0, "{}", rec["losses"]);
+    // the command and its three children have exited: none is still traced
+    assert_eq!(rec["processes_traced_at_end"], 0, "{rec:#}");
+}

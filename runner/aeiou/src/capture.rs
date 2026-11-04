@@ -1090,6 +1090,7 @@ pub fn run(o: Opts) -> Result<i32> {
             stop.store(true, Ordering::SeqCst);
             let reading = reader.join().map_err(|_| anyhow!("the reader thread panicked"))??;
             let losses = p.losses()?;
+            let at_end = p.traced_at_end()?;
             drop(p);
             let tail = crate::ebpf_text::trailing_gaps(&losses);
             if !tail.is_empty() {
@@ -1097,7 +1098,7 @@ pub fn run(o: Opts) -> Result<i32> {
             }
             let stats = crate::ebpf_text::convert(&bin, &trace)?;
             let rec = crate::ebpf::losses_record(&losses, &reading, o.buffer, &stats.windows);
-            Some((rec, reading, stats))
+            Some((rec, reading, stats, at_end))
         }
         _ => None,
     };
@@ -1187,13 +1188,14 @@ pub fn run(o: Opts) -> Result<i32> {
         "cache": if cache_drop.is_some() { "dropped" } else { "not dropped" },
         "cache_drop": cache_drop,
         "losses": match &ebpf_rec {
-            Some((l, _, _)) => l.clone(),
+            Some((l, _, _, _)) => l.clone(),
             None => json!({"events": 0, "note": "strace loses no call: it stops the traced thread instead, and the application is slower"}),
         },
-        "complete": ebpf_rec.as_ref().is_none_or(|(l, _, _)| l["events"] == 0),
-        "paths_not_copied": ebpf_rec.as_ref().map_or(0, |(_, _, s)| s.paths_not_copied),
-        "reader": ebpf_rec.as_ref().map(|(_, r, _)| json!({"records": r.records, "bytes": r.bytes, "seconds": r.seconds, "peak_records_per_s": r.peak_records_per_s, "peak_bytes_per_s": r.peak_bytes_per_s, "file": crate::ebpf::FILE})),
-        "conversion": ebpf_rec.as_ref().map(|(_, _, s)| s.json()),
+        "complete": ebpf_rec.as_ref().is_none_or(|(l, _, _, _)| !crate::ebpf::incomplete(l)),
+        "processes_traced_at_end": ebpf_rec.as_ref().map(|(_, _, _, n)| n),
+        "paths_not_copied": ebpf_rec.as_ref().map_or(0, |(_, _, s, _)| s.paths_not_copied),
+        "reader": ebpf_rec.as_ref().map(|(_, r, _, _)| json!({"records": r.records, "bytes": r.bytes, "seconds": r.seconds, "peak_records_per_s": r.peak_records_per_s, "peak_bytes_per_s": r.peak_bytes_per_s, "file": crate::ebpf::FILE})),
+        "conversion": ebpf_rec.as_ref().map(|(_, _, s, _)| s.json()),
         "not_seen": NOT_SEEN_STRACE.iter().chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() }).map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>(),
         "requests": requests,
         "anchors": anchors,
@@ -1208,8 +1210,8 @@ pub fn run(o: Opts) -> Result<i32> {
     for c in &changes {
         say(&format!("changed during the capture: {}", c.as_str().unwrap_or("")));
     }
-    if let Some((l, _, _)) = &ebpf_rec {
-        if l["events"].as_u64().unwrap_or(0) > 0 {
+    if let Some((l, _, _, _)) = &ebpf_rec {
+        if crate::ebpf::incomplete(l) {
             say(&crate::ebpf::loss_box(l));
         }
     }

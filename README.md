@@ -491,7 +491,8 @@ Not built, in rough order of interest:
 - The capture's other sources (brief item 54): ~~the HTTP-head shim for object requests (phase
   2),~~ (built 2026-11-03) ~~eBPF system calls that do not slow the application (phase 3),~~
   (built 2026-11-03) the `sudo -n` helper for hosts without file capabilities (phase 3b), and
-  uprobes, faults on mappings, and `io_uring` (phase 4).
+  uprobes, faults on mappings, and `io_uring` (phase 4; decided 2026-11-04 with the trace format
+  they write, strace's text extended by records of aeiou's own, `DESIGN_REVIEW.md` §3.98).
 
 - ~~The abstract rendered as prose (`PROJECT_BRIEF.md` §6 item 27), from the AST and the case's
   measured shape; the workload catalog it would join is built (2026-10-10, below).~~ Built

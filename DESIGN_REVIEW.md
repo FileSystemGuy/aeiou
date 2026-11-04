@@ -9175,9 +9175,10 @@ measurements on a real Linux node wait until one is available (none now). Then, 
 day: **aya**, both sides in Rust, the BPF object embedded in `aeiou-trace` so an owner needs
 only the release tarball (the user's leaning for programs that stay simple, this side
 agreeing); its costs a nightly toolchain and `bpf-linker` in CI and `pt_regs` offsets per
-architecture; the later probes on kernel structures (mapping faults, `io_uring`) need CO-RE
+architecture; ~~the later probes on kernel structures (mapping faults, `io_uring`) need CO-RE
 relocations, which aya loads from a C-built object (medium confidence, checked when they are
-built). **The shim: shared code, two libraries.** One crate holds the interposition machinery
+built).~~ the later probes on kernel structures read their offsets from the kernel's BTF at
+load, as phase 3's do, and need no CO-RE (checked 2026-11-04, §3.98). **The shim: shared code, two libraries.** One crate holds the interposition machinery
 (the real symbol found past `RTLD_LOCAL`, the reentrancy guard, logging without allocation),
 built as two shared objects, the capture's and item 55's `fstat` one: the capture observes and
 item 55's changes what the application sees, so the capture's library holds no code that can
@@ -9295,7 +9296,8 @@ converter to strace text resolving descriptors from the recorded opens, `dup`s, 
 `chdir`s, and its test an equivalence of the *parsed* calls of one command under strace and
 under eBPF; needs nightly Rust and `bpf-linker` locally and in CI, pinned by `dev.sh`, the
 user to approve installing them (GitHub's runners have `sudo` for the root tests); (4)
-libssl uprobes, then mapping faults and `io_uring` (CO-RE).
+~~libssl uprobes, then mapping faults and `io_uring` (CO-RE).~~ the probes of §3.98, in its
+order: `io_uring`, mapping faults, libaio's completion, POSIX AIO, libssl, cuFile and libnfs.
 
 *Open, later.* Servers started in containers (Milvus, vLLM with LMCache): the capture inside
 the container (the binary there, `--cap-add BPF --cap-add PERFMON`) or on the host against a
@@ -9569,6 +9571,191 @@ tests of each; `tests/capture.rs` and `tests/capture_ebpf.rs` run a command with
 its environment, its options, a URL, and the bytes it writes, reads, and sends over a socket,
 under each source, and find none in any file of the capture; `tests/trace_tool.rs` the
 warning and its absence.
+
+### 3.98 One trace format for every source: strace's text, extended by records of our own, and the probes of phase 4 (researched, debated with the user, and decided 2026-11-04; not started)
+
+**How it came up.** After item 62 the user asked when the probes for `io_uring` and mapping
+faults come (item 54 phase 4, nothing scheduled), noted that LMCache uses `io_uring` for some
+operations, and that strace's text holds no object request either: what is needed is a
+*general* extension of the trace format, not one for `io_uring` alone. With it two questions:
+can strace capture all a POSIX AIO application does, and is every hook each backend needs
+known. Researched the same day: a survey of prior art for such a format, the hook points per
+mechanism from the kernel's BTF on this box (6.18.54.1-WSL2) and primary sources, and an
+experiment of POSIX AIO under strace. Confidence tags: *box* (verified here), *src* (primary
+source read), *rec* (recollection, unverified).
+
+**POSIX AIO under strace (experiment, glibc 2.39, strace 6.8, box).** glibc implements
+`aio_*` in user space (`rt/aio_misc.c`, src): `aio_read` and `lio_listio` queue the request in
+glibc's memory and wake or create a helper thread (a `futex` or `clone3`, neither naming the
+request); the helper calls `pread64`, `pwrite64`, or `fsync` (`aio_fsync`), and wakes the
+waiter; `aio_error` and `aio_return` read the result from memory with no call, `aio_suspend`
+waits on a `futex` only if the request is not done. So the storage's view is whole in the
+trace (the helper's calls, with descriptor, offset, length, result), and the application's is
+not: which thread issued a request, when (the wait in glibc's queue), that it was
+asynchronous at all (a helper's `clone3` and `pread64` look like any thread's), how many were
+outstanding, and when the result was collected. And glibc serializes by descriptor: 8 reads
+queued at once on one descriptor ran one at a time on one helper; 16 over 4 descriptors ran on
+4 helpers, 4 each (at most 20 helpers by default, `optim.aio_threads`, src). The user's reading,
+sharpened: the I/O does reach the kernel, as an ordinary read of a glibc thread, and a syscall
+tracepoint cannot tell whose request it serves. Not a limit of eBPF: uprobes on libc's
+exported `aio_read`, `aio_write`, `lio_listio`, `aio_fsync`, `aio_error`, `aio_return`,
+`aio_suspend` (box) see the issuer, the time, and the `aiocb`, joined to the helper's call by
+the `aiocb`'s address or by descriptor, offset, and length. glibc's internal `__aio_notify`
+cannot be probed: libc ships no symbol table (box).
+
+**The hooks per mechanism (field lists from `trace_event_raw_*` and the structs in
+`/sys/kernel/btf/vmlinux`, box; nothing attached, tracefs is root-only here).**
+
+| Mechanism | Issue | Completion | Gap |
+|---|---|---|---|
+| `sync`, `sync-direct` | syscall tracepoints (built) | the same | `O_DIRECT` asked is not done: `iomap:iomap_dio_rw_begin`/`iomap_dio_complete` prove it on iomap filesystems (XFS, ext4) only; NFS goes through `nfs_direct_*` |
+| `posix-aio` | uprobes on `aio_read`, `aio_write`, `lio_listio`, `aio_fsync`; the helper's call traced | uprobes on `aio_error`, `aio_return`, `aio_suspend` | the join by `aiocb` address |
+| `libaio` | `io_submit` entry (its `iocb`s copied, phase 3) | `io_getevents` exit is the reap; fentry `aio_complete_rw` (static, in BTF and kallsyms, box) the real completion, `ki_res.obj` the user `iocb` (box) | `fs/aio.c` has no tracepoints (src); a completion in interrupt context has no meaningful thread, so joined by pointer; a buffered request completes inside `io_submit` (rec) |
+| `io_uring` | tracepoint `io_uring_submit_req`: its record has no descriptor, offset, or length, but its argument is the `io_kiocb` after `prep` (`io_uring.c`, src), so a raw or BTF tracepoint reads `opcode`, `flags` (`REQ_F_FIXED_FILE`), `cqe.fd`, and `io_rw`'s `kiocb.ki_pos` and `len` (box) | tracepoint `io_uring_complete` (`req`, `user_data`, `res`, `cflags`, box) | under SQPOLL the issuer is the `iou-sqp` thread; a ring read without a call hides the reap; opens and closes inside the ring need fentry on `io_openat` or reading `io_open`; a fixed file's `cqe.fd` is an index, resolved from `io_uring_register(IORING_REGISTER_FILES)`'s array; `URING_CMD` opaque; a request punted to `iou-wrk` seen by `io_uring_queue_async_work` |
+| `mmap` faults | fentry `handle_mm_fault(vma, address, flags, regs)` (box); the file offset `vm_pgoff·PAGE + (address − vm_start)` | fexit: `VM_FAULT_MAJOR` in the return | `exceptions:page_fault_user` is x86 only and has no exit; filter `FAULT_FLAG_USER` (a `get_user_pages` of an `O_DIRECT` buffer faults too); a `VM_FAULT_RETRY` attempt summed with its retry (rec); the readahead a fault starts by `readahead:page_cache_ra_*` and `filemap:mm_filemap_*` (box), by inode |
+| `gds` (cuFile) | uprobes `cuFileRead`/`cuFileWrite`, `cuFileBatchIOSubmit`, the `*Async` forms; or the `nvidia-fs` ioctls (`nvfs-core.h`, src) | uretprobe, `cuFileBatchIOGetStatus` by cookie | an asynchronous completion is a GPU stream's, untimed from the CPU; the handle mapped to a descriptor by `cuFileHandleRegister`; compatibility mode appears to use `io_uring` through `syscall()` (box, strings only); untested without the hardware |
+| `nixl-posix` | libaio by default, liburing by option (README, src): the rows above | — | NIXL's own request identity needs uprobes on mangled C++ names |
+| `libnfs` | uprobes `nfs_pread_async`, `nfs_pwrite_async`, `nfs_open_async` (API v2 adds a buffer argument) | the callback, an address known at run time | the sockets alone show the wire only; matching by XID would read payload bytes, which §3.97 forbids |
+| S3 over TLS | uprobes `SSL_write`, `SSL_write_ex` in `libssl.so.3` (box), phase 2's head filter in the probe | `SSL_read`/`SSL_read_ex`, the response head | Go's TLS, rustls, a static OpenSSL: sockets only (§3.96) |
+
+*Corrections of what was believed.* ~~The probes on kernel structures need CO-RE relocations,
+loaded from a C-built object (§3.96).~~ No probe here needs CO-RE: phase 3 already takes
+`task_struct`'s offsets from the kernel's BTF at load and hands them to the probe in a map, and
+the same serves `io_kiocb`, `io_rw`, `kiocb`, `aio_kiocb`, and `vm_area_struct`, a missing
+field failing the `source` check. Rust cannot emit CO-RE relocations yet (a pre-RFC of
+2026-04-09, an LLVM prototype; `bpf-linker`'s `--btf` emits types, not relocations), and clang
+is not installed. And `io_uring_submit_req` carries the request itself, so no probe on the
+static `io_issue_sqe` (which may be inlined) is needed for its descriptor, offset, and length.
+
+**Prior art for the format.** No format holds POSIX calls, `io_uring` submissions and
+completions, AIO, faults, and object requests in one stream per task. DFTracer (LLNL, JSON
+lines, MIT), Darshan DXT, and Recorder stop at intercepted library calls (POSIX, STDIO,
+MPI-IO, HDF5), and DFTracer pairs no issue with its completion; CTF/LTTng, Perfetto, and OTF2
+hold anything under a schema of one's own, behind a binary decoder or a C library (OTF2's
+issued and completed I/O records, paired by a matching id, the best model of asynchronous I/O,
+rec); Falco's scap and Tracee see the `io_uring` calls, not the requests in the ring (Tracee's
+events a draft); strace's JSON output (a 2014 Summer of Code series) was never merged;
+OpenTelemetry names S3's attributes (`aws.s3.bucket`, `aws.s3.key`) and nothing for files.
+
+**The debate (the user, this side).** The user: an extension of strace's text that strace
+parsers read, if they skip names they do not know, makes the strace source, where eBPF will
+not load, a pure subset of what eBPF writes, so one format for every case; against it, JSON
+lines would not depend on the vagaries of parsing text (quoted strings, spaces in paths), and
+if JSON had a significant advantage the raw strace lines could be embedded in it, or
+transformed into it by an awk script. This side, after a test of strace 6.8's escapes (box): a
+quoted string is C-escaped, a `-yy` path is bounded by `<…>` with `>` and every byte not
+printable ASCII in octal (`x\76y`, `\303\251`), a space literal, a newline `\n`, so one call is
+one line and the text is unambiguous by construction; its cost is the size of strace's grammar
+(each decoder's own layout, unfinished and resumed halves, signals, truncation, changes between
+versions), not ambiguity. JSON's real advantages: typed and named fields, a new one breaking no
+reader; a schema; every language reads it with no parser of its own; nesting. But the text
+parser never goes away (the TWG's traces, anyone's `strace -f`, the fallback), so JSON is a
+second format, not the one; JSON holding raw strace lines still needs the strace parser, and an
+awk transform would be a second, weaker one (nesting, escapes, resumed halves) beside
+`strace.rs` and its 260-file golden corpus; the fragility is in strace's lines, not in records
+we write, which can keep to a strict, keyed subset; and JSON is about 1.5 to 2 times larger on
+traces of 3.5 to 7 GiB. JSON's advantages for researchers are had by an export. The user
+agreed.
+
+**Decided (the user, 2026-11-04: "Agreed, strace text with JSONL export"; the build order, "no
+objection").**
+
+- *One capture format: strace's text, extended.* The strace source's output is a pure subset
+  of the eBPF source's. Records strace never prints carry a reserved prefix (`aeiou_`, to be
+  confirmed when built) and keep strace's line form, `TID HH:MM:SS.uuuuuu name(args) = ret
+  <dur>`. A trace that holds them begins with a header line giving the format's version and
+  the record kinds present.
+- *Our records keep to a keyed subset of strace's syntax:* every argument `key=value`, never by
+  position; a value an integer, a C-escaped quoted string, `fd<path>` with strace's escapes, or
+  a nested `{…}` or `[…]`; its grammar written in `aeiou-trace(1)` and `runner/REFERENCE.md`
+  §13, and each record kind held by the golden corpus. Names: `aeiou_uring_sqe`,
+  `aeiou_uring_cqe`, `aeiou_aio_issue`, `aeiou_aio_complete`, `aeiou_fault` (faults as runs, a
+  count per record, faults being the size risk), `aeiou_obj_req`, `aeiou_obj_resp` (OpenTelemetry's S3
+  names), later `aeiou_cufile_*` and `aeiou_nfs_*`; for example
+  `4711 10:00:00.000101 aeiou_uring_sqe(5</ring>, {op=IORING_OP_READ, fd=7</data/f>, off=4096, len=131072, user_data=0x7}) = 0`.
+- *Pairing.* A completion carries its issue's key, `user_data` and the ring for `io_uring`, the
+  `iocb` or `aiocb` address for AIO, so a reader holds only the requests in flight, at most a
+  ring's depth: memory per open file, never per call.
+- *Object requests join the stream;* `requests.jsonl` becomes a view of it.
+- *Readers skip a name they do not know:* `strace.rs`'s tables (`fd_op_of`, `path_op_of`) fall
+  through for one, which a test confirms before anything relies on it.
+- *JSON lines an export only:* `aeiou-trace export --jsonl`, a typed record per line, lossless,
+  with a JSON Schema, so researchers read a trace with jq or pandas and never parse strace;
+  Perfetto's trace JSON (flows for the pairs) a later export for viewers. Never a capture
+  format.
+- *The build order of phase 4:* (1) `io_uring` (LMCache); (2) mapping faults; (3) libaio's real
+  completion; (4) the POSIX AIO uprobes; (5) the request heads by libssl uprobes, in place of
+  the shim where it loads; (6) cuFile and libnfs last, needing hardware or a server not at
+  hand. Each kind's records and their grammar come with its probes, and each is tested
+  against the counts of the calls under it.
+
+**Several nodes: no merged trace (the user, 2026-11-04).** A scale-out capture is one trace per
+node, not per rank (the ranks on a node are lanes of its trace, §3.96), listed with each node's
+source, losses, and clock offset in rank 0's `capture-set.json`. This side proposed, and the
+user agreed: no merged capture format. A merged file breaks the one format (a thread id, a
+descriptor, and a path are each one host's, so every line would need a host field strace never
+prints); it writes one interleaving as fact where clock offsets are known only within half a
+round trip; and it would copy 0.2 to 0.5 TiB of traces that stay on each node's disk by design.
+So the set's directory is the unit a person keeps, archives, and sends (`tar --zstd` of it:
+the many files a packaging matter, not a format's), and the readers (`metrics`, `digest`,
+`compare`, `export`) take a set, find its nodes by `capture-set.json`, apply each node's offset,
+and merge the lanes by time as they stream, memory per lane. Two events of different nodes
+closer than the bound of their offsets are reported in *unknown order* (the user's choice over
+picking an order and counting the cases). Grouping the nodes by like I/O (a symmetric job's
+ranks against rank 0's checkpoint metadata and logs) is the digest's: a set digest that sorts
+the nodes into classes by `compare`'s judgment, with counts, and is published in place of the
+traces; the user's "curation" meant only keeping and preserving the trace, which the set's
+directory serves. A merged timeline for a viewer is an export (`--jsonl`, Perfetto), where
+JSON has room for the host and for an unknown order. Not implemented yet: a set read by any
+reader, the set digest.
+
+**Other programs on a node (the user, 2026-11-04: can their I/O be kept out of the trace).** It
+is already, twice. Both sources trace the command's process tree alone: strace's `-f` attaches
+to the command and its children only, and every eBPF probe returns at once for a process not in
+`TREE` (`traced()`, the command added at its first call and each child at `sched_process_fork`,
+before it runs); a daemon, a cron job, or an agent never enters either trace, whatever it
+touches. And the readers count only calls under `--root`, so even a stray call to the root disk
+is not the SUT's workload. `io_uring`'s `iou-wrk` and `iou-sqp` threads are threads of the
+application's own process and so in the tree (src, rec, not tested here); kernel writeback,
+readahead, and the NFS client's own RPCs are the storage's side, rightly outside the call
+stream (mountstats has them). Found in the checking, two defects of the eBPF source: `TREE`
+never removes an exited process, so an unrelated process given a recycled pid would be traced
+(`pid_max` is 4,194,304 here, so rare, but a long capture of many short processes, a data
+preparation's shell pipelines, makes it plausible); and `TREE` holds 65,536 processes, an
+insert into a full one ignored, so a job starting more over its life had its later children
+untraced in silence, against the rule that any loss is loud. *Decided (the user agreed to the
+proposal, 2026-11-04):* a process leaves `TREE` when its thread group is dead (the last of its
+threads exits: `signal_struct.live` at zero at `sched_process_exit`, read at offsets from the
+kernel's BTF), not when its leader exits, which may be before its threads; a child `TREE` could
+not hold is counted (`losses.untraced_processes`), makes the capture `complete: false`, and is
+in the loss box; `capture.json` records the processes still in the tree at the end; and tests:
+a process outside the command doing I/O under the same `--root` during a capture is in neither
+source's trace, and no exited process stays in the tree. The opposite risk is the larger, and
+no capture can detect it: the job's own I/O done by a process outside the tree (a server started
+apart, Milvus or vLLM with LMCache, work handed to `systemd-run` or `docker exec`, a FUSE daemon,
+a local cache daemon), so `CAPTURE.md` and the kits say to start everything that does the job's
+I/O under the capture. Later, not now: a preflight report of other processes with files open
+under `--root` (another user's need privilege to see) and a warning when `updatedb`'s pruned
+filesystems do not cover the mount, since their I/O, though outside the trace, disturbs the
+storage while it is taken.
+
+*The tree's fix built (2026-11-04).* `capture-ebpf/src/main.rs`: `sched_process_exit` takes a
+process out of `TREE` when `signal->live` is zero, and a failed insert counts `Loss.untraced`;
+`ebpf.rs`: the offsets `task_struct.signal` and `signal_struct.live` from BTF,
+`untraced_processes`, `incomplete`, the box, and `Probes::traced_at_end`; `capture.rs`:
+`complete` and `processes_traced_at_end`; `aeiou-trace(1)` and `CAPTURE.md`. Tests: the unit
+tests of the offsets, the count, and the box; `tests/capture.rs` and `tests/capture_ebpf.rs` run
+an outsider writing under the same `--root` through a capture of a command that forks three
+children, and find none of its calls in either source's trace, and under eBPF none of the four
+processes left in the tree (the count read from the probes' own map). A full tree and a recycled
+pid are not forced by a test (65,536 live processes; a chosen pid needs root): the first is
+held by the unit test of its count, the second by the tree found empty.
+
+*Risks.* A static function the compiler inlined fires no fentry (the tracepoints preferred);
+field meanings drift between kernels (`io_kiocb.cmd` at offset 0 only since about 5.19, rec;
+`len` counts iovecs for `READV`); `io_uring` doubles the records a request (submit and
+complete), which makes the 256 MiB `--buffer` question (§3.96) sooner; aarch64 has no
+`exceptions` tracepoints; nothing could be attached on this box without root. Brief item 54.
 
 ## 4. Plan changes
 
