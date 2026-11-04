@@ -1251,8 +1251,19 @@ numbers; the order is this note's.
     per request and no credential kept; the tool writes `requests.jsonl`, names the processes
     the library missed, and sends the anchor `HEAD`s; `objectlog.rs` reads `requests.jsonl` as
     a third format, and the readers take the capture directory; the tarball's `lib/` holds the
-    library. Not in phase 2: the join of requests to calls (items 49, 61). Next: phase 3, eBPF
-    with aya (nightly and `bpf-linker`, the user to approve installing them).
+    library. Not in phase 2: the join of requests to calls (items 49, 61). ~~Next: phase 3, eBPF
+    with aya (nightly and `bpf-linker`, the user to approve installing them).~~ *Phase 3
+    decided by the user the same day* (`DESIGN_REVIEW.md` §3.96 "Phase 3 decided"): a dated
+    nightly (`runner/capture-ebpf/rust-toolchain.toml`) and `bpf-linker` pinned in `dev.sh`,
+    the object built by `aeiou`'s `build.rs` in every build; file capabilities or root, the
+    `sudo -n` helper phase 3b; one ring buffer, `--buffer` 256 MiB by default, to be revisited;
+    any loss loud (a suggested `--buffer`, `complete: false`, the readers warning and marking
+    what a gap left unresolved). ~~Not implemented yet: phase 3 itself, being built.~~ *Phase 3
+    built the same day* (§3.96 "Phase 3 as built"): `--source ebpf|auto`, `--buffer`, `--convert`,
+    `runner/capture-ebpf/`, `ebpf.rs`, `ebpf_text.rs`; the same exported ops and metrics as
+    strace on the equivalence test; and a strace-parser bug it found (calls shorter than 40
+    columns dropped) fixed. Not implemented yet: the `sudo -n` helper (phase 3b), uprobes,
+    faults, `io_uring` (phase 4).
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no

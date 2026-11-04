@@ -40,6 +40,9 @@ pub const W: usize = 1;
 pub const KINDS: [&str; 2] = ["read", "write"];
 pub const METRICS_FORMAT: u64 = 2;
 const UNFINISHED: &str = "<unfinished ...>";
+/// The note of the events an eBPF capture lost (its `--- aeiou: N event(s) lost` lines): the
+/// numbers come from an incomplete trace.
+pub const EVENTS_LOST: &str = "events_lost";
 const UNDER_CACHE: usize = 1 << 20;
 
 /// What the metrics and the exporter are told about a trace.
@@ -499,6 +502,25 @@ fn resumed(body: &str) -> Option<(&str, &str)> {
     }
     let rest = r[k..].strip_prefix(" resumed>")?;
     Some((&r[..k], rest.trim_start()))
+}
+
+/// Where a finished call's arguments end (its last `)`) and its return value begins: the last
+/// `)` followed by spaces and `= `. strace pads a short call's ` = ` out to column 40 (`-a`),
+/// so `rmdir("d")  = 0` has two spaces.
+fn ret_split(body: &str) -> Option<(usize, usize)> {
+    let b = body.as_bytes();
+    let mut end = body.len();
+    while let Some(e) = body[..end].rfind("= ") {
+        let mut j = e;
+        while j > 0 && b[j - 1] == b' ' {
+            j -= 1;
+        }
+        if j < e && j > 0 && b[j - 1] == b')' {
+            return Some((j - 1, e + 2));
+        }
+        end = e;
+    }
+    None
 }
 
 /// The return value at the start of `s`: `-?\d+`, `0x[0-9a-f]+`, or `?`; with its length.
@@ -1179,6 +1201,12 @@ impl Tracer {
             self.end_chain(tid);
             return;
         }
+        if let Some(r) = body.strip_prefix("--- aeiou: ") {
+            // the eBPF source's mark where its ring buffer lost records (capture.rs)
+            let n = r.split(' ').next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            self.note(EVENTS_LOST, n);
+            return;
+        }
         if body.starts_with("---") || body.is_empty() {
             return;
         }
@@ -1226,15 +1254,15 @@ impl Tracer {
         }
         let name = &body[..i];
         if !handled(name) {
-            if let Some(k) = body.rfind(") = ").filter(|&k| may_name_a_path(name, &body[i..k])) {
+            if let Some((k, r)) = ret_split(body).filter(|&(k, _)| may_name_a_path(name, &body[i..k])) {
                 let args = split_args(&body[i + 1..k]);
-                self.ret_addr = address(&body[k + 4..]);
+                self.ret_addr = address(&body[r..]);
                 self.not_counted(tid, name, &args);
             }
             return;
         }
-        let Some(k) = body.rfind(") = ") else { return };
-        let ret_s = &body[k + 4..];
+        let Some((k, r)) = ret_split(body) else { return };
+        let ret_s = &body[r..];
         let Some((tok, tl)) = ret_token(ret_s) else { return };
         if tok == "?" {
             return;
@@ -1982,6 +2010,9 @@ pub fn metrics_document(t: &Tracer, o: &Opts) -> Value {
     if t.chain_gap.is_none() && !m.m.fan_out.is_empty() {
         notes.insert("depth_not_computed".into(), json!("give --chain-gap-us: the think time that ends a chain of io_submit rounds"));
     }
+    if notes.contains_key(EVENTS_LOST) {
+        notes.insert("trace_incomplete".into(), json!("the eBPF capture lost events when its ring buffer was full: a call whose open fell in a gap has no path, and every number here is short; capture again with a larger --buffer, or --source strace"));
+    }
     if ["aio_requests_truncated", "aio_events_truncated", "iov_arrays_truncated"].iter().any(|k| notes.contains_key(*k)) {
         notes.insert("arrays_truncated".into(), json!("trace again with strace -v: without it strace prints only the first 32 elements of an array"));
     }
@@ -2020,6 +2051,19 @@ mod tests {
         assert_eq!(split_args(""), Vec::<String>::new());
         assert_eq!(split_args(r#""a\"b", 2"#), vec![r#""a\"b""#, "2"]);
         assert_eq!(split_args("AT_FDCWD</d>, x"), vec!["AT_FDCWD</d>", "x"]);
+        // strace pads a short call's return out to column 40
+        assert_eq!(ret_split(r#"rmdir("sub")  = 0"#), Some((11, 16)));
+        assert_eq!(ret_split(r#"close(3</a>) = 0 <0.1>"#), Some((11, 15)));
+        assert_eq!(ret_split(r#"write(1, ") = x", 5) = 5"#), Some((19, 23)));
+        assert_eq!(ret_split("exit_group(0) = ?"), Some((12, 16)));
+        assert_eq!(ret_split("x = 1"), None);
+        assert_eq!(ret_split("read(3, "), None);
+        let mut t = Tracer::new(&Opts { roots: vec!["/d".into()], ..Opts::default() }, true, None);
+        t.line("0 1.000000 --- aeiou: 77 event(s) lost on cpu 2 from 1.000000 to 2.000000: the ring buffer was full ---\n");
+        t.line("0 1.000000 --- SIGCHLD {si_signo=SIGCHLD} ---\n");
+        assert_eq!(t.notes.get(EVENTS_LOST), Some(&77));
+        let doc = metrics_document(&t, &Opts::default());
+        assert!(doc["notes"]["trace_incomplete"].as_str().unwrap().contains("--buffer"));
     }
 
     #[test]

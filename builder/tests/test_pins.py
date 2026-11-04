@@ -75,7 +75,7 @@ def test_no_workflow_takes_a_version_the_day_it_runs():
 def test_dev_sh_pins_every_download_by_version_and_hash():
     text = (ROOT / "dev.sh").read_text(encoding="utf-8")
     pins = re.findall(r"^pin (\S+) (\S+) (https://\S+) ([0-9a-f]{64})$", text, re.M)
-    assert sorted((t, a) for t, a, _, _ in pins) == [(t, a) for t in ["llvm-cov", "minio", "nextest"]
+    assert sorted((t, a) for t, a, _, _ in pins) == [(t, a) for t in ["bpf-linker", "llvm-cov", "minio", "nextest"]
                                                     for a in ["aarch64", "x86_64"]], pins
     # each architecture's file, of the one version
     names = {"x86_64": ("x86_64", "amd64"), "aarch64": ("aarch64", "arm64")}

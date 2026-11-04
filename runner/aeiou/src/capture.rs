@@ -62,6 +62,14 @@ pub const NOT_SEEN_STRACE: [&str; 4] = [
     "which reads the page cache served",
 ];
 
+/// What a capture under eBPF cannot see beyond what strace cannot, recorded in every record.
+pub const NOT_SEEN_EBPF: [&str; 4] = [
+    "the lengths of vectored AIO requests (IOCB_CMD_PREADV, IOCB_CMD_PWRITEV): their iovec arrays are not copied, the requests are left out of trace.txt and counted (conversion.vectored_aio_left_out)",
+    "execve's arguments and environment: not copied (the path is), so no secret in them reaches the trace",
+    "the descriptors a recvmsg receives (SCM_RIGHTS), and those pipe, pipe2, and socketpair return: calls on them show no path",
+    "the paths of descriptors as the kernel named them: they are resolved from the recorded opens, their directories' symbolic links as they are when the capture is converted",
+];
+
 /// The environment a record keeps, a fixed list, never the whole environment.
 pub const ENVIRONMENT: [&str; 7] = ["SLURM_JOB_ID", "SLURM_NODEID", "SLURM_PROCID", "RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR"];
 
@@ -354,6 +362,16 @@ pub fn strace_source(why: &str) -> Source {
     Source { name: "strace".into(), version, why: why.into(), broken }
 }
 
+/// The eBPF source: this binary's probes, loaded and passed by the verifier with this
+/// process's privilege (then unloaded), or why they cannot be.
+pub fn ebpf_source(why: &str) -> Source {
+    let (version, broken) = match crate::ebpf::usable() {
+        Ok(how) => (Some(format!("aeiou-trace {} ({how})", env!("CARGO_PKG_VERSION"))), None),
+        Err(e) => (None, Some(e)),
+    };
+    Source { name: "ebpf".into(), version, why: why.into(), broken }
+}
+
 /// Another capture running on this host: its pid and capture id (its `--capture-id`, else its
 /// `SLURM_JOB_ID` where its environment is readable).
 fn other_captures() -> Vec<(i32, Option<String>)> {
@@ -530,6 +548,8 @@ pub struct Opts {
     /// The capture's library preloaded (`--requests shim`), and its log's size.
     pub requests: bool,
     pub requests_buffer: u64,
+    /// The eBPF source's ring buffer (`--buffer`).
+    pub buffer: u64,
     pub capture_id: Option<String>,
     pub ranks: i64,
     pub rank: i64,
@@ -636,6 +656,105 @@ fn children_of(pid: i32) -> Vec<i32> {
         }
     }
     out
+}
+
+/// The command forked and held before its `exec` until `release` (the write end of a pipe the
+/// child reads) is written to: its pid, as this process sees it, and `release`. Everything the
+/// child needs is made before the fork, so it calls only `read`, `execve`, and `_exit`.
+fn spawn_held(command: &[String], env_extra: &[(String, String)]) -> Result<(i32, i32)> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let prog = find_program(&command[0])?;
+    let prog = CString::new(prog.as_os_str().as_bytes())?;
+    let argv: Vec<CString> = command.iter().map(|a| CString::new(a.as_bytes())).collect::<std::result::Result<_, _>>()?;
+    let mut envp: Vec<CString> = Vec::new();
+    for (k, v) in original_env() {
+        if env_extra.iter().any(|(e, _)| e.as_bytes() == k.as_bytes()) {
+            continue;
+        }
+        let mut kv = k.as_bytes().to_vec();
+        kv.push(b'=');
+        kv.extend_from_slice(v.as_bytes());
+        envp.push(CString::new(kv)?);
+    }
+    for (k, v) in env_extra {
+        envp.push(CString::new(format!("{k}={v}"))?);
+    }
+    let mut argv_p: Vec<*const libc::c_char> = argv.iter().map(|a| a.as_ptr()).collect();
+    argv_p.push(std::ptr::null());
+    let mut envp_p: Vec<*const libc::c_char> = envp.iter().map(|a| a.as_ptr()).collect();
+    envp_p.push(std::ptr::null());
+    let mut fds = [0i32; 2];
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        bail!("pipe2: {}", std::io::Error::last_os_error());
+    }
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        bail!("fork: {}", std::io::Error::last_os_error());
+    }
+    if pid == 0 {
+        unsafe {
+            let mut b = 0u8;
+            let r = loop {
+                let r = libc::read(fds[0], &mut b as *mut u8 as *mut libc::c_void, 1);
+                if r >= 0 || *libc::__errno_location() != libc::EINTR {
+                    break r;
+                }
+            };
+            if r != 1 {
+                libc::_exit(1);
+            }
+            libc::execve(prog.as_ptr(), argv_p.as_ptr(), envp_p.as_ptr());
+            libc::_exit(127);
+        }
+    }
+    unsafe { libc::close(fds[0]) };
+    Ok((pid, fds[1]))
+}
+
+/// The environment this process was started with. Under file capabilities the process is
+/// secure-exec, and glibc strips `LD_PRELOAD`, `LD_LIBRARY_PATH`, `TMPDIR`, and others from its
+/// own copy at start, which would make the command's another run: the strings the kernel
+/// placed are the user's, untouched.
+fn original_env() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    use std::os::unix::ffi::OsStrExt;
+    if unsafe { libc::getauxval(libc::AT_SECURE) } == 0 {
+        return std::env::vars_os().collect();
+    }
+    // a secure-exec process is not dumpable, so its /proc/self/environ is root's to read: the
+    // strings themselves, where the kernel put them (fields 50 and 51 of /proc/self/stat),
+    // which glibc's removals leave in place (it moves only the pointers to them)
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    let f: Vec<&str> = stat.rsplit_once(')').map_or("", |(_, r)| r).split_whitespace().collect();
+    let (Some(a), Some(b)) = (f.get(47).and_then(|x| x.parse::<usize>().ok()), f.get(48).and_then(|x| x.parse::<usize>().ok())) else { return std::env::vars_os().collect() };
+    if b <= a {
+        return std::env::vars_os().collect();
+    }
+    let raw = unsafe { std::slice::from_raw_parts(a as *const u8, b - a) };
+    raw.split(|&b| b == 0)
+        .filter(|kv| !kv.is_empty())
+        .filter_map(|kv| {
+            let i = kv.iter().position(|&b| b == b'=')?;
+            Some((std::ffi::OsStr::from_bytes(&kv[..i]).to_os_string(), std::ffi::OsStr::from_bytes(&kv[i + 1..]).to_os_string()))
+        })
+        .collect()
+}
+
+/// A command's program as `execvp` finds it: a name with a `/` as it is, else the first
+/// executable file of that name on the `PATH`.
+fn find_program(name: &str) -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    if name.contains('/') {
+        return Ok(PathBuf::from(name));
+    }
+    let path = original_env().into_iter().find(|(k, _)| k == "PATH").map(|(_, v)| v).unwrap_or_else(|| "/usr/bin:/bin".into());
+    for d in std::env::split_paths(&path) {
+        let p = d.join(name);
+        if std::fs::metadata(&p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) {
+            return Ok(p);
+        }
+    }
+    bail!("{name}: not found on the PATH")
 }
 
 /// How a process ended, from `waitpid`'s status.
@@ -765,7 +884,13 @@ pub fn run(o: Opts) -> Result<i32> {
     let trace = out.join("trace.txt");
     let inherited = inherited_descriptors();
     let cache_drop = if o.cold { Some(crate::cold::drop_caches()?) } else { None };
-    let mut line: Vec<String> = ["strace", "-f", "--seccomp-bpf", "-ttt", "-T", "-yy", "-v", "-e", TRACE_SET].iter().map(|s| s.to_string()).collect();
+    let ebpf = o.source.name == "ebpf";
+    let mut line: Vec<String> = if ebpf {
+        let n = crate::ebpf::calls().iter().flatten().count();
+        vec![format!("raw_tracepoint:sys_enter,sys_exit ({n} calls: {TRACE_SET}), raw_tracepoint:sched_process_fork,sched_process_exit; ring buffer {}", crate::ebpf::human(o.buffer))]
+    } else {
+        ["strace", "-f", "--seccomp-bpf", "-ttt", "-T", "-yy", "-v", "-e", TRACE_SET].iter().map(|s| s.to_string()).collect()
+    };
     // the library, unless its check failed and was waived
     let requests_check = checks.iter().find(|c| c.name == "requests").cloned();
     let library = match (o.requests, crate::requests::library()) {
@@ -773,19 +898,40 @@ pub fn run(o: Opts) -> Result<i32> {
         _ => None,
     };
     let log = out.join(crate::requests::LOG);
+    let mut env_extra: Vec<(String, String)> = Vec::new();
     if let Some(lib) = &library {
         crate::requests::create_log(&log, o.requests_buffer)?;
         // in the command's environment alone (strace's -E), the user's own preloads after it
-        let preload = match std::env::var("LD_PRELOAD") {
-            Ok(p) if !p.is_empty() => format!("{}:{p}", lib.display()),
+        let preload = match original_env().into_iter().find(|(k, _)| k == "LD_PRELOAD").map(|(_, v)| v.to_string_lossy().into_owned()) {
+            Some(p) if !p.is_empty() => format!("{}:{p}", lib.display()),
             _ => lib.display().to_string(),
         };
-        line.extend(["-E".to_string(), format!("LD_PRELOAD={preload}"), "-E".to_string(), format!("AEIOU_CAPTURE_LOG={}", log.display())]);
+        env_extra.push(("LD_PRELOAD".into(), preload));
+        env_extra.push(("AEIOU_CAPTURE_LOG".into(), log.display().to_string()));
+        if !ebpf {
+            for (k, v) in &env_extra {
+                line.extend(["-E".to_string(), format!("{k}={v}")]);
+            }
+        }
     }
-    line.push("-o".into());
-    line.push(trace.to_string_lossy().into_owned());
-    line.push("--".into());
-    line.extend(o.command.iter().cloned());
+    if !ebpf {
+        line.push("-o".into());
+        line.push(trace.to_string_lossy().into_owned());
+        line.push("--".into());
+        line.extend(o.command.iter().cloned());
+    }
+
+    // the probes attached and every capability given up before the command exists
+    let privilege = if ebpf { crate::ebpf::privilege() } else { None };
+    let mut probes = if ebpf {
+        let p = crate::ebpf::Probes::attach(crate::ebpf::load(o.buffer)?)?;
+        if unsafe { libc::geteuid() } != 0 {
+            crate::ebpf::drop_privilege()?;
+        }
+        Some(p)
+    } else {
+        None
+    };
 
     catch(libc::SIGINT);
     catch(libc::SIGTERM);
@@ -797,18 +943,58 @@ pub fn run(o: Opts) -> Result<i32> {
     let anchor_id = o.capture_id.clone().unwrap_or_else(|| format!("{host}-{}", std::process::id()));
     let mut anchors: Vec<Value> = o.endpoints.iter().map(|(u, _)| crate::requests::anchor(u, &format!("aeiou-anchor-{anchor_id}-start"))).collect();
     let start = json!({"realtime": unix_now(), "realtime_minus_monotonic": realtime_minus_monotonic()});
-    let mut child = std::process::Command::new(&line[0]).args(&line[1..]).spawn().with_context(|| "strace".to_string())?;
-    let pid = child.id() as i32;
-    let mut interrupted: Option<String> = None;
-    let status = loop {
-        let mut st = 0;
-        let r = unsafe { libc::waitpid(pid, &mut st, libc::WNOHANG) };
-        if r == pid {
-            break st;
+    let bin = out.join(crate::ebpf::FILE);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (pid, mut strace_child, reader) = match probes.as_mut() {
+        Some(p) => {
+            // every orphan of the command is this process's to wait for, as strace -f waits
+            unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
+            let (pid, release) = spawn_held(&o.command, &env_extra)?;
+            p.seed(pid as u32)?;
+            let header = json!({
+                "arch": crate::ebpf::ARCH,
+                "kernel": crate::run::host_facts()["kernel"],
+                "realtime_minus_monotonic": start["realtime_minus_monotonic"],
+                "seed": pid,
+                "cwd": std::env::current_dir().ok(),
+                "inherited": inherited,
+            });
+            let reader = p.read_into(&bin, &header, stop.clone())?;
+            unsafe {
+                libc::write(release, b"x".as_ptr() as *const libc::c_void, 1);
+                libc::close(release);
+            }
+            (pid, None, Some(reader))
         }
-        if r < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-            let _ = child.wait();
-            bail!("waitpid: {}", std::io::Error::last_os_error());
+        None => {
+            let child = std::process::Command::new(&line[0]).args(&line[1..]).spawn().with_context(|| "strace".to_string())?;
+            (child.id() as i32, Some(child), None)
+        }
+    };
+    let mut interrupted: Option<String> = None;
+    let mut status = None;
+    loop {
+        let mut st = 0;
+        // under eBPF every descendant, as strace -f waits for every tracee; the command's own
+        // status is the one kept
+        let r = unsafe { libc::waitpid(if ebpf { -1 } else { pid }, &mut st, libc::WNOHANG) };
+        if r == pid {
+            status = Some(st);
+            if !ebpf {
+                break;
+            }
+        }
+        if r < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.raw_os_error() == Some(libc::ECHILD) && status.is_some() {
+                break;
+            }
+            if e.raw_os_error() != Some(libc::EINTR) {
+                if let Some(c) = strace_child.as_mut() {
+                    let _ = c.wait();
+                }
+                bail!("waitpid: {e}");
+            }
         }
         let sig = SIGNO.swap(0, Ordering::SeqCst);
         if sig != 0 {
@@ -816,7 +1002,7 @@ pub fn run(o: Opts) -> Result<i32> {
             // a terminal's signal reached the command's process group already; one sent to
             // this process alone (kill, a launcher, a scheduler's time limit) is passed on
             if !FROM_KERNEL.load(Ordering::SeqCst) {
-                let mut kids = children_of(pid);
+                let mut kids = if ebpf { vec![pid] } else { children_of(pid) };
                 for _ in 0..100 {
                     if !kids.is_empty() {
                         break;
@@ -829,7 +1015,26 @@ pub fn run(o: Opts) -> Result<i32> {
                 }
             }
         }
-        std::thread::sleep(Duration::from_millis(10));
+        if r <= 0 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let status = status.expect("the command's status");
+    let ebpf_rec = match (probes, reader) {
+        (Some(p), Some(reader)) => {
+            stop.store(true, Ordering::SeqCst);
+            let reading = reader.join().map_err(|_| anyhow!("the reader thread panicked"))??;
+            let losses = p.losses()?;
+            drop(p);
+            let tail = crate::ebpf_text::trailing_gaps(&losses);
+            if !tail.is_empty() {
+                std::fs::OpenOptions::new().append(true).open(&bin)?.write_all(&tail)?;
+            }
+            let stats = crate::ebpf_text::convert(&bin, &trace)?;
+            let rec = crate::ebpf::losses_record(&losses, &reading, o.buffer, &stats.windows);
+            Some((rec, reading, stats))
+        }
+        _ => None,
     };
     let end = json!({"realtime": unix_now(), "realtime_minus_monotonic": realtime_minus_monotonic()});
     let exit = exit_of(status);
@@ -892,7 +1097,7 @@ pub fn run(o: Opts) -> Result<i32> {
         "aeiou_capture": 1,
         "tool": {"name": "aeiou-trace", "version": env!("CARGO_PKG_VERSION")},
         "host": {"name": host, "kernel": facts["kernel"], "distribution": distribution(), "cpus": facts["cpus"], "cpus_online": facts["cpus_online"], "memory": facts["memory"], "cgroup_memory_max": facts["cgroup_memory_max"]},
-        "source": {"name": o.source.name, "version": o.source.version, "why": o.source.why, "line": line},
+        "source": {"name": o.source.name, "version": o.source.version, "why": o.source.why, "line": line, "privilege": privilege},
         "command": {"argv": o.command, "cwd": std::env::current_dir().ok(), "uid": uid, "gid": unsafe { libc::getgid() }, "as_root": unsafe { libc::geteuid() } == 0},
         "environment": environment,
         "inherited_descriptors": inherited,
@@ -910,9 +1115,15 @@ pub fn run(o: Opts) -> Result<i32> {
         "endpoints": o.endpoints.iter().map(|(u, s)| json!({"url": u, "scheme": s})).collect::<Vec<_>>(),
         "cache": if cache_drop.is_some() { "dropped" } else { "not dropped" },
         "cache_drop": cache_drop,
-        "losses": {"events": 0, "note": "strace loses no call: it stops the traced thread instead, and the application is slower"},
-        "paths_not_copied": 0,
-        "not_seen": NOT_SEEN_STRACE.iter().map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>(),
+        "losses": match &ebpf_rec {
+            Some((l, _, _)) => l.clone(),
+            None => json!({"events": 0, "note": "strace loses no call: it stops the traced thread instead, and the application is slower"}),
+        },
+        "complete": ebpf_rec.as_ref().is_none_or(|(l, _, _)| l["events"] == 0),
+        "paths_not_copied": ebpf_rec.as_ref().map_or(0, |(_, _, s)| s.paths_not_copied),
+        "reader": ebpf_rec.as_ref().map(|(_, r, _)| json!({"records": r.records, "bytes": r.bytes, "seconds": r.seconds, "peak_records_per_s": r.peak_records_per_s, "peak_bytes_per_s": r.peak_bytes_per_s, "file": crate::ebpf::FILE})),
+        "conversion": ebpf_rec.as_ref().map(|(_, _, s)| s.json()),
+        "not_seen": NOT_SEEN_STRACE.iter().chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() }).map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>(),
         "requests": requests,
         "anchors": anchors,
         "mountstats": "not taken: a traced run's wire counts are not the application's (strace -yy adds a GETATTR to each READ); take them from an untraced run",
@@ -926,6 +1137,11 @@ pub fn run(o: Opts) -> Result<i32> {
     for c in &changes {
         say(&format!("changed during the capture: {}", c.as_str().unwrap_or("")));
     }
+    if let Some((l, _, _)) = &ebpf_rec {
+        if l["events"].as_u64().unwrap_or(0) > 0 {
+            say(&crate::ebpf::loss_box(l));
+        }
+    }
     say(&format!("written: {}", out.display()));
 
     if let Some(j) = &joined {
@@ -934,7 +1150,8 @@ pub fn run(o: Opts) -> Result<i32> {
             "host": host,
             "directory": out,
             "source": o.source.name,
-            "losses": 0,
+            "losses": rec["losses"]["events"],
+            "complete": rec["complete"],
             "clock_offset_s": offset.as_ref().map(|v| v["offset_s"].clone()),
             "clock_bound_s": offset.as_ref().map(|v| v["bound_s"].clone()),
             "exit": rec["exit"],
@@ -958,6 +1175,26 @@ pub fn run(o: Opts) -> Result<i32> {
         return Ok(128 + sig);
     }
     Ok(libc::WEXITSTATUS(status))
+}
+
+/// `--convert DIR`: the capture's `trace.txt` written again from its `syscalls.bin`, and its
+/// record's `trace` and `conversion` updated, with when and by which version.
+pub fn convert_again(dir: &Path) -> Result<()> {
+    let bin = dir.join(crate::ebpf::FILE);
+    if !bin.is_file() {
+        bail!("{}: no {} (a capture under --source ebpf keeps one; one under strace has nothing to convert)", dir.display(), crate::ebpf::FILE);
+    }
+    let rec_path = dir.join("capture.json");
+    let mut rec: Value = serde_json::from_str(&std::fs::read_to_string(&rec_path).with_context(|| rec_path.display().to_string())?).with_context(|| rec_path.display().to_string())?;
+    let trace = dir.join("trace.txt");
+    let stats = crate::ebpf_text::convert(&bin, &trace)?;
+    let (bytes, sha) = sha256_file(&trace)?;
+    rec["trace"] = json!({"file": "trace.txt", "bytes": bytes, "sha256": sha});
+    rec["conversion"] = stats.json();
+    rec["converted_again"] = json!({"by": format!("aeiou-trace {}", env!("CARGO_PKG_VERSION")), "at": unix_now()});
+    write_json(&rec_path, &rec)?;
+    say(&format!("written: {} ({} calls)", trace.display(), stats.calls));
+    Ok(())
 }
 
 /// The end on several nodes: this rank's summary to rank 0, which gathers every rank's,
@@ -998,6 +1235,19 @@ fn finish(j: &Joined, o: &Opts, summary: Value, dir: Option<&Path>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_command_is_found_as_execvp_finds_it_in_the_users_environment() {
+        assert_eq!(find_program("/bin/sh").unwrap(), PathBuf::from("/bin/sh"));
+        assert_eq!(find_program("./x").unwrap(), PathBuf::from("./x"));
+        let sh = find_program("sh").unwrap();
+        assert!(sh.is_absolute() && sh.ends_with("sh"), "{}", sh.display());
+        assert!(find_program("no-such-program-aeiou").unwrap_err().to_string().contains("not found on the PATH"));
+        // not secure-exec here: the process's own environment
+        let env = original_env();
+        assert!(env.iter().any(|(k, _)| k == "PATH"));
+        assert_eq!(env.len(), std::env::vars_os().count());
+    }
 
     const INFO: &str = "\
 22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw

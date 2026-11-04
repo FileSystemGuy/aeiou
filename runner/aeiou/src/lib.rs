@@ -24,6 +24,8 @@ pub mod endpoint;
 pub mod formats;
 pub mod digest;
 pub mod dryrun;
+pub mod ebpf;
+pub mod ebpf_text;
 pub mod eval;
 pub mod interview;
 pub mod export;

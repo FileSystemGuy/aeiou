@@ -459,6 +459,11 @@ capture's library (`libaeiou_capture.so`, in the tarball's `lib/`), which record
 the application's HTTP requests and responses seen through a shared libssl or libc's socket
 calls, credentials never kept, into `requests.jsonl`, and sends each endpoint an anchor
 `HEAD` at the start and the end; `metrics`, `export`, and `digest` take the capture directory.
+Since phase 3 (the same day) `--source ebpf`, and `auto` where it can load, traces the same
+calls with probes the binary carries (aya, on the raw tracepoints, the BPF object built from
+`runner/capture-ebpf/` with a pinned nightly), at a fraction of strace's cost a call, the
+records converted to strace's own text so every reader is unchanged; it needs root or the
+file capabilities `cap_bpf,cap_perfmon` once per node, and any lost event is loud.
 
 `aeiou cases` (2026-10-23, item 40) lists the use cases a binary can run by `--case NAME`,
 filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows
@@ -479,7 +484,8 @@ that is not the lock's. Submitters run the release.
 Not built, in rough order of interest:
 
 - The capture's other sources (brief item 54): ~~the HTTP-head shim for object requests (phase
-  2),~~ (built 2026-11-03) eBPF system calls that do not slow the application (phase 3), and
+  2),~~ (built 2026-11-03) ~~eBPF system calls that do not slow the application (phase 3),~~
+  (built 2026-11-03) the `sudo -n` helper for hosts without file capabilities (phase 3b), and
   uprobes, faults on mappings, and `io_uring` (phase 4).
 
 - ~~The abstract rendered as prose (`PROJECT_BRIEF.md` §6 item 27), from the AST and the case's

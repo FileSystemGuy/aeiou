@@ -1,0 +1,31 @@
+[package]
+name = "aeiou-capture-ebpf"
+description = "The capture's BPF programs (aeiou-trace capture --source ebpf): system calls of the traced process tree on the raw tracepoints, copied into a ring buffer as variable-length records; built for bpfel-unknown-none by ../aeiou/build.rs and embedded in aeiou-trace"
+version = "0.3.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/FileSystemGuy/aeiou"
+publish = false
+
+# Not a member of ../Cargo.toml's workspace: built only for the BPF target, by ../aeiou/build.rs,
+# with the nightly rust-toolchain.toml names (DESIGN_REVIEW.md §3.96 "Phase 3 decided").
+[workspace]
+
+[dependencies]
+aya-ebpf = "=0.2.1"
+
+[[bin]]
+name = "aeiou-capture"
+path = "src/main.rs"
+
+[profile.release]
+debug = 2
+panic = "abort"
+lto = true
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bpf_target_arch, values("x86_64", "aarch64"))'] }

@@ -52,7 +52,7 @@ def test_help_names_every_command_and_job(tmp_path):
     r = dev("--help", tmp_path=tmp_path)
     assert r.returncode == 0, r.stderr
     for word in ["setup", "check", "cov", "fetch", "abstracts", "runner", "object", "integration", "all",
-                 "minio", "nextest", "llvm-cov", "AEIOU_DEV_CACHE", USAGE]:
+                 "minio", "nextest", "llvm-cov", "bpf-linker", "zstd", "AEIOU_DEV_CACHE", USAGE]:
         assert word in r.stdout, word
     assert dev("-h", tmp_path=tmp_path).stdout == r.stdout
 
@@ -72,10 +72,10 @@ def test_a_wrong_command_job_or_tool_is_a_usage_error(tmp_path):
                                                  "  [possible values: abstracts, runner, object, integration, all]"))
     r = dev("fetch", tmp_path=tmp_path)
     assert (r.returncode, r.stderr) == (2, frame("the following required arguments were not provided:\n"
-                                                 "  <TOOL>  one of minio, nextest, llvm-cov"))
+                                                 "  <TOOL>  one of minio, nextest, llvm-cov, bpf-linker"))
     r = dev("fetch", "pandoc", tmp_path=tmp_path)
     assert (r.returncode, r.stderr) == (2, frame("invalid value 'pandoc' for '<TOOL>'\n"
-                                                 "  [possible values: minio, nextest, llvm-cov]"))
+                                                 "  [possible values: minio, nextest, llvm-cov, bpf-linker]"))
     r = dev("setup", "extra", tmp_path=tmp_path)
     assert (r.returncode, r.stderr) == (2, frame("unexpected argument 'extra' found"))
     r = dev("--foo", tmp_path=tmp_path)
@@ -92,6 +92,8 @@ def test_without_uv_or_cargo_nothing_runs_and_both_installers_are_named(tmp_path
         assert r.stdout == ""
         assert ("https://rustup.rs" in r.stderr) == bool(rust), args
         assert ("https://docs.astral.sh/uv/getting-started/installation/" in r.stderr) == bool(python), args
+        # wherever the runner is built, zstd unpacks the pinned bpf-linker (the capture's BPF object)
+        assert ("zstd    your distribution's package (it unpacks the pinned bpf-linker)" in r.stderr) == bool(rust), args
     assert not (tmp_path / "cache").exists()
 
 

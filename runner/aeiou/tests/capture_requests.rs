@@ -129,14 +129,17 @@ fn object_requests_over_http_are_recorded_with_their_responses_and_never_a_secre
     let (head, reqs) = requests(&out);
     assert_eq!((head["aeiou_requests"].as_u64(), head["requests"].as_u64()), (Some(1), Some(2)));
     let port = m.url.rsplit(':').next().unwrap();
-    let get = &reqs[0];
+    // by method, not position: the requests are in the order of their wall-clock starts, and a
+    // host whose clock is stepped (WSL2 follows its host's) can put the second curl's first
+    let get = reqs.iter().find(|r| r["method"] == "GET").unwrap_or_else(|| panic!("no GET: {reqs:?}"));
+    let headr = reqs.iter().find(|r| r["method"] == "HEAD").unwrap_or_else(|| panic!("no HEAD: {reqs:?}"));
     assert_eq!((get["method"].as_str(), get["target"].as_str(), get["via"].as_str(), get["status"].as_u64()), (Some("GET"), Some("/bench/obj"), Some("socket"), Some(206)), "{get}");
     assert_eq!(get["request"]["range"], "bytes=0-99", "{get}");
     assert_eq!(get["response"]["content-range"], "bytes 0-99/4096", "{get}");
     assert_eq!(get["peer"], format!("127.0.0.1:{port}"), "{get}");
     assert!(get["end"].as_f64().unwrap() >= get["start"].as_f64().unwrap());
-    assert_eq!((reqs[1]["method"].as_str(), reqs[1]["status"].as_u64()), (Some("HEAD"), Some(200)), "{}", reqs[1]);
-    assert!(reqs[1]["pid"] != get["pid"], "two curls, two processes");
+    assert_eq!(headr["status"].as_u64(), Some(200), "{headr}");
+    assert!(headr["pid"] != get["pid"], "two curls, two processes");
 
     // the request's secrets are in none of the capture's own files
     for f in ["requests.jsonl", "requests.bin", "capture.json"] {
@@ -158,7 +161,7 @@ fn object_requests_over_http_are_recorded_with_their_responses_and_never_a_secre
         assert_eq!(a["status"], 403, "{a}");
         assert!(a["received"].as_f64().unwrap() >= a["sent"].as_f64().unwrap());
     }
-    assert!(anchors[0]["received"].as_f64().unwrap() <= get["start"].as_f64().unwrap() && anchors[1]["sent"].as_f64().unwrap() >= reqs[1]["end"].as_f64().unwrap());
+    assert!(anchors[0]["received"].as_f64().unwrap() <= get["start"].as_f64().unwrap() && anchors[1]["sent"].as_f64().unwrap() >= headr["end"].as_f64().unwrap());
 
     // the readers take the directory: its requests for a bucket's root, its trace for a directory's
     let metrics = |root: &str| Command::new(bin()).args(["metrics", s(&out), "--root", root]).output().unwrap();

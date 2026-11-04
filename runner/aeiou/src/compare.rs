@@ -861,6 +861,13 @@ pub fn run(o: &Opts, out: &mut String) -> Result<i32> {
         text.push_str(&structure_text(s));
     }
     text.push_str(unstructured.unwrap_or(""));
+    // an incomplete eBPF capture's numbers are short: said before any of them
+    for (side, n) in [("A", nums[0]), ("B", nums[1])] {
+        if let Some(lost) = n.get("notes").and_then(|x| x.get(crate::strace::EVENTS_LOST)).and_then(Value::as_u64) {
+            text += &format!("WARNING: {side} is an incomplete trace: its capture lost {lost} event(s), so its numbers are short\n");
+            doc["incomplete"][side.to_lowercase()] = json!(lost);
+        }
+    }
     let differences = structure.as_ref().map_or(0, Structure::differences);
     if !o.json {
         out.push_str(&text);

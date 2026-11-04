@@ -1,0 +1,8 @@
+# The Rust that builds the capture's BPF object (DESIGN_REVIEW.md §3.96 "Phase 3"): the BPF target
+# has no prebuilt core, so it is built with -Z build-std, which only a nightly allows. A dated
+# nightly, pinned like the stable one in ../../rust-toolchain.toml; its LLVM (23) is the pinned
+# bpf-linker's (dev.sh). A newer one is a deliberate change of this line.
+[toolchain]
+channel = "nightly-2026-10-15"
+profile = "minimal"
+components = ["rust-src"]

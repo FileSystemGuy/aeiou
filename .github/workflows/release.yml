@@ -63,6 +63,13 @@ jobs:
           echo "VER=$ver" >> "$GITHUB_ENV"
           echo "DIST=aeiou-$ver-${{ matrix.arch }}-linux" >> "$GITHUB_ENV"
 
+      - name: The capture's BPF toolchain
+        # aeiou-trace embeds the capture's BPF object (runner/capture-ebpf/, DESIGN_REVIEW.md §3.96 "Phase 3"), which
+        # aeiou's build.rs builds with the nightly its rust-toolchain.toml names and the bpf-linker dev.sh pins
+        run: |
+          rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"/\1/p' runner/capture-ebpf/rust-toolchain.toml)" --profile minimal --component rust-src
+          dirname "$(./dev.sh fetch bpf-linker)" >> "$GITHUB_PATH"
+
       - name: Build the runner
         working-directory: runner
         # the default features: the container writers (DESIGN_REVIEW.md §3.70) and the object engine (§3.65,

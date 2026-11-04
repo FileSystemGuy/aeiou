@@ -312,3 +312,22 @@ fn what_frees_or_moves_space_is_part_of_the_structure() {
     let (_, doc) = json_of(&r, &r, &[]);
     assert!(doc["structure"]["pairs"][0]["aspects"].as_array().unwrap().iter().all(|x| x["name"] != "space"), "{doc}");
 }
+
+/// A trace an eBPF capture lost events of (its `--- aeiou: ... lost` line) is said to be
+/// incomplete before its numbers, in the text and the JSON.
+#[test]
+fn an_incomplete_trace_is_said_to_be_one() {
+    let d = crate::common::tmpdir("compare-tool", "incomplete");
+    let p = names("s", 8);
+    let a = digest(&d, "a", &reads(100, &p, false), &[]);
+    let lossy = d.join("b.strace");
+    std::fs::write(&lossy, format!("0 1700000000.000500 --- aeiou: 12 event(s) lost on cpu 1 from 1700000000.000500 to 1700000000.000600: the ring buffer was full ---\n{}", strace(&reads(100, &p, false)))).unwrap();
+    let b = d.join("b.digest.json");
+    let o = tool(&["digest", s(&lossy), "--root", "/d", "--no-questions", "-o", s(&b)]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    let (_, out, _) = compare(&a, s(&b), &[]);
+    assert!(out.contains("WARNING: B is an incomplete trace: its capture lost 12 event(s)"), "{out}");
+    assert!(!out.contains("WARNING: A"), "{out}");
+    let (_, doc) = json_of(&a, s(&b), &[]);
+    assert_eq!(doc["incomplete"]["b"], 12, "{doc}");
+}

@@ -9409,6 +9409,114 @@ built in phase 2: the join of requests to the calls under them and their replay 
 and 61); TLS inside the program, Go, HTTP/2 (phase 4's uprobes reach only shared libssl
 too). Brief item 54.
 
+**Phase 3 decided (2026-11-03, the user: the toolchain approved, "I like your recommended
+options", the 256 MiB buffer "but we might decide to increase the default once we get
+experience with tracing in the wild"; the loss policy: "approved, proceed").** This side's
+proposal, as approved:
+
+- *The toolchain.* The BPF target (`bpfel-unknown-none`) has no prebuilt `core`, so it is
+  built with `-Z build-std=core`, which only a nightly compiler allows. "Nightly" is Rust's
+  channel, not a schedule: a dated nightly is pinned (`nightly-2026-10-15`, rustc 1.101.0, LLVM
+  23.1.3) in `runner/capture-ebpf/rust-toolchain.toml`, as the stable one is in the root's, and
+  every CI run and every release builds with it; the rest of the runner stays on the stable
+  pin. `bpf-linker` 0.12.0 (2026-10-13, LLVM 23; 0.13.0 was a day old) is pinned in `dev.sh`
+  by URL and SHA-256 as its static musl build, unpacked with `zstd`, a prerequisite `dev.sh`
+  names; aya 0.14.0 and aya-ebpf 0.2.1 (June 2026; 0.15 and 0.16 were days old).
+- *The object built by `aeiou`'s `build.rs`, so every build needs the nightly* (one binary,
+  no surprises), never a committed object. *Changed in the proposing, the simpler of two:*
+  not `aya-build`, which builds the probe crate as a member of the workspace (so `--workspace`
+  and coverage would compile it for the host too), but a `build.rs` of ours that runs the
+  probe crate's own `cargo build` in its own directory with a clean environment (no
+  coverage flags reach it), the crate outside the workspace with its own lock.
+- *The `sudo -n` helper* (descriptors handed back over `SCM_RIGHTS`) *is phase 3b*: phase 3
+  attaches under file capabilities (`cap_bpf,cap_perfmon+ep` on a node-local copy, dropped for
+  good before the command is released) or as root (recorded, warned).
+- *The buffer:* one ring buffer, `--buffer SIZE`, 256 MiB by default (about two seconds of
+  the spike's 2.9 million events a second), the default to be revisited with captures in the
+  wild; a ring per group of CPUs only if one reader is measured falling behind.
+- *Losses: any loss is loud, no threshold.* The damage is not proportional to the count: one
+  lost `openat` leaves every later call on its descriptor without a path, one lost `clone` a
+  thread without a table. At the end the tool still exits with the command's status, and
+  prints a box on stderr: the events lost, on which CPUs, in which windows, and a `--buffer`
+  computed from the reader's measured peak (events a second times bytes a record times the
+  longest burst, rounded up to a power of two); `capture.json` says `complete: false`. The
+  converter writes a marker line at each window; `metrics`, `digest`, and `export` still
+  read the trace, warn, carry the loss in their output, and mark a descriptor whose open fell
+  in a gap unresolved, never guessed; `compare` flags a side with losses. The remedies named,
+  in order: a larger `--buffer`; `-o` on faster local storage when the reader's write rate was
+  the limit (it is measured); `--source strace`, lossless and slower. *Later, not now:* a
+  lossless eBPF mode, the probe stopping a thread (`bpf_send_signal`) near a full buffer and
+  the reader resuming it once drained, ptrace's cost paid only in a burst.
+- *Found in the proposing:* a raw tracepoint's `sched_process_fork` passes the child as a
+  `task_struct *`, and aya has no CO-RE, so the reader takes the three offsets it needs
+  (`pid`, `tgid`, `real_parent`) from the kernel's own BTF (`/sys/kernel/btf/vmlinux`) at load
+  and hands them to the probe in a map: the object stays one per architecture, and a kernel
+  without BTF fails the `source` check. ~~The `pt_regs` layouts per architecture come from
+  aya's bindings.~~ The `pt_regs` layouts per architecture are the kernel's fixed ones
+  (`arch/*/include/asm/ptrace.h`), constants in the probe: aya's aarch64 bindings leave the
+  struct opaque.
+
+**Phase 3 as built (2026-11-03, the same day, as decided above).** Built: `runner/capture-ebpf/`
+(the four programs: `sys_enter` and `sys_exit` on the raw tracepoints, one record at each
+call's entry with its six arguments and the strings and structures it names, one at its
+return; `sched_process_fork`, which adds the child to the traced tree before it can run and
+records it as the command's namespace numbers it; `sched_process_exit`, each thread's wait
+status), `runner/aeiou/src/ebpf.rs` (the object embedded, loaded with `--buffer`, the calls'
+table, the kernel's BTF, the capabilities, the reader), `runner/aeiou/src/ebpf_text.rs` (the
+records as strace's text), `--source ebpf|auto`, `--buffer`, `--convert DIR`, and the loss
+policy as decided, the readers' `events_lost` note and `compare`'s warning included. Tests:
+`aeiou/tests/capture_ebpf.rs`, whose first is the equivalence the phase was to be judged by: one
+program (files of every read and write family, `dup`, `lseek`, `chdir` and relative paths, a
+rename, a listing, four threads, a fork, a failed open) captured under strace and under eBPF
+gives the same exported ops, lane by lane, and the same metrics. Choices and findings in the
+building:
+
+- *The calls traced* are strace 6.8's own expansion of the capture's line for each architecture
+  (its `syscallent.h` tables, 209 calls on x86_64 and 175 on aarch64), committed as
+  `runner/aeiou/src/syscalls/{x86_64,aarch64}.tsv` with what each argument is, one letter each.
+  The probe copies only what a reader uses: paths and other strings, iovec and iocb arrays,
+  `clone3`'s and `openat2`'s structures at entry, `io_event`s at the return; never a buffer's
+  bytes and never `execve`'s arguments or environment (its path only), so no secret in them
+  reaches the trace (brief item 62). Not copied, and recorded in `not_seen`: the iovecs inside
+  vectored AIO requests (those requests are left out and counted), the descriptors `recvmsg`
+  receives and those `pipe` and `socketpair` return.
+- *The child's id.* A thread's first call can come before its parent's `clone` returns, so the
+  fork hook records the child, read as `task->thread_pid->numbers[level].nr` with every offset
+  from BTF. The level is found by the probe itself when it adds the command, the index where
+  the command's own `pid.numbers[k].nr` is its pid as the tool sees it: `/proc`'s `NSpid` counts
+  levels only from the namespace `/proc` was mounted in, and WSL2 runs the distribution one
+  below the kernel's own, where `NSpid` said 0 and the level is 1.
+- *The command* is forked by the tool and held on a pipe until the probes are attached, the
+  command seeded, and the reader running, then `execve`d (its path found on the `PATH` before
+  the fork); its records before that `execve` are left out, so the text begins where strace's
+  does. The tool is a child subreaper and waits for every process of the tree, as `strace -f`
+  does.
+- *Secure-exec.* A binary with file capabilities runs in glibc's secure mode, which strips
+  `LD_PRELOAD`, `LD_LIBRARY_PATH`, `TMPDIR`, and others from its own environment, and is not
+  dumpable, so its `/proc/self/environ` is root's: the command's environment is the strings the
+  kernel placed (`env_start` to `env_end` of `/proc/self/stat`), which glibc's removals leave in
+  place, so it is the user's.
+- *The text.* A line is held until the next record: the call's return makes it whole, another
+  thread's record cuts it (`<unfinished ...>`, then `<... resumed>`), as strace prints them;
+  a string the entry could not read is filled from the return's copy before the line is
+  written. Descriptors' paths come from the recorded opens, `dup`s, `fcntl` duplicates, forks
+  (`CLONE_FILES` shares the table, `CLONE_FS` the directory), `chdir`s, and `exec`s (which
+  close what closes on exec); `/proc/self` is the traced process's, and a directory's symbolic
+  links are resolved when the capture is converted. Open flags are printed in strace's order
+  (`src/xlat/open_mode_flags.in`), which the export keeps.
+- *A pre-existing bug the equivalence test found, in the strace parser:* strace pads a short
+  call's ` = ` out to column 40 (`rmdir("sub")  = 0`), and the parser looked for `") = "`, so
+  every call whose line was shorter than 40 columns was dropped from every strace-based
+  metric, export, and digest (an `rmdir` or `sync` of a short path; `-yy`'s paths make most
+  lines longer). Fixed (`strace.rs` `ret_split`).
+- *The tests' privilege.* Each eBPF test runs a copy of the built binary given its
+  capabilities by `sudo -n setcap`: password-less in CI, here granted by the user once per
+  build. `AEIOU_WITHOUT=ebpf` leaves them out of `dev.sh`, and says so.
+
+Not built in phase 3: the `sudo -n` helper (phase 3b); the request heads by uprobe, mapping
+faults, and `io_uring` (phase 4); aarch64 run only in the release's build (its tests run when
+an aarch64 CI job exists).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

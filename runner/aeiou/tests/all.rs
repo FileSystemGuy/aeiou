@@ -7,6 +7,7 @@ mod cov_c2;
 mod cov_c3;
 mod capture;
 mod capture_requests;
+mod capture_ebpf;
 mod cases;
 mod listing;
 mod cov_c1;

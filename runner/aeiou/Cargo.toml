@@ -27,6 +27,9 @@ libc = "0.2"
 io-uring = "0.7"
 # the capture's library and its log (aeiou-trace capture --requests shim, DESIGN_REVIEW.md §3.96)
 aeiou-interpose = { path = "../interpose" }
+# the capture's eBPF source (aeiou-trace capture --source ebpf, DESIGN_REVIEW.md §3.96 "Phase 3"): loads the
+# BPF object build.rs makes of ../capture-ebpf and reads its ring buffer; no async runtime
+aya = { version = "=0.14.0", default-features = false }
 toml = { version = "1.1.6", default-features = false, features = ["parse", "serde"] }
 # the object engine (DESIGN_REVIEW.md §3.65), the `object` feature, on by default since 2026-10-16 so every
 # build reads and writes S3; `--no-default-features` builds without it (no tokio) and without `formats`

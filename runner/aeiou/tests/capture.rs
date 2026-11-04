@@ -66,10 +66,19 @@ fn usage_errors_list_everything_missing_at_once() {
     assert_eq!(o.status.code(), Some(2));
     let err = text(&o).1;
     assert!(err.contains("--accept frob: no such check; one of ") && err.contains("output-outside-roots"), "{err}");
-    // eBPF is phase 3
-    let o = capture(&["--source", "ebpf", "--root", s(&d), "-o", s(&out), "--", "true"]);
+    // the eBPF source's buffer: not with strace, and a size the kernel's ring buffer can be
+    let o = capture(&["--source", "strace", "--buffer", "1GiB", "--root", s(&d), "-o", s(&out), "--", "true"]);
     assert_eq!(o.status.code(), Some(2));
-    assert!(text(&o).1.contains("--source ebpf: not implemented yet; it comes in phase 3 of brief item 54"), "{}", text(&o).1);
+    assert!(text(&o).1.contains("--buffer: the eBPF source's ring buffer; strace has none"), "{}", text(&o).1);
+    let o = capture(&["--buffer", "3MiB", "--root", s(&d), "-o", s(&out), "--", "true"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o).1.contains("--buffer 3MiB: a power of two from 64KiB to 2GiB"), "{}", text(&o).1);
+    // --convert takes no other option, and needs a capture made under eBPF
+    let o = capture(&["--convert", s(&d), "-o", s(&out)]);
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o).1);
+    let o = capture(&["--convert", s(&d)]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).1.contains("no syscalls.bin (a capture under --source ebpf keeps one"), "{}", text(&o).1);
     // several ranks: the source is named, the coordinator given
     let o = capture(&["--ranks", "2", "--rank", "0", "--root", s(&d), "-o", s(&out), "--", "true"]);
     assert_eq!(o.status.code(), Some(2));

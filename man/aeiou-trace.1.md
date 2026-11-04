@@ -279,8 +279,8 @@ strace text every other subcommand reads (`aeiou-trace metrics DIR/trace.txt --r
 and `capture.json`, the record of what was captured and how (FILES). The source is strace,
 `strace -f --seccomp-bpf -ttt -T -yy -v -e trace=...,%network,... -o DIR/trace.txt --
 COMMAND`, the line above with `%network` always (an owner cannot know whether descriptors
-pass over a socket). The eBPF source is not implemented yet: it comes in phase 3 of brief
-item 54 (`DESIGN_REVIEW.md` §3.96), and `--source auto` is strace until then. The command
+pass over a socket), or eBPF (below); `--source auto` takes eBPF where this binary can load
+its probes and strace elsewhere, and says why. The command
 is always started, never attached to (no `-p`), as the invoking user in their environment;
 the tool never prompts. It exits with the command's status, and when a signal ended the
 command, the tool ends by the same signal once the record is written, as strace does. A
@@ -289,9 +289,51 @@ time limit) is passed to the command, and the record says the capture was interr
 terminal's Ctrl-C already reaches the command's process group. Messages go to standard error,
 prefixed, so the command's standard output stays its own.
 
+**The eBPF source** (`--source ebpf`, `DESIGN_REVIEW.md` §3.96 "Phase 3"). Probes this binary
+carries on the raw tracepoints `sys_enter` and `sys_exit` record the same calls as the strace
+line (its classes and named calls, strace 6.8's set for this architecture, x86_64 or
+aarch64) for the command's process tree only, followed from its first instruction through
+every fork (`sched_process_fork`) to every thread's end (`sched_process_exit`): a record at
+each call's entry with its arguments and the paths it names, copied by the probe (a path whose
+page is not resident is read again at the return, and every one never read is counted), and
+one at its return. A probe cannot make the application wait, so it costs a fraction of
+strace's stop per call, and a ring buffer (`--buffer`, 256 MiB by default) holds the records
+until a reader thread copies them to `DIR/syscalls.bin`; when the buffer is full the records
+are lost, counted per CPU with their times. After the command, the records are converted to
+`trace.txt` in strace's own lines (`-f -ttt -T -yy`: unfinished and resumed calls, each
+descriptor's path from the opens, `dup`s, forks, `chdir`s, and `exec`s before it, `+++` lines
+at each thread's end), so every subcommand reads it unchanged; what the readers never use is
+printed as the address strace prints when it cannot read a buffer (a read's bytes, a `stat`'s
+structure, and `execve`'s arguments and environment, which are not copied: no secret in them
+reaches the trace). `--convert DIR` writes `trace.txt` again from `syscalls.bin`. It needs
+root, or the file capabilities `cap_bpf,cap_perfmon` (`cap_sys_admin` before Linux 5.8) granted
+once by an administrator on a node-local copy of `aeiou-trace` (`setcap
+cap_bpf,cap_perfmon+ep`; not over NFS, which carries no capabilities), and a kernel with BTF
+(`/sys/kernel/btf/vmlinux`), from which it takes the offsets it reads in kernel structures.
+The probes are attached and every capability given up for good before the command is
+started; the command runs as the invoking user, in the environment the tool was started with
+(a binary with capabilities is secure-exec, and the variables glibc strips from it,
+`LD_PRELOAD`, `LD_LIBRARY_PATH`, `TMPDIR`, are passed on as they were). The tool waits for
+every process of the tree, as `strace -f` does, and exits with the command's status.
+
+**Lost events are loud.** One lost `openat` leaves every later call on its descriptor without
+a path, so any loss, however small, ends the capture with a box on standard error: how many
+events, on which CPUs, in which windows, and what to do: a `--buffer` computed from the
+reader's busiest second, `-o` on faster local storage when the reader's write rate was the
+limit, or `--source strace`, which loses nothing and slows the application. `capture.json`
+says `complete: false`, and `trace.txt` has a line at each window, `--- aeiou: N event(s) lost
+on cpu C from T to T: the ring buffer was full ---`. The readers still read the trace and
+count those lines (`events_lost` in the notes of `metrics`, `export`, and `digest`, with
+`trace_incomplete` saying what it means), a descriptor whose open fell in a window is printed
+without a path, never guessed, and `compare` says first that a side is incomplete. Not
+implemented yet: the `sudo -n` helper for hosts where file capabilities cannot be granted
+(phase 3b of brief item 54), and the request heads by uprobe, mapping faults, and `io_uring`
+(phase 4).
+
 **Object requests.** With an `--endpoint`, the command also runs with the capture's library
 preloaded (`--requests shim`, the default then; `--requests none` leaves it out), put in the
-command's environment alone by strace's `-E`, before any `LD_PRELOAD` of the user's:
+command's environment alone (by strace's `-E`, or by the tool under eBPF), before any
+`LD_PRELOAD` of the user's:
 `libaeiou_capture.so`, which records the head of each HTTP request the application's object
 client sends and of each response it gets, where it can see them in plaintext, through a
 shared libssl (`SSL_write`, `SSL_read`, their `_ex` forms) or libc's calls on a socket a
@@ -326,8 +368,9 @@ none (`not_sent`, and why).
 **The checks** are the first step of every capture: when one fails, and is not waived by
 name with `--accept`, nothing starts and the exit status is 1. Each node checks itself:
 
-- `source`: the source can trace a child here (`strace -V`, then a trace of `true` with the
-  line's filter: `kernel.yama.ptrace_scope` 3 forbids it).
+- `source`: the source can trace a child here: for strace, `strace -V`, then a trace of `true`
+  with the line's filter (`kernel.yama.ptrace_scope` 3 forbids it); for eBPF, root or the file
+  capabilities, the kernel's BTF, and the probes loaded and passed by the kernel's verifier.
 - `root`: every `--root` is a directory with a mount in `/proc/self/mountinfo`; its file
   system, source (an NFS server and export), and options are recorded.
 - `clock`: the kernel says the clock is synchronized (`adjtimex`), with its error bounds.
@@ -649,9 +692,10 @@ command's working directory in the record (`command.cwd`) is the default `--cwd`
   Not with `--check`.
 - **--source** *SOURCE*
 
-  What traces the system calls: `strace` (any user), `ebpf` (not implemented yet; phase 3 of
-  brief item 54), or `auto`, eBPF where granted and strace elsewhere, strace until eBPF is
-  built; for one host only, so with `--ranks` above 1 the source is named. Default `auto`.
+  What traces the system calls: `strace` (any user, slower, loses nothing), `ebpf` (root or
+  the file capabilities `cap_bpf,cap_perfmon`; can lose events when its `--buffer` fills; The
+  eBPF source, above), or `auto`, eBPF where this binary can load its probes and strace
+  elsewhere; for one host only, so with `--ranks` above 1 the source is named. Default `auto`.
 - **--root** *DIR*
 
   A directory the application's data is under. Repeatable. Its mount is recorded and, with
@@ -670,6 +714,17 @@ command's working directory in the record (`command.cwd`) is the default `--cwd`
 
   The size of the library's log, sparse, in bytes or with `KiB`, `MiB`, or `GiB` (at least
   4160 bytes). A request and its response take about half a KiB. Default `1GiB`.
+- **--buffer** *SIZE*
+
+  The eBPF source's ring buffer, a power of two from `64KiB` to `2GiB`, in bytes or with
+  `KiB`, `MiB`, or `GiB`. A full buffer loses events, and the capture says so and suggests a
+  larger one. Default `256MiB`, about two seconds of one thread's cached calls; not with
+  `--source strace`.
+- **--convert** *DIR*
+
+  Write `DIR/trace.txt` again from `DIR/syscalls.bin` with this binary's converter, and update
+  `DIR/capture.json` (`trace`, `conversion`, `converted_again`); starts nothing and takes no
+  other option. A converter's fix reaches a capture without asking its owner for another.
 - **--cold**
 
   `sync`, then `3` into `/proc/sys/vm/drop_caches` before the command starts (root only; the
@@ -768,7 +823,7 @@ command's working directory in the record (`command.cwd`) is the default `--cwd`
 
   A capture's record, `aeiou_capture: 1`: `tool` and its version; `host` (name, kernel,
   distribution, CPUs, memory); `source` (`name`, `version`, `why` it was chosen, and the exact
-  `line` run); `command` (`argv`, `cwd`, `uid`, `gid`, `as_root`); `environment`, a fixed list
+  `line` run, and under eBPF the `privilege` it loaded with); `command` (`argv`, `cwd`, `uid`, `gid`, `as_root`); `environment`, a fixed list
   only (`SLURM_JOB_ID`, `SLURM_NODEID`, `SLURM_PROCID`, `RANK`, `LOCAL_RANK`, `WORLD_SIZE`,
   `MASTER_ADDR`); `inherited_descriptors`, the descriptors the command inherited, which no open
   in the trace made; `capture_id`, `rank`, `ranks`, `coordinator`, `captures_on_host`;
@@ -777,8 +832,13 @@ command's working directory in the record (`command.cwd`) is the default `--cwd`
   `signal` that ended the command), `interrupted` (the signal the tool passed on, or null);
   `roots` (each `--root`'s mount: `mount_point`, `fs_type`, `source`, `server` and `export` for
   NFS, `options`, `super_options`); `endpoints` (`url`, `scheme`); `cache` (`dropped` or `not
-  dropped`) and `cache_drop`; `losses` (0 under strace, which slows the application instead);
-  `paths_not_copied`; `not_seen`, what the source cannot see; `mountstats`, never from a traced
+  dropped`) and `cache_drop`; `losses` (`events`, 0 under strace, which slows the application instead; under eBPF
+  `per_cpu`, `windows`, each `cpu`, `events`, `first_ns` and `last_ns` on the monotonic clock,
+  `buffer`, and `suggested_buffer` when any was lost); `complete`, false when any event was
+  lost; `paths_not_copied`; under eBPF `reader` (`records`, `bytes`, `seconds`,
+  `peak_records_per_s`, `peak_bytes_per_s`, `file`) and `conversion` (`records`, `calls`,
+  `exits_without_entry`, `entries_without_exit`, `descriptors_unresolved`,
+  `vectored_aio_left_out`), and after `--convert`, `converted_again`; `not_seen`, what the source cannot see; `mountstats`, never from a traced
   run; `clock` (the start's state, the end's, and `offset_to_rank_0`, `offset_s` and
   `bound_s`); `checks` (every check's `name`, `node`, `ok`, `waived`, `detail`, of every node
   with several), `waivers`, `changes_at_end`; `trace` (`file`, `bytes`, `sha256`);
@@ -789,6 +849,12 @@ command's working directory in the record (`command.cwd`) is the default `--cwd`
   `not_reached` (each `pid` and `exe`; null when the log filled, `not_reached_unknown` saying
   why), `connected_without_heads`; and `visible_calls`); and `anchors` (each `url`, `name`,
   `target`, `sent`, `received`, `status`, or `error`, or `not_sent`).
+- `DIR/syscalls.bin`
+
+  The eBPF source's records, as the reader copied them: `AEIOUSC1`, a JSON line (`arch`,
+  `kernel`, `realtime_minus_monotonic`, `seed`, the command's pid, `cwd`, and `inherited`), then
+  the records (`runner/capture-ebpf/src/record.rs`). Kept so `--convert` can write `trace.txt`
+  again.
 - `DIR/requests.jsonl`
 
   The requests the capture's library saw, `aeiou_requests: 1` in the first line (with

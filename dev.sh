@@ -20,7 +20,7 @@ PY=$ROOT/builder/.venv/bin
 BIN=$ROOT/runner/target/release/aeiou
 USAGE="Usage: dev.sh <COMMAND> [ARGS]..."
 JOBS="abstracts runner object integration all"
-TOOLS="minio nextest llvm-cov"
+TOOLS="minio nextest llvm-cov bpf-linker"
 
 usage_error() {
     printf '%s\n\n%s\n\nFor more information, try '"'"'dev.sh --help'"'"'.\n' "dev.sh: $1" "$USAGE" >&2
@@ -46,6 +46,10 @@ pin nextest x86_64 https://github.com/nextest-rs/nextest/releases/download/cargo
 pin nextest aarch64 https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.149/cargo-nextest-0.9.149-aarch64-unknown-linux-gnu.tar.gz 6f82e375187cf3a1f3e336879a51940c315a5d0ce7253f7e517ad28295b74189
 pin llvm-cov x86_64 https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a
 pin llvm-cov aarch64 https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-aarch64-unknown-linux-gnu.tar.gz abf5f13c1520f8756d2192bfaaeadb0208f5b7eaa8cadc15bf847befa42b7360
+# the linker of the capture's BPF object (runner/capture-ebpf/, DESIGN_REVIEW.md §3.96 "Phase 3"):
+# static, its LLVM (23) the pinned nightly's; needs zstd to unpack
+pin bpf-linker x86_64 https://github.com/aya-rs/bpf-linker/releases/download/v0.12.0/bpf-linker-x86_64-unknown-linux-musl.tar.zst 6789717c8cb6a2a5d920f3b6bfac2bd7efc00f6228ecd149108a99699a75c679
+pin bpf-linker aarch64 https://github.com/aya-rs/bpf-linker/releases/download/v0.12.0/bpf-linker-aarch64-unknown-linux-musl.tar.zst 5e201e69dafac7af98f9788f1c68edd5ccc8fa0805093f899bf02bd2947b3935
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     cat <<EOT
@@ -64,8 +68,8 @@ Commands:
 Options:
   -h, --help  Print help
 
-Needs rustup (https://rustup.rs) and uv (https://docs.astral.sh/uv/getting-started/installation/), and strace for
-the integration job and cov; the versions are the checkout's. Downloads, x86_64 or aarch64, are kept in
+Needs rustup (https://rustup.rs) and uv (https://docs.astral.sh/uv/getting-started/installation/), zstd wherever
+the runner is built, and strace for the integration job and cov; the versions are the checkout's. Downloads, x86_64 or aarch64, are kept in
 \$AEIOU_DEV_CACHE (default \${XDG_CACHE_HOME:-~/.cache}/aeiou-dev), a directory per architecture, and checked again
 each time they are used. To run the benchmark, a release's tarball needs none of this (QUICKSTART.md).
 EOT
@@ -84,6 +88,8 @@ need() {
   uv      https://docs.astral.sh/uv/getting-started/installation/ (builder/pyproject.toml names its version)" ;;
         strace) missing="$missing
   strace  your distribution's package (the traces' tests run it)" ;;
+        zstd) missing="$missing
+  zstd    your distribution's package (it unpacks the pinned bpf-linker)" ;;
         esac
     done
     [ -z "$missing" ] || die "not on PATH, and needed:$missing"
@@ -102,6 +108,7 @@ fetch() {
     mkdir -p "$dir"
     case $url in
     *.tar.gz) file=$dir/$1.tar.gz ;;
+    *.tar.zst) file=$dir/$1.tar.zst ;;
     *) file=$dir/$1 ;;
     esac
     if ! { [ -f "$file" ] && printf '%s  %s\n' "$sha" "$file" | sha256sum -c --status 2>/dev/null; }; then
@@ -124,6 +131,10 @@ fetch() {
         exe=$(tar tzf "$file" | head -n 1)
         tar xzf "$file" -C "$dir" "$exe"
         echo "$dir/$exe" ;;
+    *.tar.zst)
+        exe=$(tar --zstd -tf "$file" | head -n 1)
+        tar --zstd -xf "$file" -C "$dir" "$exe"
+        echo "$dir/$exe" ;;
     *)
         chmod +x "$file"
         echo "$file" ;;
@@ -131,6 +142,18 @@ fetch() {
 }
 
 py_sync() { (cd "$ROOT/builder" && uv sync --locked --all-extras --group coverage); }
+# The BPF object aeiou-trace embeds is built by runner/aeiou/build.rs with the nightly
+# runner/capture-ebpf/rust-toolchain.toml names and the pinned bpf-linker on PATH: every job that
+# builds the runner calls this first.
+ebpf_tools() {
+    # the channel named, not read by rustup from the file, which rustup before 1.28 cannot do
+    nightly=$(sed -n 's/^channel = "\(.*\)"/\1/p' "$ROOT/runner/capture-ebpf/rust-toolchain.toml")
+    rustup toolchain install "$nightly" --profile minimal --component rust-src >/dev/null 2>&1 ||
+        die "rustup could not install $nightly, the nightly runner/capture-ebpf/rust-toolchain.toml names"
+    linker=$(fetch bpf-linker) || exit 1
+    PATH=$(dirname "$linker"):$PATH
+    export PATH
+}
 rust_build() { (cd "$ROOT/runner" && cargo build --release --locked --bin aeiou --bin aeiou-trace && cargo build --release --locked -p aeiou-capture-shim); }
 link_header() { ln -sf ../../../builder/.venv/bin/aeiou-header "$ROOT/runner/target/release/aeiou-header"; }
 
@@ -147,19 +170,46 @@ job_abstracts() {
         .venv/bin/aeiou-params check "$(find ../workloads -name "$a.ast.json")" "$f" || exit 1
     done)
 }
+# The eBPF tests (runner/aeiou/tests/capture_ebpf.rs) run a copy of aeiou-trace given its
+# capabilities by `sudo -n setcap`: password-less in CI, after `sudo -v` here. They fail without
+# it, never skip; AEIOU_WITHOUT=ebpf leaves them out, and says so.
+# `ebpf` is dev.sh's own word, taken out of AEIOU_WITHOUT here so pytest, which knows only its
+# capabilities, never sees it.
+EBPF_WITHOUT=
+case ",${AEIOU_WITHOUT:-}," in
+*,ebpf,*)
+    EBPF_WITHOUT=1
+    AEIOU_WITHOUT=$(echo ",$AEIOU_WITHOUT," | sed 's/,ebpf,/,/g; s/^,//; s/,$//')
+    if [ -n "$AEIOU_WITHOUT" ]; then export AEIOU_WITHOUT; else unset AEIOU_WITHOUT; fi ;;
+esac
+without_ebpf() {
+    if [ -n "$EBPF_WITHOUT" ]; then
+        echo "dev.sh: the eBPF tests left out (AEIOU_WITHOUT=ebpf)" >&2
+        return 0
+    fi
+    return 1
+}
 job_runner() {
+    ebpf_tools
     minio=$(fetch minio) || exit 1
     nextest=$(fetch nextest) || exit 1
-    # the whole suite, the object engine's tests against MinIO included
-    (cd "$ROOT/runner" && TEST_MINIO_BIN=$minio "$nextest" nextest run --release --locked)
+    # the whole suite, the object engine's tests against MinIO and the eBPF source's included
+    if without_ebpf; then
+        set -- -E 'not test(/^capture_ebpf::/)'
+    else
+        set --
+    fi
+    # AEIOU_WITHOUT is dev.sh's and pytest's: the runner reads every AEIOU_ variable as an option
+    (cd "$ROOT/runner" && env -u AEIOU_WITHOUT TEST_MINIO_BIN=$minio "$nextest" nextest run --release --locked "$@")
     # a build without the object engine refuses an object endpoint
     (cd "$ROOT/runner" && cargo test --release --locked --no-default-features --lib endpoint::)
 }
 job_object() {
+    ebpf_tools
     minio=$(fetch minio) || exit 1
     nextest=$(fetch nextest) || exit 1
     # the object engine without `formats`, so that build is compiled too
-    (cd "$ROOT/runner" && TEST_MINIO_BIN=$minio "$nextest" nextest run --release --locked --no-default-features --features object -E 'test(/object/) | test(/endpoint/)')
+    (cd "$ROOT/runner" && env -u AEIOU_WITHOUT TEST_MINIO_BIN=$minio "$nextest" nextest run --release --locked --no-default-features --features object -E 'test(/object/) | test(/endpoint/)')
     # the Python writer into a bucket, read back by the engine to the dry-run fingerprint
     py_sync
     rust_build
@@ -167,6 +217,7 @@ job_object() {
     (cd "$ROOT/builder" && AEIOU_REQUIRE=runner,object,formats,header,minio,py-formats,py-s3 TEST_MINIO_BIN=$minio AEIOU_RUNNER="$BIN" .venv/bin/pytest -q -rs tests/test_object.py)
 }
 job_integration() {
+    ebpf_tools
     minio=$(fetch minio) || exit 1
     rust_build
     py_sync
@@ -186,10 +237,16 @@ job_integration() {
 }
 
 cov() {
+    ebpf_tools
     minio=$(fetch minio) || exit 1
     llvm=$(fetch llvm-cov) || exit 1
-    (cd "$ROOT/runner" && TEST_MINIO_BIN=$minio "$llvm" llvm-cov --release --locked --workspace --all-targets --summary-only \
-        --no-default-ignore-filename-regex --ignore-filename-regex '/\.cargo/|/rustc/|/\.rustup/')
+    if without_ebpf; then
+        set -- -- --skip capture_ebpf::
+    else
+        set --
+    fi
+    (cd "$ROOT/runner" && env -u AEIOU_WITHOUT TEST_MINIO_BIN=$minio "$llvm" llvm-cov --release --locked --workspace --all-targets --summary-only \
+        --no-default-ignore-filename-regex --ignore-filename-regex '/\.cargo/|/rustc/|/\.rustup/' "$@")
     rust_build
     py_sync
     link_header
@@ -220,13 +277,14 @@ shift
 case $cmd in
 setup | cov)
     [ $# -eq 0 ] || usage_error "unexpected argument '$1' found"
-    need cargo uv
     if [ "$cmd" = setup ]; then
+        need cargo uv zstd
+        ebpf_tools
         rust_build
         py_sync
         link_header
     else
-        need strace
+        need cargo uv zstd strace
         cov
     fi ;;
 check)
@@ -244,9 +302,9 @@ check)
     for j in "$@"; do
         case $j in
         abstracts) want=uv ;;
-        runner) want=cargo ;;
-        object) want="cargo uv" ;;
-        integration | all) want="cargo uv strace" ;;
+        runner) want="cargo zstd" ;;
+        object) want="cargo uv zstd" ;;
+        integration | all) want="cargo uv strace zstd" ;;
         esac
         for t in $want; do
             case " $tools " in *" $t "*) ;; *) tools="$tools $t" ;; esac

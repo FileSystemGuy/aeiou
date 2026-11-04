@@ -483,8 +483,16 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         let t = std::thread::spawn(move || {
             let (mut c, _) = l.accept().unwrap();
+            // the whole head read first: a close with bytes unread resets the connection, and
+            // the client would see the reset instead of the answer
+            let mut got = Vec::new();
             let mut b = [0u8; 256];
-            let _ = c.read(&mut b);
+            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                match c.read(&mut b) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => got.extend_from_slice(&b[..n]),
+                }
+            }
             c.write_all(b"nope").unwrap();
         });
         let a = anchor(&format!("http://127.0.0.1:{port}/b"), "n");

@@ -96,6 +96,12 @@ aeiou/src/
                nodes over the coordinator (`DESIGN_REVIEW.md` §3.96)
   requests.rs  the capture's library: its log made and read into `requests.jsonl`, the processes
                it missed, the anchor `HEAD`s (§3.96 phase 2)
+  ebpf.rs      the capture's eBPF source (§3.96 phase 3): the embedded BPF object loaded and
+               attached, the calls traced (`syscalls/*.tsv`, strace 6.8's set and what each
+               argument is), the kernel's BTF read for its offsets, the capabilities given up,
+               the reader copying the ring buffer to `syscalls.bin`, the loss record
+  ebpf_text.rs the eBPF source's records as strace's text: time order, unfinished and resumed
+               calls, the descriptor tables, the loss marks
   bin/aeiou_trace.rs  the `aeiou-trace` binary (`DESIGN_REVIEW.md` §3.89)
   options.rs   the option layers (§14)
   usage.rs     the usage-error frame (§15)
@@ -117,10 +123,16 @@ aeiou/tests/object.rs   the object engine against a local MinIO (the default fea
 aeiou/tests/man.rs      man/aeiou.1.md against every subcommand's `--help`
 aeiou/tests/capture.rs  `aeiou-trace capture`: the record, the checks and waivers, a signal, two ranks
 aeiou/tests/capture_requests.rs  `--requests shim`: curl against MinIO and over TLS, no secret kept, a full log
+aeiou/tests/capture_ebpf.rs  `--source ebpf`: the same exported ops and metrics as strace, a full buffer,
+                        the environment kept under secure-exec, `--convert` (a copy given its
+                        capabilities by `sudo -n setcap`; AEIOU_WITHOUT=ebpf leaves them out)
 interpose/              `aeiou-interpose`: the preloaded libraries' machinery (the real symbol, the guard,
                         the mapped log, the capture's records)
 capture-shim/           `libaeiou_capture.so`, the capture's library (hooks over libc's socket calls and libssl);
                         tests/preload.rs: the system's Python through each hook
+capture-ebpf/           the capture's BPF programs (no_std, aya-ebpf), outside the workspace with its own lock
+                        and nightly (rust-toolchain.toml), built by aeiou's build.rs; src/record.rs, the
+                        records' layout both sides include
 aeiou-launch            the ssh loop: one rank per host (the rank flags after `capture` for a capture)
 ```
 

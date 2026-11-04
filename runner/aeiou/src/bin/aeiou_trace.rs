@@ -49,7 +49,7 @@ enum Cmd {
 
 #[derive(clap::Args)]
 struct CaptureArgs {
-    /// What traces the system calls: strace (any user), ebpf (not implemented yet: phase 3 of brief item 54), auto (eBPF where granted, else strace; one host only) [default: auto]
+    /// What traces the system calls: strace (any user, slower, loses nothing), ebpf (root or the file capabilities cap_bpf,cap_perfmon; can lose events when its --buffer fills), auto (eBPF where granted, else strace; one host only) [default: auto]
     #[arg(long, value_name = "SOURCE", value_parser = ["auto", "ebpf", "strace"])]
     source: Option<String>,
     /// A directory the application's data is under (repeatable): its mount is recorded and compared across nodes. At least one --root or --endpoint
@@ -67,12 +67,18 @@ struct CaptureArgs {
     /// The size of the library's log, sparse (KiB, MiB, GiB); a request and its response take about half a KiB [default: 1GiB]
     #[arg(long, value_name = "SIZE")]
     requests_buffer: Option<String>,
+    /// The eBPF source's ring buffer, a power of two from 4KiB to 2GiB: a full one loses events, and the capture says so and suggests a larger one [default: 256MiB]
+    #[arg(long, value_name = "SIZE")]
+    buffer: Option<String>,
     /// Start although CHECK failed (repeatable; one of the checks by name); printed and recorded
     #[arg(long, value_name = "CHECK")]
     accept: Vec<String>,
     /// Run the checks (with --ranks, on every node and across them) and start nothing; -o is checked and not made
     #[arg(long)]
     check: bool,
+    /// Write DIR/trace.txt again from DIR/syscalls.bin, the eBPF source's records, with this aeiou-trace's converter, and update DIR/capture.json; starts nothing, takes no other option
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["out", "check", "command", "root", "endpoint"])]
+    convert: Option<String>,
     /// The capture this node joins (the same on every node); default $SLURM_JOB_ID when set. Captures of one id may share a host
     #[arg(long, value_name = "ID")]
     capture_id: Option<String>,
@@ -715,6 +721,9 @@ fn url_scheme(u: &str) -> Option<String> {
 }
 
 fn capture_cmd(a: CaptureArgs) -> Result<()> {
+    if let Some(dir) = &a.convert {
+        return capture::convert_again(std::path::Path::new(dir));
+    }
     let ranks = a.ranks.unwrap_or(1);
     let mut m = Missing::new();
     let out = m.want(a.out, "-o <DIR>", "the capture directory, new or empty, on a node-local disk", None);
@@ -754,10 +763,18 @@ fn capture_cmd(a: CaptureArgs) -> Result<()> {
         None => aeiou::requests::DEFAULT_BUFFER,
     };
     let requests = a.requests.as_deref().map_or(!endpoints.is_empty(), |r| r == "shim");
+    let buffer = match &a.buffer {
+        Some(_) if a.source.as_deref() == Some("strace") => return Err(usage::err("--buffer: the eBPF source's ring buffer; strace has none (not with --source strace)")),
+        Some(b) => aeiou::ebpf::parse_buffer(b).map_err(usage::err)?,
+        None => aeiou::ebpf::DEFAULT_BUFFER,
+    };
     let source = match a.source.as_deref().unwrap_or("auto") {
-        "ebpf" => return Err(usage::err("--source ebpf: not implemented yet; it comes in phase 3 of brief item 54 (DESIGN_REVIEW.md §3.96); --source strace runs as any user")),
+        "ebpf" => capture::ebpf_source("--source ebpf"),
         "strace" => capture::strace_source("--source strace"),
-        _ => capture::strace_source("auto: the eBPF source is not built yet (phase 3 of brief item 54), and strace runs as any user"),
+        _ => match capture::ebpf_source("auto: eBPF can load here") {
+            s if s.broken.is_none() => s,
+            s => capture::strace_source(&format!("auto: {}", s.broken.unwrap_or_default())),
+        },
     };
     let out = capture::expand_out(&out.unwrap(), &aeiou::run::hostname(), std::process::id()).map_err(usage::err)?;
     let out = std::path::Path::new(&out);
@@ -771,6 +788,7 @@ fn capture_cmd(a: CaptureArgs) -> Result<()> {
         check_only: a.check,
         requests,
         requests_buffer,
+        buffer,
         capture_id: a.capture_id.or_else(|| std::env::var("SLURM_JOB_ID").ok().filter(|v| !v.is_empty())),
         ranks,
         rank,

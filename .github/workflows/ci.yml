@@ -19,8 +19,10 @@ on:
 # Every tool is a version the repository names (DESIGN_REVIEW.md §3.82): the image, Rust
 # (rust-toolchain.toml), uv (builder/pyproject.toml's required-version, by checksum), and Python
 # (builder/.python-version, always one uv downloads, never the image's), the packages from
-# uv.lock, and nextest and MinIO (dev.sh, by SHA-256). strace is the image's, so a new image is a
-# deliberate change here.
+# uv.lock, and nextest, MinIO, and bpf-linker (dev.sh, by SHA-256), and the nightly that builds
+# the capture's BPF object (runner/capture-ebpf/rust-toolchain.toml, installed by dev.sh). strace
+# is the image's, so a new image is a deliberate change here. The eBPF source's tests run a copy
+# of aeiou-trace given its capabilities by `sudo -n setcap`, which the image allows.
 jobs:
   abstracts:
     runs-on: ubuntu-24.04
