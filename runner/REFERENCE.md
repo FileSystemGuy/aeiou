@@ -2145,6 +2145,39 @@ first, `quiet_us` between a thread's runs on a file), with the note `faults_kern
 `export` keeps a mapping as one read of its range (`mmap_as_read`) and notes the faults it does
 not replay (`faults_not_replayed`; replaying them is brief item 65).
 
+libaio's completions (2026-11-04, `DESIGN_REVIEW.md` §3.98 "Phase 4 step 3"), written by the
+eBPF source when the kernel's BTF has `aio_prep_rw`, where each request is prepared, and
+`aio_complete` or, failing it, `aio_complete_rw` (`capture.json`'s `aio`, `completions_at`
+naming which; the header's records then end `aeiou_aio_issue aeiou_aio_complete`):
+
+```
+TID TIME aeiou_aio_issue(ctx=0xC, id=N, member=M) = 0
+TID TIME aeiou_aio_complete(ctx=0xC, id=N, data=0xD, in_submit=0|1) = RES
+```
+
+- After an `io_submit`'s line, one `aeiou_aio_issue` for each request the call took (its first
+  `ret`) that a completion will come for, stamped with the call's start: `ctx` the context,
+  as the line prints it; `member` the request's place in the line's array (a vectored request,
+  which the line leaves out, has none; nor does one past the 32 the probe copies); `id` a
+  number the converter gives the request while it is in flight, from the pool `io_uring`'s
+  requests take theirs from, paired with its completion by the kernel's request (never
+  printed). Under `aio_complete_rw` only reads and writes wait for one; a poll never does.
+- `aeiou_aio_complete` is printed under the submitting thread, whoever posted it, at the time
+  the kernel posted the result to the context's ring (`aio_complete`: the later of the
+  request's completion and the end of its submission; `aio_complete_rw`: its completion);
+  `data` the request's `aio_data`; `in_submit=1` for one posted before the `io_submit` that took
+  it returned (a buffered request completes inside the call), written after that call's issue
+  records, so its time can be earlier than the line before it; `RES` the result, an error as
+  strace prints one.
+
+With these records the readers count a read or a write at its completion with the bytes it
+moved, paired through its issue's `id` (not by `aio_data`, which applications reuse);
+`io_getevents` only collects. A completion inside its call is noted
+(`aio_completed_in_submit`), completions beyond the results calls collected
+(`aio_completed_never_reaped`: read from the ring in user space), and a request with no
+completion is taken as complete (`aio_results_assumed_complete`). The export's `submit` members
+carry their completions' results. A trace without them is read as strace's.
+
 ## 14. The option layers (2026-10-04)
 
 Every option of every subcommand is resolved through four layers, a higher one replacing a

@@ -36,6 +36,8 @@ enum Rec {
     Cqe { h: Head, ring: u64, req: u64, user_data: u64, res: i32, cflags: u32 },
     UringCall { h: Head, nr: u32, ret: i64, args: [u64; 6], blobs: Vec<(u8, u8, Vec<u8>)> },
     Fault { h: Head, address: u64, vm_start: u64, pgoff: u64, ino: u64, dev: u32, flags: u32, ret: u32, end: u64 },
+    AioIssue { h: Head, req: u64 },
+    AioDone { h: Head, req: u64, ctx: u64, data: u64, res: i64 },
 }
 
 fn u16_at(b: &[u8], o: usize) -> u16 {
@@ -74,6 +76,7 @@ fn decode(b: &[u8]) -> Result<Rec> {
         URING_CQE => std::mem::size_of::<Cqe>(),
         URING_CALL => std::mem::size_of::<UringCall>(),
         FAULT => std::mem::size_of::<Fault>(),
+        AIO_DONE | AIO_ISSUE => std::mem::size_of::<AioRec>(),
         _ => 0,
     };
     if b.len() < fixed {
@@ -110,6 +113,8 @@ fn decode(b: &[u8]) -> Result<Rec> {
             Rec::UringCall { h, nr: u32_at(b, 24), ret: u64_at(b, 32) as i64, args, blobs: blobs_of(b, std::mem::size_of::<UringCall>())? }
         }
         FAULT => Rec::Fault { h, address: u64_at(b, 24), vm_start: u64_at(b, 32), pgoff: u64_at(b, 40), ino: u64_at(b, 48), dev: u32_at(b, 56), flags: u32_at(b, 60), ret: u32_at(b, 64), end: u64_at(b, 72) },
+        AIO_ISSUE => Rec::AioIssue { h, req: u64_at(b, 24) },
+        AIO_DONE => Rec::AioDone { h, req: u64_at(b, 24), ctx: u64_at(b, 32), data: u64_at(b, 40), res: u64_at(b, 48) as i64 },
         URING_CQE => Rec::Cqe { h, ring: u64_at(b, 24), req: u64_at(b, 32), user_data: u64_at(b, 40), res: u32_at(b, 48) as i32, cflags: u32_at(b, 52) },
         k => bail!("a record of kind {k}"),
     })
@@ -122,7 +127,7 @@ pub const DEFAULT_FAULT_GAP_NS: u64 = 1_000_000;
 impl Rec {
     fn head(&self) -> &Head {
         match self {
-            Rec::Enter { h, .. } | Rec::Exit { h, .. } | Rec::Gap { h, .. } | Rec::Gone { h, .. } | Rec::Fork { h, .. } | Rec::Sqe { h, .. } | Rec::Cqe { h, .. } | Rec::UringCall { h, .. } | Rec::Fault { h, .. } => h,
+            Rec::Enter { h, .. } | Rec::Exit { h, .. } | Rec::Gap { h, .. } | Rec::Gone { h, .. } | Rec::Fork { h, .. } | Rec::Sqe { h, .. } | Rec::Cqe { h, .. } | Rec::UringCall { h, .. } | Rec::Fault { h, .. } | Rec::AioIssue { h, .. } | Rec::AioDone { h, .. } => h,
         }
     }
 }
@@ -154,6 +159,25 @@ struct Req {
     open: Option<(Option<String>, u64, u32)>,
     close: Option<(i64, u32)>,
 }
+/// A libaio request in flight (`aios`, by the kernel's request): the number its records carry
+/// and the thread that submitted it; `quiet` for one `io_submit`'s line leaves out (vectored, or
+/// past the 32 requests the probe copies), so its completion is written as nothing.
+struct AioReq {
+    id: u64,
+    tid: u32,
+    quiet: bool,
+}
+
+/// A libaio completion posted before the `io_submit` that took its request returned (a buffered
+/// request completes inside the call), held until that call's line and its requests' are
+/// written.
+struct Held {
+    ts: u64,
+    ctx: u64,
+    data: u64,
+    res: i64,
+}
+
 type Files = Rc<RefCell<HashMap<i64, Fd>>>;
 type Cwd = Rc<RefCell<String>>;
 type Maps = Rc<RefCell<Mappings>>;
@@ -296,6 +320,13 @@ pub struct Stats {
     pub faults_unresolved: u64,
     pub faults_failed: u64,
     pub faults_retried: u64,
+    /// libaio's requests written with their completions to come (`aeiou_aio_issue`), the
+    /// completions that matched no request, those posted before their `io_submit` returned, and
+    /// the requests still in flight at the end.
+    pub aio_requests: u64,
+    pub aio_completions_unmatched: u64,
+    pub aio_completed_in_submit: u64,
+    pub aio_in_flight_at_end: u64,
 }
 
 impl Stats {
@@ -317,6 +348,10 @@ impl Stats {
             "faults_unresolved": self.faults_unresolved,
             "faults_failed": self.faults_failed,
             "faults_retried": self.faults_retried,
+            "aio_requests": self.aio_requests,
+            "aio_completions_unmatched": self.aio_completions_unmatched,
+            "aio_completed_in_submit": self.aio_completed_in_submit,
+            "aio_in_flight_at_end": self.aio_in_flight_at_end,
         })
     }
 }
@@ -431,6 +466,15 @@ struct Text<W: Write> {
     /// No run can go on past this time (the earliest end of one plus the gap): a record after it
     /// writes the runs that are over, so a thread gone quiet has its run where it ended.
     runs_due: u64,
+    /// The function libaio's completions were traced at (the header's `aio.layout.complete`),
+    /// when they were: `aio_complete` posts every request's, `aio_complete_rw` a read's or a
+    /// write's alone, so only those wait for one.
+    aio: Option<String>,
+    aios: HashMap<u64, AioReq>,
+    /// The requests an `io_submit` not yet returned has prepared, in its array's order, each with
+    /// its completion when it was posted inside the call (the kernel frees a request it
+    /// completed there, and the call's next one may take its address), by its thread.
+    issued: HashMap<u32, Vec<(u64, Option<Held>)>>,
 }
 
 impl<W: Write> Text<W> {
@@ -457,7 +501,7 @@ impl<W: Write> Text<W> {
             real: HashMap::new(),
             gone: HashSet::new(),
             uring: hdr["uring"]["layout"].is_object().then(|| hdr["uring"]["layout"].clone()),
-            header_due: hdr["uring"]["traced"] == json!(true) || hdr["faults"]["traced"] == json!(true),
+            header_due: hdr["uring"]["traced"] == json!(true) || hdr["faults"]["traced"] == json!(true) || hdr["aio"]["traced"] == json!(true),
             rings: HashMap::new(),
             reqs: HashMap::new(),
             free_ids: BinaryHeap::new(),
@@ -468,6 +512,9 @@ impl<W: Write> Text<W> {
             runs: HashMap::new(),
             retries: HashMap::new(),
             runs_due: u64::MAX,
+            aio: (hdr["aio"]["traced"] == json!(true)).then(|| hdr["aio"]["layout"]["complete"].as_str().unwrap_or("aio_complete").to_string()),
+            aios: HashMap::new(),
+            issued: HashMap::new(),
         }
     }
 
@@ -511,6 +558,9 @@ impl<W: Write> Text<W> {
             if self.faults.is_some() {
                 kinds.push("aeiou_fault");
             }
+            if self.aio.is_some() {
+                kinds.extend(["aeiou_aio_issue", "aeiou_aio_complete"]);
+            }
             self.w.write_all(format!("0 {} --- aeiou: trace format {}, records {} ---\n", self.when(ts), crate::strace::TRACE_FORMAT, kinds.join(" ")).as_bytes())?;
             if self.faults.is_some() && !self.first_touch {
                 self.w.write_all(format!("0 {} --- aeiou: faults: a first touch of a page may not fault (the capture's fault-around check was waived) ---\n", self.when(ts)).as_bytes())?;
@@ -519,7 +569,7 @@ impl<W: Write> Text<W> {
         // a thread's run of faults ends at its next record of any other kind, so its lines keep
         // their order; a loss ends every run, since what was lost is not known
         match &r {
-            Rec::Fault { .. } | Rec::Cqe { .. } => {}
+            Rec::Fault { .. } | Rec::Cqe { .. } | Rec::AioIssue { .. } | Rec::AioDone { .. } => {}
             Rec::Gap { .. } => self.flush_runs()?,
             r => self.flush_run(r.head().tid)?,
         }
@@ -530,6 +580,14 @@ impl<W: Write> Text<W> {
             Rec::Fault { h, address, vm_start, pgoff, ino, dev, flags, ret, end } => self.fault(h, address, vm_start, pgoff, (ino, dev), flags, ret, end),
             Rec::Sqe { h, ring, req, user_data, flags, fd, opcode, cmd, blobs } => self.sqe(h, ring, req, user_data, flags, fd, opcode, &cmd, &blobs),
             Rec::Cqe { h, ring, req, user_data, res, cflags } => self.cqe(h, ring, req, user_data, res, cflags),
+            Rec::AioIssue { h, req } => {
+                // inside the thread's io_submit, whose line is not written yet
+                if self.aio.is_some() && self.pending.get(&h.tid).is_some_and(|p| !p.silent && Some(p.nr) == nr_of("io_submit")) {
+                    self.issued.entry(h.tid).or_default().push((req, None));
+                }
+                Ok(())
+            }
+            Rec::AioDone { h, req, ctx, data, res } => self.aio_done(h, req, ctx, data, res),
             Rec::UringCall { h, nr, ret, args, blobs } => {
                 if nr == NR_IO_URING_SETUP {
                     if let Some(b) = blob(&blobs, 0).filter(|b| b.len() == 8) {
@@ -629,6 +687,7 @@ impl<W: Write> Text<W> {
             if !old.silent {
                 self.stats.entries_without_exit += 1;
             }
+            self.stats.aio_completions_unmatched += self.issued.remove(&h.tid).map_or(0, |v| v.iter().filter(|i| i.1.is_some()).count() as u64);
         }
         Ok(())
     }
@@ -665,14 +724,117 @@ impl<W: Write> Text<W> {
                 p.unfinished = true;
                 self.w.write_all(format!("{} {} <... {} resumed>{tail}) = {r} {dur}\n", h.tid, self.when(h.ts), c.name).as_bytes())?;
             }
+            if c.name == "io_submit" {
+                self.aio_issue(h.tid, &p, ret)?;
+            }
         }
         Ok(())
+    }
+
+    // ---- libaio (DESIGN_REVIEW.md §3.98 "Phase 4 step 3")
+
+    /// The requests an `io_submit` took (its first `ret`; the kernel prepares them in its array's
+    /// order, each an `AIO_ISSUE`), after its line: each one a completion will come for,
+    /// numbered, as an `aeiou_aio_issue` stamped with the call's start and naming the request by
+    /// its place in the line's array (one the line leaves out, vectored or past the 32 the probe
+    /// copies, waited for in silence); then the completions posted before the call returned.
+    fn aio_issue(&mut self, tid: u32, p: &Pending, ret: i64) -> Result<()> {
+        let Some(at) = self.aio.clone() else { return Ok(()) };
+        let issued = self.issued.remove(&tid).unwrap_or_default();
+        let cbs = iocb_list(&p.blobs);
+        let ctx = p.args[0];
+        let mut member = 0usize;
+        let mut held = Vec::new();
+        for (k, (req, done)) in issued.into_iter().enumerate() {
+            if k as i64 >= ret {
+                // prepared and refused: the kernel drops it with no completion
+                self.stats.aio_completions_unmatched += done.is_some() as u64;
+                continue;
+            }
+            let op = cbs.get(k).map(|e| u16_at(e, 16));
+            let quiet = matches!(op, None | Some(7 | 8));
+            let printed = member;
+            if !quiet {
+                member += 1;
+            }
+            // aio_complete_rw sees a read's or a write's completion alone
+            if at != "aio_complete" && !matches!(op, None | Some(0 | 1 | 7 | 8)) {
+                continue;
+            }
+            let id = self.take_id();
+            let rq = AioReq { id, tid, quiet };
+            match done {
+                // answered inside the call: written after the call's issues, never in flight
+                Some(c) => held.push((rq, c)),
+                None => {
+                    if let Some(old) = self.aios.insert(req, rq) {
+                        // its completion lost: the number is free again
+                        self.free_ids.push(Reverse(old.id));
+                    }
+                }
+            }
+            if !quiet {
+                self.stats.aio_requests += 1;
+                self.cut()?;
+                self.w.write_all(format!("{tid} {} aeiou_aio_issue(ctx={ctx:#x}, id={id}, member={printed}) = 0\n", self.when(p.ts)).as_bytes())?;
+            }
+        }
+        for (rq, c) in held {
+            self.aio_write(rq, c, true)?;
+        }
+        Ok(())
+    }
+
+    /// A completion of a request a traced thread issued: its record written, or held while the
+    /// `io_submit` that took it has not returned.
+    fn aio_done(&mut self, h: Head, req: u64, ctx: u64, data: u64, res: i64) -> Result<()> {
+        if self.aio.is_none() {
+            return Ok(());
+        }
+        let c = Held { ts: h.ts, ctx, data, res };
+        if let Some(rq) = self.aios.remove(&req) {
+            return self.aio_write(rq, c, false);
+        }
+        // the latest issue of this request not yet answered
+        let slot = self.issued.values_mut().find_map(|v| v.iter_mut().rev().find(|i| i.0 == req && i.1.is_none()));
+        match slot {
+            Some(i) => i.1 = Some(c),
+            None => self.stats.aio_completions_unmatched += 1,
+        }
+        Ok(())
+    }
+
+    /// A request's completion written under its submitting thread, its number freed.
+    fn aio_write(&mut self, rq: AioReq, c: Held, in_submit: bool) -> Result<()> {
+        self.free_ids.push(Reverse(rq.id));
+        if rq.quiet {
+            return Ok(());
+        }
+        self.stats.aio_completed_in_submit += in_submit as u64;
+        let ret = if c.res < 0 { errno_text(-c.res as i32) } else { c.res.to_string() };
+        self.cut()?;
+        let line = format!("{} {} aeiou_aio_complete(ctx={:#x}, id={}, data={:#x}, in_submit={}) = {ret}\n", rq.tid, self.when(c.ts), c.ctx, rq.id, c.data, in_submit as u8);
+        self.w.write_all(line.as_bytes())?;
+        Ok(())
+    }
+
+    /// A number for a request in flight, `io_uring`'s or libaio's: the smallest free.
+    fn take_id(&mut self) -> u64 {
+        match self.free_ids.pop() {
+            Some(Reverse(i)) => i,
+            None => {
+                self.next_id += 1;
+                self.next_id - 1
+            }
+        }
     }
 
     fn end(&mut self) -> Result<()> {
         self.flush_runs()?;
         self.cut()?;
         self.stats.uring_in_flight_at_end += self.reqs.len() as u64;
+        self.stats.aio_in_flight_at_end += self.aios.values().filter(|r| !r.quiet).count() as u64;
+        self.stats.aio_completions_unmatched += self.issued.drain().map(|(_, v)| v.iter().filter(|i| i.1.is_some()).count() as u64).sum::<u64>();
         let mut left: Vec<(u32, Pending)> = self.pending.drain().collect();
         left.sort_by_key(|(t, p)| (p.ts, *t));
         for (tid, p) in left {
@@ -875,13 +1037,7 @@ impl<W: Write> Text<W> {
         let i32_at = |o: usize| u32_at(cmd, o.min(CMD_SIZE - 4)) as i32;
         let u64c = |o: usize| u64_at(cmd, o.min(CMD_SIZE - 8));
         self.stats.uring_requests += 1;
-        let id = match self.free_ids.pop() {
-            Some(Reverse(i)) => i,
-            None => {
-                self.next_id += 1;
-                self.next_id - 1
-            }
-        };
+        let id = self.take_id();
         let task = self.uring_task(&h);
         let fixed = flags & 1 != 0;
         let mut a = vec![format!("ring={}", self.ring_name(ring)), format!("id={id}"), format!("op={}", uring_op(opcode))];
@@ -972,8 +1128,7 @@ impl<W: Write> Text<W> {
         let task = self.tasks.get(&tid).cloned().unwrap_or_else(|| self.uring_task(&Head { tid, pid: h.pid, ..h }));
         let mut ret = res.to_string();
         if res < 0 {
-            let e = -res;
-            ret = format!("-1 {} ({})", errno_name(e), std::io::Error::from_raw_os_error(e).to_string().split(" (os error").next().unwrap_or(""));
+            ret = errno_text(-res);
         } else if let Some((path, of, slot)) = open {
             if slot == 0 {
                 task.files.borrow_mut().insert(res as i64, Fd { path: path.clone(), cloexec: of & libc::O_CLOEXEC as u64 != 0 });
@@ -1120,9 +1275,11 @@ impl<W: Write> Text<W> {
     }
 
     fn iocbs(&mut self, blobs: &[(u8, u8, Vec<u8>)], task: &Task, v: u64) -> String {
-        let Some(b) = blob(blobs, 2) else { return ptr(v) };
+        if blob(blobs, 2).is_none() {
+            return ptr(v);
+        }
         let mut out = Vec::new();
-        for e in b.chunks_exact(IOCB_SIZE) {
+        for e in iocb_list(blobs) {
             let (data, rw, op, fd, buf, n, off) = (u64_at(e, 0), u32_at(e, 12), u16_at(e, 16), u32_at(e, 20), u64_at(e, 24), u64_at(e, 32), u64_at(e, 40) as i64);
             let name = match op {
                 0 => "PREAD",
@@ -1338,6 +1495,21 @@ fn proc_self(path: &str, pid: u32, tid: u32) -> String {
         }
     }
     path.to_string()
+}
+
+/// `io_submit`'s requests as the probe copied them, each its `struct iocb`.
+fn iocb_list(blobs: &[(u8, u8, Vec<u8>)]) -> Vec<&[u8]> {
+    blob(blobs, 2).map(|b| b.chunks_exact(IOCB_SIZE).collect()).unwrap_or_default()
+}
+
+/// A call's number by its name.
+fn nr_of(name: &str) -> Option<u32> {
+    calls().iter().flatten().find(|c| c.name == name).map(|c| c.nr)
+}
+
+/// A failed request's result as strace prints a call's: `-1 EIO (Input/output error)`.
+fn errno_text(e: i32) -> String {
+    format!("-1 {} ({})", errno_name(e), std::io::Error::from_raw_os_error(e).to_string().split(" (os error").next().unwrap_or(""))
 }
 
 fn blob(blobs: &[(u8, u8, Vec<u8>)], arg: u8) -> Option<&[u8]> {
@@ -1721,7 +1893,7 @@ mod tests {
     }
 
     fn gap(cpu: u32, lost: u64, first: u64, last: u64) -> Vec<u8> {
-        trailing_gaps(&[Loss::default(), Loss::default(), Loss { pending: lost, first, last, total: lost, untraced: 0, rings: 0 }])
+        trailing_gaps(&[Loss::default(), Loss::default(), Loss { pending: lost, first, last, total: lost, ..Default::default() }])
             .into_iter()
             .collect::<Vec<u8>>()
             .chunks(48)
@@ -1748,7 +1920,9 @@ mod tests {
     /// `text` with the header's entries `extra` adds (`uring`, `faults`; one without `traced` left out).
     fn text_with(records: &[Vec<u8>], extra: Value) -> (String, Stats) {
         let uring = extra["uring"].clone();
-        let d = std::env::temp_dir().join(format!("aeiou-ebpf-text-{}-{}-{}", std::process::id(), records.len() ^ records.iter().map(|r| r.len()).sum::<usize>(), uring.is_object() && uring.get("traced").is_some()));
+        // one directory per call: tests run in parallel, and records alike in size are not the same records
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let d = std::env::temp_dir().join(format!("aeiou-ebpf-text-{}-{}", std::process::id(), CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
         std::fs::create_dir_all(&d).unwrap();
         let bin = d.join("syscalls.bin");
         let mut f = MAGIC.to_vec();
@@ -1758,6 +1932,9 @@ mod tests {
         }
         if extra["faults"].get("traced").is_some() {
             hdr["faults"] = extra["faults"].clone();
+        }
+        if extra["aio"].get("traced").is_some() {
+            hdr["aio"] = extra["aio"].clone();
         }
         f.extend_from_slice(serde_json::to_string(&hdr).unwrap().as_bytes());
         f.push(b'\n');
@@ -2327,5 +2504,158 @@ mod tests {
         assert_eq!(iovs(&[], 0x5, 1), "0x5");
         assert_eq!(events(&[], 0x5, -14), "0x5");
         assert_eq!(trailing_gaps(&[Loss::default()]).len(), 0);
+    }
+    /// A libaio request's issue by thread `tid` (`aio_prep_rw`'s probe).
+    fn aio_issue(ts: u64, tid: u32, req: u64) -> Vec<u8> {
+        aio_rec(AIO_ISSUE, ts, tid, req, 0xc, 0, 0)
+    }
+
+    /// A libaio completion (`aio_complete`'s probe), posted by no traced thread.
+    fn aio_done(ts: u64, req: u64, ctx: u64, data: u64, res: i64) -> Vec<u8> {
+        aio_rec(AIO_DONE, ts, 0, req, ctx, data, res)
+    }
+
+    fn aio_rec(kind: u16, ts: u64, tid: u32, req: u64, ctx: u64, data: u64, res: i64) -> Vec<u8> {
+        let mut b = Vec::new();
+        head(&mut b, kind, ts, if tid == 0 { 0 } else { 10 }, tid);
+        for v in [req, ctx, data, res as u64] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        done(b)
+    }
+
+    /// `io_submit`'s requests as the probe copies them: `(opcode, aio_data, length, offset)` on
+    /// descriptor 5.
+    fn iocbs(reqs: &[(u16, u64, u64, u64)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for &(op, data, n, off) in reqs {
+            let mut e = vec![0u8; IOCB_SIZE];
+            e[0..8].copy_from_slice(&data.to_le_bytes());
+            e[16..18].copy_from_slice(&op.to_le_bytes());
+            e[20..24].copy_from_slice(&5u32.to_le_bytes());
+            e[32..40].copy_from_slice(&n.to_le_bytes());
+            e[40..48].copy_from_slice(&off.to_le_bytes());
+            out.extend(e);
+        }
+        out
+    }
+
+    /// libaio's completions (DESIGN_REVIEW.md §3.98 "Phase 4 step 3"): each request an
+    /// `io_submit` took numbered after its line by the kernel's request its issue named, its
+    /// place in the line's array the order the kernel prepared it, a vectored one waited for in
+    /// silence; a completion posted inside the call held until its line and written
+    /// `in_submit=1`; one posted later at its own time under the submitting thread; an error as
+    /// strace prints one; the kernel's request reused once completed; a completion of no request
+    /// in flight, or of one the call did not take, counted unmatched; one never posted counted
+    /// in flight at the end. Under `aio_complete_rw` an fsync waits for nothing; an exit lost
+    /// drops what its call held.
+    #[test]
+    fn libaio_completions_are_paired_with_their_requests() {
+        let aio = json!({"aio": {"traced": true, "layout": {"complete": "aio_complete", "fsync": true}}});
+        let first = iocbs(&[(0, 1, 4096, 0), (7, 9, 2, 0), (1, 2, 100, 8192)]);
+        let second = iocbs(&[(0, 3, 10, 0), (0, 3, 10, 10)]);
+        let mut r = exec(S);
+        r.extend([
+            enter(3 * S, 10, 10, "io_submit", [0xc, 3, 0xd, 0, 0, 0], &[(2, BYTES, &first)]),
+            aio_issue(3 * S + 1, 10, 0x1000),
+            aio_issue(3 * S + 2, 10, 0x2000),
+            aio_issue(3 * S + 3, 10, 0x3000),
+            // a buffered read completes inside the call
+            aio_done(3 * S + 5, 0x1000, 0xc, 1, 4096),
+            exit(3 * S + 10, 10, 10, "io_submit", 3, &[]),
+            aio_done(4 * S, 0x2000, 0xc, 9, 2),
+            aio_done(4 * S + 1, 0x3000, 0xc, 2, -5),
+            aio_done(4 * S + 2, 0x9999, 0xc, 0, 1),
+            // the same aio_data twice; the kernel's request 0x1000 free again
+            enter(5 * S, 10, 10, "io_submit", [0xc, 2, 0xd, 0, 0, 0], &[(2, BYTES, &second)]),
+            aio_issue(5 * S + 1, 10, 0x1000),
+            aio_issue(5 * S + 2, 10, 0x4000),
+            exit(5 * S + 3, 10, 10, "io_submit", 1, &[]),
+            // the request the call prepared and did not take
+            aio_done(5 * S + 4, 0x4000, 0xc, 3, 10),
+            // an issue outside an io_submit's line (none pending): nothing waits for it
+            aio_issue(6 * S, 10, 0x5000),
+            aio_done(6 * S + 1, 0x5000, 0xc, 0, 0),
+        ]);
+        let (t, st) = text_with(&r, aio.clone());
+        assert!(t.contains("--- aeiou: trace format 1, records aeiou_aio_issue aeiou_aio_complete ---"), "{t}");
+        let lines: Vec<&str> = t.lines().filter(|l| (l.contains("io_submit(") || l.contains("aeiou_aio_")) && !l.contains("--- aeiou")).collect();
+        assert_eq!(
+            lines,
+            [
+                "10 1003.000000 io_submit(0xc, 3, [{aio_data=0x1, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=5</w/held>, aio_buf=NULL, aio_nbytes=4096, aio_offset=0}, {aio_data=0x2, aio_lio_opcode=IOCB_CMD_PWRITE, aio_fildes=5</w/held>, aio_buf=NULL, aio_nbytes=100, aio_offset=8192}]) = 3 <0.000000>",
+                "10 1003.000000 aeiou_aio_issue(ctx=0xc, id=1, member=0) = 0",
+                "10 1003.000000 aeiou_aio_issue(ctx=0xc, id=3, member=1) = 0",
+                "10 1003.000000 aeiou_aio_complete(ctx=0xc, id=1, data=0x1, in_submit=1) = 4096",
+                "10 1004.000000 aeiou_aio_complete(ctx=0xc, id=3, data=0x2, in_submit=0) = -1 EIO (Input/output error)",
+                "10 1005.000000 io_submit(0xc, 2, [{aio_data=0x3, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=5</w/held>, aio_buf=NULL, aio_nbytes=10, aio_offset=0}, {aio_data=0x3, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=5</w/held>, aio_buf=NULL, aio_nbytes=10, aio_offset=10}]) = 1 <0.000000>",
+                "10 1005.000000 aeiou_aio_issue(ctx=0xc, id=1, member=0) = 0",
+            ],
+            "{t}"
+        );
+        assert_eq!((st.aio_requests, st.aio_completed_in_submit, st.aio_completions_unmatched, st.aio_in_flight_at_end, st.vectored_aio_left_out), (3, 1, 3, 1, 1), "{st:?}");
+        assert_eq!(st.json()["aio_completed_in_submit"], 1);
+
+        // aio_complete_rw: an fsync's completion is not traced, so nothing waits for it; a
+        // completion inside a call whose exit was lost is unmatched, as is one held at the end
+        let sync = iocbs(&[(2, 5, 0, 0), (1, 6, 10, 0)]);
+        let r = [
+            exec(S),
+            vec![
+                enter(3 * S, 10, 10, "io_submit", [0xe, 2, 0xd, 0, 0, 0], &[(2, BYTES, &sync)]),
+                aio_issue(3 * S + 1, 10, 0x5000),
+                aio_issue(3 * S + 2, 10, 0x6000),
+                exit(3 * S + 3, 10, 10, "io_submit", 2, &[]),
+                aio_done(3 * S + 4, 0x6000, 0xe, 6, 10),
+                enter(4 * S, 10, 10, "io_submit", [0xe, 1, 0xd, 0, 0, 0], &[(2, BYTES, &sync[IOCB_SIZE..])]),
+                aio_issue(4 * S + 1, 10, 0x7000),
+                aio_done(4 * S + 2, 0x7000, 0xe, 6, 10),
+                enter(5 * S, 10, 10, "close", [5, 0, 0, 0, 0, 0], &[]),
+                exit(5 * S + 1, 10, 10, "close", 0, &[]),
+                enter(6 * S, 10, 12, "io_submit", [0xe, 1, 0xd, 0, 0, 0], &[(2, BYTES, &sync[IOCB_SIZE..])]),
+                aio_issue(6 * S + 1, 12, 0x8000),
+                aio_done(6 * S + 2, 0x8000, 0xe, 6, 10),
+            ],
+        ]
+        .concat();
+        let (t, st) = text_with(&r, json!({"aio": {"traced": true, "layout": {"complete": "aio_complete_rw", "fsync": false}}}));
+        assert!(t.contains("10 1003.000000 aeiou_aio_issue(ctx=0xe, id=1, member=1) = 0") && !t.contains("member=0"), "{t}");
+        assert!(t.contains("10 1003.000000 aeiou_aio_complete(ctx=0xe, id=1, data=0x6, in_submit=0) = 10"), "{t}");
+        assert_eq!((st.aio_requests, st.aio_completions_unmatched, st.aio_in_flight_at_end), (1, 2, 0), "{st:?}");
+
+        // buffered requests complete and are freed inside their call, and the call's next takes
+        // the kernel's request again: each completion is its own issue's
+        let two = iocbs(&[(0, 1, 100, 0), (0, 2, 200, 100)]);
+        let r = [
+            exec(S),
+            vec![
+                enter(3 * S, 10, 10, "io_submit", [0xc, 2, 0xd, 0, 0, 0], &[(2, BYTES, &two)]),
+                aio_issue(3 * S + 1, 10, 0x1000),
+                aio_done(3 * S + 2, 0x1000, 0xc, 1, 100),
+                aio_issue(3 * S + 3, 10, 0x1000),
+                aio_done(3 * S + 4, 0x1000, 0xc, 2, 150),
+                exit(3 * S + 5, 10, 10, "io_submit", 2, &[]),
+            ],
+        ]
+        .concat();
+        let (t, st) = text_with(&r, aio.clone());
+        let lines: Vec<&str> = t.lines().filter(|l| l.contains(" aeiou_aio_") && !l.contains("--- aeiou")).collect();
+        assert_eq!(
+            lines,
+            [
+                "10 1003.000000 aeiou_aio_issue(ctx=0xc, id=1, member=0) = 0",
+                "10 1003.000000 aeiou_aio_issue(ctx=0xc, id=2, member=1) = 0",
+                "10 1003.000000 aeiou_aio_complete(ctx=0xc, id=1, data=0x1, in_submit=1) = 100",
+                "10 1003.000000 aeiou_aio_complete(ctx=0xc, id=2, data=0x2, in_submit=1) = 150",
+            ],
+            "{t}"
+        );
+        assert_eq!((st.aio_requests, st.aio_completed_in_submit, st.aio_completions_unmatched, st.aio_in_flight_at_end), (2, 2, 0, 0), "{st:?}");
+
+        // without the header's aio, the probes' records are nothing
+        let r = [exec(S), vec![enter(3 * S, 10, 10, "io_submit", [0xc, 1, 0xd, 0, 0, 0], &[(2, BYTES, &first[..IOCB_SIZE])]), aio_issue(3 * S + 1, 10, 0x1000), exit(3 * S + 2, 10, 10, "io_submit", 1, &[]), aio_done(3 * S + 3, 0x1000, 0xc, 1, 4096)]].concat();
+        let (t, st) = text(&r);
+        assert!(t.contains("io_submit(0xc, 1, [{aio_data=0x1, aio_lio_opcode=IOCB_CMD_PREAD") && !t.contains("aeiou_aio") && !t.contains("trace format"), "{t}");
+        assert_eq!((st.aio_requests, st.aio_completions_unmatched), (0, 0));
     }
 }

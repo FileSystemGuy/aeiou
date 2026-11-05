@@ -311,8 +311,8 @@ fn pid_ns() -> Result<(u64, u64)> {
 }
 
 /// The kernel structures' offsets the probes read, from the kernel's BTF, in a `Config` with
-/// no namespace and no seed; and what `io_uring`'s probes need (`uring_layout`) and the faults'
-/// (`fault_layout`), or why they cannot run here.
+/// no namespace and no seed; and what `io_uring`'s probes need (`uring_layout`), the faults'
+/// (`fault_layout`), and libaio's (`aio_layout`), or why they cannot run here.
 pub fn kernel_layout() -> Result<(Config, Layouts)> {
     let p = "/sys/kernel/btf/vmlinux";
     let raw = std::fs::read(p).with_context(|| format!("{p}: the kernel's BTF (CONFIG_DEBUG_INFO_BTF), which the eBPF source needs"))?;
@@ -320,15 +320,64 @@ pub fn kernel_layout() -> Result<(Config, Layouts)> {
     let mut cfg = base_layout(&btf, p)?;
     let uring = uring_layout(&btf, &mut cfg);
     let faults = fault_layout(&btf, &mut cfg);
-    Ok((cfg, Layouts { uring, faults }))
+    let aio = aio_layout(&btf, &mut cfg);
+    Ok((cfg, Layouts { uring, faults, aio }))
 }
 
-/// What the kernel's BTF allows of the probes beyond the calls': `io_uring`'s requests and the
-/// faults on mappings, each the converter's layout or why its probes cannot run here.
+/// What the kernel's BTF allows of the probes beyond the calls': `io_uring`'s requests, the
+/// faults on mappings, and libaio's completions, each the converter's layout or why its probes
+/// cannot run here.
 #[derive(Debug, Clone)]
 pub struct Layouts {
     pub uring: std::result::Result<Value, String>,
     pub faults: std::result::Result<Value, String>,
+    pub aio: std::result::Result<Value, String>,
+}
+
+/// What libaio's probes read (DESIGN_REVIEW.md §3.98 "Phase 4 step 3"), from the kernel's BTF,
+/// set in `cfg` (`aio` 1): the functions the probes attach to, a request's issue at
+/// `aio_prep_rw(req, iocb)` (every read and write) and `aio_fsync(req, ...)` where the BTF has it,
+/// its completion at `aio_complete(iocb)` (every request's, as it is posted) or, where the BTF has
+/// no such function (inlined), `aio_complete_rw(kiocb, res)` (a read's or a write's alone); each
+/// takes the request as its first member, which is checked; and `aio_kiocb`'s context and result
+/// and the context's `user_id`. The header's `aio.layout` names the functions, which decide what
+/// the converter waits for. `Err` says why libaio's completions cannot be traced on this kernel,
+/// and the capture goes on without them.
+pub fn aio_layout(btf: &Btf, cfg: &mut Config) -> std::result::Result<Value, String> {
+    let params = |f: &str| btf.function_params(f);
+    match params("aio_prep_rw") {
+        // 6.18 passes a third, rw_type (box); the request is first in every form
+        Some(p) if p.len() >= 2 && p[0] == "req" => {}
+        None => return Err("the kernel's BTF has no function aio_prep_rw (CONFIG_AIO, or inlined), where a request's issue is traced".into()),
+        p => return Err(format!("aio_prep_rw's parameters are not those the probes read ({p:?})")),
+    }
+    let complete = match (params("aio_complete"), params("aio_complete_rw")) {
+        (Some(p), _) if p.len() == 1 => "aio_complete",
+        (_, Some(p)) if p.len() >= 2 && p[0] == "kiocb" && p[1] == "res" => "aio_complete_rw",
+        (None, None) => return Err("the kernel's BTF has neither aio_complete nor aio_complete_rw (both inlined)".into()),
+        (a, b) => return Err(format!("aio_complete's and aio_complete_rw's parameters are not those the probes read ({a:?}, {b:?})")),
+    };
+    let fsync = params("aio_fsync").is_some_and(|p| p.first().is_some_and(|n| n == "req"));
+    let off = |s: &str, m: &str| btf.offset(s, m).ok_or_else(|| format!("the kernel's BTF has no {s}.{m}"));
+    // the probes take a kiocb or a fsync_iocb for the aio_kiocb it begins
+    for m in ["rw", "fsync"] {
+        if off("aio_kiocb", m)? != 0 {
+            return Err(format!("struct aio_kiocb does not begin with its {m}"));
+        }
+    }
+    *cfg = Config { aio: 1, ki_ctx_off: off("aio_kiocb", "ki_ctx")?, ki_res_off: off("aio_kiocb", "ki_res")?, ctx_user_id_off: off("kioctx", "user_id")?, ..*cfg };
+    Ok(json!({"complete": complete, "fsync": fsync}))
+}
+
+/// libaio's programs (`aio_layout`): the issue's, of the function of its name, and the
+/// completion's.
+fn aio_programs(l: &Value) -> Vec<String> {
+    let mut v = vec!["aio_prep_rw".to_string()];
+    if l["fsync"] == true {
+        v.push("aio_fsync".into());
+    }
+    v.push(l["complete"].as_str().unwrap_or("aio_complete").to_string());
+    v
 }
 
 /// What the faults' probes read (DESIGN_REVIEW.md §3.98 "Phase 4 step 2"), from the kernel's
@@ -467,6 +516,12 @@ pub fn load(buffer: u64) -> Result<(aya::Ebpf, Layouts)> {
             config.faults = 0;
         }
     }
+    if let Ok(l) = &layouts.aio {
+        if let Err(why) = load_aio(&mut bpf, &aio_programs(l)) {
+            layouts.aio = Err(why);
+            config.aio = 0;
+        }
+    }
     {
         let mut cfg: aya::maps::Array<_, Config> = aya::maps::Array::try_from(bpf.map_mut("CONFIG").expect("CONFIG"))?;
         cfg.set(0, config, 0)?;
@@ -481,6 +536,16 @@ fn load_faults(bpf: &mut aya::Ebpf) -> std::result::Result<(), String> {
     p.load("handle_mm_fault", &btf).map_err(|e| format!("the kernel would not load a program on handle_mm_fault's entry: {e}"))?;
     let p: &mut aya::programs::FExit = bpf.program_mut(FAULT_PROGRAMS[1]).expect("a program of the object").try_into().map_err(|e| format!("{e}"))?;
     p.load("handle_mm_fault", &btf).map_err(|e| format!("the kernel would not load a program on handle_mm_fault's return: {e}"))?;
+    Ok(())
+}
+
+/// libaio's programs, each an `fentry` of the function of its name.
+fn load_aio(bpf: &mut aya::Ebpf, functions: &[String]) -> std::result::Result<(), String> {
+    let btf = aya::Btf::from_sys_fs().map_err(|e| format!("the kernel's BTF: {e}"))?;
+    for f in functions {
+        let p: &mut aya::programs::FEntry = bpf.program_mut(f).expect("a program of the object").try_into().map_err(|e| format!("{e}"))?;
+        p.load(f, &btf).map_err(|e| format!("the kernel would not load a program on {f}'s entry: {e}"))?;
+    }
     Ok(())
 }
 
@@ -519,15 +584,20 @@ pub fn usable() -> std::result::Result<String, String> {
         "eBPF needs root or the file capabilities cap_bpf,cap_perfmon on a node-local copy of aeiou-trace (setcap cap_bpf,cap_perfmon+ep; cap_sys_admin before Linux 5.8); --source strace runs as any user".to_string()
     })?;
     let (_, l) = load(1 << 16).map_err(|e| format!("{e:#}"))?;
+    Ok(usable_text(how, &l))
+}
+
+/// The `source` check's verdict on a load as `how`: what is traced, then what is not and why.
+fn usable_text(how: &str, l: &Layouts) -> String {
     let mut what = format!("loaded and verified as {how}, kernel BTF");
     let mut not = vec![];
-    for (name, r) in [("io_uring's requests", &l.uring), ("faults on mappings", &l.faults)] {
+    for (name, r) in [("io_uring's requests", &l.uring), ("faults on mappings", &l.faults), ("libaio's completions", &l.aio)] {
         match r {
             Ok(_) => what += &format!(", {name}"),
             Err(why) => not.push(format!("{name} not traced: {why}")),
         }
     }
-    Ok(if not.is_empty() { what } else { format!("{what}; {}", not.join("; ")) })
+    if not.is_empty() { what } else { format!("{what}; {}", not.join("; ")) }
 }
 
 /// The probes attached to a command not yet started: `seed` is its pid as this process sees it.
@@ -540,6 +610,7 @@ pub struct Probes {
     // the faults' links, kept: an fentry's link is the program's attachment
     _faults: Vec<aya::programs::fentry::FEntryLinkId>,
     _faults_exit: Vec<aya::programs::fexit::FExitLinkId>,
+    _aio: Vec<aya::programs::fentry::FEntryLinkId>,
 }
 
 impl Probes {
@@ -572,7 +643,29 @@ impl Probes {
                 }
             }
         }
-        Ok(Probes { bpf, links, layouts, _faults: fe, _faults_exit: fx })
+        let mut fa = vec![];
+        if let Ok(l) = &layouts.aio {
+            let functions = aio_programs(l);
+            let r = (|| -> std::result::Result<(), String> {
+                for f in &functions {
+                    let p: &mut aya::programs::FEntry = bpf.program_mut(f).expect("a program").try_into().map_err(|e| format!("{e}"))?;
+                    fa.push(p.attach().map_err(|e| format!("attaching to {f}'s entry: {e}"))?);
+                }
+                Ok(())
+            })();
+            match r {
+                Ok(()) => links += functions.len(),
+                Err(why) => {
+                    // the programs attached record nothing the converter reads without the
+                    // header's layout
+                    let mut cfg: aya::maps::Array<_, Config> = aya::maps::Array::try_from(bpf.map_mut("CONFIG").expect("CONFIG"))?;
+                    let c = cfg.get(&0, 0)?;
+                    cfg.set(0, Config { aio: 0, ..c }, 0)?;
+                    layouts.aio = Err(why);
+                }
+            }
+        }
+        Ok(Probes { bpf, links, layouts, _faults: fe, _faults_exit: fx, _aio: fa })
     }
 
     /// The header's `uring`: whether `io_uring`'s requests are traced, and the converter's layout.
@@ -583,6 +676,11 @@ impl Probes {
     /// The header's `faults`: whether faults on mappings are traced, and the converter's layout.
     pub fn faults_header(&self) -> Value {
         traced_header(&self.layouts.faults)
+    }
+
+    /// The header's `aio`: whether libaio's completions are traced, and the converter's layout.
+    pub fn aio_header(&self) -> Value {
+        traced_header(&self.layouts.aio)
     }
 
     /// The process to trace, by its pid here: the probe adds it at its next call.
@@ -837,7 +935,7 @@ mod tests {
     #[test]
     fn the_kernel_btf_has_the_layout() {
         let (c, l) = kernel_layout().unwrap();
-        assert!(l.uring.is_ok() && l.faults.is_ok(), "{l:?}");
+        assert!(l.uring.is_ok() && l.faults.is_ok() && l.aio.is_ok(), "{l:?}");
         assert!(c.tgid_off > 0 && c.exit_code_off > 0 && c.tgid_off != c.exit_code_off && c.thread_pid_off > 0);
         assert!(c.numbers_off > c.level_off && c.upid_size >= 12);
         // where a process's living threads are counted, so the tree can let it go
@@ -897,6 +995,75 @@ mod tests {
         let b = loss_box(&rings);
         assert!(b.contains("1 io_uring ring(s) of the command whose completions were not traced"), "{b}");
         assert!(b.lines().all(|l| l.chars().count() == b.lines().next().unwrap().chars().count()));
+
+    }
+
+    #[test]
+    fn the_source_check_says_what_is_traced_and_why_not() {
+        let all = Layouts { uring: Ok(json!({})), faults: Ok(json!({})), aio: Ok(json!({})) };
+        assert_eq!(usable_text("root", &all), "loaded and verified as root, kernel BTF, io_uring's requests, faults on mappings, libaio's completions");
+        let some = Layouts { faults: Err("no trampolines".into()), aio: Err("aio_prep_rw inlined".into()), ..all };
+        assert_eq!(
+            usable_text("cap_bpf", &some),
+            "loaded and verified as cap_bpf, kernel BTF, io_uring's requests; faults on mappings not traced: no trampolines; libaio's completions not traced: aio_prep_rw inlined"
+        );
+    }
+
+    #[test]
+    fn the_kernel_btf_has_libaio_s_layout_and_another_kernel_is_said_why() {
+        let raw = std::fs::read("/sys/kernel/btf/vmlinux").unwrap();
+        let btf = Btf::parse(&raw).unwrap();
+        // this box's kernel (6.18): aio_complete, aio_prep_rw, and aio_fsync functions of their own
+        assert_eq!(btf.function_params("aio_complete").unwrap(), ["iocb"]);
+        assert_eq!(btf.function_params("aio_prep_rw").unwrap(), ["req", "iocb", "rw_type"]);
+        let mut c = Config::default();
+        let l = aio_layout(&btf, &mut c).unwrap();
+        assert_eq!(l, json!({"complete": "aio_complete", "fsync": true}));
+        assert_eq!(aio_programs(&l), ["aio_prep_rw", "aio_fsync", "aio_complete"]);
+        assert_eq!(c.aio, 1);
+        assert!(c.ki_ctx_off > 0 && c.ki_res_off > 0 && c.ki_ctx_off != c.ki_res_off && c.ctx_user_id_off > 0, "{c:?}");
+        let changed = |f: &dyn Fn(&mut Btf)| {
+            let mut b = Btf::parse(&raw).unwrap();
+            f(&mut b);
+            let mut c = Config::default();
+            let r = aio_layout(&b, &mut c);
+            (r, c.aio)
+        };
+        let func = |b: &mut Btf, from: &str, to: &str| b.types.iter_mut().find(|t| t.1 == 12 && t.0 == from).unwrap().0 = to.into();
+        // aio_complete and aio_fsync inlined: the reads' and writes' completions alone
+        let (r, on) = changed(&|b| {
+            func(b, "aio_complete", "x");
+            func(b, "aio_fsync", "z");
+        });
+        let l = r.unwrap();
+        assert_eq!((&l, on), (&json!({"complete": "aio_complete_rw", "fsync": false}), 1));
+        assert_eq!(aio_programs(&l), ["aio_prep_rw", "aio_complete_rw"]);
+        let (r, on) = changed(&|b| {
+            func(b, "aio_complete", "x");
+            func(b, "aio_complete_rw", "y");
+        });
+        assert!(r.unwrap_err().contains("neither aio_complete nor aio_complete_rw") && on == 0);
+        let (r, on) = changed(&|b| func(b, "aio_prep_rw", "x"));
+        assert!(r.unwrap_err().contains("no function aio_prep_rw") && on == 0);
+        let (r, _) = changed(&|b| {
+            let proto = b.types.iter().find(|t| t.1 == 12 && t.0 == "aio_prep_rw").unwrap().4 as usize;
+            b.types[proto].3[0].0 = "kiocb".into();
+        });
+        assert!(r.unwrap_err().contains("aio_prep_rw's parameters are not those"));
+        let (r, _) = changed(&|b| {
+            func(b, "aio_complete", "x");
+            let proto = b.types.iter().find(|t| t.1 == 12 && t.0 == "aio_complete_rw").unwrap().4 as usize;
+            b.types[proto].3[0].0 = "req".into();
+        });
+        assert!(r.unwrap_err().contains("not those the probes read"));
+        // the request's own structure not first
+        let (r, _) = changed(&|b| {
+            let t = b.types.iter_mut().find(|t| t.1 == 4 && t.0 == "aio_kiocb").unwrap();
+            t.3.iter_mut().find(|m| m.0.is_empty()).unwrap().2 = 64;
+        });
+        assert!(r.unwrap_err().contains("does not begin with its rw"));
+        let (r, on) = changed(&|b| b.types.iter_mut().find(|t| t.1 == 4 && t.0 == "kioctx").unwrap().3.iter_mut().find(|m| m.0 == "user_id").unwrap().0 = "x".into());
+        assert!(r.unwrap_err().contains("no kioctx.user_id") && on == 0);
     }
 
     #[test]
@@ -922,6 +1089,37 @@ mod tests {
         assert!(changed(&|b| rename(b, 4, "io_kiocb", "x")).contains("passes no struct io_kiocb"));
         assert!(changed(&|b| member(b, "io_kiocb", "opcode", "x")).contains("no io_kiocb.opcode"));
         assert!(changed(&|b| rename(b, 4, "io_statx", "x")).contains("no struct io_statx"));
+        // a tracepoint's prototype changed: its parameters, after `void *__data`
+        let proto = |b: &Btf, tp: &str| {
+            let skip = |mut t: usize| {
+                while let Some((_, 8..=11 | 18, _, _, next)) = b.types.get(t) {
+                    t = *next as usize;
+                }
+                t
+            };
+            let td = b.types.iter().position(|t| t.1 == 8 && t.0 == format!("btf_trace_{tp}")).unwrap();
+            skip(b.types[skip(b.types[td].4 as usize)].4 as usize)
+        };
+        // the request third, or io_uring_complete passing two arguments
+        assert!(changed(&|b| {
+            let p = proto(b, "io_uring_submit_req");
+            let extra = b.types[p].3[0].clone();
+            b.types[p].3.insert(1, extra.clone());
+            b.types[p].3.insert(1, extra);
+        })
+        .contains("not of a form the probes read"));
+        assert!(changed(&|b| {
+            let p = proto(b, "io_uring_complete");
+            b.types[p].3.truncate(3);
+        })
+        .contains("not of a form the probes read"));
+        // its third argument no cqe, and no fields after it
+        assert!(changed(&|b| {
+            let p = proto(b, "io_uring_complete");
+            let ring = b.types[p].3[1].clone();
+            b.types[p].3[3] = ring;
+        })
+        .contains("io_uring_complete is not of a form the probes read"));
         assert!(changed(&|b| {
             let t = b.types.iter_mut().find(|t| t.1 == 4 && t.0 == "io_rw").unwrap();
             t.4 = 100;

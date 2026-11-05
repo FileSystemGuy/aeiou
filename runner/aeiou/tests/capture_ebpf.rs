@@ -201,12 +201,14 @@ fn ebpf_gives_the_calls_strace_gives() {
     let first = std::fs::read_to_string(eb.join("trace.txt")).unwrap();
     let mut lines = first.lines();
     let mut first = lines.next().unwrap();
-    if rec["uring"]["traced"] == true || rec["faults"]["traced"] == true {
-        let kinds = match (rec["uring"]["traced"] == true, rec["faults"]["traced"] == true) {
-            (true, true) => "aeiou_uring_sqe aeiou_uring_cqe aeiou_fault",
-            (true, false) => "aeiou_uring_sqe aeiou_uring_cqe",
-            _ => "aeiou_fault",
-        };
+    // and libaio's completions (phase 4 step 3)
+    let kinds = [("uring", "aeiou_uring_sqe aeiou_uring_cqe"), ("faults", "aeiou_fault"), ("aio", "aeiou_aio_issue aeiou_aio_complete")]
+        .iter()
+        .filter(|(k, _)| rec[*k]["traced"] == true)
+        .map(|(_, v)| *v)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !kinds.is_empty() {
         assert!(first.starts_with("0 ") && first.contains(&format!(" --- aeiou: trace format 1, records {kinds} ---")), "{first}");
         first = lines.next().unwrap();
         if rec["faults"]["first_touch_observed"] == false {
@@ -461,6 +463,69 @@ fn io_uring_requests_are_traced_and_read_as_the_calls_they_do() {
     assert!(got > 0 && got <= asked, "the sync run read {got} of the {asked} bytes the dry run asks");
     for (tag, f) in &seen[1..] {
         assert_eq!(f, &seen[0].1, "{tag} against sync");
+    }
+}
+
+/// The runner's own libaio engine as the traced application (DESIGN_REVIEW.md §3.98 "Phase 4
+/// step 3"): `aeiou run --posix libaio` of npy_per_sample's smoke set, through the page cache
+/// and with `--cache direct`, captured under eBPF, reads as the same run under `--posix sync`
+/// does with the same cache, every request numbered after its `io_submit` and answered by its
+/// completion, none unmatched or left in flight; through the page cache every completion is
+/// posted inside the `io_submit` that took it (buffered kernel AIO is synchronous), and with
+/// `--cache direct` some are posted after it returned.
+#[test]
+fn libaio_completions_are_traced_and_read_as_the_calls_they_do() {
+    let exe = privileged();
+    let t = tmp("aio");
+    let root = t.join("data");
+    let m = crate::common::workloads().join("input-pipeline/map/npy-per-sample");
+    let (ast, params) = (m.join("npy_per_sample.ast.json"), m.join("params/smoke.params.json"));
+    let aeiou = env!("CARGO_BIN_EXE_aeiou");
+    let o = Command::new(aeiou).args(["datagen", s(&ast), "--params-file", s(&params), "--root", s(&root)]).env_remove("AEIOU_CONFIG").output().unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    let fixed = |m: &Value| {
+        let t = &m["total"];
+        serde_json::json!({
+            "bytes_read": t["bytes_read"], "bytes_written": t["bytes_written"],
+            "read": t["counts"]["read"], "open": t["counts"]["open"], "close": t["counts"]["close"],
+            "request_size": t["request_size"], "popularity_bytes": t["popularity_bytes"], "popularity_objects": t["popularity_objects"],
+        })
+    };
+    for cache in ["per-open", "direct"] {
+        let mut seen = Vec::new();
+        for posix in ["sync", "libaio"] {
+            let tag = format!("{posix}-{cache}");
+            let out = t.join(format!("cap-{tag}"));
+            let args = ["--source", "ebpf", "--root", s(&root), "-o", s(&out), "--", aeiou, "run", s(&ast), "--params-file", s(&params), "--param", "step_time=0", "--gpus", "1", "--root", s(&root), "--posix", posix, "--cache", cache];
+            let o = Command::new(&exe).arg("capture").args(WAIVE).args(args).env_remove("AEIOU_CONFIG").output().unwrap();
+            assert!(o.status.success(), "{tag}: {}", text(&o));
+            let rec = record(&out);
+            assert_eq!(rec["complete"], true, "{tag}: {}", rec["losses"]);
+            assert_eq!((&rec["aio"]["traced"], &rec["aio"]["completions_at"]), (&serde_json::json!(true), &serde_json::json!("aio_complete")), "{tag}: {}", rec["aio"]);
+            assert!(!rec["not_seen"].to_string().contains("when a libaio request completed"), "{tag}: {}", rec["not_seen"]);
+            let c = &rec["conversion"];
+            assert_eq!((c["aio_completions_unmatched"].as_u64(), c["aio_in_flight_at_end"].as_u64()), (Some(0), Some(0)), "{tag}: {c}");
+            let body = std::fs::read_to_string(out.join("trace.txt")).unwrap();
+            let (issues, completes) = (body.lines().filter(|l| l.contains(" aeiou_aio_issue(")).count() as u64, body.lines().filter(|l| l.contains(" aeiou_aio_complete(")).count() as u64);
+            let got = metrics(&out, &root);
+            let notes = got["notes"].as_object().unwrap();
+            assert!(notes.get("aio_results_assumed_complete").is_none(), "{tag}: {notes:?}");
+            if posix == "sync" {
+                assert_eq!((issues, completes), (0, 0), "{tag}");
+            } else {
+                assert!(issues > 0 && issues == completes && issues == c["aio_requests"].as_u64().unwrap(), "{tag}: {issues} issued, {completes} completed, {c}");
+                let inside = c["aio_completed_in_submit"].as_u64().unwrap();
+                assert_eq!(notes.get("aio_completed_in_submit").and_then(Value::as_u64).unwrap_or(0), inside, "{tag}: {notes:?}");
+                if cache == "per-open" {
+                    assert_eq!(inside, issues, "{tag}: a buffered request completes inside its io_submit");
+                } else {
+                    assert!(inside < issues, "{tag}: {inside} of {issues} direct requests completed inside their io_submit");
+                }
+                eprintln!("{tag}: {issues} requests, {inside} completed inside io_submit, never reaped by a call: {:?}", notes.get("aio_completed_never_reaped"));
+            }
+            seen.push((tag, fixed(&got)));
+        }
+        assert_eq!(seen[1].1, seen[0].1, "{} against {}", seen[1].0, seen[0].0);
     }
 }
 

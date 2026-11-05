@@ -9610,7 +9610,7 @@ cannot be probed: libc ships no symbol table (box).
 |---|---|---|---|
 | `sync`, `sync-direct` | syscall tracepoints (built) | the same | `O_DIRECT` asked is not done: `iomap:iomap_dio_rw_begin`/`iomap_dio_complete` prove it on iomap filesystems (XFS, ext4) only; NFS goes through `nfs_direct_*` |
 | `posix-aio` | uprobes on `aio_read`, `aio_write`, `lio_listio`, `aio_fsync`; the helper's call traced | uprobes on `aio_error`, `aio_return`, `aio_suspend` | the join by `aiocb` address |
-| `libaio` | `io_submit` entry (its `iocb`s copied, phase 3) | `io_getevents` exit is the reap; fentry `aio_complete_rw` (static, in BTF and kallsyms, box) the real completion, `ki_res.obj` the user `iocb` (box) | `fs/aio.c` has no tracepoints (src); a completion in interrupt context has no meaningful thread, so joined by pointer; a buffered request completes inside `io_submit` (rec) |
+| `libaio` | `io_submit` entry (its `iocb`s copied, phase 3); fentry `aio_prep_rw` and `aio_fsync`, the kernel's request (phase 4 step 3) | `io_getevents` exit is the reap; fentry `aio_complete_rw` (static, in BTF and kallsyms, box) the real completion, `ki_res.obj` the user `iocb` (box); built at `aio_complete`, every request's posting, `aio_complete_rw` the fallback (2026-11-04, "Phase 4 step 3") | `fs/aio.c` has no tracepoints (src); a completion in interrupt context has no meaningful thread, so joined by pointer; a buffered request completes inside `io_submit` (rec) |
 | `io_uring` | tracepoint `io_uring_submit_req`: its record has no descriptor, offset, or length, but its argument is the `io_kiocb` after `prep` (`io_uring.c`, src), so a raw or BTF tracepoint reads `opcode`, `flags` (`REQ_F_FIXED_FILE`), `cqe.fd`, and `io_rw`'s `kiocb.ki_pos` and `len` (box) | tracepoint `io_uring_complete` (`req`, `user_data`, `res`, `cflags`, box) | under SQPOLL the issuer is the `iou-sqp` thread; a ring read without a call hides the reap; opens and closes inside the ring need fentry on `io_openat` or reading `io_open`; a fixed file's `cqe.fd` is an index, resolved from `io_uring_register(IORING_REGISTER_FILES)`'s array; `URING_CMD` opaque; a request punted to `iou-wrk` seen by `io_uring_queue_async_work` |
 | `mmap` faults | fentry `handle_mm_fault(vma, address, flags, regs)` (box); the file offset `vm_pgoff·PAGE + (address − vm_start)` | fexit: `VM_FAULT_MAJOR` in the return | `exceptions:page_fault_user` is x86 only and has no exit; ~~filter `FAULT_FLAG_USER`~~ filter on `regs` set (a `get_user_pages` of an `O_DIRECT` buffer faults too, and passes none; the flag would drop a call's copy of a mapped buffer; 2026-11-04, "Phase 4 step 2"); a `VM_FAULT_RETRY` attempt summed with its retry (rec); the readahead a fault starts by `readahead:page_cache_ra_*` and `filemap:mm_filemap_*` (box), by inode |
 | `gds` (cuFile) | uprobes `cuFileRead`/`cuFileWrite`, `cuFileBatchIOSubmit`, the `*Async` forms; or the `nvidia-fs` ioctls (`nvfs-core.h`, src) | uretprobe, `cuFileBatchIOGetStatus` by cookie | an asynchronous completion is a GPU stream's, untimed from the CPU; the handle mapped to a descriptor by `cuFileHandleRegister`; compatibility mode appears to use `io_uring` through `syscall()` (box, strings only); untested without the hardware |
@@ -9962,6 +9962,109 @@ mapping the converter does not know (an inherited mapping it saw no `mmap` of: n
 trace starts at the command's `exec`) is counted, not printed; a run of two faults at a random
 pair of offsets reads as a stride; faults on huge mappings of many files under one thread are
 one record per run, the size risk §3.98 named.
+
+**Phase 4 step 3, libaio's completions (proposed by this side and agreed by the user
+2026-11-04: "Proceed").** What the eBPF source saw of libaio before: `io_submit`'s requests
+copied at entry and `io_getevents`'s results at exit, the readers pairing a result with its
+request by `(context, aio_data)` in submission order. Four gaps, this side's: (1) when a
+request completed is unknown, only when the application collected its result, and buffered
+kernel AIO mostly completes inside `io_submit` (the call blocks), so an application can look
+asynchronous when it is not, demand-side information under the theme of step 2; (2) a result
+read from the context's ring in user space, with no call (fio's `userspace_reap`), is not seen,
+and its request was taken as complete with the bytes it asked; (3) `aio_data` is often reused
+(0), so a short read's result could go to another request; (4) a vectored request has no
+length in the record. Proposed and agreed: an `fentry` of `aio_complete(struct aio_kiocb *)`,
+every request's completion as the kernel posts it to the context's ring (reads, writes, fsync,
+poll), `aio_complete_rw(kiocb, res)` where the kernel's BTF has no `aio_complete` (inlined:
+reads' and writes' alone); the context's `user_id`, the request's `ki_res.obj` (the
+application's `struct iocb`), and the result read at offsets from BTF; ~~a completion traced by
+its context, which an `io_submit` of a traced process adds to a map (a completion may run in an
+interrupt), keyed by `user_id`, unique within a process only, a collision with an untraced
+process's context at the same address accepted as rare (its completions match nothing and are
+counted);~~ (superseded: "Found at the grant" below) `io_submit`'s probe copying each request's address with its structure (~~the key~~: corrected
+below, "Found at the grant"); records `aeiou_aio_issue` and `aeiou_aio_complete` (the names §3.98 reserved, `aeiou_aio_issue` holding
+the key alone, the request's fields staying in `io_submit`'s line); durations recorded, not
+reported as metrics in this step.
+
+*Built (2026-11-04).* `capture-ebpf/src/record.rs`: `AIO_ISSUE` and `AIO_DONE`, one record
+`AioRec` (the kernel's request, never printed; the context's `user_id`; `aio_data`; the result),
+`Config`'s `aio`, `ki_ctx_off`, `ki_res_off`, `ctx_user_id_off`. `capture-ebpf/src/main.rs`:
+`fentry`s of `aio_prep_rw` (every read and write as `io_submit` prepares it, in its array's
+order) and `aio_fsync` in the submitting thread, the request added to `AIO_REQS` (an LRU map of
+65,536, so a request prepared and then refused, which never completes, cannot fill it), and of
+`aio_complete` or `aio_complete_rw`, a completion recorded only for a request in the map, the
+records built on the program's stack, as `io_uring_complete`'s. `ebpf.rs`: `aio_layout` (the
+functions by their `FUNC`s' prototypes, `aio_kiocb` beginning with its `rw` and its `fsync`, the
+offsets), `aio_programs`, `load_aio`, the attach (a kernel that refuses a program captures on
+without them, said why), the header's `aio` (`complete`, `fsync`). `ebpf_text.rs`: a thread's
+issues inside its `io_submit` kept until the call's exit, then, after its line, an
+`aeiou_aio_issue(ctx=0xC, id=N, member=M) = 0` for each of the first `ret` that a completion
+will come for, stamped with the call's start, `member` its place in the line's array (one the
+line leaves out, vectored or past the 32 copied, waited for in silence); requests in flight by
+the kernel's request, numbered from `io_uring`'s pool; a completion posted before its call
+returned held until that call's line, then written `in_submit=1`; an `aeiou_aio_complete(ctx=0xC,
+id=N, data=0xD, in_submit=0|1) = RES` under the submitting thread, `RES` an error as strace
+prints one; the conversion's `aio_requests`, `aio_completions_unmatched`,
+`aio_completed_in_submit`, `aio_in_flight_at_end`. `strace.rs`: a trace whose header lists
+`aeiou_aio_complete` counts a request at its completion with the bytes it moved, paired through
+its issue's number, `io_getevents` collecting only; the notes `aio_completed_in_submit` and
+`aio_completed_never_reaped` (completions less the results calls collected), a request with no
+completion `aio_results_assumed_complete` as before; the export's members get their
+completions' results. `capture.rs`: `capture.json`'s `aio` (`traced`, `why`, `completions_at`),
+the source line, `not_seen` (strace's line on libaio's completions, new, left out where they are
+traced; the fallback's own). A trace without the records reads as before.
+
+*Found at the grant: the application's `struct iocb`'s address is no key (the user agreed
+the change 2026-11-04, "proceed").* As first built, the completion named its request by
+`ki_res.obj` and the probe of `io_submit` copied each request's address; a context filter
+(`AIO_CTXS`, filled by a program on `sys_enter` at each traced `io_submit`) chose the
+completions. The capture of this runner's `--posix libaio --cache direct` matched 1,606
+requests and left 440 completions unmatched: the kernel copies the structure at submission, so
+an application may reuse its memory at once, and this runner's engine builds its requests in a
+reused buffer, one address in flight for several requests (a decode of `syscalls.bin`, box).
+Buffered, every completion was inside its own call and the reuse did not show. So requests are
+paired by the kernel's own (`aio_kiocb`), recorded at `aio_prep_rw` and `aio_fsync` as the
+call prepares them, the issue probe's map choosing the completions in place of the context
+filter (gone, with its table and its loss box); a request's place in the array is the order of
+its call's issues. Cost: `aio_poll` is inlined here, so a poll request is not traced (it was
+never counted); a kernel that inlines `aio_prep_rw` traces no completion, said why. Found with
+it: `aio_prep_rw` takes a third parameter, `rw_type`, on this kernel (box); the loader requires
+the request first and no more. At the second grant, buffered: the kernel frees a request it
+completed inside the call, and the call's next request takes its address (one address four
+times in one `io_submit`; 1,124 of 1,606 completions unmatched), so the converter keeps each
+of a call's issues with the completion posted after it, the latest unanswered issue of that
+request answered, and writes a completion inside its call with its issue's number, never in
+the requests in flight.
+
+*Tests.* Unit: the layout from this kernel's BTF and every refusal of another's (`ebpf.rs`;
+with it, tests of `io_uring`'s other tracepoint forms and of the source check's wording, which
+had none); the records written (`ebpf_text.rs`: a completion inside its call, one after, an
+error, a vectored request, the kernel's request reused inside one call and after, a completion
+of no request and of one the call did not take, a lost exit, the fallback's fsync, no header);
+the reader (`strace.rs`: counted at completion through the issue's number with `aio_data`
+reused and completions out of order, the notes, the export's results, and the same calls
+without the records misread by `aio_data` as before). Golden: two cases, the record forms by
+hand and a capture of this runner's `--posix libaio --cache direct` (npy_per_sample at 20
+samples, 322 requests). Privileged (`tests/capture_ebpf.rs`): `aeiou run --posix libaio` of
+npy_per_sample's smoke set through the page cache and with `--cache direct`, captured under
+eBPF, reads as `--posix sync` with the same cache; 1,606 requests each answered, none unmatched
+or in flight; through the page cache all 1,606 posted inside their `io_submit`, direct none
+(box, WSL2 6.18, ext4). Not tested here: a kernel without `aio_complete` or `aio_prep_rw` (the
+layout's unit tests hold the refusals), an application that reads results from the ring in
+user space (fio is not installed; the reader's unit test holds the note), poll requests.
+
+
+*Found in the building.* `aio_complete` is called when the request's last reference drops:
+`io_submit_one` holds one until it has submitted the request, the completion the other
+(`iocb_put`, `fs/aio.c`, rec), so the record's time is when the result is posted, the later of
+the completion and the submission's end, which is the moment the application could collect
+it; `aio_complete_rw`, the fallback, is the completion itself. ~~A vectored request counted with
+the bytes its completion moved~~ (proposed): not built, since the reader takes a request's
+file, offset, and asked length from `io_submit`'s line, which leaves a vectored request out
+(its iovec array is not copied, `NOT_SEEN_EBPF`); its completion is consumed and nothing is
+written, as before. The `json!` of `capture.json` reached the macro's recursion limit with one
+key more: `aio` is set after it.
+
 
 ## 4. Plan changes
 

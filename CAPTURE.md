@@ -78,6 +78,11 @@ and put the noted value back after. Every program on the host takes more faults 
 set. If you cannot, `--accept fault-around` captures anyway, and the record says the faults
 missed some first touches. The record's `faults` says whether faults were traced, and why not.
 
+For an application that uses libaio (`io_submit`), it records when the kernel completed each
+request, where strace shows only when the application collected the result, and sees results
+the application reads from the ring's memory with no call. The record's `aio` says whether
+libaio's completions were traced, and why not.
+
 The probes cannot make your application wait, so when the application makes calls faster
 than the tool writes them down, the ring buffer fills and calls are lost. Any loss ends the
 capture with a box saying how many, where, and what to do: usually `--buffer 1GiB` (or what
@@ -177,8 +182,8 @@ does: send its digest, not the trace.
   `sudo -n` helper (phase 3b of brief item 54).
 - Object requests over TLS inside the program, Go, or HTTP/2 (libssl uprobes come with the
   eBPF source, phase 4): the record's `not_seen` lists what this capture could not see.
-  `io_uring`'s requests and page faults on mappings are traced by the eBPF source
-  (2026-11-04) where the kernel allows; under strace they are not.
+  `io_uring`'s requests, page faults on mappings, and libaio's completions are traced by the
+  eBPF source (2026-11-04) where the kernel allows; under strace they are not.
 - One node's interruption stopping the others (each node stops on its own signal, which
   `aeiou-launch` sends to every node), and comparing per-node records afterward for captures
   taken without a coordinator.

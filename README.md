@@ -484,6 +484,12 @@ put back by root, else set by the owner or waived); a fault still maps the whole
 is in, up to 2 MiB, which no setting changes (the pages each mapped, brief item 67). Decided with it: the abstract holds what the
 application demands, and readahead, caching, and the rest of the storage stack's response are
 the system under test's, judged by the performance it delivers.
+Since 2026-11-04 (phase 4, step 3, §3.98 "Phase 4 step 3") it traces libaio's completions too:
+when the kernel posted each request's result (`aeiou_aio_issue` and `aeiou_aio_complete`
+records), so a request counts at its completion with the bytes it moved, paired by a number,
+not by the reused `aio_data`, a completion inside its `io_submit` (buffered kernel AIO) and one
+read from the ring with no call are noted; a capture of this runner's own `--posix libaio`
+engine, buffered and direct, reads as its `--posix sync` run does.
 
 `aeiou cases` (2026-10-23, item 40) lists the use cases a binary can run by `--case NAME`,
 filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows
@@ -506,7 +512,7 @@ Not built, in rough order of interest:
 - The capture's other sources (brief item 54): ~~the HTTP-head shim for object requests (phase
   2),~~ (built 2026-11-03) ~~eBPF system calls that do not slow the application (phase 3),~~
   (built 2026-11-03) the `sudo -n` helper for hosts without file capabilities (phase 3b), and
-  uprobes, ~~faults on mappings, and `io_uring`~~ (`io_uring` and faults built 2026-11-04) (phase 4; decided
+  uprobes, ~~faults on mappings, `io_uring`, and libaio's completions~~ (built 2026-11-04) (phase 4; decided
   2026-11-04 with the trace format they write, strace's text extended by records of aeiou's own,
   `DESIGN_REVIEW.md` §3.98).
 

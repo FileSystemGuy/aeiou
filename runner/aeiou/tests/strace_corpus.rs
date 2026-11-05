@@ -43,7 +43,15 @@
 //! mappings (2026-11-04, phase 4 step 2; two cases, each checked by hand against its input):
 //! runs of loads, of stores, going down, inside a call, on a file outside the root, a run line
 //! written after a later-stamped one, the quiet times between a thread's runs; and a capture
-//! whose fault-around check was waived, fault-around's stride and the note it carries.
+//! whose fault-around check was waived, fault-around's stride and the note it carries. And
+//! libaio's completions (2026-11-04, phase 4 step 3; two cases, each checked by hand against its
+//! input): a capture of this runner's `--posix libaio --cache direct` engine (npy_per_sample at
+//! 20 samples, every completion after its call; paths rewritten to `/t/...`, `/s...`, and
+//! `/src/aeiou`), and these, written by hand:
+//! requests counted at their completions through their issues' numbers, `aio_data` reused and
+//! completions out of order, a short read, an error, a completion inside its call, a request on
+//! a file outside the root, an fsync not counted, a call that took fewer than it was given, a
+//! request with no completion, a completion of no request, results never collected by a call.
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths

@@ -28,6 +28,15 @@ pub const URING_CALL: u16 = 8;
 /// A page fault of a traced process on a file's mapping (`handle_mm_fault`, an `fentry` and an
 /// `fexit`, DESIGN_REVIEW.md §3.98 "Phase 4 step 2"): `Fault`, `head.ts` the fault's start.
 pub const FAULT: u16 = 9;
+/// A libaio request's completion as the kernel posts it (`aio_complete`, or `aio_complete_rw`
+/// where the kernel's BTF has no `aio_complete`; an `fentry`, DESIGN_REVIEW.md §3.98 "Phase 4
+/// step 3"), of a request `AIO_ISSUE` recorded: `AioRec`, `pid` and `tid` whoever's thread or
+/// interrupt posted it.
+pub const AIO_DONE: u16 = 10;
+/// A libaio request of a traced thread as `io_submit` prepares it (`aio_prep_rw`, every read
+/// and write; `aio_fsync`): `AioRec`, `res` 0. A call's requests are prepared in its array's
+/// order, so the converter knows each one's place.
+pub const AIO_ISSUE: u16 = 11;
 
 /// The start of every record: its kind and whole length, the CPU, the monotonic clock, and the
 /// process and thread as the traced command's own PID namespace numbers them.
@@ -141,6 +150,21 @@ pub struct FaultStart {
     pub ino: u64,
     pub dev: u32,
     pub flags: u32,
+}
+
+/// A libaio request's issue or completion: the kernel's request (`aio_kiocb`'s address, never
+/// printed: it pairs the two, where the application's `struct iocb`'s address does not, since
+/// the kernel copies the structure and the application may reuse it at once), the context
+/// (`kioctx.user_id`, the `aio_context_t` the application holds), its `aio_data`, and, at its
+/// completion, its result.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AioRec {
+    pub head: Head,
+    pub req: u64,
+    pub ctx: u64,
+    pub data: u64,
+    pub res: i64,
 }
 
 /// `VM_EXEC` (include/linux/mm.h, a `#define` the BTF does not carry, the same since 2.6): a
@@ -286,7 +310,13 @@ pub struct Config {
     pub inode_ino_off: u32,
     pub inode_sb_off: u32,
     pub sb_dev_off: u32,
-    pub pad_faults: u32,
+    /// libaio's completions (DESIGN_REVIEW.md §3.98 "Phase 4 step 3"): whether they are traced
+    /// (0, the kernel's structures are not those the probes read), and `aio_kiocb`'s `ki_ctx`
+    /// and `ki_res` and `kioctx`'s `user_id` offsets.
+    pub aio: u32,
+    pub ki_ctx_off: u32,
+    pub ki_res_off: u32,
+    pub ctx_user_id_off: u32,
 }
 
 /// One CPU's losses (`LOSSES`): records pending since the last one written, and in all; and

@@ -1299,9 +1299,21 @@ numbers; the order is this note's.
     back; anyone else is told how, or waives it). Decided with it, the theme: the abstract holds
     what the application demands, the storage stack's response (readahead, caching) is the
     system under test's and is judged by the performance it delivers; a capture measures the
-    application's demand and think time, not the capture host's performance (items 65, 66). Not
+    application's demand and think time, not the capture host's performance (items 65, 66). ~~Not
     implemented yet: libaio's real completion (phase 4 step 3, next), the rest of phase 4,
-    phase 3b, readers of a set, the set digest; readahead traced for diagnosis.
+    phase 3b, readers of a set, the set digest; readahead traced for diagnosis.~~
+    *Phase 4 step 3, libaio's completions, proposed and agreed with the user and built
+    2026-11-04* (§3.98 "Phase 4 step 3"): an `fentry` of `aio_complete` (every request's
+    completion as it is posted; `aio_complete_rw`, reads' and writes' alone, where the kernel's
+    BTF has no `aio_complete`), of the requests the command's threads issued, recorded at
+    `aio_prep_rw` and `aio_fsync` and paired by the kernel's request (the application's
+    `struct iocb` address is reused, found at the grant); written as `aeiou_aio_issue` (after the
+    `io_submit` line, a request's number and its place in the array) and `aeiou_aio_complete`
+    (`in_submit=1` for one posted before its call returned) records; a request counted at its
+    completion with the bytes it moved, paired by its number, not `aio_data`, `io_getevents`
+    only collecting (notes `aio_completed_in_submit`, `aio_completed_never_reaped`). Not
+    implemented yet: POSIX AIO's uprobes (phase 4 step 4, next), the rest of phase 4, phase 3b,
+    readers of a set, the set digest; readahead traced for diagnosis.
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no

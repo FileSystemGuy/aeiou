@@ -804,7 +804,7 @@ fn handled(name: &str) -> bool {
         || DUPS.contains(&name)
         || fd_op_of(name).is_some()
         || path_op_of(name).is_some()
-        || matches!(name, "close" | "lseek" | "io_setup" | "io_submit" | "io_getevents" | "io_pgetevents" | "chdir" | "fchdir" | "mmap" | "aeiou_uring_sqe" | "aeiou_uring_cqe" | "aeiou_fault")
+        || matches!(name, "close" | "lseek" | "io_setup" | "io_submit" | "io_getevents" | "io_pgetevents" | "chdir" | "fchdir" | "mmap" | "aeiou_uring_sqe" | "aeiou_uring_cqe" | "aeiou_fault" | "aeiou_aio_issue" | "aeiou_aio_complete")
 }
 
 /// When a call started and returned, and by whom: `(tid, issued, done)`.
@@ -884,6 +884,16 @@ pub struct Tracer {
     uring_batch: HashMap<i64, Vec<(String, String)>>,
     /// An `io_submit` was counted: its rounds' depth needs `--chain-gap-us` (`io_uring`'s are not chained).
     aio_submitted: bool,
+    /// The trace's header lists libaio's completions (`aeiou_aio_issue`, `aeiou_aio_complete`,
+    /// DESIGN_REVIEW.md §3.98 "Phase 4 step 3"): a request is counted at its completion, and
+    /// `io_getevents` only collects. Then each thread's last `io_submit`'s requests by their place
+    /// in its array, until its `aeiou_aio_issue`s number them; the requests in flight by
+    /// `(context, id)`; and the completions and the results collected, in all.
+    aio_records: bool,
+    aio_members: HashMap<i64, (String, HashMap<usize, Waiting>)>,
+    aio_ids: HashMap<(String, String), Waiting>,
+    aio_completed: u64,
+    aio_reaped: u64,
     aio_unused: BTreeMap<String, u64>,
     clock: f64,
     pub notes: BTreeMap<String, u64>,
@@ -926,6 +936,11 @@ impl Tracer {
             uring: HashMap::new(),
             uring_batch: HashMap::new(),
             aio_submitted: false,
+            aio_records: false,
+            aio_members: HashMap::new(),
+            aio_ids: HashMap::new(),
+            aio_completed: 0,
+            aio_reaped: 0,
             aio_unused: BTreeMap::new(),
             clock: 0.0,
             notes: BTreeMap::new(),
@@ -1287,6 +1302,7 @@ impl Tracer {
             // the eBPF source's header: the format's version and the record kinds it may hold
             let v: u64 = r.split([',', ' ']).next().and_then(|n| n.parse().ok()).unwrap_or(0);
             self.format = v;
+            self.aio_records = r.split_once(", records ").is_some_and(|(_, k)| k.split(' ').any(|k| k == "aeiou_aio_complete"));
             if v > TRACE_FORMAT {
                 self.note("trace_format_newer", v);
             }
@@ -1638,6 +1654,37 @@ impl Tracer {
         }
     }
 
+    /// An `aeiou_aio_complete`: its request's read or write counted with the bytes it moved.
+    fn aio_complete(&mut self, a: &[String], ret: i64, err: Option<&str>) -> Result<()> {
+        let args = keyed(a);
+        self.aio_completed += 1;
+        let (Some(ctx), Some(id)) = (args.get("ctx"), args.get("id")) else { return Ok(()) };
+        let Some(w) = self.aio_ids.remove(&(ctx.clone(), id.clone())) else { return Ok(()) };
+        if args.get("in_submit").is_some_and(|v| v == "1") {
+            self.note("aio_completed_in_submit", 1);
+        }
+        let n = ret.max(0);
+        self.data(w.kind, w.inst, w.tid, &w.path, w.file, w.off, w.nbytes, n)?;
+        if w.kind == W && n > 0 {
+            if let Some(e) = self.extent.get_mut(&w.path) {
+                *e = (*e).max(w.off + n);
+            }
+        }
+        if let (Some(m), Some(ex)) = (w.member, self.export.as_mut()) {
+            ex.member_ret(m, if ret >= 0 { json!(ret) } else { json!(err.unwrap_or("EIO")) });
+        }
+        Ok(())
+    }
+
+    /// Requests whose results the trace does not show, taken as complete.
+    fn assume_complete(&mut self, ws: Vec<Waiting>) -> Result<()> {
+        for w in ws {
+            self.note("aio_results_assumed_complete", 1);
+            self.data(w.kind, w.inst, w.tid, &w.path, w.file, w.off, w.nbytes, w.nbytes)?;
+        }
+        Ok(())
+    }
+
     /// The path an `io_uring` open names, resolved as the converter printed its directory.
     fn uring_open_path(&self, u: &Uring) -> Option<String> {
         let p = c_string(u.args.get("path")?)?;
@@ -1695,6 +1742,20 @@ impl Tracer {
         }
         if name == "aeiou_uring_cqe" {
             return self.uring_cqe(tid, a, ret, ret_path, done, err);
+        }
+        if name == "aeiou_aio_issue" {
+            let args = keyed(a);
+            let (Some(ctx), Some(id), Some(m)) = (args.get("ctx"), args.get("id"), args.get("member").and_then(|m| m.parse::<usize>().ok())) else { return Ok(()) };
+            // a request the line's thread did not count (not under a root, not a read or a write) is not waited for
+            if let Some(w) = self.aio_members.get_mut(&tid).filter(|(c, _)| c == ctx).and_then(|(_, ws)| ws.remove(&m)) {
+                if let Some(old) = self.aio_ids.insert((ctx.clone(), id.clone()), w) {
+                    self.assume_complete(vec![old])?;
+                }
+            }
+            return Ok(());
+        }
+        if name == "aeiou_aio_complete" {
+            return self.aio_complete(a, ret, err);
         }
         let inst = self.instance(tid);
         if inst.is_none() {
@@ -1987,8 +2048,8 @@ impl Tracer {
             }
             // the kernel takes the first `ret` requests of the array and none past them
             let taken = ret.max(0) as usize;
-            let mut got: Vec<(String, usize, String, Option<u64>, i64, i64)> = Vec::new();
-            for cb in cbs.iter().take(taken) {
+            let mut got: Vec<(usize, String, usize, String, Option<u64>, i64, i64)> = Vec::new();
+            for (k, cb) in cbs.iter().take(taken).enumerate() {
                 let path = cb.path.clone().filter(|p| !p.is_empty());
                 let f = self.file(tid, Some(cb.fd), path.as_deref());
                 let fp = path.clone().or_else(|| f.as_ref().and_then(|f| f.borrow().path.clone()));
@@ -1998,7 +2059,7 @@ impl Tracer {
                     continue;
                 };
                 let held = f.as_ref().and_then(|f| f.borrow().file);
-                got.push((cb.data.clone(), if read { R } else { W }, p, held, cb.offset, cb.nbytes));
+                got.push((k, cb.data.clone(), if read { R } else { W }, p, held, cb.offset, cb.nbytes));
             }
             let Some(inst) = inst else { return Ok(()) };
             if got.is_empty() || ret <= 0 {
@@ -2042,7 +2103,20 @@ impl Tracer {
                     members = Some(self.export.as_mut().unwrap().submit(when, &mem));
                 }
             }
-            for (j, (data, kind, p, file, off, nbytes)) in got.into_iter().enumerate() {
+            if self.aio_records {
+                // counted at its completion (`aeiou_aio_complete`), once its `aeiou_aio_issue`
+                // numbers it; a request of the thread's call before that none numbered was lost
+                let mut take = HashMap::new();
+                for (j, (k, _, kind, p, file, off, nbytes)) in got.into_iter().enumerate() {
+                    let member = members.as_ref().and_then(|m| m.get(j).copied());
+                    take.insert(k, Waiting { kind, inst, tid, path: p, file, off, nbytes, member });
+                }
+                if let Some((_, old)) = self.aio_members.insert(tid, (ctx, take)) {
+                    self.assume_complete(old.into_values().collect())?;
+                }
+                return Ok(());
+            }
+            for (j, (_, data, kind, p, file, off, nbytes)) in got.into_iter().enumerate() {
                 // counted when its result is reaped (`io_getevents`), with the bytes it moved
                 let member = members.as_ref().and_then(|m| m.get(j).copied());
                 let seq = &mut self.aio_seq;
@@ -2062,6 +2136,11 @@ impl Tracer {
                 c.1 = done;
             }
             let ctx = a.first().cloned();
+            if self.aio_records {
+                // the requests' results are their completions': collecting them counts nothing
+                self.aio_reaped += ret.max(0) as u64;
+                return Ok(());
+            }
             let evs = events(a.get(3).map(String::as_str).unwrap_or(""));
             if a.len() > 3 && truncated(&a[3]) && ret > evs.len() as i64 && self.aio.keys().any(|k| Some(&k.0) == ctx.as_ref()) {
                 // results the trace cut off: their requests stay waiting, taken as complete at the end
@@ -2306,10 +2385,23 @@ impl Tracer {
         let mut keys: Vec<(u64, (String, String))> = self.aio.iter().map(|(k, v)| (v.0, k.clone())).collect();
         keys.sort();
         for (_, k) in keys {
-            for w in self.aio.remove(&k).unwrap().1 {
-                self.note("aio_results_assumed_complete", 1);
-                self.data(w.kind, w.inst, w.tid, &w.path, w.file, w.off, w.nbytes, w.nbytes)?;
-            }
+            let ws = self.aio.remove(&k).unwrap().1;
+            self.assume_complete(ws)?;
+        }
+        // the same of a trace with completions: their records lost, or the capture ended first
+        let mut left: Vec<((String, String), Waiting)> = self.aio_ids.drain().collect();
+        left.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut members: Vec<(i64, (String, HashMap<usize, Waiting>))> = self.aio_members.drain().collect();
+        members.sort_by_key(|m| m.0);
+        for (_, (_, ws)) in members {
+            let mut ws: Vec<(usize, Waiting)> = ws.into_iter().collect();
+            ws.sort_by_key(|w| w.0);
+            left.extend(ws.into_iter().map(|(_, w)| (Default::default(), w)));
+        }
+        self.assume_complete(left.into_iter().map(|(_, w)| w).collect())?;
+        if self.aio_completed > self.aio_reaped {
+            // a result read from the context's ring in user space, with no call
+            self.note("aio_completed_never_reaped", self.aio_completed - self.aio_reaped);
         }
         // contexts made and never submitted to: unused, or `io_submit` left out of the trace's
         // `-e trace=` (strace classes no AIO call in `%desc`), and every request lost with it
@@ -2585,6 +2677,70 @@ mod tests {
         assert!(notes.get("not_counted:aeiou_uring_sqe").is_none() && notes.get("not_counted:aeiou_uring_cqe").is_none(), "{notes}");
         // the ring's requests are in this trace: its setup is no longer a sign they are missing
         assert!(notes.get("not_counted:io_uring_setup").is_none(), "{notes}");
+    }
+
+    /// libaio's completions in an eBPF capture (DESIGN_REVIEW.md §3.98 "Phase 4 step 3"): a
+    /// request counted at its `aeiou_aio_complete` with the bytes it moved, paired by the number
+    /// its `aeiou_aio_issue` gave it (not by `aio_data`, which the second call reuses and whose
+    /// completions come out of order), `io_getevents` collecting only; a completion inside its
+    /// call noted, the results never collected by a call noted, a request with no completion
+    /// taken as complete; the export's members get their completions' results.
+    #[test]
+    fn libaio_requests_count_at_their_completions() {
+        let lines = [
+            "0 1.000000 --- aeiou: trace format 1, records aeiou_aio_issue aeiou_aio_complete ---",
+            "1 1.000001 openat(AT_FDCWD</d>, \"/d/a\", O_RDWR) = 7</d/a> <0.000010>",
+            "1 1.000002 io_setup(8, [0xc]) = 0 <0.000001>",
+            "1 1.000003 io_submit(0xc, 3, [{aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=7</d/a>, aio_buf=0x1, aio_nbytes=4096, aio_offset=0}, {aio_data=0x0, aio_lio_opcode=IOCB_CMD_FSYNC, aio_fildes=7</d/a>}, {aio_data=0x0, aio_lio_opcode=IOCB_CMD_PWRITE, aio_fildes=7</d/a>, aio_buf=0x1, aio_nbytes=100, aio_offset=8192}]) = 3 <0.000004>",
+            "1 1.000003 aeiou_aio_issue(ctx=0xc, id=1, member=0) = 0",
+            "1 1.000003 aeiou_aio_issue(ctx=0xc, id=2, member=1) = 0",
+            "1 1.000003 aeiou_aio_issue(ctx=0xc, id=3, member=2) = 0",
+            "1 1.000004 aeiou_aio_complete(ctx=0xc, id=1, data=0x0, in_submit=1) = 1000",
+            "1 1.000010 aeiou_aio_complete(ctx=0xc, id=3, data=0x0, in_submit=0) = 100",
+            "1 1.000011 aeiou_aio_complete(ctx=0xc, id=2, data=0x0, in_submit=0) = 0",
+            "1 1.000012 io_getevents(0xc, 1, 8, [{data=0x0, obj=0x10, res=100, res2=0}], NULL) = 1 <0.000001>",
+            "1 1.000020 io_submit(0xc, 2, [{aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=7</d/a>, aio_buf=0x1, aio_nbytes=4096, aio_offset=0}, {aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=7</d/a>, aio_buf=0x1, aio_nbytes=4096, aio_offset=4096}]) = 2 <0.000004>",
+            "1 1.000020 aeiou_aio_issue(ctx=0xc, id=1, member=0) = 0",
+            "1 1.000020 aeiou_aio_issue(ctx=0xc, id=2, member=1) = 0",
+            "1 1.000030 aeiou_aio_complete(ctx=0xc, id=2, data=0x0, in_submit=0) = 4096",
+            "1 1.000031 aeiou_aio_complete(ctx=0xc, id=1, data=0x0, in_submit=0) = -1 EIO (Input/output error)",
+            "1 1.000032 io_getevents(0xc, 2, 8, [{data=0x0, obj=0x20, res=4096, res2=0}, {data=0x0, obj=0x18, res=-5, res2=0}], NULL) = 2 <0.000001>",
+            // a request whose completion the trace does not show
+            "1 1.000040 io_submit(0xc, 1, [{aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=7</d/a>, aio_buf=0x1, aio_nbytes=10, aio_offset=0}]) = 1 <0.000004>",
+            "1 1.000040 aeiou_aio_issue(ctx=0xc, id=4, member=0) = 0",
+            // a completion of no request the trace shows
+            "1 1.000050 aeiou_aio_complete(ctx=0xc, id=9, data=0x0, in_submit=0) = 10",
+        ]
+        .join("\n");
+        let o = Opts { roots: vec!["/d".into()], ..Opts::default() };
+        let (doc, _) = metrics(lines.as_bytes(), &o).unwrap();
+        let total = &doc["total"];
+        // the short read's 1000, the second call's 4096 at 4096 (not the failed one at 0), the unanswered 10
+        assert_eq!((total["bytes_read"].as_u64(), total["bytes_written"].as_u64()), (Some(1000 + 4096 + 10), Some(100)), "{total}");
+        assert_eq!(total["fan_out"], json!({"1": 1, "2": 2}), "{total}");
+        let notes = &doc["notes"];
+        assert_eq!(notes["aio_completed_in_submit"], 1, "{notes}");
+        // six completions, three results collected by a call
+        assert_eq!(notes["aio_completed_never_reaped"], 3, "{notes}");
+        assert_eq!(notes["aio_results_assumed_complete"], 1, "{notes}");
+        assert!(notes.get("aio_requests_not_counted").is_some_and(|n| n == 1), "{notes}");
+        // the same calls without the records: counted when reaped, by aio_data, as strace's are,
+        // which gives the write's result to the read and the read's to the write
+        let plain: String = lines.lines().filter(|l| !l.contains("aeiou_")).collect::<Vec<_>>().join("\n");
+        let (doc, _) = metrics(plain.as_bytes(), &o).unwrap();
+        assert!(doc["notes"].get("aio_completed_in_submit").is_none(), "{}", doc["notes"]);
+        assert_eq!((doc["total"]["bytes_read"].as_u64(), doc["total"]["bytes_written"].as_u64()), (Some(100 + 4096 + 10), Some(4096)), "{}", doc["total"]);
+
+        // the export's submits carry their members' results
+        let opener = || -> std::io::Result<Box<dyn BufRead + '_>> { Ok(Box::new(lines.as_bytes())) };
+        let mut out = Vec::new();
+        crate::export::strace(&opener, "/d", &[], None, &mut out).unwrap();
+        let ev: Vec<Value> = out.split(|b| *b == b'\n').filter(|l| !l.is_empty()).skip(1).map(|l| serde_json::from_slice(l).unwrap()).collect();
+        let subs: Vec<&Value> = ev.iter().filter(|e| e["op"] == "submit").collect();
+        assert_eq!(subs.len(), 3, "{ev:?}");
+        let rets = |e: &Value| e["ops"].as_array().unwrap().iter().map(|m| m["ret"].clone()).collect::<Vec<_>>();
+        assert_eq!(rets(subs[0]), [json!(1000), json!(100)], "{ev:?}");
+        assert_eq!(rets(subs[1]), [json!("EIO"), json!(4096)], "{ev:?}");
     }
 
     #[test]

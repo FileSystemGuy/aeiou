@@ -125,7 +125,14 @@ count=C, major=M, write=0|1, in_call=0|1, page=B, span_ns=T, gap_max_ns=G, addr=
 stamped with its first fault's start, `off` the first fault's page in the file, `major` the
 faults that read the disk, `in_call` a call's copy of a mapped buffer, `span_ns` from the first
 fault's start to the last's end, `gap_max_ns` the longest quiet time inside it, and `<DUR>`
-the time its faults took. `metrics` counts them apart from the calls, in `faults` (FILES; the
+the time its faults took. And libaio's completions (`DESIGN_REVIEW.md` §3.98 "Phase 4 step 3";
+`aeiou_aio_issue aeiou_aio_complete` in the header's records): after an `io_submit`'s line an
+`aeiou_aio_issue(ctx=0xC, id=N, member=M) = 0` for each request it took, `member` its place in
+the line's array, and an `aeiou_aio_complete(ctx=0xC, id=N, data=0xD, in_submit=0|1) = RES`
+when the kernel posted its result, `in_submit=1` before the call returned; a read or write then
+counts at its completion with the bytes it moved, paired by `id`, not `aio_data`, and
+`io_getevents` only collects (notes `aio_completed_in_submit`, `aio_completed_never_reaped`).
+`metrics` counts the faults apart from the calls, in `faults` (FILES; the
 note `faults_kernel_observed` says what they are: the kernel's view of first touches, weaker
 evidence than a call), `export` keeps a mapping as one read of its range (`mmap_as_read`) and
 notes the faults it does not replay (`faults_not_replayed`), and a capture whose
@@ -390,6 +397,16 @@ readahead on a cold read), which no setting changes: an `aeiou_fault` is where t
 began, at the granularity the kernel mapped, and the pages each fault mapped are not recorded
 (brief item 67). What a fault shows is the kernel's view of the application's touches; the
 readahead it starts is the kernel's own I/O and is not in the trace.
+**libaio's completions** (`DESIGN_REVIEW.md` §3.98 "Phase 4 step 3"): where the kernel's BTF
+has `aio_prep_rw` and `aio_complete` (every request's completion as it is posted) or
+`aio_complete_rw` (reads' and writes' alone), and the kernel can attach to them
+(`capture.json`'s `aio` says which, or why not; the capture goes on without them), an `fentry`
+of `aio_prep_rw` (and of `aio_fsync`, where the BTF has it) records each request of the
+command's threads as `io_submit` prepares it, in its array's order, and one of the completion's
+function records that request's completion, whoever posts it (an interrupt, a worker), paired
+by the kernel's own request, never printed (the application's `struct iocb` is copied by the
+kernel, and its address may be reused at once). A poll request is not traced. They are
+written as the `aeiou_aio_issue` and `aeiou_aio_complete` records above.
 The probes are attached and every capability given up for good before the command is
 started; the command runs as the invoking user, in the environment the tool was started with
 (a binary with capabilities is secure-exec, and the variables glibc strips from it,
@@ -413,9 +430,8 @@ count those lines (`events_lost` in the notes of `metrics`, `export`, and `diges
 `trace_incomplete` saying what it means), a descriptor whose open fell in a window is printed
 without a path, never guessed, and `compare` says first that a side is incomplete. Not
 implemented yet: the `sudo -n` helper for hosts where file capabilities cannot be granted
-(phase 3b of brief item 54), and the request heads by uprobe, mapping faults, libaio's real
-completion, and POSIX AIO's issuer (phase 4, after `io_uring` and mapping faults, built
-2026-11-04); a `trace` node that replays faults as touches through a mapping (brief item 65).
+(phase 3b of brief item 54), and the request heads by uprobe and POSIX AIO's issuer (phase 4,
+after `io_uring`, mapping faults, and libaio's completions, built 2026-11-04); a `trace` node that replays faults as touches through a mapping (brief item 65).
 
 **Object requests.** With an `--endpoint`, the command also runs with the capture's library
 preloaded (`--requests shim`, the default then; `--requests none` leaves it out), put in the

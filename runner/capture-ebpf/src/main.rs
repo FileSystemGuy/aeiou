@@ -16,7 +16,7 @@ use aya_ebpf::{
         bpf_probe_read_kernel, generated as gen,
     },
     macros::{fentry, fexit, map, raw_tracepoint},
-    maps::{Array, HashMap, PerCpuArray, RingBuf},
+    maps::{Array, HashMap, LruHashMap, PerCpuArray, RingBuf},
     programs::{FEntryContext, FExitContext, RawTracePointContext},
 };
 use core::mem::size_of;
@@ -39,6 +39,13 @@ static RETRY: HashMap<u32, u32> = HashMap::with_max_entries(65536, 0);
 /// traced by its ring, since it may run in an interrupt or in a thread of no traced process.
 #[map]
 static RINGS: HashMap<u64, u8> = HashMap::with_max_entries(4096, 0);
+/// The libaio requests of traced threads in flight, by the kernel's request: a completion is
+/// traced by its request, since it may run in an interrupt or in a thread of no traced process
+/// (DESIGN_REVIEW.md §3.98 "Phase 4 step 3"). Least recently used first out, so a request the
+/// kernel dropped without a completion (one `io_submit` refused after preparing it) cannot
+/// fill it.
+#[map]
+static AIO_REQS: LruHashMap<u64, u8> = LruHashMap::with_max_entries(65536, 0);
 /// A fault between its entry and its return, by thread id.
 #[map]
 static FAULTS: HashMap<u32, FaultStart> = HashMap::with_max_entries(65536, 0);
@@ -633,6 +640,88 @@ pub fn fault_exit(ctx: FExitContext) -> i32 {
     let Some(loss) = LOSSES.get_ptr_mut(0) else { return 0 };
     let loss = unsafe { &mut *loss };
     if EVENTS.output::<Fault>(&rec, 0).is_err() {
+        if loss.pending == 0 {
+            loss.first = rec.head.ts;
+        }
+        loss.pending += 1;
+        loss.last = rec.head.ts;
+        loss.total += 1;
+    }
+    0
+}
+
+/// A libaio request of a traced thread as `io_submit` prepares it, a read or a write
+/// (`aio_prep_rw(struct kiocb *, const struct iocb *)`, the request's `kiocb` its first member,
+/// its context and `aio_data` set before): added to `AIO_REQS`, so its completion is traced,
+/// and recorded, so the converter numbers it by its place in the call's array.
+#[fentry(function = "aio_prep_rw")]
+pub fn aio_prep_rw(ctx: FEntryContext) -> i32 {
+    let req: *const u8 = ctx.arg(0);
+    aio_issue(req)
+}
+
+/// The same of an fsync (`aio_fsync(struct fsync_iocb *, ...)`, the request's first member).
+#[fentry(function = "aio_fsync")]
+pub fn aio_fsync(ctx: FEntryContext) -> i32 {
+    let req: *const u8 = ctx.arg(0);
+    aio_issue(req)
+}
+
+#[inline(always)]
+fn aio_issue(req: *const u8) -> i32 {
+    if !traced() {
+        return 0;
+    }
+    let Some(cfg) = CONFIG.get(0) else { return 0 };
+    if cfg.aio == 0 {
+        return 0;
+    }
+    let key = req as u64;
+    let _ = AIO_REQS.insert(&key, &1, 0);
+    aio_emit(cfg, AIO_ISSUE, req, 0)
+}
+
+/// A libaio request's completion as the kernel posts it to the context's ring
+/// (`aio_complete(struct aio_kiocb *)`, its result in `ki_res`), whatever thread or interrupt
+/// posts it: kept when the request is one a traced thread issued.
+#[fentry(function = "aio_complete")]
+pub fn aio_complete(ctx: FEntryContext) -> i32 {
+    let req: *const u8 = ctx.arg(0);
+    let Some(cfg) = CONFIG.get(0) else { return 0 };
+    let res = unsafe { bpf_probe_read_kernel(req.add(cfg.ki_res_off as usize + 16) as *const i64) }.unwrap_or(0);
+    aio_done(cfg, req, res)
+}
+
+/// The same where the kernel's BTF has no `aio_complete` (inlined): `aio_complete_rw(struct
+/// kiocb *, long res)`, a read's or a write's completion alone.
+#[fentry(function = "aio_complete_rw")]
+pub fn aio_complete_rw(ctx: FEntryContext) -> i32 {
+    let req: *const u8 = ctx.arg(0);
+    let res: i64 = ctx.arg(1);
+    let Some(cfg) = CONFIG.get(0) else { return 0 };
+    aio_done(cfg, req, res)
+}
+
+#[inline(always)]
+fn aio_done(cfg: &Config, req: *const u8, res: i64) -> i32 {
+    let key = req as u64;
+    if cfg.aio == 0 || unsafe { AIO_REQS.get(&key) }.is_none() {
+        return 0;
+    }
+    let _ = AIO_REQS.remove(&key);
+    aio_emit(cfg, AIO_DONE, req, res)
+}
+
+/// An `AioRec` of `req`, built on this program's stack: an interrupt's completion must not
+/// write the per-CPU buffer a call's probe it interrupted is filling.
+#[inline(always)]
+fn aio_emit(cfg: &Config, kind: u16, req: *const u8, res: i64) -> i32 {
+    let rd = |p: *const u8, o: usize| unsafe { bpf_probe_read_kernel(p.add(o) as *const u64) }.unwrap_or(0);
+    let kctx = rd(req, cfg.ki_ctx_off as usize) as *const u8;
+    let rec = AioRec { head: Head { len: size_of::<AioRec>() as u16, ..head(kind) }, req: req as u64, ctx: rd(kctx, cfg.ctx_user_id_off as usize), data: rd(req, cfg.ki_res_off as usize), res };
+    let Some(loss) = LOSSES.get_ptr_mut(0) else { return 0 };
+    let loss = unsafe { &mut *loss };
+    if EVENTS.output::<AioRec>(&rec, 0).is_err() {
         if loss.pending == 0 {
             loss.first = rec.head.ts;
         }

@@ -1,0 +1,28 @@
+0 1700000000.000000 --- aeiou: trace format 1, records aeiou_aio_issue aeiou_aio_complete ---
+10 1700000000.000000 execve("/bin/app", 0x20, 0x30) = 0 <0.000001>
+10 1700000000.000010 openat(AT_FDCWD</d>, "a", O_RDWR|O_CREAT, 0644) = 7</d/a> <0.000002>
+10 1700000000.000020 openat(AT_FDCWD</e>, "x", O_RDONLY) = 8</e/x> <0.000002>
+10 1700000000.000030 io_setup(64, [0x7f00000c0000]) = 0 <0.000003>
+10 1700000000.000040 io_submit(0x7f00000c0000, 4, [{aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=7</d/a>, aio_buf=0x1000, aio_nbytes=4096, aio_offset=0}, {aio_data=0x0, aio_lio_opcode=IOCB_CMD_FSYNC, aio_fildes=7</d/a>}, {aio_data=0x0, aio_rw_flags=RWF_DSYNC, aio_lio_opcode=IOCB_CMD_PWRITE, aio_fildes=7</d/a>, aio_buf=0x2000, aio_nbytes=100, aio_offset=8192}, {aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=8</e/x>, aio_buf=0x3000, aio_nbytes=10, aio_offset=0}]) = 4 <0.000020>
+10 1700000000.000040 aeiou_aio_issue(ctx=0x7f00000c0000, id=1, member=0) = 0
+10 1700000000.000040 aeiou_aio_issue(ctx=0x7f00000c0000, id=2, member=1) = 0
+10 1700000000.000040 aeiou_aio_issue(ctx=0x7f00000c0000, id=3, member=2) = 0
+10 1700000000.000040 aeiou_aio_issue(ctx=0x7f00000c0000, id=4, member=3) = 0
+10 1700000000.000050 aeiou_aio_complete(ctx=0x7f00000c0000, id=1, data=0x0, in_submit=1) = 1000
+10 1700000000.000055 aeiou_aio_complete(ctx=0x7f00000c0000, id=4, data=0x0, in_submit=1) = 10
+11 1700000000.000070 read(7</d/a>, ""..., 100) = 100 <0.000002>
+10 1700000000.000100 aeiou_aio_complete(ctx=0x7f00000c0000, id=3, data=0x0, in_submit=0) = 100
+10 1700000000.000110 aeiou_aio_complete(ctx=0x7f00000c0000, id=2, data=0x0, in_submit=0) = 0
+10 1700000000.000120 io_getevents(0x7f00000c0000, 1, 64, [{data=0x0, obj=0x10, res=100, res2=0}], NULL) = 1 <0.000001>
+10 1700000000.000200 io_submit(0x7f00000c0000, 2, [{aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=7</d/a>, aio_buf=0x1000, aio_nbytes=4096, aio_offset=0}, {aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=7</d/a>, aio_buf=0x2000, aio_nbytes=4096, aio_offset=4096}]) = 2 <0.000004>
+10 1700000000.000200 aeiou_aio_issue(ctx=0x7f00000c0000, id=1, member=0) = 0
+10 1700000000.000200 aeiou_aio_issue(ctx=0x7f00000c0000, id=2, member=1) = 0
+10 1700000000.000300 aeiou_aio_complete(ctx=0x7f00000c0000, id=2, data=0x0, in_submit=0) = 4096
+10 1700000000.000310 aeiou_aio_complete(ctx=0x7f00000c0000, id=1, data=0x0, in_submit=0) = -1 EIO (Input/output error)
+10 1700000000.000320 io_getevents(0x7f00000c0000, 2, 64, [{data=0x0, obj=0x20, res=4096, res2=0}, {data=0x0, obj=0x18, res=-5, res2=0}], NULL) = 2 <0.000001>
+10 1700000000.000400 io_submit(0x7f00000c0000, 2, [{aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=7</d/a>, aio_buf=0x1000, aio_nbytes=10, aio_offset=0}, {aio_data=0x0, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=7</d/a>, aio_buf=0x1000, aio_nbytes=10, aio_offset=10}]) = 1 <0.000004>
+10 1700000000.000400 aeiou_aio_issue(ctx=0x7f00000c0000, id=5, member=0) = 0
+10 1700000000.000500 aeiou_aio_complete(ctx=0x7f00000c0000, id=9, data=0x0, in_submit=0) = 10
+10 1700000000.000510 aeiou_future_record(x=1) = 0
+10 1700000000.000600 close(7</d/a>) = 0 <0.000001>
+10 1700000000.000700 +++ exited with 0 +++

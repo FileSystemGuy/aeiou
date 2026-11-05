@@ -59,9 +59,10 @@ pub const MAX_OFFSET_S: f64 = 0.010;
 pub const CLOCK_ROUNDS: usize = 8;
 
 /// What a capture under strace cannot see, recorded in every record.
-pub const NOT_SEEN_STRACE: [&str; 4] = [
+pub const NOT_SEEN_STRACE: [&str; 5] = [
     "loads and stores to mapped memory (mmap): the page faults they cause are not system calls",
     "io_uring operations: io_uring_enter is traced, the submission queue's entries are not",
+    "when a libaio request completed: io_getevents shows when its result was collected, and a result read from the context's ring in user space, with no call, is not seen at all",
     "object-store requests: the sockets' calls are traced, the HTTP heads are not (the capture's library, --requests shim, or the store's own log)",
     "which reads the page cache served",
 ];
@@ -73,6 +74,11 @@ pub const NOT_SEEN_URING: [&str; 3] = [
     "the contents of IORING_OP_URING_CMD requests (a driver's own commands, NVMe passthrough): their operation alone",
     "when an io_uring completion was reaped: an application reads them from the ring's shared memory with no call",
 ];
+
+/// What a capture under eBPF cannot see of libaio when its completions are traced at
+/// `aio_complete_rw` (in place of strace's line on it, `NOT_SEEN_STRACE[2]`): the kernel's BTF
+/// has no `aio_complete` (DESIGN_REVIEW.md §3.98 "Phase 4 step 3").
+pub const NOT_SEEN_AIO_RW: &str = "when a libaio fsync or poll request completed: this kernel's BTF has no aio_complete, so the completions of reads and writes alone are traced (at aio_complete_rw); the others are counted when io_getevents collects them";
 
 /// What a capture under eBPF cannot see of mapped memory when its faults are traced (in place of
 /// strace's line on it, `NOT_SEEN_STRACE[0]`); the last when a first touch may not fault.
@@ -1189,6 +1195,15 @@ pub fn run(o: Opts) -> Result<i32> {
     if faults_traced {
         line[0] += &format!(", fentry,fexit:handle_mm_fault (faults on mappings of files; runs end after {} µs quiet)", o.fault_gap_ns as f64 / 1e3);
     }
+    let aio = probes.as_ref().map(|p| p.aio_header());
+    // the function libaio's completions are traced at, when they are
+    let aio_at = aio.as_ref().and_then(|a| a["layout"]["complete"].as_str().map(str::to_string));
+    if let Some(Value::String(why)) = aio.as_ref().map(|a| &a["why"]) {
+        say(&format!("libaio's completions are not traced: {why}"));
+    }
+    if let Some(f) = &aio_at {
+        line[0] += &format!(", fentry:{f} (libaio's completions)");
+    }
 
     catch(libc::SIGINT);
     catch(libc::SIGTERM);
@@ -1217,6 +1232,7 @@ pub fn run(o: Opts) -> Result<i32> {
                 "inherited": inherited,
                 "uring": p.uring_header(),
                 "faults": faults,
+                "aio": aio,
             });
             let reader = p.read_into(&bin, &header, stop.clone())?;
             unsafe {
@@ -1361,7 +1377,16 @@ pub fn run(o: Opts) -> Result<i32> {
         line.truncate(line.len() - o.command.len());
         line.extend(argv.iter().cloned());
     }
-    let rec = json!({
+    let not_seen = NOT_SEEN_STRACE
+            .iter()
+            .filter(|n| !(uring_traced && n.starts_with("io_uring operations")) && !(faults_traced && n.starts_with("loads and stores")) && !(aio_at.is_some() && n.starts_with("when a libaio request")))
+            .chain(if aio_at.as_deref() == Some("aio_complete_rw") { [NOT_SEEN_AIO_RW].iter() } else { [].iter() })
+            .chain(if uring_traced { NOT_SEEN_URING.iter() } else { [].iter() })
+            .chain(if faults_traced { NOT_SEEN_FAULTS[..if first_touch == Some(true) { 4 } else { 5 }].iter() } else { [].iter() })
+            .chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() })
+            .map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>();
+    let aio_rec = aio.as_ref().map(|a| json!({"traced": a["traced"], "why": a.get("why"), "completions_at": a["layout"].get("complete")}));
+    let mut rec = json!({
         "aeiou_capture": 1,
         "tool": {"name": "aeiou-trace", "version": env!("CARGO_PKG_VERSION")},
         "host": {"name": host, "kernel": facts["kernel"], "distribution": distribution(), "cpus": facts["cpus"], "cpus_online": facts["cpus_online"], "memory": facts["memory"], "cgroup_memory_max": facts["cgroup_memory_max"]},
@@ -1400,13 +1425,7 @@ pub fn run(o: Opts) -> Result<i32> {
             "first_touch_observed": f.get("first_touch"),
             "fault_around": {"set_by_capture": fault_around.is_some(), "before": fault_around},
         })),
-        "not_seen": NOT_SEEN_STRACE
-            .iter()
-            .filter(|n| !(uring_traced && n.starts_with("io_uring operations")) && !(faults_traced && n.starts_with("loads and stores")))
-            .chain(if uring_traced { NOT_SEEN_URING.iter() } else { [].iter() })
-            .chain(if faults_traced { NOT_SEEN_FAULTS[..if first_touch == Some(true) { 4 } else { 5 }].iter() } else { [].iter() })
-            .chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() })
-            .map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>(),
+        "not_seen": not_seen,
         "requests": requests,
         "anchors": anchors,
         "mountstats": "not taken: a traced run's wire counts are not the application's (strace -yy adds a GETATTR to each READ); take them from an untraced run",
@@ -1416,6 +1435,8 @@ pub fn run(o: Opts) -> Result<i32> {
         "changes_at_end": changes,
         "trace": {"file": "trace.txt", "bytes": bytes, "sha256": sha},
     });
+    // apart: one key more and the macro passes its recursion limit
+    rec["aio"] = json!(aio_rec);
     write_json(&out.join("capture.json"), &rec)?;
     for c in &changes {
         say(&format!("changed during the capture: {}", c.as_str().unwrap_or("")));
