@@ -54,6 +54,12 @@ your environment. The kernel needs BTF (`/sys/kernel/btf/vmlinux`, every recent
 distribution's). `--source auto`, the default, takes eBPF when the copy can load its probes
 and strace when it cannot, and the `source` check says which and why.
 
+It also sees what strace cannot: the requests an application hands the kernel through
+`io_uring` (LMCache does for some of its operations), each
+recorded when the kernel takes it and when it completes. Under strace a ring's I/O is only its
+`io_uring_enter` calls, so for such an application use the eBPF source. The record's `uring`
+says whether this kernel's `io_uring` was traced, and why not.
+
 The probes cannot make your application wait, so when the application makes calls faster
 than the tool writes them down, the ring buffer fills and calls are lost. Any loss ends the
 capture with a box saying how many, where, and what to do: usually `--buffer 1GiB` (or what
@@ -152,8 +158,9 @@ does: send its digest, not the trace.
 - For the eBPF source on hosts where file capabilities cannot be granted, a password-less
   `sudo -n` helper (phase 3b of brief item 54).
 - Object requests over TLS inside the program, Go, or HTTP/2 (libssl uprobes come with the
-  eBPF source, phase 4), and page faults on mappings and `io_uring` operations (phase 4): the
-  record's `not_seen` lists what this capture could not see.
+  eBPF source, phase 4), and page faults on mappings (phase 4): the record's `not_seen` lists
+  what this capture could not see. `io_uring`'s requests are traced by the eBPF source
+  (2026-11-04) where the kernel has its tracepoints; under strace they are not.
 - One node's interruption stopping the others (each node stops on its own signal, which
   `aeiou-launch` sends to every node), and comparing per-node records afterward for captures
   taken without a coordinator.

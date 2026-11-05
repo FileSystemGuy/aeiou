@@ -32,6 +32,9 @@ enum Rec {
     Gap { h: Head, lost: u64, first: u64, last: u64 },
     Gone { h: Head, code: i64 },
     Fork { h: Head, child: u32, thread: bool },
+    Sqe { h: Head, ring: u64, req: u64, user_data: u64, flags: u64, fd: i32, opcode: u8, cmd: [u8; CMD_SIZE], blobs: Vec<(u8, u8, Vec<u8>)> },
+    Cqe { h: Head, ring: u64, req: u64, user_data: u64, res: i32, cflags: u32 },
+    UringCall { h: Head, nr: u32, ret: i64, args: [u64; 6], blobs: Vec<(u8, u8, Vec<u8>)> },
 }
 
 fn u16_at(b: &[u8], o: usize) -> u16 {
@@ -74,6 +77,25 @@ fn decode(b: &[u8]) -> Result<Rec> {
         GAP => Rec::Gap { h, lost: u64_at(b, 24), first: u64_at(b, 32), last: u64_at(b, 40) },
         GONE => Rec::Gone { h, code: u64_at(b, 32) as i64 },
         FORK => Rec::Fork { h, child: u32_at(b, 24), thread: u32_at(b, 28) == 1 },
+        URING_SQE => Rec::Sqe {
+            h,
+            ring: u64_at(b, 24),
+            req: u64_at(b, 32),
+            user_data: u64_at(b, 40),
+            flags: u64_at(b, 48),
+            fd: u32_at(b, 56) as i32,
+            opcode: b[60],
+            cmd: b[64..64 + CMD_SIZE].try_into().unwrap(),
+            blobs: blobs_of(b, std::mem::size_of::<Sqe>())?,
+        },
+        URING_CALL => {
+            let mut args = [0u64; 6];
+            for (i, a) in args.iter_mut().enumerate() {
+                *a = u64_at(b, 40 + 8 * i);
+            }
+            Rec::UringCall { h, nr: u32_at(b, 24), ret: u64_at(b, 32) as i64, args, blobs: blobs_of(b, std::mem::size_of::<UringCall>())? }
+        }
+        URING_CQE => Rec::Cqe { h, ring: u64_at(b, 24), req: u64_at(b, 32), user_data: u64_at(b, 40), res: u32_at(b, 48) as i32, cflags: u32_at(b, 52) },
         k => bail!("a record of kind {k}"),
     })
 }
@@ -84,6 +106,26 @@ fn decode(b: &[u8]) -> Result<Rec> {
 struct Fd {
     path: Option<String>,
     cloexec: bool,
+}
+
+/// An `io_uring` ring (`io_uring_setup`'s, by its `io_ring_ctx`'s address): its descriptor,
+/// and its registered files by index, each the descriptor it was registered from (none for
+/// a file opened into its slot) and its path.
+#[derive(Debug, Default)]
+struct Ring {
+    fd: Option<i64>,
+    fixed: HashMap<u32, (Option<i64>, Option<String>)>,
+}
+
+/// An `io_uring` request in flight: the number its records carry, the thread that submitted it,
+/// its opcode, and what its completion changes (an open's path, flags, and slot; a close's).
+struct Req {
+    id: u64,
+    tid: u32,
+    ring: u64,
+    opcode: u8,
+    open: Option<(Option<String>, u64, u32)>,
+    close: Option<(i64, u32)>,
 }
 type Files = Rc<RefCell<HashMap<i64, Fd>>>;
 type Cwd = Rc<RefCell<String>>;
@@ -140,6 +182,9 @@ pub struct Stats {
     pub entries_without_exit: u64,
     pub descriptors_unresolved: u64,
     pub vectored_aio_left_out: u64,
+    pub uring_requests: u64,
+    pub uring_completions_unmatched: u64,
+    pub uring_in_flight_at_end: u64,
 }
 
 impl Stats {
@@ -152,6 +197,9 @@ impl Stats {
             "entries_without_exit": self.entries_without_exit,
             "descriptors_unresolved": self.descriptors_unresolved,
             "vectored_aio_left_out": self.vectored_aio_left_out,
+            "uring_requests": self.uring_requests,
+            "uring_completions_unmatched": self.uring_completions_unmatched,
+            "uring_in_flight_at_end": self.uring_in_flight_at_end,
         })
     }
 }
@@ -244,6 +292,15 @@ struct Text<W: Write> {
     real: HashMap<String, String>,
     /// Threads whose end the trace showed, so a later record of theirs is a new thread's.
     gone: HashSet<u32>,
+    /// `io_uring`'s layout (the header's `uring.layout`), when its requests were traced; the
+    /// header line not yet written.
+    uring: Option<Value>,
+    header_due: bool,
+    rings: HashMap<u64, Ring>,
+    reqs: HashMap<u64, Req>,
+    /// The numbers of requests no longer in flight, the smallest given first; then `next_id`.
+    free_ids: BinaryHeap<Reverse<u64>>,
+    next_id: u64,
 }
 
 impl<W: Write> Text<W> {
@@ -269,6 +326,12 @@ impl<W: Write> Text<W> {
             stats: Stats::default(),
             real: HashMap::new(),
             gone: HashSet::new(),
+            uring: hdr["uring"]["layout"].is_object().then(|| hdr["uring"]["layout"].clone()),
+            header_due: hdr["uring"]["traced"] == json!(true),
+            rings: HashMap::new(),
+            reqs: HashMap::new(),
+            free_ids: BinaryHeap::new(),
+            next_id: 1,
         }
     }
 
@@ -301,7 +364,28 @@ impl<W: Write> Text<W> {
 
     fn record(&mut self, r: Rec) -> Result<()> {
         self.stats.records += 1;
+        if self.header_due {
+            // DESIGN_REVIEW.md §3.98: the format, and the kinds of record the trace may hold
+            self.header_due = false;
+            let ts = match &r {
+                Rec::Enter { h, .. } | Rec::Exit { h, .. } | Rec::Gap { h, .. } | Rec::Gone { h, .. } | Rec::Fork { h, .. } | Rec::Sqe { h, .. } | Rec::Cqe { h, .. } | Rec::UringCall { h, .. } => h.ts,
+            };
+            self.w.write_all(format!("0 {} --- aeiou: trace format {}, records aeiou_uring_sqe aeiou_uring_cqe ---\n", self.when(ts), crate::strace::TRACE_FORMAT).as_bytes())?;
+        }
         match r {
+            Rec::Sqe { h, ring, req, user_data, flags, fd, opcode, cmd, blobs } => self.sqe(h, ring, req, user_data, flags, fd, opcode, &cmd, &blobs),
+            Rec::Cqe { h, ring, req, user_data, res, cflags } => self.cqe(h, ring, req, user_data, res, cflags),
+            Rec::UringCall { h, nr, ret, args, blobs } => {
+                if nr == NR_IO_URING_SETUP {
+                    if let Some(b) = blob(&blobs, 0).filter(|b| b.len() == 8) {
+                        self.rings.insert(u64_at(b, 0), Ring { fd: Some(ret), fixed: HashMap::new() });
+                    }
+                } else if nr == NR_IO_URING_REGISTER {
+                    let task = self.uring_task(&h);
+                    self.register(&task, &args, &blobs);
+                }
+                Ok(())
+            }
             Rec::Enter { h, nr, args, blobs } => self.enter(h, nr, args, blobs),
             Rec::Exit { h, nr, ret, blobs } => self.exit(h, nr, ret, blobs),
             Rec::Gap { h, lost, first, last } => {
@@ -431,6 +515,7 @@ impl<W: Write> Text<W> {
 
     fn end(&mut self) -> Result<()> {
         self.cut()?;
+        self.stats.uring_in_flight_at_end += self.reqs.len() as u64;
         let mut left: Vec<(u32, Pending)> = self.pending.drain().collect();
         left.sort_by_key(|(t, p)| (p.ts, *t));
         for (tid, p) in left {
@@ -443,6 +528,210 @@ impl<W: Write> Text<W> {
                 self.w.write_all(format!("{tid} {} <... {name} resumed>) = ?\n", self.when(p.ts)).as_bytes())?;
             }
         }
+        Ok(())
+    }
+
+    // ---- io_uring (DESIGN_REVIEW.md §3.98)
+
+    /// The ring an `io_uring_register` names, and the files it registers, updates, or drops.
+    fn register(&mut self, task: &Task, args: &[u64; 6], blobs: &[(u8, u8, Vec<u8>)]) {
+        let (fd, op) = (args[0] as i32 as i64, args[1] & 0x7fff_ffff);
+        if args[1] & 0x8000_0000 != 0 {
+            // the ring named by its registered index: which ring is not known here
+            return;
+        }
+        let Some(ring) = self.rings.iter().find(|(_, r)| r.fd == Some(fd)).map(|(k, _)| *k) else { return };
+        let fds = |arg: u8| -> Vec<i32> { blob(blobs, arg).map(|b| b.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect()).unwrap_or_default() };
+        let (offset, list) = match op {
+            2 => (Some(0), fds(2)),
+            3 => {
+                self.rings.get_mut(&ring).unwrap().fixed.clear();
+                return;
+            }
+            6 | 14 => (blob(blobs, 2).filter(|b| b.len() >= 4).map(|b| u32_at(b, 0)), fds(3)),
+            13 => (Some(0), fds(3)),
+            _ => return,
+        };
+        let Some(offset) = offset else { return };
+        let files = task.files.borrow();
+        let r = self.rings.get_mut(&ring).unwrap();
+        if op == 2 || op == 13 {
+            r.fixed.clear();
+        }
+        for (i, &d) in list.iter().enumerate() {
+            let k = offset + i as u32;
+            match d {
+                // IORING_REGISTER_FILES_SKIP: left as it is
+                -2 => {}
+                d if d < 0 => {
+                    r.fixed.remove(&k);
+                }
+                d => {
+                    r.fixed.insert(k, (Some(d as i64), files.get(&(d as i64)).and_then(|f| f.path.clone())));
+                }
+            }
+        }
+    }
+
+    /// The table of the thread that submitted a request: its own, or, for a thread the trace
+    /// saw no fork of (`io_uring`'s SQPOLL thread), its process's.
+    fn uring_task(&mut self, h: &Head) -> Task {
+        if !self.tasks.contains_key(&h.tid) {
+            if let Some(t) = self.tasks.get(&h.pid) {
+                return t.clone();
+            }
+        }
+        self.task(h.tid)
+    }
+
+    /// A request's file: `fd=` its descriptor, or for a registered file (`REQ_F_FIXED_FILE`)
+    /// `fixed=` its index with its path, after the descriptor it was registered from.
+    fn uring_file(&mut self, task: &Task, ring: u64, fixed: bool, fd: i32) -> String {
+        if !fixed {
+            return format!("fd={}", self.fd(task, fd as i64 as u64));
+        }
+        let f = self.rings.get(&ring).and_then(|r| r.fixed.get(&(fd as u32))).cloned();
+        let ann = |p: &Option<String>| p.as_ref().map_or(String::new(), |p| format!("<{}>", annotation(p)));
+        match f {
+            Some((Some(d), p)) => format!("fd={d}{}, fixed={fd}{}", ann(&p), ann(&p)),
+            Some((None, p)) => format!("fixed={fd}{}", ann(&p)),
+            None => {
+                self.stats.descriptors_unresolved += 1;
+                format!("fixed={fd}")
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sqe(&mut self, h: Head, ring: u64, req: u64, user_data: u64, flags: u64, fd: i32, opcode: u8, cmd: &[u8; CMD_SIZE], blobs: &[(u8, u8, Vec<u8>)]) -> Result<()> {
+        let Some(l) = self.uring.clone() else { return Ok(()) };
+        let at = |k: &str, f: &str| l[k][f].as_u64().unwrap_or(0) as usize;
+        let i32_at = |o: usize| u32_at(cmd, o.min(CMD_SIZE - 4)) as i32;
+        let u64c = |o: usize| u64_at(cmd, o.min(CMD_SIZE - 8));
+        self.stats.uring_requests += 1;
+        let id = match self.free_ids.pop() {
+            Some(Reverse(i)) => i,
+            None => {
+                self.next_id += 1;
+                self.next_id - 1
+            }
+        };
+        let task = self.uring_task(&h);
+        let fixed = flags & 1 != 0;
+        let mut a = vec![format!("ring={}", self.ring_name(ring)), format!("id={id}"), format!("op={}", uring_op(opcode))];
+        let (mut open, mut close) = (None, None);
+        match opcode {
+            // the reads and writes, vectored (a count of iovecs, `iovcnt`) or not
+            1 | 2 | 4 | 5 | 22 | 23 | 49 | 60 | 61 => {
+                a.push(self.uring_file(&task, ring, fixed, fd));
+                a.push(format!("off={}", u64c(at("rw", "pos")) as i64));
+                let n = u32_at(cmd, at("rw", "len").min(CMD_SIZE - 4));
+                a.push(if matches!(opcode, 1 | 2 | 60 | 61) { format!("iovcnt={n}") } else { format!("len={n}") });
+                let rwf = u32_at(cmd, at("rw", "flags").min(CMD_SIZE - 4)) as u64;
+                if rwf != 0 {
+                    a.push(format!("rw_flags={}", bits(rwf, &RWF)));
+                }
+            }
+            IORING_OP_OPENAT | IORING_OP_OPENAT2 => {
+                let dfd = i32_at(at("open", "dfd")) as i64 as u64;
+                let of = u64c(at("open", "flags"));
+                let slot = u32_at(cmd, at("open", "file_slot").min(CMD_SIZE - 4));
+                a.push(format!("dirfd={}", self.dirfd(&task, dfd)));
+                a.push(format!("path={}", string(0, 1, blobs)));
+                a.push(format!("flags={}", open_flags(of)));
+                if of & (libc::O_CREAT as u64 | 0o20000000) != 0 || opcode == IORING_OP_OPENAT2 {
+                    a.push(format!("mode={}", mode(u64c(at("open", "mode")))));
+                }
+                if opcode == IORING_OP_OPENAT2 {
+                    a.push(format!("resolve={:#x}", u64c(at("open", "resolve"))));
+                }
+                if slot != 0 {
+                    a.push(format!("file_slot={slot}"));
+                }
+                let path = str_of(blobs, 0).and_then(|s| self.resolve(h.pid, h.tid, &task, dfd, &s));
+                open = Some((path, of, slot));
+            }
+            19 => {
+                let (cfd, slot) = (i32_at(at("close", "fd")) as i64, u32_at(cmd, at("close", "file_slot").min(CMD_SIZE - 4)));
+                if slot != 0 {
+                    a.push(format!("file_slot={slot}"));
+                    a.push(self.uring_file(&task, ring, true, slot as i32 - 1));
+                } else {
+                    a.push(format!("fd={}", self.fd(&task, cfd as u64)));
+                }
+                close = Some((cfd, slot));
+            }
+            3 => {
+                a.push(self.uring_file(&task, ring, fixed, fd));
+                let f = i32_at(at("sync", "flags")) as u64;
+                a.push(format!("fsync_flags={}", bits(f, &[(1, "IORING_FSYNC_DATASYNC")])));
+            }
+            IORING_OP_STATX => {
+                let dfd = i32_at(at("statx", "dfd")) as i64 as u64;
+                a.push(format!("dirfd={}", self.dirfd(&task, dfd)));
+                // AT_EMPTY_PATH's "" the kernel may keep as no name at all
+                a.push(format!("path={}", if str_of(blobs, 0).is_some() { string(0, 1, blobs) } else { "\"\"".into() }));
+                a.push(format!("flags={}", bits(u32_at(cmd, at("statx", "flags").min(CMD_SIZE - 4)) as u64, &AT_FLAGS)));
+                a.push(format!("mask={:#x}", u32_at(cmd, at("statx", "mask").min(CMD_SIZE - 4))));
+            }
+            // the request's descriptor is the kernel's only for an operation that takes a file
+            op if uring_takes_file(op) => a.push(self.uring_file(&task, ring, fixed, fd)),
+            _ => {}
+        }
+        a.push(format!("user_data={user_data:#x}"));
+        self.cut()?;
+        self.w.write_all(format!("{} {} aeiou_uring_sqe({}) = 0\n", h.tid, self.when(h.ts), a.join(", ")).as_bytes())?;
+        if let Some(old) = self.reqs.insert(req, Req { id, tid: h.tid, ring, opcode, open, close }) {
+            // its completion lost: the number is free again
+            self.free_ids.push(Reverse(old.id));
+        }
+        Ok(())
+    }
+
+    fn ring_name(&self, ring: u64) -> String {
+        self.rings.get(&ring).and_then(|r| r.fd).map_or("?".to_string(), |f| f.to_string())
+    }
+
+    fn cqe(&mut self, h: Head, ring: u64, req: u64, user_data: u64, res: i32, cflags: u32) -> Result<()> {
+        let Some(rq) = self.reqs.get(&req).filter(|r| r.ring == ring) else {
+            self.stats.uring_completions_unmatched += 1;
+            return Ok(());
+        };
+        let (id, tid, opcode, open, close) = (rq.id, rq.tid, rq.opcode, rq.open.clone(), rq.close);
+        // IORING_CQE_F_MORE: the request goes on (a multishot's)
+        if cflags & 2 == 0 {
+            self.reqs.remove(&req);
+            self.free_ids.push(Reverse(id));
+        }
+        let task = self.tasks.get(&tid).cloned().unwrap_or_else(|| self.uring_task(&Head { tid, pid: h.pid, ..h }));
+        let mut ret = res.to_string();
+        if res < 0 {
+            let e = -res;
+            ret = format!("-1 {} ({})", errno_name(e), std::io::Error::from_raw_os_error(e).to_string().split(" (os error").next().unwrap_or(""));
+        } else if let Some((path, of, slot)) = open {
+            if slot == 0 {
+                task.files.borrow_mut().insert(res as i64, Fd { path: path.clone(), cloexec: of & libc::O_CLOEXEC as u64 != 0 });
+                if let Some(p) = &path {
+                    ret = format!("{res}<{}>", annotation(p));
+                }
+            } else if let Some(r) = self.rings.get_mut(&ring) {
+                // IORING_FILE_INDEX_ALLOC: the slot the kernel chose is the result
+                let k = if slot == u32::MAX { res as u32 } else { slot - 1 };
+                r.fixed.insert(k, (None, path));
+            }
+        } else if let Some((cfd, slot)) = close {
+            if slot != 0 {
+                if let Some(r) = self.rings.get_mut(&ring) {
+                    r.fixed.remove(&(slot - 1));
+                }
+            } else {
+                task.files.borrow_mut().remove(&cfd);
+            }
+        }
+        let _ = opcode;
+        let f = bits((cflags & 0xffff) as u64, &[(1, "IORING_CQE_F_BUFFER"), (2, "IORING_CQE_F_MORE"), (4, "IORING_CQE_F_SOCK_NONEMPTY"), (8, "IORING_CQE_F_NOTIF"), (16, "IORING_CQE_F_BUF_MORE")]);
+        self.cut()?;
+        self.w.write_all(format!("{tid} {} aeiou_uring_cqe(ring={}, id={id}, user_data={user_data:#x}, flags={f}) = {ret}\n", self.when(h.ts), self.ring_name(ring)).as_bytes())?;
         Ok(())
     }
 
@@ -717,6 +1006,26 @@ impl<W: Write> Text<W> {
                 None => ret.to_string(),
             },
         }
+    }
+}
+
+/// Whether an `io_uring` operation takes a file (`io_issue_defs`' `needs_file`), so its
+/// request's descriptor is the submission's; for any other the kernel leaves it unset.
+fn uring_takes_file(op: u8) -> bool {
+    matches!(op, 1..=6 | 8..=10 | 13 | 16 | 17 | 22..=24 | 26 | 27 | 29 | 30 | 33 | 34 | 40 | 41 | 43 | 46..=49 | 54..=61)
+}
+
+/// An `io_uring` opcode's name (`include/uapi/linux/io_uring.h`, `enum io_uring_op`, as this
+/// box's kernel's BTF lists it to Linux 6.18), its number for a later one.
+fn uring_op(op: u8) -> String {
+    const OPS: [&str; 63] = [
+        "NOP", "READV", "WRITEV", "FSYNC", "READ_FIXED", "WRITE_FIXED", "POLL_ADD", "POLL_REMOVE", "SYNC_FILE_RANGE", "SENDMSG", "RECVMSG", "TIMEOUT", "TIMEOUT_REMOVE", "ACCEPT", "ASYNC_CANCEL", "LINK_TIMEOUT", "CONNECT", "FALLOCATE", "OPENAT", "CLOSE", "FILES_UPDATE",
+        "STATX", "READ", "WRITE", "FADVISE", "MADVISE", "SEND", "RECV", "OPENAT2", "EPOLL_CTL", "SPLICE", "PROVIDE_BUFFERS", "REMOVE_BUFFERS", "TEE", "SHUTDOWN", "RENAMEAT", "UNLINKAT", "MKDIRAT", "SYMLINKAT", "LINKAT", "MSG_RING", "FSETXATTR",
+        "SETXATTR", "FGETXATTR", "GETXATTR", "SOCKET", "URING_CMD", "SEND_ZC", "SENDMSG_ZC", "READ_MULTISHOT", "WAITID", "FUTEX_WAIT", "FUTEX_WAKE", "FUTEX_WAITV", "FIXED_FD_INSTALL", "FTRUNCATE", "BIND", "LISTEN", "RECV_ZC", "EPOLL_WAIT", "READV_FIXED", "WRITEV_FIXED", "PIPE",
+    ];
+    match OPS.get(op as usize) {
+        Some(n) => format!("IORING_OP_{n}"),
+        None => op.to_string(),
     }
 }
 
@@ -1132,7 +1441,7 @@ mod tests {
     }
 
     fn gap(cpu: u32, lost: u64, first: u64, last: u64) -> Vec<u8> {
-        trailing_gaps(&[Loss::default(), Loss::default(), Loss { pending: lost, first, last, total: lost, untraced: 0 }])
+        trailing_gaps(&[Loss::default(), Loss::default(), Loss { pending: lost, first, last, total: lost, untraced: 0, rings: 0 }])
             .into_iter()
             .collect::<Vec<u8>>()
             .chunks(48)
@@ -1148,11 +1457,19 @@ mod tests {
     /// The text of `records` (any order: the converter sorts them), the process 10 started in
     /// `/w` with descriptor 1 a pipe and 5 a file.
     fn text(records: &[Vec<u8>]) -> (String, Stats) {
-        let d = std::env::temp_dir().join(format!("aeiou-ebpf-text-{}-{}", std::process::id(), records.len() ^ records.iter().map(|r| r.len()).sum::<usize>()));
+        text_of(records, json!({}))
+    }
+
+    /// `text` with the header's `uring` (`ebpf::Probes::uring_header`).
+    fn text_of(records: &[Vec<u8>], uring: Value) -> (String, Stats) {
+        let d = std::env::temp_dir().join(format!("aeiou-ebpf-text-{}-{}-{}", std::process::id(), records.len() ^ records.iter().map(|r| r.len()).sum::<usize>(), uring.is_object() && uring.get("traced").is_some()));
         std::fs::create_dir_all(&d).unwrap();
         let bin = d.join("syscalls.bin");
         let mut f = MAGIC.to_vec();
-        let hdr = json!({"arch": crate::ebpf::ARCH, "realtime_minus_monotonic": 1000.0, "seed": 10, "cwd": "/w", "inherited": [{"fd": 1, "target": "pipe:[7]"}, {"fd": 5, "target": "/w/held"}, {"fd": 6}]});
+        let mut hdr = json!({"arch": crate::ebpf::ARCH, "realtime_minus_monotonic": 1000.0, "seed": 10, "cwd": "/w", "inherited": [{"fd": 1, "target": "pipe:[7]"}, {"fd": 5, "target": "/w/held"}, {"fd": 6}]});
+        if uring.get("traced").is_some() {
+            hdr["uring"] = uring;
+        }
         f.extend_from_slice(serde_json::to_string(&hdr).unwrap().as_bytes());
         f.push(b'\n');
         for r in records {
@@ -1171,6 +1488,164 @@ mod tests {
 
     fn exec(ts: u64) -> Vec<Vec<u8>> {
         vec![enter(ts, 10, 10, "execve", [0x10, 0x20, 0x30, 0, 0, 0], &[(0, STR, b"/bin/app")]), exit(ts + 1000, 10, 10, "execve", 0, &[])]
+    }
+
+    /// The layout of `uring_header`, as a kernel like this box's gives it.
+    fn layout() -> Value {
+        json!({"traced": true, "layout": {
+            "rw": {"pos": 8, "addr": 48, "len": 56, "flags": 60},
+            "open": {"dfd": 8, "file_slot": 12, "flags": 24, "mode": 32, "resolve": 40},
+            "close": {"fd": 8, "file_slot": 12},
+            "sync": {"len": 8, "off": 16, "flags": 24},
+            "statx": {"dfd": 8, "mask": 12, "flags": 16},
+        }})
+    }
+
+    /// The request's first bytes: `(offset, value, bytes)` set in zeros.
+    fn cmd(fields: &[(usize, i64, usize)]) -> [u8; CMD_SIZE] {
+        let mut c = [0u8; CMD_SIZE];
+        for &(o, v, n) in fields {
+            c[o..o + n].copy_from_slice(&v.to_le_bytes()[..n]);
+        }
+        c
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sqe(ts: u64, pid: u32, tid: u32, ring: u64, req: u64, user_data: u64, flags: u64, fd: i32, opcode: u8, cmd: [u8; CMD_SIZE], path: Option<&str>) -> Vec<u8> {
+        let mut b = Vec::new();
+        head(&mut b, URING_SQE, ts, pid, tid);
+        for v in [ring, req, user_data, flags] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        b.extend_from_slice(&fd.to_le_bytes());
+        b.extend_from_slice(&[opcode, 0, 0, 0]);
+        b.extend_from_slice(&cmd);
+        if let Some(p) = path {
+            blob(&mut b, 0, STR, p.as_bytes());
+        }
+        done(b)
+    }
+
+    fn uring_call(ts: u64, nr: u32, ret: i64, args: [u64; 6], blobs: &[(u8, u8, &[u8])]) -> Vec<u8> {
+        let mut b = Vec::new();
+        head(&mut b, URING_CALL, ts, 10, 10);
+        b.extend_from_slice(&nr.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&ret.to_le_bytes());
+        for a in args {
+            b.extend_from_slice(&a.to_le_bytes());
+        }
+        for (a, w, d) in blobs {
+            blob(&mut b, *a, *w, d);
+        }
+        done(b)
+    }
+
+    fn cqe(ts: u64, ring: u64, req: u64, user_data: u64, res: i32, cflags: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        // posted from an interrupt: no thread of the command's
+        head(&mut b, URING_CQE, ts, 0, 0);
+        for v in [ring, req, user_data] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        b.extend_from_slice(&res.to_le_bytes());
+        b.extend_from_slice(&cflags.to_le_bytes());
+        done(b)
+    }
+
+    #[test]
+    fn io_uring_requests_print_as_aeiou_records_and_read_as_their_calls() {
+        const R: u64 = 0xffff_aa00;
+        let us = |n: u64| S + n * 1000;
+        let rw = |pos: i64, len: i64| cmd(&[(8, pos, 8), (56, len, 4)]);
+        let mut r = exec(S);
+        r.extend([
+            enter(us(10), 10, 10, "io_uring_setup", [64, 0x7ffe, 0, 0, 0, 0], &[]),
+            exit(us(11), 10, 10, "io_uring_setup", 4, &[]),
+            uring_call(us(11), NR_IO_URING_SETUP, 4, [64, 0x7ffe, 0, 0, 0, 0], &[(0, BYTES, &R.to_le_bytes())]),
+            // an open and a read in one enter
+            enter(us(20), 10, 10, "io_uring_enter", [4, 2, 0, 0, 0, 8], &[]),
+            sqe(us(21), 10, 10, R, 0xf1, 1, 0, -100, 18, cmd(&[(8, -100, 4), (24, 0o102, 8), (32, 0o644, 8)]), Some("d/a")),
+            cqe(us(22), R, 0xf1, 1, 7, 0),
+            sqe(us(23), 10, 10, R, 0xf2, 7, 0, 7, 22, rw(4096, 131072), None),
+            exit(us(24), 10, 10, "io_uring_enter", 2, &[]),
+            // descriptor 7 registered as file 0, written by the SQPOLL thread (no fork of it seen)
+            enter(us(30), 10, 10, "io_uring_register", [4, 2, 0xb000, 1, 0, 0], &[]),
+            exit(us(31), 10, 10, "io_uring_register", 0, &[]),
+            uring_call(us(31), NR_IO_URING_REGISTER, 0, [4, 2, 0xb000, 1, 0, 0], &[(2, BYTES, &7i32.to_le_bytes())]),
+            sqe(us(32), 10, 99, R, 0xf3, 0, 1, 0, 23, rw(0, 100), None),
+            cqe(us(33), R, 0xf2, 7, 131072, 0),
+            cqe(us(34), R, 0xf3, 0, -5, 0),
+            // a completion of a request the trace never saw submitted
+            cqe(us(35), R, 0xf9, 0, 1, 0),
+            // a direct open into slot 1 (file_slot 2), then a read of it
+            sqe(us(40), 10, 10, R, 0xf4, 0, 0, -100, 18, cmd(&[(8, -100, 4), (12, 2, 4)]), Some("/w/d/b")),
+            cqe(us(41), R, 0xf4, 0, 0, 0),
+            sqe(us(42), 10, 10, R, 0xf5, 0, 1, 1, 22, rw(0, 10), None),
+            cqe(us(43), R, 0xf5, 0, 10, 0),
+            // multishot: one request, two completions
+            sqe(us(50), 10, 10, R, 0xf6, 0, 0, 7, 49, rw(-1, 0), None),
+            cqe(us(51), R, 0xf6, 0, 10, 3),
+            cqe(us(52), R, 0xf6, 0, 0, 0),
+            // a vectored read, an fdatasync, and a ring the trace saw no setup of
+            sqe(us(60), 10, 10, R, 0xf7, 0, 0, 7, 1, rw(0, 2), None),
+            cqe(us(61), R, 0xf7, 0, 50, 0),
+            sqe(us(62), 10, 10, R, 0xf8, 0, 0, 7, 3, cmd(&[(24, 1, 4)]), None),
+            cqe(us(63), R, 0xf8, 0, 0, 0),
+            sqe(us(70), 10, 10, 0xcc00, 0xfa, 0, 0, 7, 22, rw(0, 1), None),
+            // a statx of a descriptor and one of a path; an unlinkat, whose path no record holds;
+            // the request's descriptor of an operation that takes no file is the kernel's leftover
+            sqe(us(80), 10, 10, R, 0xfb, 0, 0, 0, 21, cmd(&[(8, 7, 4), (12, 0x7ff, 4), (16, 0x1000, 4)]), Some("")),
+            cqe(us(81), R, 0xfb, 0, 0, 0),
+            sqe(us(82), 10, 10, R, 0xfc, 0, 0, 0, 21, cmd(&[(8, -100, 4), (12, 0x200, 4)]), Some("d/a")),
+            cqe(us(83), R, 0xfc, 0, 0, 0),
+            sqe(us(84), 10, 10, R, 0xfd, 0, 0, 0, 36, cmd(&[]), None),
+            cqe(us(85), R, 0xfd, 0, 0, 0),
+        ]);
+        let (t, st) = text_of(&r, layout());
+        let lines: Vec<&str> = t.lines().collect();
+        assert!(lines[0].starts_with("0 1001.000000 --- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe ---"), "{t}");
+        for want in [
+            "10 1001.000020 io_uring_enter(4, 2, 0, NULL, NULL, 8 <unfinished ...>",
+            r#"10 1001.000021 aeiou_uring_sqe(ring=4, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</w>, path="d/a", flags=O_RDWR|O_CREAT, mode=0644, user_data=0x1) = 0"#,
+            "10 1001.000022 aeiou_uring_cqe(ring=4, id=1, user_data=0x1, flags=0) = 7</w/d/a>",
+            "10 1001.000023 aeiou_uring_sqe(ring=4, id=1, op=IORING_OP_READ, fd=7</w/d/a>, off=4096, len=131072, user_data=0x7) = 0",
+            "10 1001.000024 <... io_uring_enter resumed>) = 2 <0.000004>",
+            "99 1001.000032 aeiou_uring_sqe(ring=4, id=2, op=IORING_OP_WRITE, fd=7</w/d/a>, fixed=0</w/d/a>, off=0, len=100, user_data=0x0) = 0",
+            "10 1001.000033 aeiou_uring_cqe(ring=4, id=1, user_data=0x7, flags=0) = 131072",
+            "99 1001.000034 aeiou_uring_cqe(ring=4, id=2, user_data=0x0, flags=0) = -1 EIO (Input/output error)",
+            r#"10 1001.000040 aeiou_uring_sqe(ring=4, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</w>, path="/w/d/b", flags=O_RDONLY, file_slot=2, user_data=0x0) = 0"#,
+            "10 1001.000041 aeiou_uring_cqe(ring=4, id=1, user_data=0x0, flags=0) = 0",
+            "10 1001.000042 aeiou_uring_sqe(ring=4, id=1, op=IORING_OP_READ, fixed=1</w/d/b>, off=0, len=10, user_data=0x0) = 0",
+            "10 1001.000050 aeiou_uring_sqe(ring=4, id=1, op=IORING_OP_READ_MULTISHOT, fd=7</w/d/a>, off=-1, len=0, user_data=0x0) = 0",
+            "10 1001.000051 aeiou_uring_cqe(ring=4, id=1, user_data=0x0, flags=IORING_CQE_F_BUFFER|IORING_CQE_F_MORE) = 10",
+            "10 1001.000052 aeiou_uring_cqe(ring=4, id=1, user_data=0x0, flags=0) = 0",
+            "10 1001.000060 aeiou_uring_sqe(ring=4, id=1, op=IORING_OP_READV, fd=7</w/d/a>, off=0, iovcnt=2, user_data=0x0) = 0",
+            "10 1001.000062 aeiou_uring_sqe(ring=4, id=1, op=IORING_OP_FSYNC, fd=7</w/d/a>, fsync_flags=IORING_FSYNC_DATASYNC, user_data=0x0) = 0",
+            "10 1001.000070 aeiou_uring_sqe(ring=?, id=1, op=IORING_OP_READ, fd=7</w/d/a>, off=0, len=1, user_data=0x0) = 0",
+            r#"10 1001.000080 aeiou_uring_sqe(ring=4, id=2, op=IORING_OP_STATX, dirfd=7</w/d/a>, path="", flags=AT_EMPTY_PATH, mask=0x7ff, user_data=0x0) = 0"#,
+            r#"10 1001.000082 aeiou_uring_sqe(ring=4, id=2, op=IORING_OP_STATX, dirfd=AT_FDCWD</w>, path="d/a", flags=0, mask=0x200, user_data=0x0) = 0"#,
+            "10 1001.000084 aeiou_uring_sqe(ring=4, id=2, op=IORING_OP_UNLINKAT, user_data=0x0) = 0",
+        ] {
+            assert!(lines.contains(&want), "missing {want}\n{t}");
+        }
+        assert!(!t.contains("1001.000035"), "{t}");
+        assert_eq!((st.uring_requests, st.uring_completions_unmatched, st.uring_in_flight_at_end), (12, 1, 1), "{st:?}");
+
+        // what the readers make of it
+        let o = crate::strace::Opts { roots: vec!["/w/d".into()], ..Default::default() };
+        let mut tr = crate::strace::Tracer::new(&o, true, None);
+        for l in t.lines() {
+            tr.line(&format!("{l}\n"));
+        }
+        tr.finish().unwrap();
+        let doc = crate::strace::metrics_document(&tr, &o);
+        assert_eq!(doc["total"]["bytes_read"], 131072 + 10 + 10 + 50 + 1, "{}", doc["total"]);
+        assert_eq!(doc["total"]["bytes_written"], 0, "{}", doc["total"]);
+        assert_eq!(doc["total"]["counts"]["open"], 1, "{}", doc["total"]);
+        assert_eq!(doc["total"]["counts"]["fdatasync"], 1, "{}", doc["total"]);
+        assert_eq!((&doc["total"]["counts"]["fstat"], &doc["total"]["counts"]["stat"]), (&json!(1), &json!(1)), "{}", doc["total"]);
+        assert_eq!(doc["notes"]["not_counted:aeiou_uring_sqe:IORING_OP_UNLINKAT"], 1, "{}", doc["notes"]);
     }
 
     #[test]

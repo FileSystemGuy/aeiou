@@ -35,6 +35,10 @@ static TREE: HashMap<u32, u8> = HashMap::with_max_entries(65536, 0);
 /// The string arguments a thread's entry could not copy, retried at its exit, by thread id.
 #[map]
 static RETRY: HashMap<u32, u32> = HashMap::with_max_entries(65536, 0);
+/// The rings traced processes submitted to, by `io_ring_ctx`'s address: a completion is
+/// traced by its ring, since it may run in an interrupt or in a thread of no traced process.
+#[map]
+static RINGS: HashMap<u64, u8> = HashMap::with_max_entries(4096, 0);
 #[map]
 static LOSSES: PerCpuArray<Loss> = PerCpuArray::with_max_entries(1, 0);
 /// Twice the largest record, so a blob at any offset below `SCRATCH` fits without a check the
@@ -197,6 +201,63 @@ fn put_iocbs(buf: *mut u8, off: usize, nr: u64, list: u64) -> usize {
     off + size_of::<Blob>() + len
 }
 
+/// `io_uring_register`'s files: for the opcodes taking a structure, the structure (a blob of
+/// argument 2), then the descriptors it or argument 2 points to (argument 3's blob, or
+/// argument 2's for `IORING_REGISTER_FILES`), at most `MAX_FILES`.
+#[inline(always)]
+fn put_files(buf: *mut u8, off: usize, opcode: u64, arg: u64, nr_args: u64) -> usize {
+    // IORING_REGISTER_USE_REGISTERED_RING names the ring by its index: the files are the same
+    let op = opcode & 0x7fff_ffff;
+    let (head, size) = match op {
+        6 => (true, 16usize),       // IORING_REGISTER_FILES_UPDATE: struct io_uring_files_update
+        13 | 14 => (true, 32usize), // _FILES2: io_uring_rsrc_register; _FILES_UPDATE2: io_uring_rsrc_update2
+        2 => (false, 0usize),       // IORING_REGISTER_FILES: the array itself
+        _ => return off,
+    };
+    if !head {
+        return put_bytes(buf, off, 2, arg, nr_args as usize * 4, MAX_FILES * 4);
+    }
+    let mut s = [0u8; 32];
+    if unsafe { gen::bpf_probe_read_user(s.as_mut_ptr() as *mut _, size as u32, arg as *const _) } != 0 {
+        return off;
+    }
+    let off = put_bytes(buf, off, 2, arg, size, 32);
+    let u32_at = |o: usize| u32::from_le_bytes([s[o], s[o + 1], s[o + 2], s[o + 3]]);
+    let u64_at = |o: usize| u32_at(o) as u64 | (u32_at(o + 4) as u64) << 32;
+    let (data, nr) = match op {
+        6 => (u64_at(8), nr_args),
+        13 => (u64_at(16), u32_at(0) as u64),
+        _ => (u64_at(8), u32_at(24) as u64),
+    };
+    if data == 0 {
+        return off;
+    }
+    put_bytes(buf, off, 3, data, nr as usize * 4, MAX_FILES * 4)
+}
+
+/// The ring descriptor `fd` of the current process is: its file's `private_data`, the
+/// `io_ring_ctx`, as a blob of argument 0.
+#[inline(always)]
+fn put_ring(buf: *mut u8, off: usize, fd: u64) -> usize {
+    let Some(cfg) = CONFIG.get(0) else { return off };
+    if cfg.uring == 0 || fd >= 1 << 20 {
+        return off;
+    }
+    let task = unsafe { aya_ebpf::helpers::bpf_get_current_task() } as *const u8;
+    let read = |p: *const u8, o: u32| unsafe { bpf_probe_read_kernel(p.add(o as usize) as *const u64) }.ok().map(|v| v as *const u8);
+    let Some(files) = read(task, cfg.task_files_off) else { return off };
+    let Some(fdt) = read(files, cfg.files_fdt_off) else { return off };
+    let Some(fds) = read(fdt, cfg.fdt_fd_off) else { return off };
+    let Some(file) = read(fds, fd as u32 * 8) else { return off };
+    let Some(ring) = read(file, cfg.file_private_off) else { return off };
+    let off = off & (SCRATCH - 1);
+    unsafe {
+        *(buf.add(off) as *mut Blob) = Blob { arg: 0, what: BYTES, len: 8, pad: 0 };
+        *(buf.add(off + size_of::<Blob>()) as *mut u64) = ring as u64;
+    }
+    off + size_of::<Blob>() + 8
+}
+
 /// The record in `buf`, `len` bytes, into the ring buffer, after a `GAP` for what this CPU
 /// lost since its last; a record with no room is counted.
 #[inline(always)]
@@ -304,6 +365,7 @@ pub fn sys_exit(ctx: RawTracePointContext) -> i32 {
     if exit_special(spec) == IO_EVENTS && ret > 0 {
         off = put_bytes(buf, off, 3, reg(regs, regs::EXIT[3]), ret as usize * IO_EVENT_SIZE, MAX_ELEMS * IO_EVENT_SIZE);
     }
+
     emit(buf, off);
     0
 }
@@ -363,6 +425,160 @@ pub fn sched_process_exit(ctx: RawTracePointContext) -> i32 {
             let _ = TREE.remove(&tgid);
         }
     }
+    0
+}
+
+/// An `io_uring` request of a traced process as the kernel takes it, after its `prep` read
+/// the submission entry (`io_submit_sqe`), so the request holds the descriptor, offset, and
+/// length; an open's or a statx's path read from the kernel's copy (`filename`). The ring is
+/// added to `RINGS`, so its completions are traced.
+///
+/// One program per form of the tracepoint, the loader attaching the one the kernel's BTF gives
+/// (a raw program may read no argument past the tracepoint's last, or it does not attach):
+/// the request alone, or (before about Linux 5.19) after the ring.
+#[raw_tracepoint(tracepoint = "io_uring_submit_req")]
+pub fn io_uring_submit_req(ctx: RawTracePointContext) -> i32 {
+    let req: u64 = ctx.arg(0);
+    submit_req(req as *const u8)
+}
+
+#[raw_tracepoint(tracepoint = "io_uring_submit_req")]
+pub fn io_uring_submit_req_after_ring(ctx: RawTracePointContext) -> i32 {
+    let req: u64 = ctx.arg(1);
+    submit_req(req as *const u8)
+}
+
+#[inline(always)]
+fn submit_req(req: *const u8) -> i32 {
+    if !traced() {
+        return 0;
+    }
+    let Some(cfg) = CONFIG.get(0) else { return 0 };
+    if cfg.uring == 0 {
+        return 0;
+    }
+    let rd64 = |o: u32| unsafe { bpf_probe_read_kernel(req.add(o as usize) as *const u64) }.unwrap_or(0);
+    let ring = rd64(cfg.req_ctx_off);
+    if RINGS.insert(&ring, &1, 0).is_err() {
+        if let Some(loss) = LOSSES.get_ptr_mut(0) {
+            unsafe { (*loss).rings += 1 };
+        }
+    }
+    let Some(buf) = BUF.get_ptr_mut(0) else { return 0 };
+    let buf = buf as *mut u8;
+    let opcode = unsafe { bpf_probe_read_kernel(req.add(cfg.req_opcode_off as usize)) }.unwrap_or(0u8);
+    let fd = unsafe { bpf_probe_read_kernel(req.add(cfg.req_fd_off as usize) as *const i32) }.unwrap_or(-1);
+    let rec = buf as *mut Sqe;
+    unsafe {
+        (*rec).head = head(URING_SQE);
+        (*rec).ring = ring;
+        (*rec).req = req as u64;
+        (*rec).user_data = rd64(cfg.req_user_data_off);
+        (*rec).flags = rd64(cfg.req_flags_off);
+        (*rec).fd = fd;
+        (*rec).opcode = opcode;
+        (*rec).pad = [0; 3];
+        let cmd = &raw mut (*rec).cmd;
+        if gen::bpf_probe_read_kernel(cmd as *mut _, CMD_SIZE as u32, req as *const _) != 0 {
+            *cmd = [0; CMD_SIZE];
+        }
+    }
+    let mut off = size_of::<Sqe>();
+    if opcode == IORING_OP_OPENAT || opcode == IORING_OP_OPENAT2 || opcode == IORING_OP_STATX {
+        let filename = rd64(if opcode == IORING_OP_STATX { cfg.statx_filename_off } else { cfg.open_filename_off }) as *const u8;
+        if let Ok(name) = unsafe { bpf_probe_read_kernel(filename.add(cfg.filename_name_off as usize) as *const u64) } {
+            let o = off & (SCRATCH - 1);
+            let data = unsafe { buf.add(o + size_of::<Blob>()) };
+            let n = unsafe { gen::bpf_probe_read_kernel_str(data as *mut _, (PATH_MAX + 1) as u32, name as *const _) };
+            let (what, len) = if n <= 0 {
+                (STR_FAULT, 0usize)
+            } else if n as usize > PATH_MAX {
+                (STR_CUT, PATH_MAX)
+            } else {
+                (STR, n as usize - 1)
+            };
+            unsafe { *(buf.add(o) as *mut Blob) = Blob { arg: 0, what, len: len as u16, pad: 0 } };
+            off = o + size_of::<Blob>() + pad8(len);
+        }
+    }
+    emit(buf, off);
+    0
+}
+
+/// A completion on a ring a traced process submitted to, whatever thread or interrupt posts
+/// it: the tracepoint passes the `struct io_uring_cqe` posted or, on older kernels, its fields
+/// one by one, a program for each (`io_uring_submit_req`'s note).
+#[raw_tracepoint(tracepoint = "io_uring_complete")]
+pub fn io_uring_complete(ctx: RawTracePointContext) -> i32 {
+    let ring: u64 = ctx.arg(0);
+    if !uring_traced(ring) {
+        return 0;
+    }
+    let req: u64 = ctx.arg(1);
+    let cqe: *const u8 = ctx.arg(2);
+    let ud = unsafe { bpf_probe_read_kernel(cqe as *const u64) }.unwrap_or(0);
+    let res = unsafe { bpf_probe_read_kernel(cqe.add(8) as *const i32) }.unwrap_or(0);
+    let fl = unsafe { bpf_probe_read_kernel(cqe.add(12) as *const u32) }.unwrap_or(0);
+    complete(ring, req, ud, res, fl)
+}
+
+#[raw_tracepoint(tracepoint = "io_uring_complete")]
+pub fn io_uring_complete_fields(ctx: RawTracePointContext) -> i32 {
+    let ring: u64 = ctx.arg(0);
+    if !uring_traced(ring) {
+        return 0;
+    }
+    let (req, ud, res, fl): (u64, u64, u64, u64) = (ctx.arg(1), ctx.arg(2), ctx.arg(3), ctx.arg(4));
+    complete(ring, req, ud, res as i32, fl as u32)
+}
+
+#[inline(always)]
+fn uring_traced(ring: u64) -> bool {
+    CONFIG.get(0).is_some_and(|c| c.uring != 0) && unsafe { RINGS.get(&ring) }.is_some()
+}
+
+#[inline(always)]
+fn complete(ring: u64, req: u64, user_data: u64, res: i32, cflags: u32) -> i32 {
+    // built on this program's stack: an interrupt's completion must not write the per-CPU
+    // buffer a call's probe it interrupted is filling
+    let rec = Cqe { head: Head { len: size_of::<Cqe>() as u16, ..head(URING_CQE) }, ring, req, user_data, res, cflags };
+    let Some(loss) = LOSSES.get_ptr_mut(0) else { return 0 };
+    let loss = unsafe { &mut *loss };
+    if EVENTS.output::<Cqe>(&rec, 0).is_err() {
+        if loss.pending == 0 {
+            loss.first = rec.head.ts;
+        }
+        loss.pending += 1;
+        loss.last = rec.head.ts;
+        loss.total += 1;
+    }
+    0
+}
+
+/// The return of a traced `io_uring_setup` (the ring its descriptor is) or `io_uring_register`
+/// (the files it registers), as a record of its own: a program apart from `sys_exit`'s, so
+/// neither grows past what the verifier takes, attached only with `io_uring`'s probes.
+#[raw_tracepoint(tracepoint = "sys_exit")]
+pub fn uring_calls(ctx: RawTracePointContext) -> i32 {
+    let regs: *const u8 = ctx.arg(0);
+    let nr = reg(regs, regs::NR) as i64 as i32;
+    if nr != NR_IO_URING_SETUP as i32 && nr != NR_IO_URING_REGISTER as i32 {
+        return 0;
+    }
+    let ret: i64 = ctx.arg(1);
+    if ret < 0 || !traced() {
+        return 0;
+    }
+    let Some(buf) = BUF.get_ptr_mut(0) else { return 0 };
+    let buf = buf as *mut u8;
+    let mut args = [0u64; 6];
+    for (i, a) in args.iter_mut().enumerate() {
+        *a = reg(regs, regs::EXIT[i]);
+    }
+    unsafe { *(buf as *mut UringCall) = UringCall { head: head(URING_CALL), nr: nr as u32, pad: 0, ret, args } };
+    let off = size_of::<UringCall>();
+    let off = if nr == NR_IO_URING_SETUP as i32 { put_ring(buf, off, ret as u64) } else { put_files(buf, off, args[1], args[2], args[3]) };
+    emit(buf, off);
     0
 }
 

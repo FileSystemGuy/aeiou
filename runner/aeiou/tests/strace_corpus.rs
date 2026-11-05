@@ -32,6 +32,14 @@
 //! `execve_arguments_printed`, the metrics' `trace_may_hold_secrets` saying not to send it
 //! (2026-11-04, brief item 62, `DESIGN_REVIEW.md` §3.97; most cases, each checked by script to
 //! differ by these notes alone).
+//! Added by the port, not the Python's: an eBPF capture's `io_uring` records (2026-11-04, brief
+//! item 54 phase 4, `DESIGN_REVIEW.md` §3.98; three cases, each checked by hand against its
+//! input): every record form written out (an open, reads and writes in one enter, a registered
+//! file, a direct open, a multishot, a vectored read, an fdatasync, a statx of a descriptor and
+//! of a path, a path operation and an fadvise noted by name, an error, a completion of no
+//! submission, a ring of no setup, a record of a kind not known), and two captures of this
+//! runner's own `--posix io_uring` engine (npy_per_sample at 20 samples), with and without
+//! SQPOLL, their paths rewritten to `/t/...`, `/u/...`, and `/src/aeiou`.
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths

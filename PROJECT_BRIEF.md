@@ -1280,7 +1280,15 @@ numbers; the order is this note's.
     than the clock bound in unknown order, nodes grouped by a set digest; not implemented yet);
     and the eBPF tree's two defects fixed (an exited process leaves it, so a recycled pid is
     not traced; a child a full tree cannot hold is counted and makes the capture incomplete).
-    Not implemented yet: all of phase 4, phase 3b, readers of a set, the set digest.
+    ~~Not implemented yet: all of phase 4, phase 3b, readers of a set, the set digest.~~
+    *Phase 4 step 1, `io_uring`, designed with the user and built 2026-11-04* (§3.98 "Phase 4
+    step 1 as built"): probes on `io_uring_submit_req` and `io_uring_complete` (a program for
+    each tracepoint form, chosen from BTF), the ring at `io_uring_setup`'s return and the
+    registered files at `io_uring_register`'s, written as `aeiou_uring_sqe` and
+    `aeiou_uring_cqe` records after the format's header line, paired by a number the converter
+    gives (not `user_data`), and read as the calls they do; `STATX` decoded too, beyond the
+    agreed set, since the runner's own engine does its `fstat`s so. Not implemented yet: the
+    rest of phase 4 (mapping faults next), phase 3b, readers of a set, the set digest.
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no
@@ -1383,6 +1391,14 @@ numbers; the order is this note's.
     command that writes the trace again as the capture's line would have (the lists as
     addresses, every buffer `""...`), streamed, with what it replaced counted; until then the
     owner sends the digest.
+64. **`uring_knobs`'s SQPOLL count flaky under load (queued by the user 2026-11-04; not
+    started).** `tests/uring_knobs.rs` `io_uring_knobs_keep_the_fingerprint` asserts one kernel
+    submission thread per loop (`HostCounters.sqpoll_threads`, read from each ring's fdinfo at
+    the end of its loop), "exact however short the row is"; it counted 2 of 3 once, row `sqpoll
+    per loop`, in the instrumented coverage run beside every other test (2026-11-04), and passed
+    in `./dev.sh check all`, the other coverage pass, and five runs alone. To find: whether a
+    loop's fdinfo can be read before its SQPOLL thread exists or after it is gone, and make the
+    count exact or the assertion what the kernel guarantees.
 
 ## 7. Environment
 

@@ -1,0 +1,1651 @@
+0 1793834983.184786 --- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe ---
+3236275 1793834983.192713 execve("runner/target/release/aeiou", 0x62f484fc5810, 0x62f484fc3e60) = 0 <0.001008>
+3236275 1793834983.193819 mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720509ba7000 <0.000014>
+3236275 1793834983.193835 access("/etc/ld.so.preload", 4) = -1 ENOENT (No such file or directory) <0.000013>
+3236275 1793834983.193851 openat(AT_FDCWD</src/aeiou>, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3</etc/ld.so.cache> <0.000013>
+3236275 1793834983.193865 fstat(3</etc/ld.so.cache>, 0x7ffc3bd477f0) = 0 <0.000001>
+3236275 1793834983.193877 mmap(NULL, 46407, PROT_READ, MAP_PRIVATE, 3</etc/ld.so.cache>, 0) = 0x720509b9b000 <0.000002>
+3236275 1793834983.193878 close(3</etc/ld.so.cache>) = 0 <0.000000>
+3236275 1793834983.193885 openat(AT_FDCWD</src/aeiou>, "/lib/x86_64-linux-gnu/libgcc_s.so.1", O_RDONLY|O_CLOEXEC) = 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1> <0.000014>
+3236275 1793834983.193899 read(3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 0x7ffc3bd47a28, 832) = 832 <0.000013>
+3236275 1793834983.193914 fstat(3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 0x7ffc3bd478c0) = 0 <0.000000>
+3236275 1793834983.193925 mmap(NULL, 185256, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 0) = 0x720509b6d000 <0.000003>
+3236275 1793834983.193933 mmap(0x720509b71000, 147456, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 16384) = 0x720509b71000 <0.000006>
+3236275 1793834983.193949 mmap(0x720509b95000, 16384, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 163840) = 0x720509b95000 <0.000003>
+3236275 1793834983.193952 mmap(0x720509b99000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>, 176128) = 0x720509b99000 <0.000002>
+3236275 1793834983.193971 close(3</usr/lib/x86_64-linux-gnu/libgcc_s.so.1>) = 0 <0.000010>
+3236275 1793834983.193984 openat(AT_FDCWD</src/aeiou>, "/lib/x86_64-linux-gnu/libm.so.6", O_RDONLY|O_CLOEXEC) = 3</usr/lib/x86_64-linux-gnu/libm.so.6> <0.000003>
+3236275 1793834983.193997 read(3</usr/lib/x86_64-linux-gnu/libm.so.6>, 0x7ffc3bd47a08, 832) = 832 <0.000001>
+3236275 1793834983.193999 fstat(3</usr/lib/x86_64-linux-gnu/libm.so.6>, 0x7ffc3bd478a0) = 0 <0.000000>
+3236275 1793834983.194000 mmap(NULL, 950296, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libm.so.6>, 0) = 0x720509a84000 <0.000005>
+3236275 1793834983.194015 mmap(0x720509a94000, 520192, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libm.so.6>, 65536) = 0x720509a94000 <0.000005>
+3236275 1793834983.194022 mmap(0x720509b13000, 360448, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libm.so.6>, 585728) = 0x720509b13000 <0.000005>
+3236275 1793834983.194037 mmap(0x720509b6b000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libm.so.6>, 946176) = 0x720509b6b000 <0.000002>
+3236275 1793834983.194047 close(3</usr/lib/x86_64-linux-gnu/libm.so.6>) = 0 <0.000010>
+3236275 1793834983.194060 openat(AT_FDCWD</src/aeiou>, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3</usr/lib/x86_64-linux-gnu/libc.so.6> <0.000002>
+3236275 1793834983.194073 read(3</usr/lib/x86_64-linux-gnu/libc.so.6>, 0x7ffc3bd479e8, 832) = 832 <0.000001>
+3236275 1793834983.194074 pread64(3</usr/lib/x86_64-linux-gnu/libc.so.6>, 0x7ffc3bd47600, 784, 64) = 784 <0.000000>
+3236275 1793834983.194075 fstat(3</usr/lib/x86_64-linux-gnu/libc.so.6>, 0x7ffc3bd47880) = 0 <0.000000>
+3236275 1793834983.194077 pread64(3</usr/lib/x86_64-linux-gnu/libc.so.6>, 0x7ffc3bd474d0, 784, 64) = 784 <0.000003>
+3236275 1793834983.194082 mmap(NULL, 2174352, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libc.so.6>, 0) = 0x720509800000 <0.000003>
+3236275 1793834983.194095 mmap(0x720509828000, 1609728, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libc.so.6>, 163840) = 0x720509828000 <0.000005>
+3236275 1793834983.194110 mmap(0x7205099b1000, 323584, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libc.so.6>, 1773568) = 0x7205099b1000 <0.000009>
+3236275 1793834983.194129 mmap(0x720509a00000, 24576, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3</usr/lib/x86_64-linux-gnu/libc.so.6>, 2093056) = 0x720509a00000 <0.000003>
+3236275 1793834983.194135 mmap(0x720509a06000, 52624, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x720509a06000 <0.000011>
+3236275 1793834983.194153 close(3</usr/lib/x86_64-linux-gnu/libc.so.6>) = 0 <0.000010>
+3236275 1793834983.194175 mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720509a82000 <0.000012>
+3236275 1793834983.194586 munmap(0x720509b9b000, 46407) = 0 <0.000026>
+3236275 1793834983.194671 poll(0x7ffc3bd485e0, 3, 0) = 0 <0.000039>
+3236275 1793834983.194742 openat(AT_FDCWD</src/aeiou>, "/proc/self/maps", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/maps> <0.000031>
+3236275 1793834983.194789 fstat(3</proc/3236275/maps>, 0x7ffc3bd48390) = 0 <0.000001>
+3236275 1793834983.194801 read(3</proc/3236275/maps>, 0x5d6f94dbe500, 1024) = 1024 <0.000011>
+3236275 1793834983.194831 read(3</proc/3236275/maps>, 0x5d6f94dbe500, 1024) = 1024 <0.000014>
+3236275 1793834983.194848 read(3</proc/3236275/maps>, 0x5d6f94dbe500, 1024) = 1024 <0.000015>
+3236275 1793834983.194865 read(3</proc/3236275/maps>, 0x5d6f94dbe500, 1024) = 323 <0.000012>
+3236275 1793834983.194879 close(3</proc/3236275/maps>) = 0 <0.000002>
+3236275 1793834983.194895 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509ba4000 <0.000002>
+3236275 1793834983.195329 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7205095ff000 <0.000023>
+3236275 1793834983.195359 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205097ff990, parent_tid=0x7205097ff990, exit_signal=0, stack=0x7205095ff000, stack_size=0x1ffe00, tls=0x7205097ff6c0}, 88) = 3236277 <0.000049>
+3236277 1793834983.195419 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720501400000 <0.000003>
+3236277 1793834983.195422 munmap(0x720501400000, 46137344) = 0 <0.000003>
+3236277 1793834983.195425 munmap(0x720508000000, 20971520) = 0 <0.000002>
+3236277 1793834983.195434 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509ba1000 <0.000006>
+3236275 1793834983.195464 openat(AT_FDCWD</src/aeiou>, "workloads/input-pipeline/map/npy-per-sample/params/smoke.params.json", O_RDONLY|O_CLOEXEC) = 3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/params/smoke.params.json> <0.000020>
+3236275 1793834983.195495 statx(3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/params/smoke.params.json>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44ec0) = 0 <0.000001>
+3236275 1793834983.195498 read(3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/params/smoke.params.json>, 0x5d6f94dc9b10, 455) = 455 <0.000002>
+3236275 1793834983.195500 read(3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/params/smoke.params.json>, 0x7ffc3bd44ef0, 32) = 0 <0.000003>
+3236275 1793834983.195506 close(3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/params/smoke.params.json>) = 0 <0.000001>
+3236275 1793834983.195572 openat(AT_FDCWD</src/aeiou>, "workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json", O_RDONLY|O_CLOEXEC) = 3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json> <0.000012>
+3236275 1793834983.195585 statx(3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44e10) = 0 <0.000000>
+3236275 1793834983.195586 read(3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json>, 0x5d6f94dd4020, 39028) = 39028 <0.000005>
+3236275 1793834983.195602 read(3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json>, 0x7ffc3bd44e40, 32) = 0 <0.000000>
+3236275 1793834983.195604 close(3</src/aeiou/workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json>) = 0 <0.000000>
+3236275 1793834983.196982 readlink("/tmp", 0x7ffc3bd44c50, 1023) = -1 EINVAL (Invalid argument) <0.000016>
+3236275 1793834983.196998 readlink("/u0", 0x7ffc3bd44c50, 1023) = -1 EINVAL (Invalid argument) <0.000002>
+3236275 1793834983.197000 readlink("/u", 0x7ffc3bd44c50, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.197002 readlink("/u/s0", 0x7ffc3bd44c50, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.197014 readlink("/u/s", 0x7ffc3bd44c50, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.197015 readlink("/t", 0x7ffc3bd44c50, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.197017 readlink("/t/data", 0x7ffc3bd44c50, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.197019 readlink("/t/data/train", 0x7ffc3bd44c50, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.197036 openat(AT_FDCWD</src/aeiou>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/cgroup> <0.000009>
+3236275 1793834983.197056 statx(3</proc/3236275/cgroup>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd45150) = 0 <0.000001>
+3236275 1793834983.197057 lseek(3</proc/3236275/cgroup>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.197058 read(3</proc/3236275/cgroup>, 0x5d6f94e1cbe0, 128) = 16 <0.000004>
+3236275 1793834983.197072 read(3</proc/3236275/cgroup>, 0x5d6f94e1cbf0, 112) = 0 <0.000000>
+3236275 1793834983.197073 close(3</proc/3236275/cgroup>) = 0 <0.000002>
+3236275 1793834983.197075 statx(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", 0, 0xfff, 0x7ffc3bd44e20) = 0 <0.000007>
+3236275 1793834983.197094 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000004>
+3236275 1793834983.197099 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd45100) = 0 <0.000000>
+3236275 1793834983.197099 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000001>
+3236275 1793834983.197102 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd45200, 32) = 11 <0.000004>
+3236275 1793834983.197109 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd45200, 32) = 0 <0.000010>
+3236275 1793834983.197119 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000002>
+3236275 1793834983.197122 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000002>
+3236275 1793834983.197127 statx(3</sys/fs/cgroup/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd45100) = 0 <0.000002>
+3236275 1793834983.197129 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000010>
+3236275 1793834983.197142 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd45200, 32) = 11 <0.000001>
+3236275 1793834983.197143 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd45200, 32) = 0 <0.000000>
+3236275 1793834983.197143 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000000>
+3236275 1793834983.197210 write(1</dev/null>, 0x5d6f94e0b500, 96) = 96 <0.000012>
+3236275 1793834983.197222 write(1</dev/null>, 0x5d6f61fa74e2, 1) = 1 <0.000000>
+3236275 1793834983.197223 write(1</dev/null>, 0x5d6f61fc899d, 39) = 39 <0.000000>
+3236275 1793834983.197226 write(1</dev/null>, 0x5d6f94e0b500, 86) = 86 <0.000000>
+3236275 1793834983.197226 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197229 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197239 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197242 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197242 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197244 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197244 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197246 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000011>
+3236275 1793834983.197257 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197260 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197260 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197262 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000003>
+3236275 1793834983.197266 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197268 write(1</dev/null>, 0x5d6f94e0b500, 87) = 87 <0.000010>
+3236275 1793834983.197278 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197280 write(1</dev/null>, 0x5d6f94e0b500, 90) = 90 <0.000000>
+3236275 1793834983.197280 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197283 write(1</dev/null>, 0x5d6f94e0b500, 80) = 80 <0.000000>
+3236275 1793834983.197283 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197285 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197296 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197299 write(1</dev/null>, 0x5d6f94e0b500, 80) = 80 <0.000000>
+3236275 1793834983.197299 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197301 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197313 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197315 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197316 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197318 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000015>
+3236275 1793834983.197333 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197336 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197336 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197338 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197338 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197340 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197351 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197353 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197353 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197355 write(1</dev/null>, 0x5d6f94e0b500, 119) = 119 <0.000000>
+3236275 1793834983.197355 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197357 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197368 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197370 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197370 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197372 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197373 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197375 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197385 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197388 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197388 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197390 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197401 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197404 write(1</dev/null>, 0x5d6f94e0b500, 80) = 80 <0.000000>
+3236275 1793834983.197404 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197406 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197407 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197419 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000002>
+3236275 1793834983.197422 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197424 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197434 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197437 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197437 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197439 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197450 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000002>
+3236275 1793834983.197454 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197454 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197456 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197467 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197469 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197470 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197472 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000003>
+3236275 1793834983.197476 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197479 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197479 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197481 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197481 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197483 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197494 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197497 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197497 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197499 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197510 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197512 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197512 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197514 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197515 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000003>
+3236275 1793834983.197521 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000010>
+3236275 1793834983.197531 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197534 write(1</dev/null>, 0x5d6f94e0b500, 84) = 84 <0.000000>
+3236275 1793834983.197535 write(1</dev/null>, 0x5d6f61fc89d6, 2) = 2 <0.000000>
+3236275 1793834983.197535 write(1</dev/null>, 0x5d6f61fc8846, 1) = 1 <0.000000>
+3236275 1793834983.197913 statx(AT_FDCWD</src/aeiou>, "/t/data/train/00000/sample_000000000.npz", 0, 0xfff, 0x7ffc3bd44d00) = 0 <0.000022>
+3236275 1793834983.198292 write(1</dev/null>, 0x5d6f94e0b500, 186) = 186 <0.000012>
+3236275 1793834983.198304 write(1</dev/null>, 0x5d6f61fa7501, 1) = 1 <0.000000>
+3236275 1793834983.198308 write(1</dev/null>, 0x5d6f94e0b500, 201) = 201 <0.000000>
+3236275 1793834983.198308 write(1</dev/null>, 0x5d6f61f9d7b2, 1) = 1 <0.000000>
+3236275 1793834983.198311 write(1</dev/null>, 0x5d6f94e0b500, 80) = 80 <0.000012>
+3236275 1793834983.198323 write(1</dev/null>, 0x5d6f61fa594f, 107) = 107 <0.000000>
+3236275 1793834983.198326 write(1</dev/null>, 0x5d6f94e0b500, 185) = 185 <0.000000>
+3236275 1793834983.198326 write(1</dev/null>, 0x5d6f61f9f642, 1) = 1 <0.000000>
+3236275 1793834983.198330 openat(AT_FDCWD</src/aeiou>, "/t/data/train/.aeiou-dataset.json", O_RDONLY|O_CLOEXEC) = 3</t/data/train/.aeiou-dataset.json> <0.000003>
+3236275 1793834983.198333 statx(3</t/data/train/.aeiou-dataset.json>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44a30) = 0 <0.000001>
+3236275 1793834983.198334 read(3</t/data/train/.aeiou-dataset.json>, 0x5d6f94dd4f70, 1918) = 1918 <0.000002>
+3236275 1793834983.198337 read(3</t/data/train/.aeiou-dataset.json>, 0x7ffc3bd44a60, 32) = 0 <0.000000>
+3236275 1793834983.198338 close(3</t/data/train/.aeiou-dataset.json>) = 0 <0.000001>
+3236275 1793834983.198390 write(1</dev/null>, 0x5d6f94e0b500, 141) = 141 <0.000011>
+3236275 1793834983.198401 write(1</dev/null>, 0x5d6f61faa39d, 1) = 1 <0.000000>
+3236275 1793834983.198406 write(1</dev/null>, 0x5d6f94e0b500, 58) = 58 <0.000010>
+3236275 1793834983.198417 write(1</dev/null>, 0x5d6f61fa3640, 2) = 2 <0.000000>
+3236275 1793834983.198422 openat(AT_FDCWD</src/aeiou>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/cgroup> <0.000013>
+3236275 1793834983.198436 statx(3</proc/3236275/cgroup>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd45100) = 0 <0.000000>
+3236275 1793834983.198436 lseek(3</proc/3236275/cgroup>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.198437 read(3</proc/3236275/cgroup>, 0x5d6f94e15c00, 128) = 16 <0.000002>
+3236275 1793834983.198449 read(3</proc/3236275/cgroup>, 0x5d6f94e15c10, 112) = 0 <0.000000>
+3236275 1793834983.198450 close(3</proc/3236275/cgroup>) = 0 <0.000001>
+3236275 1793834983.198451 statx(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", 0, 0xfff, 0x7ffc3bd44dd0) = 0 <0.000002>
+3236275 1793834983.198455 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000012>
+3236275 1793834983.198467 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd450b0) = 0 <0.000000>
+3236275 1793834983.198468 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.198469 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd451b0, 32) = 11 <0.000001>
+3236275 1793834983.198470 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd451b0, 32) = 0 <0.000000>
+3236275 1793834983.198471 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000001>
+3236275 1793834983.198472 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000004>
+3236275 1793834983.198477 statx(3</sys/fs/cgroup/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd450b0) = 0 <0.000000>
+3236275 1793834983.198492 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.198492 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd451b0, 32) = 11 <0.000001>
+3236275 1793834983.198493 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd451b0, 32) = 0 <0.000000>
+3236275 1793834983.198494 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000000>
+3236275 1793834983.198675 openat(AT_FDCWD</src/aeiou>, "/proc/self/fd", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</proc/3236275/fd> <0.000015>
+3236275 1793834983.198690 fstat(3</proc/3236275/fd>, 0x7ffc3bd450c0) = 0 <0.000001>
+3236275 1793834983.198704 getdents64(3</proc/3236275/fd>, 0x5d6f94e43750, 32768) = 144 <0.000009>
+3236275 1793834983.198724 getdents64(3</proc/3236275/fd>, 0x5d6f94e43750, 32768) = 0 <0.000000>
+3236275 1793834983.198725 close(3</proc/3236275/fd>) = 0 <0.000001>
+3236275 1793834983.198726 openat(AT_FDCWD</src/aeiou>, "/proc/self/task", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</proc/3236275/task> <0.000003>
+3236275 1793834983.198739 fstat(3</proc/3236275/task>, 0x7ffc3bd450c0) = 0 <0.000000>
+3236275 1793834983.198740 getdents64(3</proc/3236275/task>, 0x5d6f94e43750, 32768) = 112 <0.000003>
+3236275 1793834983.198745 getdents64(3</proc/3236275/task>, 0x5d6f94e43750, 32768) = 0 <0.000010>
+3236275 1793834983.198757 close(3</proc/3236275/task>) = 0 <0.000000>
+3236275 1793834983.198759 openat(AT_FDCWD</src/aeiou>, "/proc/self/maps", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/maps> <0.000002>
+3236275 1793834983.198771 statx(3</proc/3236275/maps>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd45000) = 0 <0.000000>
+3236275 1793834983.198772 read(3</proc/3236275/maps>, 0x7ffc3bd45030, 32) = 32 <0.000003>
+3236275 1793834983.198776 read(3</proc/3236275/maps>, 0x5d6f94e2c260, 32) = 32 <0.000000>
+3236275 1793834983.198776 read(3</proc/3236275/maps>, 0x5d6f94e1a060, 64) = 64 <0.000003>
+3236275 1793834983.198781 read(3</proc/3236275/maps>, 0x5d6f94e2f1d0, 128) = 128 <0.000001>
+3236275 1793834983.198782 read(3</proc/3236275/maps>, 0x5d6f94e2fc20, 256) = 256 <0.000001>
+3236275 1793834983.198784 read(3</proc/3236275/maps>, 0x5d6f94e2f850, 512) = 512 <0.000002>
+3236275 1793834983.198789 read(3</proc/3236275/maps>, 0x5d6f94e363a0, 1024) = 1024 <0.000004>
+3236275 1793834983.198804 read(3</proc/3236275/maps>, 0x5d6f94e43f20, 2048) = 1739 <0.000006>
+3236275 1793834983.198820 read(3</proc/3236275/maps>, 0x5d6f94e445eb, 309) = 0 <0.000000>
+3236275 1793834983.198821 close(3</proc/3236275/maps>) = 0 <0.000001>
+3236275 1793834983.198824 openat(AT_FDCWD</src/aeiou>, "/proc/sys/kernel/threads-max", O_RDONLY|O_CLOEXEC) = 3</proc/sys/kernel/threads-max> <0.000005>
+3236275 1793834983.198839 statx(3</proc/sys/kernel/threads-max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44fb0) = 0 <0.000000>
+3236275 1793834983.198840 read(3</proc/sys/kernel/threads-max>, 0x7ffc3bd44fe0, 32) = 7 <0.000002>
+3236275 1793834983.198842 read(3</proc/sys/kernel/threads-max>, 0x5d6f94e36df7, 32) = 0 <0.000000>
+3236275 1793834983.198843 close(3</proc/sys/kernel/threads-max>) = 0 <0.000000>
+3236275 1793834983.198844 openat(AT_FDCWD</src/aeiou>, "/proc/sys/vm/max_map_count", O_RDONLY|O_CLOEXEC) = 3</proc/sys/vm/max_map_count> <0.000003>
+3236275 1793834983.198857 statx(3</proc/sys/vm/max_map_count>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44fb0) = 0 <0.000000>
+3236275 1793834983.198857 read(3</proc/sys/vm/max_map_count>, 0x7ffc3bd44fe0, 32) = 8 <0.000000>
+3236275 1793834983.198858 read(3</proc/sys/vm/max_map_count>, 0x5d6f94e37068, 32) = 0 <0.000000>
+3236275 1793834983.198859 close(3</proc/sys/vm/max_map_count>) = 0 <0.000000>
+3236275 1793834983.198868 write(1</dev/null>, 0x5d6f94e0b500, 83) = 83 <0.000010>
+3236275 1793834983.198878 write(1</dev/null>, 0x5d6f61f9d7b2, 1) = 1 <0.000000>
+3236275 1793834983.198879 write(1</dev/null>, 0x5d6f94e0b500, 123) = 123 <0.000000>
+3236275 1793834983.198879 write(1</dev/null>, 0x5d6f61f9d7b2, 1) = 1 <0.000000>
+3236275 1793834983.198889 openat(AT_FDCWD</src/aeiou>, "/sys/devices/system/cpu/online", O_RDONLY|O_CLOEXEC) = 3</sys/devices/system/cpu/online> <0.000015>
+3236275 1793834983.198913 read(3</sys/devices/system/cpu/online>, 0x7ffc3bd44dc0, 1024) = 5 <0.000013>
+3236275 1793834983.198927 close(3</sys/devices/system/cpu/online>) = 0 <0.000001>
+3236275 1793834983.198930 openat(AT_FDCWD</src/aeiou>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/cgroup> <0.000016>
+3236275 1793834983.198946 statx(3</proc/3236275/cgroup>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44de0) = 0 <0.000000>
+3236275 1793834983.198946 lseek(3</proc/3236275/cgroup>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.198947 read(3</proc/3236275/cgroup>, 0x5d6f94e15c00, 128) = 16 <0.000001>
+3236275 1793834983.198948 read(3</proc/3236275/cgroup>, 0x5d6f94e15c10, 112) = 0 <0.000000>
+3236275 1793834983.198949 close(3</proc/3236275/cgroup>) = 0 <0.000000>
+3236275 1793834983.198950 statx(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", 0, 0xfff, 0x7ffc3bd44ab0) = 0 <0.000004>
+3236275 1793834983.198966 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000003>
+3236275 1793834983.198970 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44d90) = 0 <0.000000>
+3236275 1793834983.198970 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.198971 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd44e90, 32) = 11 <0.000003>
+3236275 1793834983.198976 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd44e90, 32) = 0 <0.000011>
+3236275 1793834983.198988 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000001>
+3236275 1793834983.198990 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000001>
+3236275 1793834983.198992 statx(3</sys/fs/cgroup/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44d90) = 0 <0.000002>
+3236275 1793834983.198996 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000002>
+3236275 1793834983.198998 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd44e90, 32) = 11 <0.000003>
+3236275 1793834983.199003 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd44e90, 32) = 0 <0.000010>
+3236275 1793834983.199015 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000001>
+3236275 1793834983.199018 openat(AT_FDCWD</src/aeiou>, "/proc/meminfo", O_RDONLY|O_CLOEXEC) = 3</proc/meminfo> <0.000002>
+3236275 1793834983.199031 statx(3</proc/meminfo>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44e80) = 0 <0.000000>
+3236275 1793834983.199031 read(3</proc/meminfo>, 0x7ffc3bd44eb0, 32) = 32 <0.000010>
+3236275 1793834983.199052 read(3</proc/meminfo>, 0x5d6f94dc1190, 32) = 32 <0.000000>
+3236275 1793834983.199052 read(3</proc/meminfo>, 0x5d6f94e35ac0, 64) = 64 <0.000000>
+3236275 1793834983.199053 read(3</proc/meminfo>, 0x5d6f94e2e670, 128) = 128 <0.000000>
+3236275 1793834983.199054 read(3</proc/meminfo>, 0x5d6f94dd8500, 256) = 256 <0.000000>
+3236275 1793834983.199054 read(3</proc/meminfo>, 0x5d6f94dd6fa0, 512) = 512 <0.000000>
+3236275 1793834983.199055 read(3</proc/meminfo>, 0x5d6f94e363a0, 1024) = 451 <0.000000>
+3236275 1793834983.199055 read(3</proc/meminfo>, 0x5d6f94e36563, 573) = 0 <0.000000>
+3236275 1793834983.199056 close(3</proc/meminfo>) = 0 <0.000000>
+3236275 1793834983.199058 openat(AT_FDCWD</src/aeiou>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/cgroup> <0.000011>
+3236275 1793834983.199069 statx(3</proc/3236275/cgroup>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44f40) = 0 <0.000000>
+3236275 1793834983.199070 read(3</proc/3236275/cgroup>, 0x7ffc3bd44f70, 32) = 16 <0.000001>
+3236275 1793834983.199071 read(3</proc/3236275/cgroup>, 0x5d6f94e37070, 32) = 0 <0.000000>
+3236275 1793834983.199072 close(3</proc/3236275/cgroup>) = 0 <0.000000>
+3236275 1793834983.199074 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/memory.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/memory.max> <0.000006>
+3236275 1793834983.199089 statx(3</sys/fs/cgroup/non-systemd/memory.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44f40) = 0 <0.000000>
+3236275 1793834983.199090 read(3</sys/fs/cgroup/non-systemd/memory.max>, 0x7ffc3bd44f70, 32) = 4 <0.000001>
+3236275 1793834983.199091 read(3</sys/fs/cgroup/non-systemd/memory.max>, 0x5d6f94e18514, 32) = 0 <0.000000>
+3236275 1793834983.199092 close(3</sys/fs/cgroup/non-systemd/memory.max>) = 0 <0.000001>
+3236275 1793834983.199093 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/memory.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/memory.max> <0.000003>
+3236275 1793834983.199106 statx(3</sys/fs/cgroup/memory.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44f40) = 0 <0.000000>
+3236275 1793834983.199107 read(3</sys/fs/cgroup/memory.max>, 0x7ffc3bd44f70, 32) = 4 <0.000000>
+3236275 1793834983.199108 read(3</sys/fs/cgroup/memory.max>, 0x5d6f94e27af4, 32) = 0 <0.000000>
+3236275 1793834983.199108 close(3</sys/fs/cgroup/memory.max>) = 0 <0.000000>
+3236275 1793834983.199145 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7205093fe000 <0.000013>
+3236275 1793834983.199168 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205095fe990, parent_tid=0x7205095fe990, exit_signal=0, stack=0x7205093fe000, stack_size=0x1ffe00, tls=0x7205095fe6c0}, 88) = 3236278 <0.000042>
+3236278 1793834983.199224 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7204fc000000 <0.000004>
+3236278 1793834983.199228 munmap(0x720500000000, 67108864) = 0 <0.000003>
+3236278 1793834983.199239 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000002>
+3236278 1793834983.199246 openat(AT_FDCWD</src/aeiou>, "/proc/self/status", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/status> <0.000009>
+3236278 1793834983.199256 statx(3</proc/3236275/status>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd840) = 0 <0.000001>
+3236278 1793834983.199258 read(3</proc/3236275/status>, 0x7205095fd870, 32) = 32 <0.000010>
+3236278 1793834983.199269 read(3</proc/3236275/status>, 0x7204fc000cb0, 32) = 32 <0.000000>
+3236278 1793834983.199270 read(3</proc/3236275/status>, 0x7204fc000cd0, 64) = 64 <0.000000>
+3236278 1793834983.199270 read(3</proc/3236275/status>, 0x7204fc000d10, 128) = 128 <0.000000>
+3236278 1793834983.199270 read(3</proc/3236275/status>, 0x7204fc000d90, 256) = 256 <0.000000>
+3236278 1793834983.199272 read(3</proc/3236275/status>, 0x7204fc000e90, 512) = 512 <0.000000>
+3236278 1793834983.199273 read(3</proc/3236275/status>, 0x7204fc001090, 1024) = 442 <0.000000>
+3236278 1793834983.199273 read(3</proc/3236275/status>, 0x7204fc00124a, 582) = 0 <0.000000>
+3236278 1793834983.199274 close(3</proc/3236275/status>) = 0 <0.000001>
+3236278 1793834983.199278 openat(AT_FDCWD</src/aeiou>, "/proc/self/task", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</proc/3236275/task> <0.000001>
+3236278 1793834983.199280 fstat(3</proc/3236275/task>, 0x7205095fd8b0) = 0 <0.000000>
+3236278 1793834983.199282 getdents64(3</proc/3236275/task>, 0x7204fc000cc0, 32768) = 144 <0.000003>
+3236278 1793834983.199286 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236275/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236275/comm> <0.000003>
+3236278 1793834983.199290 statx(4</proc/3236275/task/3236275/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.199290 read(4</proc/3236275/task/3236275/comm>, 0x7205095fd820, 32) = 6 <0.000001>
+3236278 1793834983.199291 read(4</proc/3236275/task/3236275/comm>, 0x7204fc008dc6, 32) = 0 <0.000000>
+3236278 1793834983.199292 close(4</proc/3236275/task/3236275/comm>) = 0 <0.000000>
+3236278 1793834983.199293 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236277/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236277/comm> <0.000002>
+3236278 1793834983.199295 statx(4</proc/3236275/task/3236277/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.199296 read(4</proc/3236275/task/3236277/comm>, 0x7205095fd820, 32) = 6 <0.000000>
+3236278 1793834983.199296 read(4</proc/3236275/task/3236277/comm>, 0x7204fc008e66, 32) = 0 <0.000000>
+3236278 1793834983.199297 close(4</proc/3236275/task/3236277/comm>) = 0 <0.000000>
+3236278 1793834983.199297 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236278/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236278/comm> <0.000002>
+3236278 1793834983.199300 statx(4</proc/3236275/task/3236278/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.199301 read(4</proc/3236275/task/3236278/comm>, 0x7205095fd820, 32) = 9 <0.000000>
+3236278 1793834983.199301 read(4</proc/3236275/task/3236278/comm>, 0x7204fc008f09, 32) = 0 <0.000000>
+3236278 1793834983.199302 close(4</proc/3236275/task/3236278/comm>) = 0 <0.000000>
+3236278 1793834983.199302 getdents64(3</proc/3236275/task>, 0x7204fc000cc0, 32768) = 0 <0.000000>
+3236278 1793834983.199303 close(3</proc/3236275/task>) = 0 <0.000000>
+3236275 1793834983.199319 readlink("/tmp", 0x7ffc3bd43190, 1023) = -1 EINVAL (Invalid argument) <0.000002>
+3236275 1793834983.199326 readlink("/u0", 0x7ffc3bd43190, 1023) = -1 EINVAL (Invalid argument) <0.000002>
+3236275 1793834983.199342 readlink("/u", 0x7ffc3bd43190, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.199343 readlink("/u/s0", 0x7ffc3bd43190, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.199344 readlink("/u/s", 0x7ffc3bd43190, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.199345 readlink("/t", 0x7ffc3bd43190, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.199346 readlink("/t/data", 0x7ffc3bd43190, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.199348 openat(AT_FDCWD</src/aeiou>, "/proc/self/mountstats", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/mountstats> <0.000004>
+3236275 1793834983.199363 statx(3</proc/3236275/mountstats>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43480) = 0 <0.000000>
+3236275 1793834983.199363 read(3</proc/3236275/mountstats>, 0x7ffc3bd434b0, 32) = 32 <0.000009>
+3236275 1793834983.199383 read(3</proc/3236275/mountstats>, 0x5d6f94e1d250, 32) = 32 <0.000000>
+3236275 1793834983.199384 read(3</proc/3236275/mountstats>, 0x5d6f94e1a060, 64) = 64 <0.000002>
+3236275 1793834983.199386 read(3</proc/3236275/mountstats>, 0x5d6f94e35970, 128) = 128 <0.000001>
+3236275 1793834983.199391 read(3</proc/3236275/mountstats>, 0x5d6f94dd77c0, 256) = 256 <0.000006>
+3236275 1793834983.199399 read(3</proc/3236275/mountstats>, 0x5d6f94e44130, 512) = 512 <0.000006>
+3236275 1793834983.199415 read(3</proc/3236275/mountstats>, 0x5d6f94e44330, 1024) = 1024 <0.000017>
+3236275 1793834983.199442 read(3</proc/3236275/mountstats>, 0x5d6f94e44730, 2048) = 538 <0.000008>
+3236275 1793834983.199460 read(3</proc/3236275/mountstats>, 0x5d6f94e4494a, 1510) = 0 <0.000000>
+3236275 1793834983.199461 close(3</proc/3236275/mountstats>) = 0 <0.000001>
+3236275 1793834983.199490 openat(AT_FDCWD</src/aeiou>, "/proc/self/mounts", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/mounts> <0.000013>
+3236275 1793834983.199503 statx(3</proc/3236275/mounts>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43480) = 0 <0.000000>
+3236275 1793834983.199504 read(3</proc/3236275/mounts>, 0x7ffc3bd434b0, 32) = 32 <0.000006>
+3236275 1793834983.199520 read(3</proc/3236275/mounts>, 0x5d6f94e1a040, 32) = 32 <0.000000>
+3236275 1793834983.199521 read(3</proc/3236275/mounts>, 0x5d6f94e32a60, 64) = 64 <0.000000>
+3236275 1793834983.199521 read(3</proc/3236275/mounts>, 0x5d6f94dd49a0, 128) = 128 <0.000000>
+3236275 1793834983.199522 read(3</proc/3236275/mounts>, 0x5d6f94e45040, 256) = 256 <0.000006>
+3236275 1793834983.199538 read(3</proc/3236275/mounts>, 0x5d6f94e45140, 512) = 512 <0.000006>
+3236275 1793834983.199554 read(3</proc/3236275/mounts>, 0x5d6f94e45340, 1024) = 1024 <0.000010>
+3236275 1793834983.199574 read(3</proc/3236275/mounts>, 0x5d6f94e45740, 2048) = 1425 <0.000011>
+3236275 1793834983.199596 read(3</proc/3236275/mounts>, 0x5d6f94e45cd1, 623) = 0 <0.000000>
+3236275 1793834983.199597 close(3</proc/3236275/mounts>) = 0 <0.000001>
+3236275 1793834983.199611 openat(AT_FDCWD</src/aeiou>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/cgroup> <0.000011>
+3236275 1793834983.199623 statx(3</proc/3236275/cgroup>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43620) = 0 <0.000000>
+3236275 1793834983.199624 lseek(3</proc/3236275/cgroup>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.199625 read(3</proc/3236275/cgroup>, 0x5d6f94e15b70, 128) = 16 <0.000002>
+3236275 1793834983.199629 read(3</proc/3236275/cgroup>, 0x5d6f94e15b80, 112) = 0 <0.000002>
+3236275 1793834983.199631 close(3</proc/3236275/cgroup>) = 0 <0.000000>
+3236275 1793834983.199632 statx(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", 0, 0xfff, 0x7ffc3bd432f0) = 0 <0.000003>
+3236275 1793834983.199636 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000012>
+3236275 1793834983.199649 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd435d0) = 0 <0.000000>
+3236275 1793834983.199650 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.199650 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd436d0, 32) = 11 <0.000001>
+3236275 1793834983.199661 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd436d0, 32) = 0 <0.000002>
+3236275 1793834983.199663 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000001>
+3236275 1793834983.199665 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000002>
+3236275 1793834983.199711 statx(3</sys/fs/cgroup/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd435d0) = 0 <0.000012>
+3236275 1793834983.199724 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.199725 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd436d0, 32) = 11 <0.000002>
+3236275 1793834983.199728 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd436d0, 32) = 0 <0.000000>
+3236275 1793834983.199728 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000001>
+3236275 1793834983.199737 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7205091fd000 <0.000013>
+3236275 1793834983.199757 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205093fd990, parent_tid=0x7205093fd990, exit_signal=0, stack=0x7205091fd000, stack_size=0x1ffe00, tls=0x7205093fd6c0}, 88) = 3236279 <0.000044>
+3236279 1793834983.199821 mmap(0x720500000000, 67108864, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720500000000 <0.000003>
+3236279 1793834983.199832 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9b000 <0.000001>
+3236279 1793834983.199847 io_uring_setup(1024, 0x7205093fad00) = 3 <0.000065>
+3236279 1793834983.199925 mmap(NULL, 65536, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_POPULATE, 3, 268435456) = 0x720509a72000 <0.000009>
+3236279 1793834983.199944 mmap(NULL, 69696, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_POPULATE, 3, 0) = 0x720509a60000 <0.000005>
+3236279 1793834983.199951 io_uring_register(3, 19, 0x7205093faf18, 2) = 0 <0.000011>
+3236279 1793834983.199962 io_uring_register(3, 8, 0x7205093fb888, 256) = 0 <0.000003>
+3236279 1793834983.199978 eventfd2(0, 0x80800) = 4 <0.000002>
+3236279 1793834983.200004 io_uring_enter(3, 1, 1, 0xb, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.200025 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC|O_DIRECTORY, user_data=0x0) = 0
+3236280 1793834983.200032 aeiou_uring_cqe(ring=3, id=1, user_data=0x0, flags=0) = 5</t/data/train/00000>
+3236279 1793834983.200059 <... io_uring_enter resumed>) = 1 <0.000056>
+3236279 1793834983.200076 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.200078 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_STATX, dirfd=5</t/data/train/00000>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x0) = 0
+3236280 1793834983.200115 aeiou_uring_cqe(ring=3, id=1, user_data=0x0, flags=0) = 0
+3236279 1793834983.200143 <... io_uring_enter resumed>) = 1 <0.000066>
+3236279 1793834983.200164 getdents64(5</t/data/train/00000>, 0x720500004d20, 32768) = 848 <0.000010>
+3236279 1793834983.200175 getdents64(5</t/data/train/00000>, 0x720500004d20, 32768) = 0 <0.000000>
+3236279 1793834983.200178 close(5</t/data/train/00000>) = 0 <0.000002>
+3236280 1793834983.200203 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000015.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x1) = 0
+3236280 1793834983.200206 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 5</t/data/train/00000/sample_000000015.npz>
+3236280 1793834983.200206 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000006.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x2) = 0
+3236280 1793834983.200208 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000005.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x3) = 0
+3236280 1793834983.200210 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 6</t/data/train/00000/sample_000000006.npz>
+3236280 1793834983.200210 aeiou_uring_cqe(ring=3, id=2, user_data=0x3, flags=0) = 7</t/data/train/00000/sample_000000005.npz>
+3236279 1793834983.200212 io_uring_enter(3, 0, 1, 0x9, 0x7205093fb590, 24) = 0 <0.000000>
+3236280 1793834983.200216 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_STATX, dirfd=5</t/data/train/00000/sample_000000015.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x1) = 0
+3236279 1793834983.200217 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.200225 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_STATX, dirfd=6</t/data/train/00000/sample_000000006.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x2) = 0
+3236280 1793834983.200226 aeiou_uring_sqe(ring=3, id=3, op=IORING_OP_STATX, dirfd=7</t/data/train/00000/sample_000000005.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x3) = 0
+3236280 1793834983.200229 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 0
+3236280 1793834983.200239 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 0
+3236280 1793834983.200240 aeiou_uring_cqe(ring=3, id=3, user_data=0x3, flags=0) = 0
+3236279 1793834983.200248 <... io_uring_enter resumed>) = 3 <0.000031>
+3236279 1793834983.200254 ioctl(5</t/data/train/00000/sample_000000015.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000002>
+3236279 1793834983.200258 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.200265 ioctl(6</t/data/train/00000/sample_000000006.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000000>
+3236280 1793834983.200265 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=0, len=4096, user_data=0x1) = 0
+3236279 1793834983.200267 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.200268 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.200270 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=0, len=4096, user_data=0x2) = 0
+3236279 1793834983.200270 ioctl(7</t/data/train/00000/sample_000000005.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000000>
+3236279 1793834983.200271 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR <unfinished ...>
+3236280 1793834983.200271 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236279 1793834983.200271 <... lseek resumed>) = 0 <0.000000>
+3236280 1793834983.200276 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=0, len=4096, user_data=0x3) = 0
+3236279 1793834983.200276 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.200278 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.200279 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.200280 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.200281 lseek(5</t/data/train/00000/sample_000000015.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.200286 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=1048554, len=4096, user_data=0x1) = 0
+3236279 1793834983.200286 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.200287 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236280 1793834983.200288 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 22
+3236279 1793834983.200288 lseek(6</t/data/train/00000/sample_000000006.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.200292 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=1048554, len=4096, user_data=0x2) = 0
+3236279 1793834983.200292 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000001>
+3236280 1793834983.200293 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 22
+3236279 1793834983.200294 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.200294 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.200295 lseek(7</t/data/train/00000/sample_000000005.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.200301 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=1048554, len=4096, user_data=0x3) = 0
+3236279 1793834983.200302 lseek(5</t/data/train/00000/sample_000000015.npz>, 1048534, SEEK_SET <unfinished ...>
+3236280 1793834983.200302 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 22
+3236279 1793834983.200302 <... lseek resumed>) = 1048534 <0.000000>
+3236280 1793834983.200307 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=1048534, len=4096, user_data=0x1) = 0
+3236279 1793834983.200307 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000001>
+3236280 1793834983.200307 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 42
+3236279 1793834983.200309 lseek(6</t/data/train/00000/sample_000000006.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236280 1793834983.200313 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=1048534, len=4096, user_data=0x2) = 0
+3236280 1793834983.200313 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 42
+3236279 1793834983.200313 lseek(7</t/data/train/00000/sample_000000005.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236280 1793834983.200317 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=1048534, len=4096, user_data=0x3) = 0
+3236279 1793834983.200317 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.200318 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 42
+3236279 1793834983.200319 lseek(5</t/data/train/00000/sample_000000015.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236280 1793834983.200323 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=1048452, len=4096, user_data=0x1) = 0
+3236280 1793834983.200323 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 124
+3236279 1793834983.200323 lseek(6</t/data/train/00000/sample_000000006.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236279 1793834983.200327 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.200329 lseek(7</t/data/train/00000/sample_000000005.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236280 1793834983.200329 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=1048452, len=4096, user_data=0x2) = 0
+3236280 1793834983.200330 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 124
+3236280 1793834983.200333 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=1048452, len=4096, user_data=0x3) = 0
+3236280 1793834983.200333 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 124
+3236279 1793834983.200333 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_SET) = 0 <0.000000>
+3236280 1793834983.200338 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=0, len=4096, user_data=0x1) = 0
+3236279 1793834983.200338 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.200339 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.200339 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_SET) = 0 <0.000000>
+3236280 1793834983.200344 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=0, len=4096, user_data=0x2) = 0
+3236279 1793834983.200344 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_SET) = 0 <0.000000>
+3236280 1793834983.200345 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.200348 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=0, len=4096, user_data=0x3) = 0
+3236279 1793834983.200348 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.200349 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.200350 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200351 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200352 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.200356 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=4096, len=4096, user_data=0x1) = 0
+3236279 1793834983.200356 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.200357 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.200357 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200358 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.200362 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=4096, len=4096, user_data=0x2) = 0
+3236279 1793834983.200362 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.200364 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236279 1793834983.200364 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200365 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200366 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.200370 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=4096, len=4096, user_data=0x3) = 0
+3236279 1793834983.200370 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.200371 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.200385 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720509a20000 <0.000004>
+3236280 1793834983.200469 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=8192, len=253952, user_data=0x1) = 0
+3236279 1793834983.200470 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.200473 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200475 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7205091bd000 <0.000001>
+3236280 1793834983.200501 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 253952
+3236280 1793834983.200565 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=8192, len=253952, user_data=0x2) = 0
+3236279 1793834983.200566 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200568 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x72050917d000 <0.000001>
+3236280 1793834983.200624 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 253952
+3236280 1793834983.200686 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=8192, len=253952, user_data=0x3) = 0
+3236279 1793834983.200686 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.200696 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.200716 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 253952
+3236280 1793834983.200725 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=262144, len=4096, user_data=0x1) = 0
+3236280 1793834983.200727 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=262144, len=4096, user_data=0x2) = 0
+3236280 1793834983.200727 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.200728 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 4096
+3236279 1793834983.200746 <... io_uring_enter resumed>) = 3 <0.000049>
+3236280 1793834983.200756 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=262144, len=4096, user_data=0x3) = 0
+3236280 1793834983.200758 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.200758 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200762 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x72050913c000 <0.000001>
+3236280 1793834983.200837 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=266240, len=258048, user_data=0x1) = 0
+3236279 1793834983.200838 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200840 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7205090fb000 <0.000001>
+3236280 1793834983.200874 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 258048
+3236280 1793834983.200961 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=266240, len=258048, user_data=0x2) = 0
+3236279 1793834983.200961 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.200963 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.200965 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7205090ba000 <0.000000>
+3236280 1793834983.200986 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 258048
+3236279 1793834983.201040 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.201045 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.201048 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=266240, len=258048, user_data=0x3) = 0
+3236280 1793834983.201073 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=524288, len=4096, user_data=0x1) = 0
+3236280 1793834983.201087 aeiou_uring_sqe(ring=3, id=3, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=524288, len=4096, user_data=0x2) = 0
+3236280 1793834983.201088 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 258048
+3236280 1793834983.201088 aeiou_uring_cqe(ring=3, id=2, user_data=0x1, flags=0) = 4096
+3236280 1793834983.201088 aeiou_uring_cqe(ring=3, id=3, user_data=0x2, flags=0) = 4096
+3236279 1793834983.201101 <... io_uring_enter resumed>) = 3 <0.000056>
+3236280 1793834983.201118 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=524288, len=4096, user_data=0x3) = 0
+3236279 1793834983.201120 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.201120 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.201123 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720509079000 <0.000001>
+3236280 1793834983.202620 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=528384, len=258048, user_data=0x1) = 0
+3236279 1793834983.202627 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.202635 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720509038000 <0.000004>
+3236280 1793834983.202652 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 258048
+3236280 1793834983.202714 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=528384, len=258048, user_data=0x2) = 0
+3236279 1793834983.202714 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000001>
+3236279 1793834983.202718 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.202720 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508ff7000 <0.000001>
+3236280 1793834983.202741 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 258048
+3236280 1793834983.202961 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=528384, len=258048, user_data=0x3) = 0
+3236279 1793834983.202969 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000001>
+3236279 1793834983.202975 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.202986 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 258048
+3236280 1793834983.202996 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=786432, len=4096, user_data=0x1) = 0
+3236280 1793834983.202997 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=786432, len=4096, user_data=0x2) = 0
+3236280 1793834983.202999 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.202999 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 4096
+3236279 1793834983.203012 <... io_uring_enter resumed>) = 3 <0.000036>
+3236280 1793834983.203019 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=786432, len=4096, user_data=0x3) = 0
+3236280 1793834983.203020 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.203020 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203024 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508fb7000 <0.000001>
+3236280 1793834983.203099 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=790528, len=253952, user_data=0x1) = 0
+3236279 1793834983.203100 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203102 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508f77000 <0.000001>
+3236280 1793834983.203152 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 253952
+3236280 1793834983.203176 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=790528, len=253952, user_data=0x2) = 0
+3236279 1793834983.203176 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.203177 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203179 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508f37000 <0.000001>
+3236280 1793834983.203226 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 253952
+3236280 1793834983.203251 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=790528, len=253952, user_data=0x3) = 0
+3236279 1793834983.203255 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.203259 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.203301 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 253952
+3236280 1793834983.203312 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000015.npz>, off=1044480, len=4096, user_data=0x1) = 0
+3236280 1793834983.203314 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000006.npz>, off=1044480, len=4096, user_data=0x2) = 0
+3236280 1793834983.203315 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.203315 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 4096
+3236279 1793834983.203343 <... io_uring_enter resumed>) = 3 <0.000084>
+3236280 1793834983.203352 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000005.npz>, off=1044480, len=4096, user_data=0x3) = 0
+3236280 1793834983.203353 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.203353 lseek(5</t/data/train/00000/sample_000000015.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203357 close(5</t/data/train/00000/sample_000000015.npz>) = 0 <0.000002>
+3236279 1793834983.203365 lseek(6</t/data/train/00000/sample_000000006.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203366 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000013.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x1) = 0
+3236279 1793834983.203367 close(6</t/data/train/00000/sample_000000006.npz>) = 0 <0.000000>
+3236279 1793834983.203369 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236280 1793834983.203371 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 5</t/data/train/00000/sample_000000013.npz>
+3236279 1793834983.203371 lseek(7</t/data/train/00000/sample_000000005.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203371 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000008.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x2) = 0
+3236279 1793834983.203372 close(7</t/data/train/00000/sample_000000005.npz> <unfinished ...>
+3236280 1793834983.203373 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 6</t/data/train/00000/sample_000000008.npz>
+3236279 1793834983.203373 <... close resumed>) = 0 <0.000000>
+3236279 1793834983.203375 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.203375 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000017.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x3) = 0
+3236279 1793834983.203375 <... io_uring_enter resumed>) = 1 <0.000000>
+3236280 1793834983.203377 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 7</t/data/train/00000/sample_000000017.npz>
+3236279 1793834983.203377 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24) = 3 <0.000000>
+3236280 1793834983.203377 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_STATX, dirfd=5</t/data/train/00000/sample_000000013.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x1) = 0
+3236279 1793834983.203378 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.203386 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_STATX, dirfd=6</t/data/train/00000/sample_000000008.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x2) = 0
+3236280 1793834983.203387 aeiou_uring_sqe(ring=3, id=3, op=IORING_OP_STATX, dirfd=7</t/data/train/00000/sample_000000017.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x3) = 0
+3236280 1793834983.203442 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 0
+3236280 1793834983.203454 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 0
+3236280 1793834983.203455 aeiou_uring_cqe(ring=3, id=3, user_data=0x3, flags=0) = 0
+3236279 1793834983.203464 <... io_uring_enter resumed>) = 3 <0.000086>
+3236279 1793834983.203469 ioctl(5</t/data/train/00000/sample_000000013.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000001>
+3236279 1793834983.203472 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203478 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=0, len=4096, user_data=0x1) = 0
+3236279 1793834983.203479 ioctl(6</t/data/train/00000/sample_000000008.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000000>
+3236280 1793834983.203480 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.203480 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203484 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=0, len=4096, user_data=0x2) = 0
+3236279 1793834983.203485 ioctl(7</t/data/train/00000/sample_000000017.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000000>
+3236280 1793834983.203485 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236279 1793834983.203486 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203490 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=0, len=4096, user_data=0x3) = 0
+3236279 1793834983.203490 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.203491 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.203491 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.203492 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.203493 lseek(5</t/data/train/00000/sample_000000013.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.203497 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=1048554, len=4096, user_data=0x1) = 0
+3236279 1793834983.203497 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236280 1793834983.203498 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 22
+3236279 1793834983.203498 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.203499 lseek(6</t/data/train/00000/sample_000000008.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.203503 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=1048554, len=4096, user_data=0x2) = 0
+3236279 1793834983.203503 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.203504 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 22
+3236279 1793834983.203505 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.203506 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.203506 lseek(7</t/data/train/00000/sample_000000017.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.203510 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=1048554, len=4096, user_data=0x3) = 0
+3236279 1793834983.203511 lseek(5</t/data/train/00000/sample_000000013.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236280 1793834983.203511 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 22
+3236280 1793834983.203515 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=1048534, len=4096, user_data=0x1) = 0
+3236279 1793834983.203515 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.203516 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 42
+3236279 1793834983.203516 lseek(6</t/data/train/00000/sample_000000008.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236280 1793834983.203520 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=1048534, len=4096, user_data=0x2) = 0
+3236280 1793834983.203521 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 42
+3236279 1793834983.203521 lseek(7</t/data/train/00000/sample_000000017.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236279 1793834983.203525 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.203525 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=1048534, len=4096, user_data=0x3) = 0
+3236279 1793834983.203526 <... io_uring_enter resumed>) = 1 <0.000000>
+3236280 1793834983.203526 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 42
+3236279 1793834983.203527 lseek(5</t/data/train/00000/sample_000000013.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236280 1793834983.203531 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=1048452, len=4096, user_data=0x1) = 0
+3236280 1793834983.203531 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 124
+3236279 1793834983.203531 lseek(6</t/data/train/00000/sample_000000008.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236280 1793834983.203535 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=1048452, len=4096, user_data=0x2) = 0
+3236279 1793834983.203535 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.203536 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 124
+3236279 1793834983.203537 lseek(7</t/data/train/00000/sample_000000017.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236280 1793834983.203542 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=1048452, len=4096, user_data=0x3) = 0
+3236279 1793834983.203542 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_SET <unfinished ...>
+3236280 1793834983.203543 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 124
+3236279 1793834983.203543 <... lseek resumed>) = 0 <0.000000>
+3236280 1793834983.203547 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=0, len=4096, user_data=0x1) = 0
+3236279 1793834983.203547 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.203548 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.203548 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_SET) = 0 <0.000000>
+3236280 1793834983.203553 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=0, len=4096, user_data=0x2) = 0
+3236279 1793834983.203553 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_SET) = 0 <0.000000>
+3236280 1793834983.203553 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.203557 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=0, len=4096, user_data=0x3) = 0
+3236279 1793834983.203557 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.203558 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.203559 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203560 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203561 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203564 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=4096, len=4096, user_data=0x1) = 0
+3236279 1793834983.203565 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203566 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.203566 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203567 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203571 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=4096, len=4096, user_data=0x2) = 0
+3236279 1793834983.203571 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.203572 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR <unfinished ...>
+3236280 1793834983.203572 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236279 1793834983.203572 <... lseek resumed>) = 0 <0.000000>
+3236279 1793834983.203573 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203574 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203578 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=4096, len=4096, user_data=0x3) = 0
+3236279 1793834983.203578 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.203579 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.203582 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508ef7000 <0.000001>
+3236280 1793834983.203656 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=8192, len=253952, user_data=0x1) = 0
+3236279 1793834983.203656 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.203658 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203660 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508eb7000 <0.000001>
+3236280 1793834983.203690 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 253952
+3236280 1793834983.203733 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=8192, len=253952, user_data=0x2) = 0
+3236279 1793834983.203733 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.203735 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508e77000 <0.000001>
+3236280 1793834983.203763 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 253952
+3236280 1793834983.203809 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=8192, len=253952, user_data=0x3) = 0
+3236279 1793834983.203809 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.203818 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.203838 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 253952
+3236280 1793834983.203849 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=262144, len=4096, user_data=0x1) = 0
+3236280 1793834983.203851 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=262144, len=4096, user_data=0x2) = 0
+3236280 1793834983.203852 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.203852 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 4096
+3236279 1793834983.204047 <... io_uring_enter resumed>) = 3 <0.000229>
+3236280 1793834983.204071 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=262144, len=4096, user_data=0x3) = 0
+3236280 1793834983.204073 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.204073 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.204079 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508e36000 <0.000003>
+3236280 1793834983.204342 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=266240, len=258048, user_data=0x1) = 0
+3236279 1793834983.204343 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.204345 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508df5000 <0.000001>
+3236280 1793834983.204369 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 258048
+3236280 1793834983.204420 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=266240, len=258048, user_data=0x2) = 0
+3236279 1793834983.204420 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000001>
+3236279 1793834983.204422 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.204424 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508db4000 <0.000000>
+3236280 1793834983.204447 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 258048
+3236280 1793834983.204497 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=266240, len=258048, user_data=0x3) = 0
+3236279 1793834983.204501 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.204507 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.204524 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 258048
+3236280 1793834983.204537 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=524288, len=4096, user_data=0x1) = 0
+3236280 1793834983.204540 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=524288, len=4096, user_data=0x2) = 0
+3236280 1793834983.204542 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.204542 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 4096
+3236279 1793834983.204544 <... io_uring_enter resumed>) = 3 <0.000037>
+3236280 1793834983.204552 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=524288, len=4096, user_data=0x3) = 0
+3236279 1793834983.204553 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.204554 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.204556 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508d73000 <0.000001>
+3236280 1793834983.204657 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=528384, len=258048, user_data=0x1) = 0
+3236279 1793834983.204659 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.204663 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508d32000 <0.000001>
+3236280 1793834983.204682 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 258048
+3236280 1793834983.204736 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=528384, len=258048, user_data=0x2) = 0
+3236279 1793834983.204736 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.204739 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.204741 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508cf1000 <0.000001>
+3236280 1793834983.204761 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 258048
+3236280 1793834983.204814 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=528384, len=258048, user_data=0x3) = 0
+3236279 1793834983.204818 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.204822 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.204839 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 258048
+3236280 1793834983.204849 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=786432, len=4096, user_data=0x1) = 0
+3236280 1793834983.204851 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=786432, len=4096, user_data=0x2) = 0
+3236280 1793834983.204852 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.204852 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 4096
+3236279 1793834983.204878 <... io_uring_enter resumed>) = 3 <0.000055>
+3236280 1793834983.204889 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=786432, len=4096, user_data=0x3) = 0
+3236280 1793834983.204890 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.204890 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.204894 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508cb1000 <0.000001>
+3236280 1793834983.204969 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=790528, len=253952, user_data=0x1) = 0
+3236279 1793834983.204970 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.204973 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508c71000 <0.000001>
+3236280 1793834983.205024 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 253952
+3236280 1793834983.205047 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=790528, len=253952, user_data=0x2) = 0
+3236279 1793834983.205047 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.205049 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205051 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508c31000 <0.000001>
+3236280 1793834983.205102 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 253952
+3236280 1793834983.205123 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=790528, len=253952, user_data=0x3) = 0
+3236279 1793834983.205127 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.205131 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.205175 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 253952
+3236280 1793834983.205189 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000013.npz>, off=1044480, len=4096, user_data=0x1) = 0
+3236280 1793834983.205190 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000008.npz>, off=1044480, len=4096, user_data=0x2) = 0
+3236280 1793834983.205191 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.205191 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 4096
+3236279 1793834983.205193 <... io_uring_enter resumed>) = 3 <0.000062>
+3236280 1793834983.205202 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000017.npz>, off=1044480, len=4096, user_data=0x3) = 0
+3236279 1793834983.205203 lseek(5</t/data/train/00000/sample_000000013.npz>, 0, SEEK_CUR <unfinished ...>
+3236280 1793834983.205203 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.205204 <... lseek resumed>) = 0 <0.000000>
+3236279 1793834983.205208 close(5</t/data/train/00000/sample_000000013.npz>) = 0 <0.000002>
+3236279 1793834983.205215 lseek(6</t/data/train/00000/sample_000000008.npz>, 0, SEEK_CUR <unfinished ...>
+3236280 1793834983.205215 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000007.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x1) = 0
+3236279 1793834983.205215 <... lseek resumed>) = 0 <0.000000>
+3236279 1793834983.205217 close(6</t/data/train/00000/sample_000000008.npz>) = 0 <0.000000>
+3236279 1793834983.205219 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236280 1793834983.205220 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 5</t/data/train/00000/sample_000000007.npz>
+3236279 1793834983.205220 lseek(7</t/data/train/00000/sample_000000017.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.205220 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000001.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x2) = 0
+3236279 1793834983.205222 close(7</t/data/train/00000/sample_000000017.npz>) = 0 <0.000000>
+3236280 1793834983.205223 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 6</t/data/train/00000/sample_000000001.npz>
+3236279 1793834983.205223 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.205224 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000002.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x3) = 0
+3236279 1793834983.205224 <... io_uring_enter resumed>) = 1 <0.000000>
+3236280 1793834983.205225 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 7</t/data/train/00000/sample_000000002.npz>
+3236280 1793834983.205225 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_STATX, dirfd=5</t/data/train/00000/sample_000000007.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x1) = 0
+3236279 1793834983.205226 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.205227 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.205236 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_STATX, dirfd=6</t/data/train/00000/sample_000000001.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x2) = 0
+3236280 1793834983.205237 aeiou_uring_sqe(ring=3, id=3, op=IORING_OP_STATX, dirfd=7</t/data/train/00000/sample_000000002.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x3) = 0
+3236280 1793834983.205247 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 0
+3236280 1793834983.205260 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 0
+3236280 1793834983.205261 aeiou_uring_cqe(ring=3, id=3, user_data=0x3, flags=0) = 0
+3236279 1793834983.205269 <... io_uring_enter resumed>) = 3 <0.000042>
+3236279 1793834983.205272 ioctl(5</t/data/train/00000/sample_000000007.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000001>
+3236279 1793834983.205276 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.205281 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=0, len=4096, user_data=0x1) = 0
+3236279 1793834983.205281 ioctl(6</t/data/train/00000/sample_000000001.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000000>
+3236279 1793834983.205282 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.205282 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.205286 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=0, len=4096, user_data=0x2) = 0
+3236279 1793834983.205287 ioctl(7</t/data/train/00000/sample_000000002.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000000>
+3236279 1793834983.205287 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.205288 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.205292 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=0, len=4096, user_data=0x3) = 0
+3236279 1793834983.205292 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.205293 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.205294 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.205295 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.205296 lseek(5</t/data/train/00000/sample_000000007.npz>, -22, SEEK_END) = 1048554 <0.000004>
+3236280 1793834983.205308 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=1048554, len=4096, user_data=0x1) = 0
+3236279 1793834983.205308 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.205309 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.205310 lseek(6</t/data/train/00000/sample_000000001.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236279 1793834983.205314 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.205315 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.205316 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.205317 lseek(7</t/data/train/00000/sample_000000002.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.205320 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 22
+3236279 1793834983.205321 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.205321 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=1048554, len=4096, user_data=0x2) = 0
+3236279 1793834983.205321 <... io_uring_enter resumed>) = 2 <0.000000>
+3236279 1793834983.205322 lseek(5</t/data/train/00000/sample_000000007.npz>, 1048534, SEEK_SET <unfinished ...>
+3236280 1793834983.205322 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=1048554, len=4096, user_data=0x3) = 0
+3236279 1793834983.205322 <... lseek resumed>) = 1048534 <0.000000>
+3236280 1793834983.205323 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 22
+3236280 1793834983.205323 aeiou_uring_cqe(ring=3, id=2, user_data=0x3, flags=0) = 22
+3236280 1793834983.205326 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=1048534, len=4096, user_data=0x1) = 0
+3236279 1793834983.205326 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.205327 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 42
+3236279 1793834983.205328 lseek(6</t/data/train/00000/sample_000000001.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236280 1793834983.205333 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=1048534, len=4096, user_data=0x2) = 0
+3236279 1793834983.205333 lseek(7</t/data/train/00000/sample_000000002.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236279 1793834983.205338 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.205339 lseek(5</t/data/train/00000/sample_000000007.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236279 1793834983.205343 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.205344 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 42
+3236280 1793834983.205353 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=1048534, len=4096, user_data=0x3) = 0
+3236279 1793834983.205357 <... io_uring_enter resumed>) = 3 <0.000014>
+3236279 1793834983.205360 lseek(6</t/data/train/00000/sample_000000001.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236280 1793834983.205364 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=1048452, len=4096, user_data=0x1) = 0
+3236280 1793834983.205364 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 42
+3236280 1793834983.205364 aeiou_uring_cqe(ring=3, id=2, user_data=0x1, flags=0) = 124
+3236279 1793834983.205365 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.205365 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=1048452, len=4096, user_data=0x2) = 0
+3236279 1793834983.205365 <... io_uring_enter resumed>) = 1 <0.000000>
+3236280 1793834983.205366 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 124
+3236279 1793834983.205368 lseek(7</t/data/train/00000/sample_000000002.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236280 1793834983.205373 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=1048452, len=4096, user_data=0x3) = 0
+3236279 1793834983.205373 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_SET) = 0 <0.000000>
+3236279 1793834983.205379 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.205380 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_SET) = 0 <0.000000>
+3236280 1793834983.205383 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 124
+3236280 1793834983.205384 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=0, len=4096, user_data=0x1) = 0
+3236279 1793834983.205384 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236280 1793834983.205384 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.205385 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=0, len=4096, user_data=0x2) = 0
+3236279 1793834983.205385 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_SET) = 0 <0.000000>
+3236280 1793834983.205386 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.205389 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=0, len=4096, user_data=0x3) = 0
+3236279 1793834983.205389 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.205390 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.205402 <... io_uring_enter resumed>) = 1 <0.000013>
+3236279 1793834983.205405 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205407 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205408 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR) = 0 <0.000003>
+3236280 1793834983.205417 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=4096, len=4096, user_data=0x1) = 0
+3236279 1793834983.205418 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205419 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205420 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205425 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205426 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205426 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.205429 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.205430 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=4096, len=4096, user_data=0x2) = 0
+3236280 1793834983.205431 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236279 1793834983.205431 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.205431 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=4096, len=4096, user_data=0x3) = 0
+3236279 1793834983.205431 <... io_uring_enter resumed>) = 2 <0.000000>
+3236279 1793834983.205432 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR <unfinished ...>
+3236280 1793834983.205432 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.205433 <... lseek resumed>) = 0 <0.000000>
+3236279 1793834983.205436 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508bf1000 <0.000011>
+3236280 1793834983.205523 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=8192, len=253952, user_data=0x1) = 0
+3236279 1793834983.205525 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205529 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508bb1000 <0.000001>
+3236280 1793834983.205566 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 253952
+3236280 1793834983.205603 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=8192, len=253952, user_data=0x2) = 0
+3236279 1793834983.205603 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000011>
+3236279 1793834983.205617 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205621 mmap(NULL, 262144, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508b71000 <0.000011>
+3236280 1793834983.205633 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 253952
+3236280 1793834983.205704 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=8192, len=253952, user_data=0x3) = 0
+3236279 1793834983.205710 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.205715 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.205745 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 253952
+3236280 1793834983.205763 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=262144, len=4096, user_data=0x1) = 0
+3236279 1793834983.205773 <... io_uring_enter resumed>) = 3 <0.000058>
+3236280 1793834983.205774 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=262144, len=4096, user_data=0x2) = 0
+3236280 1793834983.205776 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.205776 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 4096
+3236280 1793834983.205793 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=262144, len=4096, user_data=0x3) = 0
+3236279 1793834983.205794 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000001>
+3236280 1793834983.205795 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.205797 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.205802 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508b30000 <0.000003>
+3236280 1793834983.205881 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=266240, len=258048, user_data=0x1) = 0
+3236279 1793834983.205881 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205883 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508aef000 <0.000001>
+3236280 1793834983.205907 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 258048
+3236280 1793834983.205957 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=266240, len=258048, user_data=0x2) = 0
+3236279 1793834983.205957 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.205959 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.205961 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508aae000 <0.000001>
+3236280 1793834983.205983 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 258048
+3236280 1793834983.206034 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=266240, len=258048, user_data=0x3) = 0
+3236279 1793834983.206039 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.206043 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.206060 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 258048
+3236280 1793834983.206081 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=524288, len=4096, user_data=0x1) = 0
+3236279 1793834983.206087 <... io_uring_enter resumed>) = 3 <0.000044>
+3236280 1793834983.206093 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=524288, len=4096, user_data=0x2) = 0
+3236280 1793834983.206094 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236280 1793834983.206094 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 4096
+3236279 1793834983.206095 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.206095 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=524288, len=4096, user_data=0x3) = 0
+3236279 1793834983.206095 <... io_uring_enter resumed>) = 3 <0.000000>
+3236280 1793834983.206096 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.206097 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.206100 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508a6d000 <0.000001>
+3236280 1793834983.206586 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=528384, len=258048, user_data=0x1) = 0
+3236279 1793834983.206590 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.206595 mmap(NULL, 266240, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x720508a2c000 <0.000001>
+3236280 1793834983.206610 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 258048
+3236280 1793834983.206670 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=528384, len=258048, user_data=0x2) = 0
+3236279 1793834983.206670 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.206672 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.206676 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.206694 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 258048
+3236280 1793834983.206714 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=528384, len=258048, user_data=0x3) = 0
+3236279 1793834983.206720 <... io_uring_enter resumed>) = 3 <0.000045>
+3236279 1793834983.206723 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.206749 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=786432, len=4096, user_data=0x1) = 0
+3236280 1793834983.206760 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 258048
+3236280 1793834983.206760 aeiou_uring_cqe(ring=3, id=2, user_data=0x1, flags=0) = 4096
+3236280 1793834983.206769 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=786432, len=4096, user_data=0x2) = 0
+3236279 1793834983.206773 <... io_uring_enter resumed>) = 3 <0.000049>
+3236279 1793834983.206777 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.206779 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.206780 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=786432, len=4096, user_data=0x3) = 0
+3236279 1793834983.206780 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236280 1793834983.206781 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236280 1793834983.206781 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=790528, len=253952, user_data=0x1) = 0
+3236279 1793834983.206782 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.206784 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.206785 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.206787 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.206840 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 253952
+3236280 1793834983.206859 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=790528, len=253952, user_data=0x2) = 0
+3236279 1793834983.206864 <... io_uring_enter resumed>) = 3 <0.000077>
+3236279 1793834983.206867 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.207172 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=790528, len=253952, user_data=0x3) = 0
+3236280 1793834983.207311 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 253952
+3236280 1793834983.207312 aeiou_uring_cqe(ring=3, id=2, user_data=0x3, flags=0) = 253952
+3236280 1793834983.207327 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000007.npz>, off=1044480, len=4096, user_data=0x1) = 0
+3236280 1793834983.207329 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.207349 <... io_uring_enter resumed>) = 3 <0.000482>
+3236280 1793834983.207367 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000001.npz>, off=1044480, len=4096, user_data=0x2) = 0
+3236280 1793834983.207369 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.207369 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000002.npz>, off=1044480, len=4096, user_data=0x3) = 0
+3236280 1793834983.207371 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.207372 lseek(5</t/data/train/00000/sample_000000007.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.207379 close(5</t/data/train/00000/sample_000000007.npz>) = 0 <0.000004>
+3236279 1793834983.207390 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000001>
+3236280 1793834983.207391 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000009.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x1) = 0
+3236279 1793834983.207395 lseek(6</t/data/train/00000/sample_000000001.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.207399 close(6</t/data/train/00000/sample_000000001.npz> <unfinished ...>
+3236280 1793834983.207399 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 5</t/data/train/00000/sample_000000009.npz>
+3236279 1793834983.207399 <... close resumed>) = 0 <0.000001>
+3236280 1793834983.207403 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000019.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x2) = 0
+3236279 1793834983.207405 lseek(7</t/data/train/00000/sample_000000002.npz>, 0, SEEK_CUR <unfinished ...>
+3236280 1793834983.207405 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 6</t/data/train/00000/sample_000000019.npz>
+3236279 1793834983.207405 <... lseek resumed>) = 0 <0.000001>
+3236279 1793834983.207409 close(7</t/data/train/00000/sample_000000002.npz>) = 0 <0.000001>
+3236280 1793834983.207413 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</src/aeiou>, path="/t/data/train/00000/sample_000000018.npz", flags=O_RDONLY|O_LARGEFILE|O_CLOEXEC, user_data=0x3) = 0
+3236279 1793834983.207413 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.207416 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 7</t/data/train/00000/sample_000000018.npz>
+3236280 1793834983.207417 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_STATX, dirfd=5</t/data/train/00000/sample_000000009.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x1) = 0
+3236279 1793834983.207418 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.207421 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.207437 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_STATX, dirfd=6</t/data/train/00000/sample_000000019.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x2) = 0
+3236280 1793834983.207438 aeiou_uring_sqe(ring=3, id=3, op=IORING_OP_STATX, dirfd=7</t/data/train/00000/sample_000000018.npz>, path="", flags=AT_EMPTY_PATH, mask=0x200, user_data=0x3) = 0
+3236280 1793834983.207538 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 0
+3236279 1793834983.207659 <... io_uring_enter resumed>) = 3 <0.000238>
+3236280 1793834983.207660 aeiou_uring_cqe(ring=3, id=2, user_data=0x2, flags=0) = 0
+3236280 1793834983.207662 aeiou_uring_cqe(ring=3, id=3, user_data=0x3, flags=0) = 0
+3236279 1793834983.207702 ioctl(5</t/data/train/00000/sample_000000009.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000002>
+3236279 1793834983.207708 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236280 1793834983.207712 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=0, len=4096, user_data=0x1) = 0
+3236279 1793834983.207713 ioctl(6</t/data/train/00000/sample_000000019.npz>, TCGETS, 0x7205093f9480 <unfinished ...>
+3236280 1793834983.207714 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.207714 <... ioctl resumed>) = -1 ENOTTY (Inappropriate ioctl for device) <0.000001>
+3236279 1793834983.207717 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.207719 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=0, len=4096, user_data=0x2) = 0
+3236279 1793834983.207721 ioctl(7</t/data/train/00000/sample_000000018.npz>, TCGETS, 0x7205093f9480) = -1 ENOTTY (Inappropriate ioctl for device) <0.000001>
+3236280 1793834983.207721 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236279 1793834983.207723 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.207726 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=0, len=4096, user_data=0x3) = 0
+3236279 1793834983.207726 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000001>
+3236280 1793834983.207727 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.207730 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.207732 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.207735 lseek(5</t/data/train/00000/sample_000000009.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.207737 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=1048554, len=4096, user_data=0x1) = 0
+3236279 1793834983.207738 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236280 1793834983.207739 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 22
+3236279 1793834983.207740 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.207743 lseek(6</t/data/train/00000/sample_000000019.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.207745 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=1048554, len=4096, user_data=0x2) = 0
+3236279 1793834983.207745 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.207746 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 22
+3236279 1793834983.207748 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_END) = 1048576 <0.000000>
+3236279 1793834983.207751 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 1048576 <0.000000>
+3236279 1793834983.207753 lseek(7</t/data/train/00000/sample_000000018.npz>, -22, SEEK_END) = 1048554 <0.000000>
+3236280 1793834983.207756 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=1048554, len=4096, user_data=0x3) = 0
+3236279 1793834983.207757 lseek(5</t/data/train/00000/sample_000000009.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236280 1793834983.207759 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 22
+3236280 1793834983.207760 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=1048534, len=4096, user_data=0x1) = 0
+3236279 1793834983.207760 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.207763 lseek(6</t/data/train/00000/sample_000000019.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236279 1793834983.207767 lseek(7</t/data/train/00000/sample_000000018.npz>, 1048534, SEEK_SET) = 1048534 <0.000000>
+3236279 1793834983.207769 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.207772 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 42
+3236280 1793834983.207775 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=1048534, len=4096, user_data=0x2) = 0
+3236280 1793834983.207775 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=1048534, len=4096, user_data=0x3) = 0
+3236280 1793834983.207776 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 42
+3236280 1793834983.207776 aeiou_uring_cqe(ring=3, id=2, user_data=0x3, flags=0) = 42
+3236279 1793834983.207778 <... io_uring_enter resumed>) = 3 <0.000009>
+3236279 1793834983.207783 lseek(5</t/data/train/00000/sample_000000009.npz>, 1048452, SEEK_SET) = 1048452 <0.000033>
+3236280 1793834983.207852 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=1048452, len=4096, user_data=0x1) = 0
+3236279 1793834983.207855 lseek(6</t/data/train/00000/sample_000000019.npz>, 1048452, SEEK_SET) = 1048452 <0.000001>
+3236279 1793834983.207861 lseek(7</t/data/train/00000/sample_000000018.npz>, 1048452, SEEK_SET) = 1048452 <0.000000>
+3236280 1793834983.207863 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 124
+3236280 1793834983.207864 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=1048452, len=4096, user_data=0x2) = 0
+3236279 1793834983.207864 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.207865 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=1048452, len=4096, user_data=0x3) = 0
+3236279 1793834983.207865 <... io_uring_enter resumed>) = 2 <0.000001>
+3236280 1793834983.207865 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 124
+3236280 1793834983.207865 aeiou_uring_cqe(ring=3, id=2, user_data=0x3, flags=0) = 124
+3236279 1793834983.207869 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_SET) = 0 <0.000030>
+3236280 1793834983.207948 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=0, len=4096, user_data=0x1) = 0
+3236280 1793834983.207949 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.207951 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_SET) = 0 <0.000001>
+3236280 1793834983.207953 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=0, len=4096, user_data=0x2) = 0
+3236280 1793834983.207953 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236279 1793834983.207953 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_SET) = 0 <0.000000>
+3236280 1793834983.207955 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=0, len=4096, user_data=0x3) = 0
+3236279 1793834983.207955 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.207956 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.207956 <... io_uring_enter resumed>) = 1 <0.000001>
+3236279 1793834983.207958 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.207960 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.207961 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.207962 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=4096, len=4096, user_data=0x1) = 0
+3236279 1793834983.207962 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.207963 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.207963 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR) = 0 <0.000010>
+3236279 1793834983.207975 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.207977 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=4096, len=4096, user_data=0x2) = 0
+3236279 1793834983.207978 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.207978 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236279 1793834983.207978 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.207979 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.207980 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=4096, len=4096, user_data=0x3) = 0
+3236279 1793834983.207980 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236280 1793834983.207981 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.207982 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.207988 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=8192, len=253952, user_data=0x1) = 0
+3236279 1793834983.207988 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.207990 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000000>
+3236279 1793834983.207991 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.207993 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.208018 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 253952
+3236280 1793834983.208039 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=8192, len=253952, user_data=0x2) = 0
+3236279 1793834983.208043 <... io_uring_enter resumed>) = 3 <0.000050>
+3236279 1793834983.208046 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.208079 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=8192, len=253952, user_data=0x3) = 0
+3236280 1793834983.208121 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 253952
+3236280 1793834983.208132 aeiou_uring_cqe(ring=3, id=2, user_data=0x3, flags=0) = 253952
+3236280 1793834983.208141 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=262144, len=4096, user_data=0x1) = 0
+3236280 1793834983.208153 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.208193 <... io_uring_enter resumed>) = 3 <0.000146>
+3236280 1793834983.208248 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=262144, len=4096, user_data=0x2) = 0
+3236279 1793834983.208252 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236280 1793834983.208260 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.208260 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=262144, len=4096, user_data=0x3) = 0
+3236280 1793834983.208262 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236280 1793834983.208262 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=266240, len=258048, user_data=0x1) = 0
+3236279 1793834983.208262 io_uring_enter(3, 2, 1, 0x9, 0x7205093fb590, 24) = 2 <0.000001>
+3236280 1793834983.208289 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 258048
+3236279 1793834983.208303 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR) = 0 <0.000031>
+3236280 1793834983.208374 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=266240, len=258048, user_data=0x2) = 0
+3236279 1793834983.208376 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.208384 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.208412 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 258048
+3236280 1793834983.208432 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=266240, len=258048, user_data=0x3) = 0
+3236279 1793834983.208452 <... io_uring_enter resumed>) = 3 <0.000067>
+3236280 1793834983.208470 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=524288, len=4096, user_data=0x1) = 0
+3236280 1793834983.208472 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 258048
+3236280 1793834983.208472 aeiou_uring_cqe(ring=3, id=2, user_data=0x1, flags=0) = 4096
+3236280 1793834983.208490 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=524288, len=4096, user_data=0x2) = 0
+3236279 1793834983.208494 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.208502 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.208502 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.208503 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=524288, len=4096, user_data=0x3) = 0
+3236279 1793834983.208503 <... io_uring_enter resumed>) = 3 <0.000001>
+3236280 1793834983.208504 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=528384, len=258048, user_data=0x1) = 0
+3236279 1793834983.208507 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR <unfinished ...>
+3236280 1793834983.208530 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236280 1793834983.208530 aeiou_uring_cqe(ring=3, id=2, user_data=0x1, flags=0) = 258048
+3236279 1793834983.208538 <... lseek resumed>) = 0 <0.000031>
+3236280 1793834983.208577 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=528384, len=258048, user_data=0x2) = 0
+3236279 1793834983.208578 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000001>
+3236279 1793834983.208584 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 0 <0.000001>
+3236279 1793834983.208591 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.208631 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 258048
+3236280 1793834983.208644 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=528384, len=258048, user_data=0x3) = 0
+3236280 1793834983.208669 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=786432, len=4096, user_data=0x1) = 0
+3236280 1793834983.208682 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 258048
+3236280 1793834983.208682 aeiou_uring_cqe(ring=3, id=2, user_data=0x1, flags=0) = 4096
+3236279 1793834983.208723 <... io_uring_enter resumed>) = 3 <0.000131>
+3236280 1793834983.208739 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=786432, len=4096, user_data=0x2) = 0
+3236280 1793834983.208740 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.208740 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=786432, len=4096, user_data=0x3) = 0
+3236279 1793834983.208740 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.208741 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236280 1793834983.208745 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=790528, len=253952, user_data=0x1) = 0
+3236279 1793834983.208745 io_uring_enter(3, 1, 1, 0x9, 0x7205093fb590, 24) = 1 <0.000000>
+3236279 1793834983.208747 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.208749 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.208751 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.208801 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 253952
+3236280 1793834983.208822 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=790528, len=253952, user_data=0x2) = 0
+3236279 1793834983.208884 <... io_uring_enter resumed>) = 3 <0.000134>
+3236280 1793834983.208888 aeiou_uring_sqe(ring=3, id=2, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=790528, len=253952, user_data=0x3) = 0
+3236279 1793834983.208928 io_uring_enter(3, 3, 1, 0x9, 0x7205093fb590, 24 <unfinished ...>
+3236280 1793834983.208945 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 253952
+3236280 1793834983.208945 aeiou_uring_cqe(ring=3, id=2, user_data=0x3, flags=0) = 253952
+3236280 1793834983.208946 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=5</t/data/train/00000/sample_000000009.npz>, off=1044480, len=4096, user_data=0x1) = 0
+3236280 1793834983.208947 aeiou_uring_cqe(ring=3, id=1, user_data=0x1, flags=0) = 4096
+3236279 1793834983.208968 <... io_uring_enter resumed>) = 3 <0.000040>
+3236280 1793834983.208974 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=6</t/data/train/00000/sample_000000019.npz>, off=1044480, len=4096, user_data=0x2) = 0
+3236280 1793834983.208975 aeiou_uring_cqe(ring=3, id=1, user_data=0x2, flags=0) = 4096
+3236280 1793834983.208975 aeiou_uring_sqe(ring=3, id=1, op=IORING_OP_READ, fd=7</t/data/train/00000/sample_000000018.npz>, off=1044480, len=4096, user_data=0x3) = 0
+3236279 1793834983.208976 lseek(5</t/data/train/00000/sample_000000009.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236280 1793834983.208976 aeiou_uring_cqe(ring=3, id=1, user_data=0x3, flags=0) = 4096
+3236279 1793834983.208980 close(5</t/data/train/00000/sample_000000009.npz>) = 0 <0.000002>
+3236279 1793834983.209003 write(4, 0x7205093f97a0, 8) = 8 <0.000001>
+3236279 1793834983.209008 io_uring_enter(3, 0, 1, 0x9, 0x7205093fb590, 24) = 0 <0.000000>
+3236279 1793834983.209010 lseek(6</t/data/train/00000/sample_000000019.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.209012 close(6</t/data/train/00000/sample_000000019.npz>) = 0 <0.000000>
+3236279 1793834983.209017 lseek(7</t/data/train/00000/sample_000000018.npz>, 0, SEEK_CUR) = 0 <0.000000>
+3236279 1793834983.209018 close(7</t/data/train/00000/sample_000000018.npz>) = 0 <0.000000>
+3236279 1793834983.209024 write(4, 0x7205093f97a0, 8) = 8 <0.000000>
+3236279 1793834983.209026 write(4, 0x7205093f97a0, 8) = 8 <0.000000>
+3236279 1793834983.209044 openat(AT_FDCWD</src/aeiou>, "/proc/self/fdinfo/3", O_RDONLY|O_CLOEXEC) = 5</proc/3236275/fdinfo/3> <0.000020>
+3236279 1793834983.209065 statx(5</proc/3236275/fdinfo/3>, "", AT_EMPTY_PATH, 0xfff, 0x7205093fbce0) = 0 <0.000001>
+3236279 1793834983.209068 read(5</proc/3236275/fdinfo/3>, 0x7205093fbd10, 32) = 32 <0.000006>
+3236279 1793834983.209074 read(5</proc/3236275/fdinfo/3>, 0x720500011070, 32) = 32 <0.000000>
+3236279 1793834983.209075 read(5</proc/3236275/fdinfo/3>, 0x7205000026f0, 64) = 64 <0.000000>
+3236279 1793834983.209076 read(5</proc/3236275/fdinfo/3>, 0x72050001c8a0, 128) = 128 <0.000000>
+3236279 1793834983.209076 read(5</proc/3236275/fdinfo/3>, 0x72050001c920, 256) = 53 <0.000000>
+3236279 1793834983.209077 read(5</proc/3236275/fdinfo/3>, 0x72050001c955, 203) = 0 <0.000000>
+3236279 1793834983.209078 close(5</proc/3236275/fdinfo/3>) = 0 <0.000001>
+3236279 1793834983.209081 munmap(0x720509a60000, 69696) = 0 <0.000018>
+3236279 1793834983.209099 munmap(0x720509a72000, 65536) = 0 <0.000008>
+3236279 1793834983.209108 close(3) = 0 <0.000021>
+3236279 1793834983.209130 munmap(0x720508df5000, 266240) = 0 <0.000022>
+3236279 1793834983.209153 munmap(0x720508db4000, 266240) = 0 <0.000016>
+3236279 1793834983.209170 munmap(0x720508d73000, 266240) = 0 <0.000012>
+3236279 1793834983.209183 munmap(0x720508d32000, 266240) = 0 <0.000011>
+3236279 1793834983.209196 munmap(0x720508cf1000, 266240) = 0 <0.000011>
+3236279 1793834983.209208 munmap(0x720508b30000, 266240) = 0 <0.000010>
+3236279 1793834983.209219 munmap(0x720508aef000, 266240) = 0 <0.000009>
+3236279 1793834983.209229 munmap(0x720508aae000, 266240) = 0 <0.000009>
+3236279 1793834983.209239 munmap(0x720508a6d000, 266240) = 0 <0.000011>
+3236279 1793834983.209250 munmap(0x720508a2c000, 266240) = 0 <0.000012>
+3236279 1793834983.209263 munmap(0x72050913c000, 266240) = 0 <0.000014>
+3236279 1793834983.209278 munmap(0x7205090fb000, 266240) = 0 <0.000012>
+3236279 1793834983.209291 munmap(0x7205090ba000, 266240) = 0 <0.000012>
+3236279 1793834983.209303 munmap(0x720509079000, 266240) = 0 <0.000010>
+3236279 1793834983.209315 munmap(0x720509038000, 266240) = 0 <0.000011>
+3236279 1793834983.209326 munmap(0x720508ff7000, 266240) = 0 <0.000012>
+3236279 1793834983.209338 munmap(0x720508e36000, 266240) = 0 <0.000021>
+3236279 1793834983.209360 munmap(0x720508cb1000, 262144) = 0 <0.000010>
+3236279 1793834983.209371 munmap(0x720508c71000, 262144) = 0 <0.000010>
+3236279 1793834983.209382 munmap(0x720508c31000, 262144) = 0 <0.000009>
+3236279 1793834983.209391 munmap(0x720508bf1000, 262144) = 0 <0.000010>
+3236279 1793834983.209402 munmap(0x720508bb1000, 262144) = 0 <0.000009>
+3236279 1793834983.209412 munmap(0x720508b71000, 262144) = 0 <0.000009>
+3236279 1793834983.209422 munmap(0x720509a20000, 262144) = 0 <0.000012>
+3236279 1793834983.209435 munmap(0x7205091bd000, 262144) = 0 <0.000012>
+3236279 1793834983.209448 munmap(0x72050917d000, 262144) = 0 <0.000011>
+3236279 1793834983.209460 munmap(0x720508fb7000, 262144) = 0 <0.000013>
+3236279 1793834983.209474 munmap(0x720508f77000, 262144) = 0 <0.000012>
+3236279 1793834983.209486 munmap(0x720508f37000, 262144) = 0 <0.000012>
+3236279 1793834983.209511 munmap(0x720508ef7000, 262144) = 0 <0.000014>
+3236279 1793834983.209526 munmap(0x720508eb7000, 262144) = 0 <0.000012>
+3236278 1793834983.209542 openat(AT_FDCWD</src/aeiou>, "/proc/self/status", O_RDONLY|O_CLOEXEC <unfinished ...>
+3236279 1793834983.209551 munmap(0x720508e77000, 262144) = 0 <0.000014>
+3236278 1793834983.209570 <... openat resumed>) = 3</proc/3236275/status> <0.000028>
+3236278 1793834983.209573 statx(3</proc/3236275/status>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd840) = 0 <0.000002>
+3236278 1793834983.209576 read(3</proc/3236275/status>, 0x7205095fd870, 32 <unfinished ...>
+3236279 1793834983.209588 close(4) = 0 <0.000006>
+3236278 1793834983.209596 <... read resumed>) = 32 <0.000020>
+3236279 1793834983.209598 munmap(0x720509b9b000, 12288) = 0 <0.000003>
+3236279 1793834983.209615 madvise(0x7205091fd000, 2076672, 4) = 0 <0.000003>
+3236279 1793834983.209619 exit(0) = ?
+3236279 1793834983.209625 +++ exited with 0 +++
+3236278 1793834983.209636 read(3</proc/3236275/status>, 0x7204fc000cb0, 32) = 32 <0.000002>
+3236278 1793834983.209639 read(3</proc/3236275/status>, 0x7204fc000cd0, 64) = 64 <0.000001>
+3236278 1793834983.209640 read(3</proc/3236275/status>, 0x7204fc000d10, 128) = 128 <0.000000>
+3236278 1793834983.209641 read(3</proc/3236275/status>, 0x7204fc000d90, 256) = 256 <0.000000>
+3236278 1793834983.209641 read(3</proc/3236275/status>, 0x7204fc000e90, 512) = 512 <0.000000>
+3236278 1793834983.209642 read(3</proc/3236275/status>, 0x7204fc001090, 1024) = 443 <0.000000>
+3236278 1793834983.209643 read(3</proc/3236275/status>, 0x7204fc00124b, 581) = 0 <0.000000>
+3236278 1793834983.209645 close(3</proc/3236275/status>) = 0 <0.000003>
+3236278 1793834983.209651 openat(AT_FDCWD</src/aeiou>, "/proc/self/task", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</proc/3236275/task> <0.000007>
+3236278 1793834983.209660 fstat(3</proc/3236275/task>, 0x7205095fd8b0) = 0 <0.000001>
+3236278 1793834983.209662 getdents64(3</proc/3236275/task>, 0x7204fc000cc0, 32768) = 208 <0.000013>
+3236278 1793834983.209678 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236275/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236275/comm> <0.000005>
+3236278 1793834983.209684 statx(4</proc/3236275/task/3236275/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000001>
+3236278 1793834983.209686 read(4</proc/3236275/task/3236275/comm>, 0x7205095fd820, 32) = 6 <0.000003>
+3236278 1793834983.209689 read(4</proc/3236275/task/3236275/comm>, 0x7204fc008fb6, 32) = 0 <0.000000>
+3236278 1793834983.209690 close(4</proc/3236275/task/3236275/comm>) = 0 <0.000001>
+3236278 1793834983.209702 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236277/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236277/comm> <0.000066>
+3236278 1793834983.209780 statx(4</proc/3236275/task/3236277/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000001>
+3236278 1793834983.209782 read(4</proc/3236275/task/3236277/comm>, 0x7205095fd820, 32) = 6 <0.000002>
+3236278 1793834983.209785 read(4</proc/3236275/task/3236277/comm>, 0x7204fc009056, 32) = 0 <0.000000>
+3236278 1793834983.209786 close(4</proc/3236275/task/3236277/comm>) = 0 <0.000001>
+3236278 1793834983.209789 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236278/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236278/comm> <0.000005>
+3236278 1793834983.209794 statx(4</proc/3236275/task/3236278/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.209795 read(4</proc/3236275/task/3236278/comm>, 0x7205095fd820, 32) = 9 <0.000000>
+3236278 1793834983.209795 read(4</proc/3236275/task/3236278/comm>, 0x7204fc0090f9, 32) = 0 <0.000000>
+3236278 1793834983.209796 close(4</proc/3236275/task/3236278/comm>) = 0 <0.000000>
+3236278 1793834983.209797 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236280/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236280/comm> <0.000004>
+3236278 1793834983.209801 statx(4</proc/3236275/task/3236280/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.209801 read(4</proc/3236275/task/3236280/comm>, 0x7205095fd820, 32) = 14 <0.000000>
+3236278 1793834983.209802 read(4</proc/3236275/task/3236280/comm>, 0x7204fc0091ae, 32) = 0 <0.000000>
+3236278 1793834983.209802 close(4</proc/3236275/task/3236280/comm>) = 0 <0.000001>
+3236278 1793834983.209803 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236281/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236281/comm> <0.000003>
+3236278 1793834983.209806 statx(4</proc/3236275/task/3236281/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.209807 read(4</proc/3236275/task/3236281/comm>, 0x7205095fd820, 32) = 14 <0.000000>
+3236278 1793834983.209807 read(4</proc/3236275/task/3236281/comm>, 0x7204fc00925e, 32) = 0 <0.000000>
+3236278 1793834983.209808 close(4</proc/3236275/task/3236281/comm>) = 0 <0.000000>
+3236278 1793834983.209808 getdents64(3</proc/3236275/task>, 0x7204fc000cc0, 32768) = 0 <0.000001>
+3236278 1793834983.209810 close(3</proc/3236275/task>) = 0 <0.000001>
+3236278 1793834983.209811 openat(AT_FDCWD</src/aeiou>, "/proc/self/status", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/status> <0.000001>
+3236278 1793834983.209813 statx(3</proc/3236275/status>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd840) = 0 <0.000000>
+3236278 1793834983.209813 read(3</proc/3236275/status>, 0x7205095fd870, 32) = 32 <0.000011>
+3236278 1793834983.209825 read(3</proc/3236275/status>, 0x7204fc000cb0, 32) = 32 <0.000000>
+3236278 1793834983.209826 read(3</proc/3236275/status>, 0x7204fc000cd0, 64) = 64 <0.000000>
+3236278 1793834983.209826 read(3</proc/3236275/status>, 0x7204fc000d10, 128) = 128 <0.000000>
+3236278 1793834983.209827 read(3</proc/3236275/status>, 0x7204fc000d90, 256) = 256 <0.000000>
+3236278 1793834983.209827 read(3</proc/3236275/status>, 0x7204fc000e90, 512) = 512 <0.000000>
+3236278 1793834983.209828 read(3</proc/3236275/status>, 0x7204fc001090, 1024) = 443 <0.000000>
+3236278 1793834983.209828 read(3</proc/3236275/status>, 0x7204fc00124b, 581) = 0 <0.000000>
+3236278 1793834983.209829 close(3</proc/3236275/status>) = 0 <0.000000>
+3236278 1793834983.209831 openat(AT_FDCWD</src/aeiou>, "/proc/self/task", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</proc/3236275/task> <0.000001>
+3236278 1793834983.209833 fstat(3</proc/3236275/task>, 0x7205095fd8b0) = 0 <0.000000>
+3236278 1793834983.209834 getdents64(3</proc/3236275/task>, 0x7204fc000cc0, 32768) = 208 <0.000003>
+3236278 1793834983.209838 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236275/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236275/comm> <0.000001>
+3236278 1793834983.209840 statx(4</proc/3236275/task/3236275/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.209840 read(4</proc/3236275/task/3236275/comm>, 0x7205095fd820, 32) = 6 <0.000000>
+3236278 1793834983.209841 read(4</proc/3236275/task/3236275/comm>, 0x7204fc009056, 32) = 0 <0.000000>
+3236278 1793834983.209841 close(4</proc/3236275/task/3236275/comm>) = 0 <0.000000>
+3236278 1793834983.209842 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236277/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236277/comm> <0.000001>
+3236278 1793834983.209843 statx(4</proc/3236275/task/3236277/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.209844 read(4</proc/3236275/task/3236277/comm>, 0x7205095fd820, 32) = 6 <0.000000>
+3236278 1793834983.209845 read(4</proc/3236275/task/3236277/comm>, 0x7204fc009136, 32) = 0 <0.000000>
+3236278 1793834983.209845 close(4</proc/3236275/task/3236277/comm>) = 0 <0.000000>
+3236278 1793834983.209846 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236278/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236278/comm> <0.000001>
+3236278 1793834983.209847 statx(4</proc/3236275/task/3236278/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.209847 read(4</proc/3236275/task/3236278/comm>, 0x7205095fd820, 32) = 9 <0.000000>
+3236278 1793834983.209848 read(4</proc/3236275/task/3236278/comm>, 0x7204fc0091d9, 32) = 0 <0.000000>
+3236278 1793834983.209848 close(4</proc/3236275/task/3236278/comm>) = 0 <0.000000>
+3236278 1793834983.209849 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236280/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236280/comm> <0.000001>
+3236278 1793834983.209850 statx(4</proc/3236275/task/3236280/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.209851 read(4</proc/3236275/task/3236280/comm>, 0x7205095fd820, 32) = 14 <0.000000>
+3236278 1793834983.209852 read(4</proc/3236275/task/3236280/comm>, 0x7204fc00928e, 32) = 0 <0.000000>
+3236278 1793834983.209852 close(4</proc/3236275/task/3236280/comm>) = 0 <0.000000>
+3236278 1793834983.209853 openat(AT_FDCWD</src/aeiou>, "/proc/self/task/3236281/comm", O_RDONLY|O_CLOEXEC) = 4</proc/3236275/task/3236281/comm> <0.000001>
+3236278 1793834983.209854 statx(4</proc/3236275/task/3236281/comm>, "", AT_EMPTY_PATH, 0xfff, 0x7205095fd7f0) = 0 <0.000000>
+3236278 1793834983.209854 read(4</proc/3236275/task/3236281/comm>, 0x7205095fd820, 32) = 14 <0.000000>
+3236278 1793834983.209855 read(4</proc/3236275/task/3236281/comm>, 0x7204fc00933e, 32) = 0 <0.000000>
+3236278 1793834983.209855 close(4</proc/3236275/task/3236281/comm>) = 0 <0.000000>
+3236278 1793834983.209856 getdents64(3</proc/3236275/task>, 0x7204fc000cc0, 32768) = 0 <0.000000>
+3236278 1793834983.209856 close(3</proc/3236275/task>) = 0 <0.000000>
+3236278 1793834983.209858 munmap(0x720509b9e000, 12288) = 0 <0.000004>
+3236278 1793834983.209865 madvise(0x7205093fe000, 2076672, 4) = 0 <0.000002>
+3236278 1793834983.209867 exit(0) = ?
+3236278 1793834983.209868 +++ exited with 0 +++
+3236275 1793834983.209901 statx(AT_FDCWD</src/aeiou>, "/t/data", 0, 0xfff, 0x7ffc3bd431f0) = 0 <0.000004>
+3236275 1793834983.209909 openat(AT_FDCWD</src/aeiou>, "/sys/class/bdi/8:48/read_ahead_kb", O_RDONLY|O_CLOEXEC) = 3</sys/devices/virtual/bdi/8:48/read_ahead_kb> <0.000013>
+3236275 1793834983.209923 statx(3</sys/devices/virtual/bdi/8:48/read_ahead_kb>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd430c0) = 0 <0.000000>
+3236275 1793834983.209924 read(3</sys/devices/virtual/bdi/8:48/read_ahead_kb>, 0x5d6f94e43f30, 4096) = 5 <0.000002>
+3236275 1793834983.209927 read(3</sys/devices/virtual/bdi/8:48/read_ahead_kb>, 0x5d6f94e43f35, 4091) = 0 <0.000000>
+3236275 1793834983.209927 close(3</sys/devices/virtual/bdi/8:48/read_ahead_kb>) = 0 <0.000001>
+3236275 1793834983.209930 readlink("/tmp", 0x7ffc3bd42d20, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.209931 readlink("/u0", 0x7ffc3bd42d20, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.209932 readlink("/u", 0x7ffc3bd42d20, 1023) = -1 EINVAL (Invalid argument) <0.000000>
+3236275 1793834983.209933 readlink("/u/s0", 0x7ffc3bd42d20, 1023) = -1 EINVAL (Invalid argument) <0.000000>
+3236275 1793834983.209934 readlink("/u/s", 0x7ffc3bd42d20, 1023) = -1 EINVAL (Invalid argument) <0.000000>
+3236275 1793834983.209934 readlink("/t", 0x7ffc3bd42d20, 1023) = -1 EINVAL (Invalid argument) <0.000000>
+3236275 1793834983.209935 readlink("/t/data", 0x7ffc3bd42d20, 1023) = -1 EINVAL (Invalid argument) <0.000001>
+3236275 1793834983.209936 openat(AT_FDCWD</src/aeiou>, "/proc/self/mountstats", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/mountstats> <0.000003>
+3236275 1793834983.209940 statx(3</proc/3236275/mountstats>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43010) = 0 <0.000000>
+3236275 1793834983.209940 read(3</proc/3236275/mountstats>, 0x7ffc3bd43040, 32) = 32 <0.000009>
+3236275 1793834983.209950 read(3</proc/3236275/mountstats>, 0x5d6f94e35aa0, 32) = 32 <0.000000>
+3236275 1793834983.209951 read(3</proc/3236275/mountstats>, 0x5d6f94e15bb0, 64) = 64 <0.000001>
+3236275 1793834983.209953 read(3</proc/3236275/mountstats>, 0x5d6f94dd4c80, 128) = 128 <0.000001>
+3236275 1793834983.209954 read(3</proc/3236275/mountstats>, 0x5d6f94e44030, 256) = 256 <0.000005>
+3236275 1793834983.209959 read(3</proc/3236275/mountstats>, 0x5d6f94e44130, 512) = 512 <0.000006>
+3236275 1793834983.209965 read(3</proc/3236275/mountstats>, 0x5d6f94e44330, 1024) = 1024 <0.000016>
+3236275 1793834983.209981 read(3</proc/3236275/mountstats>, 0x5d6f94e44730, 2048) = 538 <0.000007>
+3236275 1793834983.209989 read(3</proc/3236275/mountstats>, 0x5d6f94e4494a, 1510) = 0 <0.000000>
+3236275 1793834983.209990 close(3</proc/3236275/mountstats>) = 0 <0.000001>
+3236275 1793834983.210015 openat(AT_FDCWD</src/aeiou>, "/proc/self/mounts", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/mounts> <0.000002>
+3236275 1793834983.210017 statx(3</proc/3236275/mounts>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43010) = 0 <0.000000>
+3236275 1793834983.210017 read(3</proc/3236275/mounts>, 0x7ffc3bd43040, 32) = 32 <0.000005>
+3236275 1793834983.210023 read(3</proc/3236275/mounts>, 0x5d6f94e35ac0, 32) = 32 <0.000000>
+3236275 1793834983.210023 read(3</proc/3236275/mounts>, 0x5d6f94e1a060, 64) = 64 <0.000000>
+3236275 1793834983.210024 read(3</proc/3236275/mounts>, 0x5d6f94e2e670, 128) = 128 <0.000000>
+3236275 1793834983.210024 read(3</proc/3236275/mounts>, 0x5d6f94e45040, 256) = 256 <0.000005>
+3236275 1793834983.210030 read(3</proc/3236275/mounts>, 0x5d6f94e45140, 512) = 512 <0.000005>
+3236275 1793834983.210036 read(3</proc/3236275/mounts>, 0x5d6f94e45340, 1024) = 1024 <0.000010>
+3236275 1793834983.210047 read(3</proc/3236275/mounts>, 0x5d6f94e45740, 2048) = 1425 <0.000013>
+3236275 1793834983.210060 read(3</proc/3236275/mounts>, 0x5d6f94e45cd1, 623) = 0 <0.000000>
+3236275 1793834983.210060 close(3</proc/3236275/mounts>) = 0 <0.000000>
+3236275 1793834983.210167 write(1</dev/null>, 0x5d6f94e0b500, 26) = 26 <0.000001>
+3236275 1793834983.210168 write(1</dev/null>, 0x5d6f61fc10ad, 1) = 1 <0.000000>
+3236275 1793834983.210173 write(1</dev/null>, 0x5d6f94e0b500, 126) = 126 <0.000000>
+3236275 1793834983.210173 write(1</dev/null>, 0x5d6f61fb9ce9, 1) = 1 <0.000000>
+3236275 1793834983.210175 write(1</dev/null>, 0x5d6f94e0b500, 122) = 122 <0.000000>
+3236275 1793834983.210175 write(1</dev/null>, 0x5d6f61faf1bd, 1) = 1 <0.000000>
+3236275 1793834983.210178 write(1</dev/null>, 0x5d6f94e0b500, 72) = 72 <0.000000>
+3236275 1793834983.210178 write(1</dev/null>, 0x5d6f61fc10e9, 12) = 12 <0.000000>
+3236275 1793834983.210182 write(1</dev/null>, 0x5d6f94e0b500, 72) = 72 <0.000000>
+3236275 1793834983.210182 write(1</dev/null>, 0x5d6f61fb8038, 1) = 1 <0.000000>
+3236275 1793834983.210183 write(1</dev/null>, 0x5d6f61fc110c, 28) = 28 <0.000000>
+3236275 1793834983.210186 write(1</dev/null>, 0x5d6f94e0b500, 63) = 63 <0.000000>
+3236275 1793834983.210186 write(1</dev/null>, 0x5d6f61fc1357, 1) = 1 <0.000000>
+3236275 1793834983.210188 write(1</dev/null>, 0x5d6f94e0b500, 63) = 63 <0.000000>
+3236275 1793834983.210189 write(1</dev/null>, 0x5d6f61fc1357, 1) = 1 <0.000000>
+3236275 1793834983.210190 write(1</dev/null>, 0x5d6f94e0b500, 63) = 63 <0.000000>
+3236275 1793834983.210191 write(1</dev/null>, 0x5d6f61fc1357, 1) = 1 <0.000000>
+3236275 1793834983.210192 write(1</dev/null>, 0x5d6f94e0b500, 63) = 63 <0.000000>
+3236275 1793834983.210193 write(1</dev/null>, 0x5d6f61fc1357, 1) = 1 <0.000000>
+3236275 1793834983.210194 write(1</dev/null>, 0x5d6f94e0b500, 62) = 62 <0.000000>
+3236275 1793834983.210195 write(1</dev/null>, 0x5d6f61fc1357, 1) = 1 <0.000000>
+3236275 1793834983.210196 write(1</dev/null>, 0x5d6f94e0b500, 63) = 63 <0.000000>
+3236275 1793834983.210196 write(1</dev/null>, 0x5d6f61fc1357, 1) = 1 <0.000000>
+3236275 1793834983.210198 write(1</dev/null>, 0x5d6f94e0b500, 62) = 62 <0.000000>
+3236275 1793834983.210199 write(1</dev/null>, 0x5d6f61fc1357, 1) = 1 <0.000000>
+3236275 1793834983.210202 write(1</dev/null>, 0x5d6f94e0b500, 92) = 92 <0.000000>
+3236275 1793834983.210202 write(1</dev/null>, 0x5d6f61fc131f, 1) = 1 <0.000000>
+3236275 1793834983.210204 write(1</dev/null>, 0x5d6f94e0b500, 98) = 98 <0.000000>
+3236275 1793834983.210204 write(1</dev/null>, 0x5d6f61fa947e, 1) = 1 <0.000000>
+3236275 1793834983.210207 write(1</dev/null>, 0x5d6f94e0b500, 152) = 152 <0.000000>
+3236275 1793834983.210207 write(1</dev/null>, 0x5d6f61fb34fa, 1) = 1 <0.000000>
+3236275 1793834983.210209 write(1</dev/null>, 0x5d6f94e0b500, 24) = 24 <0.000000>
+3236275 1793834983.210210 write(1</dev/null>, 0x5d6f61fa654b, 1) = 1 <0.000000>
+3236275 1793834983.210210 write(1</dev/null>, 0x5d6f94e4a810, 87) = 87 <0.000000>
+3236275 1793834983.210212 write(1</dev/null>, 0x5d6f94e0b500, 75) = 75 <0.000000>
+3236275 1793834983.210212 write(1</dev/null>, 0x5d6f61fc120d, 59) = 59 <0.000000>
+3236275 1793834983.210214 write(1</dev/null>, 0x5d6f94e0b500, 56) = 56 <0.000000>
+3236275 1793834983.210214 write(1</dev/null>, 0x5d6f61fc128d, 1) = 1 <0.000000>
+3236275 1793834983.210217 write(1</dev/null>, 0x5d6f94e0b500, 56) = 56 <0.000000>
+3236275 1793834983.210218 write(1</dev/null>, 0x5d6f61fc12c0, 1) = 1 <0.000000>
+3236275 1793834983.210219 write(1</dev/null>, 0x5d6f94e0b500, 59) = 59 <0.000000>
+3236275 1793834983.210220 write(1</dev/null>, 0x5d6f61fc12c0, 1) = 1 <0.000000>
+3236275 1793834983.210222 write(1</dev/null>, 0x5d6f94e0b500, 56) = 56 <0.000000>
+3236275 1793834983.210222 write(1</dev/null>, 0x5d6f61fc12c0, 1) = 1 <0.000000>
+3236275 1793834983.210223 write(1</dev/null>, 0x5d6f94e0b500, 47) = 47 <0.000000>
+3236275 1793834983.210224 write(1</dev/null>, 0x5d6f61f9c9b6, 1) = 1 <0.000000>
+3236275 1793834983.210225 write(1</dev/null>, 0x5d6f94e0b500, 50) = 50 <0.000000>
+3236275 1793834983.210225 write(1</dev/null>, 0x5d6f61fa4916, 1) = 1 <0.000000>
+3236275 1793834983.210228 write(1</dev/null>, 0x5d6f94e0b500, 55) = 55 <0.000000>
+3236275 1793834983.210228 write(1</dev/null>, 0x5d6f61fa1841, 1) = 1 <0.000000>
+3236275 1793834983.210229 write(1</dev/null>, 0x5d6f94e0b500, 28) = 28 <0.000000>
+3236275 1793834983.210230 write(1</dev/null>, 0x5d6f61fc12d7, 1) = 1 <0.000000>
+3236275 1793834983.210232 openat(AT_FDCWD</src/aeiou>, "/sys/devices/system/cpu/online", O_RDONLY|O_CLOEXEC) = 3</sys/devices/system/cpu/online> <0.000005>
+3236275 1793834983.210237 read(3</sys/devices/system/cpu/online>, 0x7ffc3bd43e50, 1024) = 5 <0.000002>
+3236275 1793834983.210240 close(3</sys/devices/system/cpu/online>) = 0 <0.000001>
+3236275 1793834983.210243 openat(AT_FDCWD</src/aeiou>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/cgroup> <0.000002>
+3236275 1793834983.210245 statx(3</proc/3236275/cgroup>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43e70) = 0 <0.000000>
+3236275 1793834983.210246 lseek(3</proc/3236275/cgroup>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.210246 read(3</proc/3236275/cgroup>, 0x5d6f94e4a6b0, 128) = 16 <0.000002>
+3236275 1793834983.210248 read(3</proc/3236275/cgroup>, 0x5d6f94e4a6c0, 112) = 0 <0.000000>
+3236275 1793834983.210249 close(3</proc/3236275/cgroup>) = 0 <0.000000>
+3236275 1793834983.210250 statx(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", 0, 0xfff, 0x7ffc3bd43b40) = 0 <0.000004>
+3236275 1793834983.210255 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000003>
+3236275 1793834983.210258 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43e20) = 0 <0.000000>
+3236275 1793834983.210259 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.210260 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd43f20, 32) = 11 <0.000001>
+3236275 1793834983.210261 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd43f20, 32) = 0 <0.000000>
+3236275 1793834983.210261 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000000>
+3236275 1793834983.210263 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000002>
+3236275 1793834983.210265 statx(3</sys/fs/cgroup/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43e20) = 0 <0.000000>
+3236275 1793834983.210265 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.210266 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd43f20, 32) = 11 <0.000001>
+3236275 1793834983.210266 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd43f20, 32) = 0 <0.000000>
+3236275 1793834983.210267 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000000>
+3236275 1793834983.210269 openat(AT_FDCWD</src/aeiou>, "/proc/meminfo", O_RDONLY|O_CLOEXEC) = 3</proc/meminfo> <0.000002>
+3236275 1793834983.210272 statx(3</proc/meminfo>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43f10) = 0 <0.000000>
+3236275 1793834983.210273 read(3</proc/meminfo>, 0x7ffc3bd43f40, 32) = 32 <0.000010>
+3236275 1793834983.210284 read(3</proc/meminfo>, 0x5d6f94e4ab10, 32) = 32 <0.000000>
+3236275 1793834983.210284 read(3</proc/meminfo>, 0x5d6f94e4ab30, 64) = 64 <0.000000>
+3236275 1793834983.210284 read(3</proc/meminfo>, 0x5d6f94e4ab70, 128) = 128 <0.000000>
+3236275 1793834983.210285 read(3</proc/meminfo>, 0x5d6f94e4c740, 256) = 256 <0.000000>
+3236275 1793834983.210285 read(3</proc/meminfo>, 0x5d6f94e4c840, 512) = 512 <0.000000>
+3236275 1793834983.210286 read(3</proc/meminfo>, 0x5d6f94e4ca40, 1024) = 451 <0.000000>
+3236275 1793834983.210286 read(3</proc/meminfo>, 0x5d6f94e4cc03, 573) = 0 <0.000000>
+3236275 1793834983.210287 close(3</proc/meminfo>) = 0 <0.000000>
+3236275 1793834983.210288 openat(AT_FDCWD</src/aeiou>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/cgroup> <0.000001>
+3236275 1793834983.210289 statx(3</proc/3236275/cgroup>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43fd0) = 0 <0.000000>
+3236275 1793834983.210290 read(3</proc/3236275/cgroup>, 0x7ffc3bd44000, 32) = 16 <0.000001>
+3236275 1793834983.210291 read(3</proc/3236275/cgroup>, 0x5d6f94e4bfd0, 32) = 0 <0.000000>
+3236275 1793834983.210292 close(3</proc/3236275/cgroup>) = 0 <0.000000>
+3236275 1793834983.210293 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/memory.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/memory.max> <0.000002>
+3236275 1793834983.210295 statx(3</sys/fs/cgroup/non-systemd/memory.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43fd0) = 0 <0.000000>
+3236275 1793834983.210296 read(3</sys/fs/cgroup/non-systemd/memory.max>, 0x7ffc3bd44000, 32) = 4 <0.000000>
+3236275 1793834983.210297 read(3</sys/fs/cgroup/non-systemd/memory.max>, 0x5d6f94e4a784, 32) = 0 <0.000000>
+3236275 1793834983.210297 close(3</sys/fs/cgroup/non-systemd/memory.max>) = 0 <0.000000>
+3236275 1793834983.210299 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/memory.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/memory.max> <0.000002>
+3236275 1793834983.210301 statx(3</sys/fs/cgroup/memory.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd43fd0) = 0 <0.000000>
+3236275 1793834983.210302 read(3</sys/fs/cgroup/memory.max>, 0x7ffc3bd44000, 32) = 4 <0.000000>
+3236275 1793834983.210302 read(3</sys/fs/cgroup/memory.max>, 0x5d6f94e4a7e4, 32) = 0 <0.000000>
+3236275 1793834983.210303 close(3</sys/fs/cgroup/memory.max>) = 0 <0.000000>
+3236275 1793834983.210304 openat(AT_FDCWD</src/aeiou>, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3</proc/3236275/cgroup> <0.000001>
+3236275 1793834983.210305 statx(3</proc/3236275/cgroup>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd44100) = 0 <0.000000>
+3236275 1793834983.210306 lseek(3</proc/3236275/cgroup>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.210306 read(3</proc/3236275/cgroup>, 0x5d6f94e4a6b0, 128) = 16 <0.000000>
+3236275 1793834983.210307 read(3</proc/3236275/cgroup>, 0x5d6f94e4a6c0, 112) = 0 <0.000000>
+3236275 1793834983.210307 close(3</proc/3236275/cgroup>) = 0 <0.000000>
+3236275 1793834983.210308 statx(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cgroup.controllers", 0, 0xfff, 0x7ffc3bd43dd0) = 0 <0.000001>
+3236275 1793834983.210309 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/non-systemd/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/non-systemd/cpu.max> <0.000001>
+3236275 1793834983.210311 statx(3</sys/fs/cgroup/non-systemd/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd440b0) = 0 <0.000000>
+3236275 1793834983.210311 lseek(3</sys/fs/cgroup/non-systemd/cpu.max>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.210311 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd441b0, 32) = 11 <0.000000>
+3236275 1793834983.210312 read(3</sys/fs/cgroup/non-systemd/cpu.max>, 0x7ffc3bd441b0, 32) = 0 <0.000000>
+3236275 1793834983.210313 close(3</sys/fs/cgroup/non-systemd/cpu.max>) = 0 <0.000000>
+3236275 1793834983.210313 openat(AT_FDCWD</src/aeiou>, "/sys/fs/cgroup/cpu.max", O_RDONLY|O_CLOEXEC) = 3</sys/fs/cgroup/cpu.max> <0.000001>
+3236275 1793834983.210315 statx(3</sys/fs/cgroup/cpu.max>, "", AT_EMPTY_PATH, 0xfff, 0x7ffc3bd440b0) = 0 <0.000000>
+3236275 1793834983.210315 lseek(3</sys/fs/cgroup/cpu.max>, 0, SEEK_CUR) = 0 <0.000000>
+3236275 1793834983.210315 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd441b0, 32) = 11 <0.000000>
+3236275 1793834983.210316 read(3</sys/fs/cgroup/cpu.max>, 0x7ffc3bd441b0, 32) = 0 <0.000000>
+3236275 1793834983.210316 close(3</sys/fs/cgroup/cpu.max>) = 0 <0.000000>
+3236275 1793834983.210323 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205095fe990, parent_tid=0x7205095fe990, exit_signal=0, stack=0x7205093fe000, stack_size=0x1ffe00, tls=0x7205095fe6c0}, 88) = 3236282 <0.000039>
+3236275 1793834983.210364 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205093fd990, parent_tid=0x7205093fd990, exit_signal=0, stack=0x7205091fd000, stack_size=0x1ffe00, tls=0x7205093fd6c0}, 88) = 3236283 <0.000020>
+3236275 1793834983.210385 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720508ffc000 <0.000003>
+3236275 1793834983.210402 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205091fc990, parent_tid=0x7205091fc990, exit_signal=0, stack=0x720508ffc000, stack_size=0x1ffe00, tls=0x7205091fc6c0}, 88) = 3236284 <0.000018>
+3236275 1793834983.210421 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720508dfb000 <0.000001>
+3236275 1793834983.210429 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x720508ffb990, parent_tid=0x720508ffb990, exit_signal=0, stack=0x720508dfb000, stack_size=0x1ffe00, tls=0x720508ffb6c0}, 88) = 3236285 <0.000016>
+3236275 1793834983.210447 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720508bfa000 <0.000001>
+3236275 1793834983.210453 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x720508dfa990, parent_tid=0x720508dfa990, exit_signal=0, stack=0x720508bfa000, stack_size=0x1ffe00, tls=0x720508dfa6c0}, 88) = 3236286 <0.000016>
+3236275 1793834983.210470 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7205089f9000 <0.000001>
+3236275 1793834983.210477 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x720508bf9990, parent_tid=0x720508bf9990, exit_signal=0, stack=0x7205089f9000, stack_size=0x1ffe00, tls=0x720508bf96c0}, 88) = 3236287 <0.000016>
+3236275 1793834983.210494 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7205087f8000 <0.000001>
+3236275 1793834983.210500 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205089f8990, parent_tid=0x7205089f8990, exit_signal=0, stack=0x7205087f8000, stack_size=0x1ffe00, tls=0x7205089f86c0}, 88) = 3236288 <0.000018>
+3236275 1793834983.210518 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7205085f7000 <0.000001>
+3236275 1793834983.210524 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205087f7990, parent_tid=0x7205087f7990, exit_signal=0, stack=0x7205085f7000, stack_size=0x1ffe00, tls=0x7205087f76c0}, 88) = 3236289 <0.000020>
+3236275 1793834983.210545 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7205083f6000 <0.000001>
+3236275 1793834983.210549 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205085f6990, parent_tid=0x7205085f6990, exit_signal=0, stack=0x7205083f6000, stack_size=0x1ffe00, tls=0x7205085f66c0}, 88) = 3236290 <0.000017>
+3236275 1793834983.210567 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7205081f5000 <0.000001>
+3236275 1793834983.210573 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7205083f5990, parent_tid=0x7205083f5990, exit_signal=0, stack=0x7205081f5000, stack_size=0x1ffe00, tls=0x7205083f56c0}, 88) = 3236291 <0.000019>
+3236275 1793834983.210593 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204fbdff000 <0.000002>
+3236275 1793834983.210600 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204fbfff990, parent_tid=0x7204fbfff990, exit_signal=0, stack=0x7204fbdff000, stack_size=0x1ffe00, tls=0x7204fbfff6c0}, 88) = 3236292 <0.000020>
+3236275 1793834983.210620 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204fbbfe000 <0.000001>
+3236275 1793834983.210626 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204fbdfe990, parent_tid=0x7204fbdfe990, exit_signal=0, stack=0x7204fbbfe000, stack_size=0x1ffe00, tls=0x7204fbdfe6c0}, 88) = 3236293 <0.000020>
+3236275 1793834983.210647 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204fb9fd000 <0.000001>
+3236275 1793834983.210652 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204fbbfd990, parent_tid=0x7204fbbfd990, exit_signal=0, stack=0x7204fb9fd000, stack_size=0x1ffe00, tls=0x7204fbbfd6c0}, 88) = 3236294 <0.000016>
+3236275 1793834983.210669 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204fb7fc000 <0.000001>
+3236275 1793834983.210675 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204fb9fc990, parent_tid=0x7204fb9fc990, exit_signal=0, stack=0x7204fb7fc000, stack_size=0x1ffe00, tls=0x7204fb9fc6c0}, 88) = 3236295 <0.000020>
+3236275 1793834983.210696 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204fb5fb000 <0.000001>
+3236275 1793834983.210702 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204fb7fb990, parent_tid=0x7204fb7fb990, exit_signal=0, stack=0x7204fb5fb000, stack_size=0x1ffe00, tls=0x7204fb7fb6c0}, 88) = 3236296 <0.000021>
+3236275 1793834983.210726 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204fb3fa000 <0.000001>
+3236275 1793834983.210730 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204fb5fa990, parent_tid=0x7204fb5fa990, exit_signal=0, stack=0x7204fb3fa000, stack_size=0x1ffe00, tls=0x7204fb5fa6c0}, 88) = 3236297 <0.000018>
+3236275 1793834983.210749 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204fb1f9000 <0.000001>
+3236275 1793834983.210753 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204fb3f9990, parent_tid=0x7204fb3f9990, exit_signal=0, stack=0x7204fb1f9000, stack_size=0x1ffe00, tls=0x7204fb3f96c0}, 88) = 3236298 <0.000023>
+3236275 1793834983.210778 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204faff8000 <0.000001>
+3236275 1793834983.210787 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204fb1f8990, parent_tid=0x7204fb1f8990, exit_signal=0, stack=0x7204faff8000, stack_size=0x1ffe00, tls=0x7204fb1f86c0}, 88) = 3236299 <0.000009>
+3236275 1793834983.210798 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204fadf7000 <0.000001>
+3236275 1793834983.210803 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204faff7990, parent_tid=0x7204faff7990, exit_signal=0, stack=0x7204fadf7000, stack_size=0x1ffe00, tls=0x7204faff76c0}, 88) = 3236300 <0.000007>
+3236275 1793834983.210811 mmap(NULL, 2101248, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7204fabf6000 <0.000000>
+3236275 1793834983.210815 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7204fadf6990, parent_tid=0x7204fadf6990, exit_signal=0, stack=0x7204fabf6000, stack_size=0x1ffe00, tls=0x7204fadf66c0}, 88) = 3236301 <0.000011>
+3236299 1793834983.210842 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000002>
+3236299 1793834983.210850 munmap(0x720509b9e000, 12288) = 0 <0.000002>
+3236299 1793834983.210854 madvise(0x7204faff8000, 2076672, 4) = 0 <0.000002>
+3236299 1793834983.210855 exit(0) = ?
+3236299 1793834983.210856 +++ exited with 0 +++
+3236300 1793834983.210865 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000001>
+3236300 1793834983.210867 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236300 1793834983.210869 madvise(0x7204fadf7000, 2076672, 4) = 0 <0.000001>
+3236300 1793834983.210871 exit(0) = ?
+3236300 1793834983.210871 +++ exited with 0 +++
+3236301 1793834983.210877 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000001>
+3236301 1793834983.210879 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236301 1793834983.210881 madvise(0x7204fabf6000, 2076672, 4) = 0 <0.000001>
+3236301 1793834983.210881 exit(0) = ?
+3236301 1793834983.210881 +++ exited with 0 +++
+3236283 1793834983.210908 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000002>
+3236283 1793834983.210914 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236283 1793834983.210915 madvise(0x7205091fd000, 2076672, 4) = 0 <0.000002>
+3236283 1793834983.210917 exit(0) = ?
+3236283 1793834983.210918 +++ exited with 0 +++
+3236282 1793834983.210930 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000006>
+3236282 1793834983.210943 munmap(0x720509b9e000, 12288 <unfinished ...>
+3236284 1793834983.210945 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+3236282 1793834983.210946 <... munmap resumed>) = 0 <0.000003>
+3236284 1793834983.210947 <... mmap resumed>) = 0x720509b9e000 <0.000002>
+3236282 1793834983.210948 madvise(0x7205093fe000, 2076672, 4 <unfinished ...>
+3236284 1793834983.210950 munmap(0x720509b9e000, 12288 <unfinished ...>
+3236282 1793834983.210951 <... madvise resumed>) = 0 <0.000003>
+3236282 1793834983.210951 exit(0 <unfinished ...>
+3236284 1793834983.210952 <... munmap resumed>) = 0 <0.000001>
+3236282 1793834983.210952 <... exit resumed>) = ?
+3236282 1793834983.210952 +++ exited with 0 +++
+3236284 1793834983.210953 madvise(0x720508ffc000, 2076672, 4) = 0 <0.000001>
+3236284 1793834983.210954 exit(0) = ?
+3236284 1793834983.210954 +++ exited with 0 +++
+3236285 1793834983.210973 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000001>
+3236285 1793834983.210977 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236285 1793834983.210979 madvise(0x720508dfb000, 2076672, 4) = 0 <0.000001>
+3236285 1793834983.210980 exit(0) = ?
+3236285 1793834983.210980 +++ exited with 0 +++
+3236286 1793834983.211001 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000002>
+3236286 1793834983.211006 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236286 1793834983.211008 madvise(0x720508bfa000, 2076672, 4 <unfinished ...>
+3236287 1793834983.211009 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+3236286 1793834983.211009 <... madvise resumed>) = 0 <0.000001>
+3236286 1793834983.211010 exit(0) = ?
+3236286 1793834983.211010 +++ exited with 0 +++
+3236287 1793834983.211014 <... mmap resumed>) = 0x720509b9e000 <0.000005>
+3236287 1793834983.211020 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236287 1793834983.211023 madvise(0x7205089f9000, 2076672, 4) = 0 <0.000002>
+3236287 1793834983.211025 exit(0) = ?
+3236287 1793834983.211026 +++ exited with 0 +++
+3236289 1793834983.211042 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000002>
+3236289 1793834983.211046 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236289 1793834983.211049 madvise(0x7205085f7000, 2076672, 4) = 0 <0.000001>
+3236289 1793834983.211050 exit(0) = ?
+3236289 1793834983.211050 +++ exited with 0 +++
+3236290 1793834983.211054 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000002>
+3236290 1793834983.211059 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236290 1793834983.211062 madvise(0x7205083f6000, 2076672, 4) = 0 <0.000001>
+3236290 1793834983.211063 exit(0) = ?
+3236290 1793834983.211063 +++ exited with 0 +++
+3236291 1793834983.211088 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000002>
+3236291 1793834983.211094 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236291 1793834983.211096 madvise(0x7205081f5000, 2076672, 4) = 0 <0.000001>
+3236292 1793834983.211097 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+3236291 1793834983.211097 exit(0) = ?
+3236291 1793834983.211098 +++ exited with 0 +++
+3236292 1793834983.211101 <... mmap resumed>) = 0x720509b9e000 <0.000004>
+3236292 1793834983.211106 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236292 1793834983.211108 madvise(0x7204fbdff000, 2076672, 4) = 0 <0.000001>
+3236292 1793834983.211109 exit(0) = ?
+3236292 1793834983.211110 +++ exited with 0 +++
+3236288 1793834983.211134 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000005>
+3236293 1793834983.211144 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9b000 <0.000002>
+3236288 1793834983.211146 munmap(0x720509b9e000, 12288 <unfinished ...>
+3236293 1793834983.211149 munmap(0x720509b9b000, 12288 <unfinished ...>
+3236288 1793834983.211151 <... munmap resumed>) = 0 <0.000005>
+3236293 1793834983.211152 <... munmap resumed>) = 0 <0.000003>
+3236288 1793834983.211153 madvise(0x7205087f8000, 2076672, 4 <unfinished ...>
+3236293 1793834983.211154 madvise(0x7204fbbfe000, 2076672, 4 <unfinished ...>
+3236288 1793834983.211162 <... madvise resumed>) = 0 <0.000009>
+3236288 1793834983.211163 exit(0) = ?
+3236288 1793834983.211164 +++ exited with 0 +++
+3236294 1793834983.211166 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+3236293 1793834983.211166 <... madvise resumed>) = 0 <0.000012>
+3236293 1793834983.211167 exit(0) = ?
+3236293 1793834983.211167 +++ exited with 0 +++
+3236294 1793834983.211171 <... mmap resumed>) = 0x720509b9e000 <0.000005>
+3236294 1793834983.211176 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236294 1793834983.211178 madvise(0x7204fb9fd000, 2076672, 4) = 0 <0.000001>
+3236294 1793834983.211179 exit(0) = ?
+3236294 1793834983.211180 +++ exited with 0 +++
+3236295 1793834983.211199 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000002>
+3236295 1793834983.211204 munmap(0x720509b9e000, 12288 <unfinished ...>
+3236298 1793834983.211205 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+3236295 1793834983.211205 <... munmap resumed>) = 0 <0.000001>
+3236296 1793834983.211205 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+3236295 1793834983.211206 madvise(0x7204fb7fc000, 2076672, 4 <unfinished ...>
+3236298 1793834983.211208 <... mmap resumed>) = 0x720509b9e000 <0.000004>
+3236296 1793834983.211210 <... mmap resumed>) = 0x7204f2a00000 <0.000005>
+3236296 1793834983.211210 munmap(0x7204f2a00000, 23068672 <unfinished ...>
+3236298 1793834983.211218 munmap(0x720509b9e000, 12288 <unfinished ...>
+3236297 1793834983.211228 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+3236296 1793834983.211237 <... munmap resumed>) = 0 <0.000027>
+3236296 1793834983.211238 munmap(0x7204f8000000, 44040192 <unfinished ...>
+3236295 1793834983.211268 <... madvise resumed>) = 0 <0.000062>
+3236295 1793834983.211269 exit(0) = ?
+3236295 1793834983.211270 +++ exited with 0 +++
+3236298 1793834983.211289 <... munmap resumed>) = 0 <0.000071>
+3236298 1793834983.211302 madvise(0x7204fb1f9000, 2076672, 4) = 0 <0.000002>
+3236298 1793834983.211305 exit(0 <unfinished ...>
+3236297 1793834983.211305 <... mmap resumed>) = 0x720509b9e000 <0.000077>
+3236298 1793834983.211305 <... exit resumed>) = ?
+3236298 1793834983.211305 +++ exited with 0 +++
+3236297 1793834983.211311 munmap(0x720509b9e000, 12288) = 0 <0.000001>
+3236297 1793834983.211313 madvise(0x7204fb3fa000, 2076672, 4) = 0 <0.000001>
+3236297 1793834983.211315 exit(0) = ?
+3236297 1793834983.211315 +++ exited with 0 +++
+3236296 1793834983.211328 <... munmap resumed>) = 0 <0.000090>
+3236296 1793834983.211350 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x720509b9e000 <0.000013>
+3236296 1793834983.211367 munmap(0x720509b9e000, 12288) = 0 <0.000013>
+3236296 1793834983.211381 madvise(0x7204fb5fb000, 2076672, 4) = 0 <0.000002>
+3236296 1793834983.211394 exit(0) = ?
+3236296 1793834983.211395 +++ exited with 0 +++
+3236275 1793834983.211412 munmap(0x7205093fe000, 2101248) = 0 <0.000020>
+3236275 1793834983.211450 write(1</dev/null>, 0x5d6f94e0b500, 63) = 63 <0.000001>
+3236275 1793834983.211451 write(1</dev/null>, 0x5d6f61f9d7b2, 1) = 1 <0.000000>
+3236275 1793834983.211458 openat(AT_FDCWD</src/aeiou>, "/proc/sys/vm/overcommit_memory", O_RDONLY|O_CLOEXEC) = 3</proc/sys/vm/overcommit_memory> <0.000008>
+3236275 1793834983.211467 read(3</proc/sys/vm/overcommit_memory>, 0x7ffc3bd44507, 1) = 1 <0.000003>
+3236275 1793834983.211469 close(3</proc/sys/vm/overcommit_memory>) = 0 <0.000001>
+3236275 1793834983.211470 madvise(0x72050003f000, 524288, 4) = 0 <0.000022>
+3236275 1793834983.211569 exit_group(0) = ?
+3236275 1793834983.211590 +++ exited with 0 +++
+3236277 1793834983.211607 +++ exited with 0 +++
+3236281 1793834983.211638 +++ exited with 0 +++
+3236280 1793834983.211673 +++ exited with 0 +++

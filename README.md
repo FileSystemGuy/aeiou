@@ -469,6 +469,12 @@ line prints `execve`'s arguments and environment as addresses and no call's byte
 eBPF source already did, `capture.json` keeps the command line with every value named as a
 secret and every URL's password redacted (`--argv none` the program alone), and `metrics`
 and `digest` warn of a trace taken by hand that prints them.
+Since 2026-11-04 (brief item 54 phase 4, step 1, §3.98) the eBPF source traces `io_uring`'s
+requests too, where the kernel has its tracepoints: each request as the kernel takes it and
+each completion, written as `aeiou_uring_sqe` and `aeiou_uring_cqe` records after a header of
+the trace's format (`runner/REFERENCE.md` §13), and read as the calls they do, one
+`io_uring_enter`'s a fan-out; a capture of this runner's own `--posix io_uring` engine, with and
+without SQPOLL, reads as its `--posix sync` run does.
 
 `aeiou cases` (2026-10-23, item 40) lists the use cases a binary can run by `--case NAME`,
 filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows
@@ -491,8 +497,9 @@ Not built, in rough order of interest:
 - The capture's other sources (brief item 54): ~~the HTTP-head shim for object requests (phase
   2),~~ (built 2026-11-03) ~~eBPF system calls that do not slow the application (phase 3),~~
   (built 2026-11-03) the `sudo -n` helper for hosts without file capabilities (phase 3b), and
-  uprobes, faults on mappings, and `io_uring` (phase 4; decided 2026-11-04 with the trace format
-  they write, strace's text extended by records of aeiou's own, `DESIGN_REVIEW.md` §3.98).
+  uprobes, faults on mappings, ~~and `io_uring`~~ (`io_uring` built 2026-11-04) (phase 4; decided
+  2026-11-04 with the trace format they write, strace's text extended by records of aeiou's own,
+  `DESIGN_REVIEW.md` §3.98).
 
 - ~~The abstract rendered as prose (`PROJECT_BRIEF.md` §6 item 27), from the AST and the case's
   measured shape; the workload catalog it would join is built (2026-10-10, below).~~ Built

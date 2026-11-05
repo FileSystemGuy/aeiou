@@ -506,7 +506,9 @@ uses them. A trace that prints them is noted (`execve_arguments_printed`,
   separates one search from the next is a property of the application. A beam search done
   by a thread pool of `pread`s has no fork in the trace: its fan-out and depth are not
   recoverable, and that row of the comparison says `none`.
-- **Not visible to `strace`:** `io_uring` submissions and page faults on a mapping. Not
+- **Not visible to `strace`:** `io_uring` submissions and page faults on a mapping (an eBPF
+  capture's trace holds the `io_uring` requests as `aeiou_uring_sqe` and `aeiou_uring_cqe`
+  records, read as the calls they do: `runner/REFERENCE.md` §13, since 2026-11-04). Not
   counted: `sendfile`, `splice`, `copy_file_range`.
 - **`compare`.** One row per metric with both values and a distance in [0, 1]: the
   difference of two shares (mix, ops by kind, first touches, bytes in multi-op runs,

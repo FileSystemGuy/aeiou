@@ -9572,7 +9572,7 @@ its environment, its options, a URL, and the bytes it writes, reads, and sends o
 under each source, and find none in any file of the capture; `tests/trace_tool.rs` the
 warning and its absence.
 
-### 3.98 One trace format for every source: strace's text, extended by records of our own, and the probes of phase 4 (researched, debated with the user, and decided 2026-11-04; not started)
+### 3.98 One trace format for every source: strace's text, extended by records of our own, and the probes of phase 4 (researched, debated with the user, and decided 2026-11-04; phase 4 step 1, `io_uring`, built the same day)
 
 **How it came up.** After item 62 the user asked when the probes for `io_uring` and mapping
 faults come (item 54 phase 4, nothing scheduled), noted that LMCache uses `io_uring` for some
@@ -9673,8 +9673,9 @@ objection").**
   count per record, faults being the size risk), `aeiou_obj_req`, `aeiou_obj_resp` (OpenTelemetry's S3
   names), later `aeiou_cufile_*` and `aeiou_nfs_*`; for example
   `4711 10:00:00.000101 aeiou_uring_sqe(5</ring>, {op=IORING_OP_READ, fd=7</data/f>, off=4096, len=131072, user_data=0x7}) = 0`.
-- *Pairing.* A completion carries its issue's key, `user_data` and the ring for `io_uring`, the
-  `iocb` or `aiocb` address for AIO, so a reader holds only the requests in flight, at most a
+- *Pairing.* A completion carries its issue's key, ~~`user_data` and the ring~~ a number the
+  converter gives the request while it is in flight (decided 2026-11-04, "Phase 4 step 1"
+  below) for `io_uring`, the `iocb` or `aiocb` address for AIO, so a reader holds only the requests in flight, at most a
   ring's depth: memory per open file, never per call.
 - *Object requests join the stream;* `requests.jsonl` becomes a view of it.
 - *Readers skip a name they do not know:* `strace.rs`'s tables (`fd_op_of`, `path_op_of`) fall
@@ -9750,6 +9751,82 @@ children, and find none of its calls in either source's trace, and under eBPF no
 processes left in the tree (the count read from the probes' own map). A full tree and a recycled
 pid are not forced by a test (65,536 live processes; a chosen pid needs root): the first is
 held by the unit test of its count, the second by the tree found empty.
+
+**Phase 4 step 1, `io_uring` (proposed and agreed with the user 2026-11-04: "proceed with the
+recommendations").** Settled before building, with this side's recommendation each time:
+- *Pairing by the converter's number, not `user_data`* (a change to the decision above).
+  Applications reuse `user_data`, 0 for requests nobody waits on is common, and the request's
+  own address is unique in flight but is a kernel address, not to be published. So the
+  converter numbers each request by its address (`id=`), the smallest number free, and frees it
+  at the last completion (multishot: while `IORING_CQE_F_MORE`). `user_data` is printed.
+- *Whose line.* A submission is the submitting thread's (under SQPOLL the kernel's thread, the
+  issuer lost, said in `not_seen`); a completion is printed under its submission's thread,
+  since it may be posted from an interrupt or an io-wq worker; no `<duration>`; an error as
+  strace prints one.
+- *The header* only in a trace that may hold the records (the probes attached); a plain strace
+  is format 0, headerless.
+- *Operations:* reads and writes (fixed, vectored, multishot), `FSYNC`, `OPENAT`, `OPENAT2`,
+  `CLOSE` decoded, any other by its name and file.
+- *Fixed files in step 1:* the descriptors `io_uring_register` registers copied, up to 1,024 a
+  call, and a direct open's slot filled, so a registered file's index has its path.
+- *Not attached* where the kernel lacks the tracepoints or its structures differ: the capture
+  goes on, `capture.json` says why, and `not_seen` keeps strace's line on `io_uring`.
+- *Readers:* a read or write at its completion, with the bytes it moved at its offset; one
+  `io_uring_enter`'s a fan-out, exported as one `submit`; an open, a close, an fsync as calls;
+  in-flight depth per ring later.
+- *Tests first:* the readers skipping unknown records; each record's decoding; golden cases;
+  a capture of this runner's own `--posix io_uring` engine against `--posix sync`.
+
+*Built (2026-11-04).* `capture-ebpf/src/main.rs`: `io_uring_submit_req` (the request's opcode,
+flags, descriptor, `user_data`, ring, and first 64 bytes, the operation's structure, decoded by
+the converter at offsets from BTF the header carries; an open's or a statx's path from the
+kernel's `struct filename`; the ring added to `RINGS`); `io_uring_complete` (traced by ring,
+whatever thread or interrupt posts it, its record built on the program's stack so it cannot
+corrupt the per-CPU buffer of a call's probe it interrupted); `uring_calls` on `sys_exit` (the
+ring at `io_uring_setup`'s return, found through the descriptor table, and the files
+`io_uring_register` registers). `ebpf.rs`: `uring_layout` from BTF (the tracepoints' prototypes
+by their `btf_trace_` typedefs, the offsets, the operations' structures checked to fit 64
+bytes), `untraced_rings` among the losses, `capture.json`'s `uring`. `ebpf_text.rs`: the
+records, the header, the rings and their registered files. `strace.rs`: the header
+(`trace_format_newer`), the records read as their calls, `io_uring_setup` no longer noted in a
+trace that holds its ring's requests. Grammar: `runner/REFERENCE.md` §13, `aeiou-trace(1)`.
+
+*Found in the building.* The verifier refused `sys_enter` with `io_uring_register`'s copy added
+(a million instructions explored: the copy's branches multiplied by the six strings'), so the
+copies went to a small program of their own and the call programs stayed as they were; it
+refused a load from the tracepoint's arguments at an offset chosen at run time, into which the
+compiler had folded "the request is argument 0 or 1"; and the kernel refuses to attach a raw
+program that reads past its tracepoint's last argument (EINVAL), so each tracepoint form has its
+own program, the loader attaching the one BTF gives (`io_uring_submit_req` with the request
+alone, or after the ring before about 5.19, rec; `io_uring_complete` with the posted cqe, or
+its fields one by one). On a real trace: the request's descriptor is the kernel's only for an
+operation that takes a file (`needs_file`), otherwise a leftover (`fd=0</dev/null>` was printed
+for every statx), so it is printed for those alone. *Beyond the agreed set:* `STATX` decoded
+(directory, path, flags, mask), read as strace's `statx` is, an `fstat` on a descriptor, since
+this runner's engine does every `fstat` so and the backends' traces disagreed without it; and an
+operation on paths no record holds (`UNLINKAT`, `RENAMEAT`, `MKDIRAT`, ...) noted by name
+always, since whether it is under a root cannot be judged. In the export, a request at offset
+-1 (the file's position, which the kernel reads and moves) is the sequential `read` or `write`
+it is, the position tracked, so a replay moves its own; a vectored request, whose length the
+record does not hold, and a multishot's results are left out of the export and noted, as the
+eBPF source's vectored AIO is. And the dry run counts the lengths an abstract asks, a read past
+a file's end included (npy_per_sample's smoke set: 219,885,683 asked, 146,774,015 returned,
+strace and eBPF agreeing to the byte), so a run's trace is held to the dry run by at most, never
+equal. The `depth_not_computed` note is an `io_submit` trace's alone (`io_uring`'s rounds are
+not chained).
+
+*Tests.* Unit: the header and an unknown record skipped; every record form converted
+(`ebpf_text.rs`) and read (`strace.rs`), a request at the position, a multishot, the export's
+exclusions; the BTF layout and the programs chosen per kernel form (`ebpf.rs`). Golden: three
+cases (every record form written out, and two captures of the runner's `io_uring` engine with
+and without SQPOLL). Privileged (`tests/capture_ebpf.rs`): `aeiou run --posix io_uring` of
+npy_per_sample's smoke set, and with `--sqpoll 10`, captured under eBPF, reads the same bytes of
+the same files with the same opens, closes, reads, `fstat`s, `stat`s, request sizes, and
+popularity as `--posix sync`, every completion matched; the seven earlier eBPF tests unchanged.
+Not tested here: fixed files and direct opens from a real application (the runner registers
+none; the converter's unit test holds them), an older kernel's tracepoint forms (CI's kernel may
+differ from this box's), `io_uring` from an application other than this runner (LMCache's is
+the next to trace). Brief item 54.
 
 *Risks.* A static function the compiler inlined fires no fentry (the tracepoints preferred);
 field meanings drift between kernels (`io_kiocb.cmd` at offset 0 only since about 5.19, rec;

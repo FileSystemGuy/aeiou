@@ -62,6 +62,14 @@ pub const NOT_SEEN_STRACE: [&str; 4] = [
     "which reads the page cache served",
 ];
 
+/// What a capture under eBPF cannot see of `io_uring` when its requests are traced (in place of
+/// strace's line on it, `NOT_SEEN_STRACE[1]`).
+pub const NOT_SEEN_URING: [&str; 3] = [
+    "which thread asked for an io_uring request the kernel's SQPOLL thread submitted: its records carry that thread's id",
+    "the contents of IORING_OP_URING_CMD requests (a driver's own commands, NVMe passthrough): their operation alone",
+    "when an io_uring completion was reaped: an application reads them from the ring's shared memory with no call",
+];
+
 /// What a capture under eBPF cannot see beyond what strace cannot, recorded in every record.
 pub const NOT_SEEN_EBPF: [&str; 4] = [
     "the lengths of vectored AIO requests (IOCB_CMD_PREADV, IOCB_CMD_PWRITEV): their iovec arrays are not copied, the requests are left out of trace.txt and counted (conversion.vectored_aio_left_out)",
@@ -997,6 +1005,11 @@ pub fn run(o: Opts) -> Result<i32> {
     } else {
         None
     };
+    let uring = probes.as_ref().map(|p| p.uring_header());
+    let uring_traced = uring.as_ref().is_some_and(|u| u["traced"] == true);
+    if let Some(Value::String(why)) = uring.as_ref().map(|u| &u["why"]) {
+        say(&format!("io_uring's requests are not traced: {why}"));
+    }
 
     catch(libc::SIGINT);
     catch(libc::SIGTERM);
@@ -1023,6 +1036,7 @@ pub fn run(o: Opts) -> Result<i32> {
                 "seed": pid,
                 "cwd": std::env::current_dir().ok(),
                 "inherited": inherited,
+                "uring": p.uring_header(),
             });
             let reader = p.read_into(&bin, &header, stop.clone())?;
             unsafe {
@@ -1196,7 +1210,8 @@ pub fn run(o: Opts) -> Result<i32> {
         "paths_not_copied": ebpf_rec.as_ref().map_or(0, |(_, _, s, _)| s.paths_not_copied),
         "reader": ebpf_rec.as_ref().map(|(_, r, _, _)| json!({"records": r.records, "bytes": r.bytes, "seconds": r.seconds, "peak_records_per_s": r.peak_records_per_s, "peak_bytes_per_s": r.peak_bytes_per_s, "file": crate::ebpf::FILE})),
         "conversion": ebpf_rec.as_ref().map(|(_, _, s, _)| s.json()),
-        "not_seen": NOT_SEEN_STRACE.iter().chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() }).map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>(),
+        "uring": uring.as_ref().map(|u| json!({"traced": u["traced"], "why": u.get("why")})),
+        "not_seen": NOT_SEEN_STRACE.iter().filter(|n| !(uring_traced && n.starts_with("io_uring operations"))).chain(if uring_traced { NOT_SEEN_URING.iter() } else { [].iter() }).chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() }).map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>(),
         "requests": requests,
         "anchors": anchors,
         "mountstats": "not taken: a traced run's wire counts are not the application's (strace -yy adds a GETATTR to each READ); take them from an untraced run",

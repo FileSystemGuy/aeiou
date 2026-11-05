@@ -21,7 +21,8 @@
 //! Descriptor tables follow `clone` when the trace has it (`-e trace=…,%process`); otherwise a
 //! thread that uses a descriptor it never opened joins the table of the one that did (the
 //! `-yy` path decides which). Not visible to `strace`, so not counted: `io_uring` submissions
-//! and page faults on a mapping. The trace is read once, in a stream; the state is per
+//! (an eBPF capture's `aeiou_uring_sqe` and `aeiou_uring_cqe` records are, as the calls they
+//! do; DESIGN_REVIEW.md §3.98) and page faults on a mapping. The trace is read once, in a stream; the state is per
 //! descriptor, per thread, and per path under the roots, never per call.
 
 use std::cell::RefCell;
@@ -39,6 +40,9 @@ pub const R: usize = 0;
 pub const W: usize = 1;
 pub const KINDS: [&str; 2] = ["read", "write"];
 pub const METRICS_FORMAT: u64 = 2;
+/// The version of the capture's trace format this reader knows (DESIGN_REVIEW.md §3.98): strace's
+/// text with the `aeiou_` records, given by the header line an eBPF capture begins with.
+pub const TRACE_FORMAT: u64 = 1;
 const UNFINISHED: &str = "<unfinished ...>";
 /// The note of the events an eBPF capture lost (its `--- aeiou: N event(s) lost` lines): the
 /// numbers come from an incomplete trace.
@@ -796,7 +800,7 @@ fn handled(name: &str) -> bool {
         || DUPS.contains(&name)
         || fd_op_of(name).is_some()
         || path_op_of(name).is_some()
-        || matches!(name, "close" | "lseek" | "io_setup" | "io_submit" | "io_getevents" | "io_pgetevents" | "chdir" | "fchdir" | "mmap")
+        || matches!(name, "close" | "lseek" | "io_setup" | "io_submit" | "io_getevents" | "io_pgetevents" | "chdir" | "fchdir" | "mmap" | "aeiou_uring_sqe" | "aeiou_uring_cqe")
 }
 
 /// When a call started and returned, and by whom: `(tid, issued, done)`.
@@ -813,6 +817,34 @@ struct Waiting {
     off: i64,
     nbytes: i64,
     member: Option<(usize, usize)>,
+}
+
+/// An `io_uring` request between its `aeiou_uring_sqe` and its last `aeiou_uring_cqe`: its
+/// operation (`IORING_OP_` left off), the record's keyed arguments, and, for a read or a write,
+/// what its completion counts.
+struct Uring {
+    op: String,
+    tid: i64,
+    issued: Option<f64>,
+    args: HashMap<String, String>,
+    data: Option<Waiting>,
+    /// A request at the file's position (offset -1): the open file whose position it reads at
+    /// issue and moves by its result, as a `read` or `write` does.
+    cur: Option<FileRef>,
+}
+
+/// The `key=value` arguments of an `aeiou_` record (DESIGN_REVIEW.md §3.98).
+fn keyed(a: &[String]) -> HashMap<String, String> {
+    a.iter().filter_map(|x| x.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect()
+}
+
+/// Whether an `io_uring` operation moves file data: a read (`true`) or a write.
+fn uring_reads(op: &str) -> Option<bool> {
+    match op {
+        "READ" | "READV" | "READ_FIXED" | "READ_MULTISHOT" => Some(true),
+        "WRITE" | "WRITEV" | "WRITE_FIXED" => Some(false),
+        _ => None,
+    }
 }
 
 /// Reads `strace` lines and feeds the metrics, the exporter, or both.
@@ -837,6 +869,14 @@ pub struct Tracer {
     /// dict's), which is the order the unreaped are counted in at the end.
     aio: HashMap<(String, String), (u64, Vec<Waiting>)>,
     aio_seq: u64,
+    /// The trace's format (`--- aeiou: trace format N` at its start; 0, a plain strace, without).
+    pub format: u64,
+    /// `io_uring` requests in flight, by `(ring, id)` (`aeiou_uring_sqe`), at most a ring's depth.
+    uring: HashMap<(String, String), Uring>,
+    /// A thread's data requests submitted since its last other line: one fan-out.
+    uring_batch: HashMap<i64, Vec<(String, String)>>,
+    /// An `io_submit` was counted: its rounds' depth needs `--chain-gap-us` (`io_uring`'s are not chained).
+    aio_submitted: bool,
     aio_unused: BTreeMap<String, u64>,
     clock: f64,
     pub notes: BTreeMap<String, u64>,
@@ -874,6 +914,10 @@ impl Tracer {
             chain: HashMap::new(),
             aio: HashMap::new(),
             aio_seq: 0,
+            format: 0,
+            uring: HashMap::new(),
+            uring_batch: HashMap::new(),
+            aio_submitted: false,
             aio_unused: BTreeMap::new(),
             clock: 0.0,
             notes: BTreeMap::new(),
@@ -949,10 +993,12 @@ impl Tracer {
 
     /// A call no op covers, noted by name when it names a path under a root (the man page's
     /// "dropped and counted by name"); an `io_uring_setup` always, since the I/O of its ring
-    /// is not in an strace.
+    /// is not in an strace, unless the trace holds the ring's requests (an eBPF capture's,
+    /// its header's format 1 and on).
     fn not_counted(&mut self, tid: i64, name: &str, a: &[String]) {
         let hit = match name {
-            "io_uring_setup" | "sync" => true,
+            "io_uring_setup" => self.format == 0,
+            "sync" => true,
             _ if MAPPING_CALLS.contains(&name) => self.on_a_root_mapping(name, a),
             _ => self.names_a_root_path(tid, a),
         };
@@ -1219,6 +1265,9 @@ impl Tracer {
             }
             ts = Some(v);
         }
+        if !self.uring_batch.is_empty() && !body.starts_with("aeiou_uring_sqe(") {
+            self.flush_uring(tid);
+        }
         if body.starts_with("+++") {
             if let Some(m) = self.m() {
                 m.end_context(tid);
@@ -1226,10 +1275,20 @@ impl Tracer {
             self.end_chain(tid);
             return;
         }
+        if let Some(r) = body.strip_prefix("--- aeiou: trace format ") {
+            // the eBPF source's header: the format's version and the record kinds it may hold
+            let v: u64 = r.split([',', ' ']).next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            self.format = v;
+            if v > TRACE_FORMAT {
+                self.note("trace_format_newer", v);
+            }
+            return;
+        }
         if let Some(r) = body.strip_prefix("--- aeiou: ") {
             // the eBPF source's mark where its ring buffer lost records (capture.rs)
-            let n = r.split(' ').next().and_then(|n| n.parse().ok()).unwrap_or(0);
-            self.note(EVENTS_LOST, n);
+            if let Some(n) = r.split(' ').next().and_then(|n| n.parse().ok()).filter(|_| r.contains(" event(s) lost")) {
+                self.note(EVENTS_LOST, n);
+            }
             return;
         }
         if body.starts_with("---") || body.is_empty() {
@@ -1345,6 +1404,211 @@ impl Tracer {
         }
     }
 
+    // ---- io_uring (DESIGN_REVIEW.md §3.98)
+
+    /// An `aeiou_uring_sqe`: the request held until its completion, a read or a write also in
+    /// the thread's batch, the fan-out its `io_uring_enter` submits.
+    fn uring_sqe(&mut self, tid: i64, inst: Option<i64>, a: &[String], issued: Option<f64>) {
+        let args = keyed(a);
+        let (Some(ring), Some(id), Some(op)) = (args.get("ring"), args.get("id"), args.get("op")) else { return };
+        let key = (ring.clone(), id.clone());
+        let op = op.strip_prefix("IORING_OP_").unwrap_or(op).to_string();
+        let mut data = None;
+        let mut cur = None;
+        if let (Some(read), Some(inst)) = (uring_reads(&op), inst) {
+            let (fd, path) = self.uring_file(&args);
+            let f = self.file(tid, fd, path.as_deref());
+            let fp = path.or_else(|| f.as_ref().and_then(|f| f.borrow().path.clone()));
+            if let Some(p) = self.under(fp.as_deref()) {
+                let int = |k: &str| args.get(k).and_then(|v| int0(v));
+                let held = f.as_ref().and_then(|f| f.borrow().file);
+                // a vectored request's length is its result's (the probe copies no iovec)
+                let nbytes = int("len").unwrap_or(-1);
+                let mut off = int("off").unwrap_or(-1);
+                if off == -1 {
+                    if let Some(f) = &f {
+                        off = f.borrow().pos;
+                        cur = Some(f.clone());
+                    }
+                }
+                data = Some(Waiting { kind: if read { R } else { W }, inst, tid, path: p, file: held, off, nbytes, member: None });
+                self.uring_batch.entry(tid).or_default().push(key.clone());
+            }
+        }
+        if self.uring.insert(key, Uring { op, tid, issued, args, data, cur }).is_some() {
+            self.note("uring_submissions_without_completion", 1);
+        }
+    }
+
+    /// The descriptor and path a request names: `fd=` the descriptor (`-yy`'s form), `fixed=`
+    /// a registered file's index with the path the converter resolved it to.
+    fn uring_file(&self, args: &HashMap<String, String>) -> (Option<i64>, Option<String>) {
+        let (fd, mut path) = args.get("fd").map(|v| fd_arg(v)).unwrap_or((None, None));
+        if path.is_none() {
+            path = args.get("fixed").and_then(|v| fd_arg(v).1);
+        }
+        (fd, path.filter(|p| !p.is_empty()))
+    }
+
+    /// The reads and writes `tid` submitted since its last other line, as one fan-out (and,
+    /// exported, one `submit`, as an `io_submit`'s are).
+    fn flush_uring(&mut self, tid: i64) {
+        let Some(keys) = self.uring_batch.remove(&tid) else { return };
+        if let Some(m) = self.metrics.as_mut() {
+            *m.m.fan_out.entry(keys.len() as u64).or_insert(0) += 1;
+        }
+        if self.export.is_none() {
+            return;
+        }
+        let mut mem = Vec::new();
+        let mut at = Vec::new();
+        let mut when: When = (tid, None, None);
+        for k in &keys {
+            let Some(u) = self.uring.get(k) else { continue };
+            let Some(w) = &u.data else { continue };
+            if u.cur.is_some() {
+                // written at its completion, as the sequential call it is
+                continue;
+            }
+            let kind = if w.kind == R { "read" } else { "write" };
+            // what a submit cannot say: a length the record does not hold, results past the first
+            let left_out = if w.nbytes < 0 {
+                Some(format!("not_exported:{kind}v:length not traced"))
+            } else if u.op == "READ_MULTISHOT" {
+                Some(format!("not_exported:{kind}:multishot"))
+            } else {
+                None
+            };
+            if let Some(n) = left_out {
+                let ex = self.export.as_mut().unwrap();
+                ex.note("calls_not_exported", 1);
+                ex.note(&n, 1);
+                continue;
+            }
+            when.1 = when.1.or(u.issued);
+            when.2 = u.issued;
+            let (fd, path) = self.uring_file(&u.args);
+            let (off, nbytes) = (w.off, w.nbytes);
+            let f = self.file(tid, fd, path.as_deref()).or_else(|| path.map(|p| new_file(Some(p), 0, false)));
+            if let Ok(Some(oid)) = self.oid_or_note(f.as_ref(), kind, when) {
+                mem.push((kind, oid, off, nbytes));
+                at.push(k.clone());
+            }
+        }
+        if mem.is_empty() {
+            return;
+        }
+        let members = self.export.as_mut().unwrap().submit(when, &mem);
+        for (k, m) in at.into_iter().zip(members) {
+            if let Some(w) = self.uring.get_mut(&k).and_then(|u| u.data.as_mut()) {
+                w.member = Some(m);
+            }
+        }
+    }
+
+    /// An `aeiou_uring_cqe`: its request's read or write counted with the bytes it moved, an
+    /// open, a close, or a sync counted as the call it does, and anything else on a root by its
+    /// operation's name. A completion with `IORING_CQE_F_MORE` leaves its request in flight.
+    #[allow(clippy::too_many_arguments)]
+    fn uring_cqe(&mut self, _tid: i64, a: &[String], ret: i64, ret_path: Option<String>, done: Option<f64>, err: Option<&str>) -> Result<()> {
+        let args = keyed(a);
+        let (Some(ring), Some(id)) = (args.get("ring"), args.get("id")) else { return Ok(()) };
+        let key = (ring.clone(), id.clone());
+        let more = args.get("flags").is_some_and(|f| f.contains("IORING_CQE_F_MORE"));
+        let Some(mut u) = self.uring.remove(&key) else {
+            self.note("uring_completions_without_submission", 1);
+            return Ok(());
+        };
+        if let Some(w) = &u.data {
+            let n = if ret >= 0 { ret } else { 0 };
+            // a request of no length the probe saw (vectored, or a buffer the kernel picks) is its result's
+            let len = if w.nbytes < 0 || (w.nbytes == 0 && n > 0) { n } else { w.nbytes };
+            self.data(w.kind, w.inst, w.tid, &w.path, w.file, w.off, len, n)?;
+            if w.kind == W && n > 0 && w.off >= 0 {
+                if let Some(e) = self.extent.get_mut(&w.path) {
+                    *e = (*e).max(w.off + n);
+                }
+            }
+            if let (Some(m), Some(ex)) = (w.member, self.export.as_mut()) {
+                ex.member_ret(m, if ret >= 0 { json!(ret) } else { json!(err.unwrap_or("EIO")) });
+            }
+            if let Some(f) = u.cur.clone() {
+                if n > 0 {
+                    f.borrow_mut().pos = w.off + n;
+                }
+                let (kind, off, issued) = (if w.kind == R { "read" } else { "write" }, w.off, u.issued);
+                if let Some(oid) = self.oid_or_note(Some(&f), kind, (u.tid, issued, done))? {
+                    self.export.as_mut().unwrap().data((u.tid, issued, done), kind, oid, off, len, false, ret, err);
+                }
+            }
+            if more {
+                let pos = u.cur.as_ref().map(|f| f.borrow().pos);
+                let d = u.data.as_mut().unwrap();
+                d.member = None;
+                // the next result of a request at the position is where this one left it
+                if let Some(p) = pos {
+                    d.off = p;
+                }
+                self.uring.insert(key, u);
+            }
+            return Ok(());
+        }
+        let file = |k: &str| u.args.get(k).cloned();
+        let call: Option<(&str, Vec<String>)> = match u.op.as_str() {
+            "OPENAT" | "OPENAT2" if u.args.contains_key("file_slot") => {
+                // installed in the ring's table, not the process's: no descriptor to follow
+                let p = self.uring_open_path(&u);
+                if self.under(p.as_deref()).is_some() {
+                    self.note("uring_direct_opens_not_counted", 1);
+                }
+                None
+            }
+            "OPENAT" => Some(("openat", vec![file("dirfd").unwrap_or("AT_FDCWD".into()), file("path").unwrap_or_default(), file("flags").unwrap_or("O_RDONLY".into()), file("mode").unwrap_or("0".into())])),
+            "OPENAT2" => Some((
+                "openat2",
+                vec![
+                    file("dirfd").unwrap_or("AT_FDCWD".into()),
+                    file("path").unwrap_or_default(),
+                    format!("{{flags={}, mode={}, resolve={}}}", file("flags").unwrap_or("O_RDONLY".into()), file("mode").unwrap_or("0".into()), file("resolve").unwrap_or("0".into())),
+                    "24".into(),
+                ],
+            )),
+            "CLOSE" if !u.args.contains_key("file_slot") => file("fd").map(|f| ("close", vec![f])),
+            "FSYNC" => {
+                let data = u.args.get("fsync_flags").is_some_and(|f| f.contains("IORING_FSYNC_DATASYNC"));
+                file("fd").map(|f| (if data { "fdatasync" } else { "fsync" }, vec![f]))
+            }
+            // as strace prints statx: on a descriptor (AT_EMPTY_PATH) an fstat, on a path a stat
+            "STATX" => Some(("statx", vec![file("dirfd").unwrap_or("AT_FDCWD".into()), file("path").unwrap_or_default(), file("flags").unwrap_or("0".into()), file("mask").unwrap_or("0".into()), "0x1".into()])),
+            _ => {
+                let (_, path) = self.uring_file(&u.args);
+                // an operation on paths the record does not hold: whether they are under a root is not known
+                let pathless = matches!(u.op.as_str(), "RENAMEAT" | "UNLINKAT" | "MKDIRAT" | "SYMLINKAT" | "LINKAT" | "SETXATTR" | "GETXATTR");
+                if (pathless || self.under(path.as_deref()).is_some()) && self.instance(u.tid).is_some() {
+                    self.note(&format!("not_counted:aeiou_uring_sqe:IORING_OP_{}", u.op), 1);
+                }
+                None
+            }
+        };
+        if more {
+            self.uring.insert(key, Uring { op: u.op.clone(), tid: u.tid, issued: u.issued, args: u.args.clone(), data: None, cur: None });
+        }
+        match call {
+            Some((name, a)) => self.call(u.tid, name, &a, ret, ret_path, u.issued, done, err.map(str::to_string)),
+            None => Ok(()),
+        }
+    }
+
+    /// The path an `io_uring` open names, resolved as the converter printed its directory.
+    fn uring_open_path(&self, u: &Uring) -> Option<String> {
+        let p = c_string(u.args.get("path")?)?;
+        if p.starts_with('/') {
+            return Some(p);
+        }
+        let (_, dir) = fd_arg(u.args.get("dirfd")?);
+        Some(format!("{}/{p}", dir?))
+    }
+
     fn count(&mut self, tid: i64, kind: &str) {
         if let Some(m) = self.m() {
             m.op(kind);
@@ -1390,10 +1654,17 @@ impl Tracer {
             }
             return Ok(());
         }
+        if name == "aeiou_uring_cqe" {
+            return self.uring_cqe(tid, a, ret, ret_path, done, err);
+        }
         let inst = self.instance(tid);
         if inst.is_none() {
             // the descriptor tables are still kept: a child inside an instance may inherit them
             self.note("calls_outside_instances", 1);
+        }
+        if name == "aeiou_uring_sqe" {
+            self.uring_sqe(tid, inst, a, issued);
+            return Ok(());
         }
         if OPENS.contains(&name) {
             let pi = if name == "openat" || name == "openat2" { 1 } else { 0 };
@@ -1706,6 +1977,7 @@ impl Tracer {
             if let Some(m) = self.metrics.as_mut() {
                 *m.m.fan_out.entry(got.len() as u64).or_insert(0) += 1;
             }
+            self.aio_submitted = true;
             let ctx = a[0].clone();
             let mut members: Option<Vec<(usize, usize)>> = None;
             if self.export.is_some() {
@@ -1971,6 +2243,21 @@ impl Tracer {
         for t in tids {
             self.end_chain(t);
         }
+        let mut tids: Vec<i64> = self.uring_batch.keys().copied().collect();
+        tids.sort_unstable();
+        for t in tids {
+            self.flush_uring(t);
+        }
+        // `io_uring` requests whose completion the trace does not show (the capture ended first,
+        // or its record was lost): taken as complete, as AIO's are
+        let mut left: Vec<((String, String), Uring)> = self.uring.drain().collect();
+        left.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, u) in left {
+            if let Some(w) = u.data {
+                self.note("uring_results_assumed_complete", 1);
+                self.data(w.kind, w.inst, w.tid, &w.path, w.file, w.off, w.nbytes, w.nbytes)?;
+            }
+        }
         // requests whose results the trace does not show (reaped from the ring in user space,
         // or `io_getevents` not traced): taken as complete
         let mut keys: Vec<(u64, (String, String))> = self.aio.iter().map(|(k, v)| (v.0, k.clone())).collect();
@@ -2039,7 +2326,7 @@ pub fn metrics(input: impl BufRead, o: &Opts) -> Result<(Value, Seen)> {
 pub fn metrics_document(t: &Tracer, o: &Opts) -> Value {
     let m = t.metrics.as_ref().unwrap();
     let mut notes: serde_json::Map<String, Value> = t.notes.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
-    if t.chain_gap.is_none() && !m.m.fan_out.is_empty() {
+    if t.chain_gap.is_none() && t.aio_submitted {
         notes.insert("depth_not_computed".into(), json!("give --chain-gap-us: the think time that ends a chain of io_submit rounds"));
     }
     if notes.contains_key(EVENTS_LOST) {
@@ -2099,6 +2386,147 @@ mod tests {
         assert_eq!(t.notes.get(EVENTS_LOST), Some(&77));
         let doc = metrics_document(&t, &Opts::default());
         assert!(doc["notes"]["trace_incomplete"].as_str().unwrap().contains("--buffer"));
+    }
+
+    #[test]
+    fn the_header_and_a_record_of_a_kind_not_known_are_skipped() {
+        // DESIGN_REVIEW.md §3.98: a reader falls through a name it does not know, counted by name
+        let o = Opts { roots: vec!["/d".into()], ..Opts::default() };
+        let mut t = Tracer::new(&o, true, None);
+        t.line("0 1.000000 --- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe ---\n");
+        t.line("1 1.000001 openat(AT_FDCWD</d>, \"/d/a\", O_RDONLY) = 3</d/a> <0.000010>\n");
+        t.line("1 1.000002 aeiou_later_kind(fd=3</d/a>, off=0, len=4096, path=\"/d/a\") = 4096\n");
+        t.line("1 1.000003 pread64(3</d/a>, \"\"..., 4096, 0) = 4096 <0.000010>\n");
+        assert!(!t.notes.contains_key(EVENTS_LOST), "{:?}", t.notes);
+        assert_eq!(t.notes.get("not_counted:aeiou_later_kind"), Some(&1), "{:?}", t.notes);
+        assert_eq!(t.format, 1);
+        let doc = metrics_document(&t, &o);
+        assert!(doc["notes"].get("trace_incomplete").is_none(), "{}", doc["notes"]);
+        assert_eq!(doc["total"]["bytes_read"], 4096, "{}", doc["total"]);
+        // a newer format than this reader's is read as far as it can be, and said so
+        let mut t = Tracer::new(&o, true, None);
+        t.line(&format!("0 1.000000 --- aeiou: trace format {}, records aeiou_x ---\n", TRACE_FORMAT + 1));
+        assert_eq!(t.notes.get("trace_format_newer"), Some(&(TRACE_FORMAT + 1)));
+    }
+
+    #[test]
+    fn io_uring_requests_count_as_their_calls_and_one_enter_s_are_a_fan_out() {
+        let o = Opts { roots: vec!["/d".into()], ..Opts::default() };
+        let mut t = Tracer::new(&o, true, None);
+        for l in [
+            "0 1.000000 --- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe ---",
+            "1 1.000001 io_uring_setup(64, 0x7ffe) = 5 <0.000010>",
+            // an open through the ring: the descriptor it returns names its path
+            "1 1.000002 io_uring_enter(5, 1, 1, IORING_ENTER_GETEVENTS, NULL, 8 <unfinished ...>",
+            r#"1 1.000003 aeiou_uring_sqe(ring=5, id=1, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</d>, path="a", flags=O_RDWR|O_CREAT, mode=0644, user_data=0x1) = 0"#,
+            "1 1.000004 aeiou_uring_cqe(ring=5, id=1, user_data=0x1, flags=0) = 7</d/a>",
+            "1 1.000005 <... io_uring_enter resumed>) = 1 <0.000003>",
+            // two reads and a write in one enter: a fan-out of 3
+            "1 1.000010 io_uring_enter(5, 3, 0, 0, NULL, 8 <unfinished ...>",
+            "1 1.000011 aeiou_uring_sqe(ring=5, id=1, op=IORING_OP_READ, fd=7</d/a>, off=0, len=4096, user_data=0x0) = 0",
+            "1 1.000012 aeiou_uring_sqe(ring=5, id=2, op=IORING_OP_READ_FIXED, fd=7</d/a>, off=8192, len=4096, user_data=0x0) = 0",
+            "1 1.000013 aeiou_uring_sqe(ring=5, id=3, op=IORING_OP_WRITE, fd=7</d/a>, fixed=0</d/a>, off=65536, len=100, user_data=0x0) = 0",
+            "1 1.000014 <... io_uring_enter resumed>) = 3 <0.000004>",
+            "1 1.000020 aeiou_uring_cqe(ring=5, id=2, user_data=0x0, flags=0) = 4096",
+            "1 1.000021 aeiou_uring_cqe(ring=5, id=1, user_data=0x0, flags=0) = 1000",
+            "1 1.000022 aeiou_uring_cqe(ring=5, id=3, user_data=0x0, flags=0) = 100",
+            // a vectored read moves what its result says; an fdatasync; a direct open not counted
+            "1 1.000030 aeiou_uring_sqe(ring=5, id=4, op=IORING_OP_READV, fd=7</d/a>, off=0, iovcnt=2, user_data=0x0) = 0",
+            "1 1.000031 aeiou_uring_sqe(ring=5, id=5, op=IORING_OP_FSYNC, fd=7</d/a>, fsync_flags=IORING_FSYNC_DATASYNC, user_data=0x0) = 0",
+            r#"1 1.000032 aeiou_uring_sqe(ring=5, id=6, op=IORING_OP_OPENAT, dirfd=AT_FDCWD</d>, path="b", flags=O_RDONLY, file_slot=1, user_data=0x0) = 0"#,
+            "1 1.000033 aeiou_uring_sqe(ring=5, id=7, op=IORING_OP_FADVISE, fd=7</d/a>, user_data=0x0) = 0",
+            "1 1.000040 aeiou_uring_cqe(ring=5, id=4, user_data=0x0, flags=0) = 50",
+            "1 1.000041 aeiou_uring_cqe(ring=5, id=5, user_data=0x0, flags=0) = 0",
+            "1 1.000042 aeiou_uring_cqe(ring=5, id=6, user_data=0x0, flags=0) = 0",
+            "1 1.000043 aeiou_uring_cqe(ring=5, id=7, user_data=0x0, flags=0) = 0",
+            // a failed read moves nothing; a completion of no submission the trace shows
+            "1 1.000050 aeiou_uring_sqe(ring=5, id=8, op=IORING_OP_READ, fd=7</d/a>, off=0, len=10, user_data=0x0) = 0",
+            "1 1.000051 aeiou_uring_cqe(ring=5, id=8, user_data=0x0, flags=0) = -1 EIO (Input/output error)",
+            "1 1.000052 aeiou_uring_cqe(ring=5, id=9, user_data=0x0, flags=0) = 10",
+            "1 1.000060 aeiou_uring_sqe(ring=5, id=10, op=IORING_OP_CLOSE, fd=7</d/a>, user_data=0x0) = 0",
+            "1 1.000061 aeiou_uring_cqe(ring=5, id=10, user_data=0x0, flags=0) = 0",
+            // a request whose result the trace does not show: taken as complete
+            "1 1.000070 aeiou_uring_sqe(ring=5, id=11, op=IORING_OP_WRITE, fixed=0</d/a>, off=0, len=7, user_data=0x0) = 0",
+        ] {
+            t.line(&format!("{l}\n"));
+        }
+        t.finish().unwrap();
+        let doc = metrics_document(&t, &o);
+        let total = &doc["total"];
+        assert_eq!(total["bytes_read"], 1000 + 4096 + 50, "{total}");
+        assert_eq!(total["bytes_written"], 100 + 7, "{total}");
+        assert_eq!(total["counts"]["open"], 1, "{total}");
+        assert_eq!(total["counts"]["fdatasync"], 1, "{total}");
+        assert_eq!(total["counts"]["close"], 1, "{total}");
+        assert_eq!(total["fan_out"]["3"], 1, "{total}");
+        let notes = &doc["notes"];
+        assert_eq!(notes["uring_direct_opens_not_counted"], 1, "{notes}");
+        assert_eq!(notes["not_counted:aeiou_uring_sqe:IORING_OP_FADVISE"], 1, "{notes}");
+        assert_eq!(notes["uring_completions_without_submission"], 1, "{notes}");
+        assert_eq!(notes["uring_results_assumed_complete"], 1, "{notes}");
+        assert!(notes.get("not_counted:aeiou_uring_sqe").is_none() && notes.get("not_counted:aeiou_uring_cqe").is_none(), "{notes}");
+        // the ring's requests are in this trace: its setup is no longer a sign they are missing
+        assert!(notes.get("not_counted:io_uring_setup").is_none(), "{notes}");
+    }
+
+    #[test]
+    fn a_request_at_the_file_s_position_reads_there_and_moves_it() {
+        // offset -1: the file's position, which the kernel reads at issue and moves by the result
+        let lines = [
+            "1 1.000001 openat(AT_FDCWD</d>, \"/d/a\", O_RDONLY) = 7</d/a> <0.000010>",
+            "1 1.000002 read(7</d/a>, \"\"..., 100, 0) = 100 <0.000010>",
+            "1 1.000011 aeiou_uring_sqe(ring=5, id=1, op=IORING_OP_READ, fd=7</d/a>, off=-1, len=50, user_data=0x0) = 0",
+            "1 1.000012 aeiou_uring_cqe(ring=5, id=1, user_data=0x0, flags=0) = 50",
+            "1 1.000013 read(7</d/a>, \"\"..., 10) = 10 <0.000010>",
+            // a vectored request's length and a multishot's results are not a submit's: left out of
+            // the export, noted, and counted by the metrics
+            "1 1.000021 aeiou_uring_sqe(ring=5, id=2, op=IORING_OP_READV, fd=7</d/a>, off=0, iovcnt=2, user_data=0x0) = 0",
+            "1 1.000022 aeiou_uring_cqe(ring=5, id=2, user_data=0x0, flags=0) = 30",
+            "1 1.000031 aeiou_uring_sqe(ring=5, id=3, op=IORING_OP_READ_MULTISHOT, fd=7</d/a>, off=0, len=0, user_data=0x0) = 0",
+            "1 1.000032 aeiou_uring_cqe(ring=5, id=3, user_data=0x0, flags=IORING_CQE_F_MORE) = 5",
+            "1 1.000033 aeiou_uring_cqe(ring=5, id=3, user_data=0x0, flags=0) = 0",
+            // a multishot at the position: each result where the last left it
+            "1 1.000041 aeiou_uring_sqe(ring=5, id=4, op=IORING_OP_READ_MULTISHOT, fd=7</d/a>, off=-1, len=0, user_data=0x0) = 0",
+            "1 1.000042 aeiou_uring_cqe(ring=5, id=4, user_data=0x0, flags=IORING_CQE_F_MORE) = 7",
+            "1 1.000043 aeiou_uring_cqe(ring=5, id=4, user_data=0x0, flags=0) = 3",
+        ]
+        .join("\n");
+        let opener = || -> std::io::Result<Box<dyn BufRead + '_>> { Ok(Box::new(lines.as_bytes())) };
+        let mut out = Vec::new();
+        let sum = crate::export::strace(&opener, "/d", &[], None, &mut out).unwrap();
+        let ev: Vec<Value> = out.split(|b| *b == b'\n').filter(|l| !l.is_empty()).skip(1).map(|l| serde_json::from_slice(l).unwrap()).collect();
+        // written as the sequential read it is, so a replay moves its position as the kernel did
+        let reads: Vec<&Value> = ev.iter().filter(|e| e["op"] == "read").collect();
+        assert_eq!(reads.len(), 5, "{ev:?}");
+        assert!(reads[1]["len"] == 50 && reads[1].get("offset").is_none(), "{ev:?}");
+        assert_eq!(ev.iter().filter(|e| e["op"] == "submit").count(), 0, "{ev:?}");
+        let notes = &sum.header["notes"];
+        assert_eq!((&notes["not_exported:readv:length not traced"], &notes["not_exported:read:multishot"]), (&json!(1), &json!(1)), "{notes}");
+        let o = Opts { roots: vec!["/d".into()], ..Opts::default() };
+        let (doc, _) = metrics(lines.as_bytes(), &o).unwrap();
+        assert_eq!(doc["total"]["bytes_read"], 100 + 50 + 10 + 30 + 5 + 7 + 3, "{}", doc["total"]);
+        // 0 to 100, 100 to 150, 150 to 160: one run, the ring's read where the position was; and
+        // the multishot's 160 to 167 and 167 to 170 another, after the reads at 0 between
+        assert_eq!(doc["total"]["run_length"]["read"]["multi_op_bytes"], 160 + 10, "{}", doc["total"]["run_length"]);
+    }
+
+    #[test]
+    fn a_multishot_request_stays_in_flight_while_its_completions_say_more() {
+        let o = Opts { roots: vec!["/d".into()], ..Opts::default() };
+        let mut t = Tracer::new(&o, true, None);
+        for l in [
+            "1 1.000001 openat(AT_FDCWD</d>, \"/d/a\", O_RDONLY) = 7</d/a> <0.000010>",
+            "1 1.000011 aeiou_uring_sqe(ring=5, id=1, op=IORING_OP_READ_MULTISHOT, fd=7</d/a>, off=0, len=0, user_data=0x0) = 0",
+            "1 1.000012 aeiou_uring_cqe(ring=5, id=1, user_data=0x0, flags=IORING_CQE_F_BUFFER|IORING_CQE_F_MORE) = 10",
+            "1 1.000013 aeiou_uring_cqe(ring=5, id=1, user_data=0x0, flags=IORING_CQE_F_BUFFER|IORING_CQE_F_MORE) = 20",
+            "1 1.000014 aeiou_uring_cqe(ring=5, id=1, user_data=0x0, flags=0) = 0",
+        ] {
+            t.line(&format!("{l}\n"));
+        }
+        t.finish().unwrap();
+        let doc = metrics_document(&t, &o);
+        assert_eq!(doc["total"]["bytes_read"], 30, "{}", doc["total"]);
+        assert!(doc["notes"].get("uring_completions_without_submission").is_none(), "{}", doc["notes"]);
     }
 
     #[test]

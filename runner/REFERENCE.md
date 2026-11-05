@@ -2044,6 +2044,70 @@ and so does the reuse distance, as the trace of instances at once would.
 time per lane; a cap on the file (a million lines is about 64 MiB of parsed ops, held in
 memory).
 
+### The capture's text and its `aeiou_` records (2026-11-04)
+
+The trace an `aeiou-trace capture` writes (`trace.txt`) is strace's text, `-f -ttt -T -yy`,
+extended by records strace never prints (`DESIGN_REVIEW.md` §3.98), so the strace source's
+trace is a subset of the eBPF source's and every reader takes either. A trace that holds them
+begins with a header line every strace reader skips:
+
+```
+0 1762250000.000000 --- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe ---
+```
+
+A record keeps strace's line form, `TID TIME NAME(ARGS) = RET`, with no `<duration>`; its name
+begins `aeiou_`; every argument is `key=value`, in the order the record kind gives, never read by
+position; a value is an integer, a hexadecimal `0x...`, a flag set as strace prints one
+(`O_RDONLY|O_CLOEXEC`), a C-escaped quoted string, a descriptor as `-yy` prints it (`7</d/a>`,
+`AT_FDCWD</w>`), or `?` for what the trace cannot know. A reader skips a record of a kind it
+does not know, noted by name (`not_counted:aeiou_KIND`), and notes a header of a format newer
+than its own (`trace_format_newer`). Format 1's kinds, written by the eBPF source when the
+kernel has `io_uring`'s tracepoints (`capture.json`'s `uring`):
+
+```
+TID TIME aeiou_uring_sqe(ring=R, id=N, op=IORING_OP_NAME, FIELDS..., user_data=0xU) = 0
+TID TIME aeiou_uring_cqe(ring=R, id=N, user_data=0xU, flags=IORING_CQE_F_...) = RES
+```
+
+- `ring` is the ring's descriptor (`io_uring_setup`'s result), `?` for a ring whose setup the
+  trace did not see. `id` pairs a completion with its submission: a number the converter
+  gives a request while it is in flight, the smallest free, and frees at its last completion
+  (one without `IORING_CQE_F_MORE`); the kernel's address of the request is never printed, and
+  `user_data` (the application's, often reused) does not pair them.
+- A submission is the thread's that submitted it: the caller of `io_uring_enter`, or under
+  SQPOLL the kernel's submission thread, which the trace shows no fork of
+  (`threads_without_clone`). A completion is printed under its submission's thread, whatever
+  thread or interrupt posted it. `RES` is the result, an error as strace prints one
+  (`-1 EIO (Input/output error)`), an open's descriptor with its path (`7</d/a>`).
+- `FIELDS` by operation: reads and writes (`READ`, `WRITE`, `READ_FIXED`, `WRITE_FIXED`,
+  `READ_MULTISHOT`, `READV`, `WRITEV`, `READV_FIXED`, `WRITEV_FIXED`) the file, `off=` (-1: the
+  file's position, which the kernel reads and moves), and `len=` bytes or, vectored, `iovcnt=`
+  buffers (their lengths not copied), then `rw_flags=` when any; `OPENAT` and `OPENAT2`
+  `dirfd=`, `path=` (copied from the kernel's), `flags=`, `mode=` when the open can create, and
+  `file_slot=` for an open into the ring's table (`OPENAT2` also `resolve=`); `CLOSE` the file
+  or `file_slot=`; `FSYNC` the file and `fsync_flags=`; `STATX` `dirfd=`, `path=`, `flags=`,
+  `mask=`; any other operation that takes a file the file alone, and one that takes none
+  nothing more.
+- The file is `fd=` the descriptor, or for a registered file (`IOSQE_FIXED_FILE`) `fixed=` its
+  index with the path it was registered with, after `fd=` the descriptor it was registered
+  from when there was one (`io_uring_register`'s `IORING_REGISTER_FILES`, `_FILES2`,
+  `_FILES_UPDATE`, `_FILES_UPDATE2`, at most 1,024 descriptors a call; an open into a slot
+  fills it).
+
+The readers (`metrics`, `export`, `digest`) count a read or write at its completion with the
+bytes it moved, at its offset (or the file's position, moved by it), its size the length asked
+(a vectored one's its result); the reads and writes a thread submits between its other lines
+(one `io_uring_enter`'s) are one fan-out, exported as one `submit` line, as an `io_submit`'s
+(a request at the position as the sequential `read` or `write` it is; a vectored one and a
+multishot's are left out of the export and noted). An open, a close, an fsync, and a statx count
+as the calls they do (a statx of a descriptor an `fstat`); an open into a slot is noted
+(`uring_direct_opens_not_counted`), and any other operation by name
+(`not_counted:aeiou_uring_sqe:IORING_OP_NAME`) when its file is under a root, and always for one
+on paths the record does not hold (`RENAMEAT`, `UNLINKAT`, `MKDIRAT`, `SYMLINKAT`, `LINKAT`,
+`SETXATTR`, `GETXATTR`). A completion of no submission the trace shows is noted
+(`uring_completions_without_submission`), a request never completed is taken as complete
+(`uring_results_assumed_complete`). With the records an `io_uring_setup` is no longer noted.
+
 ## 14. The option layers (2026-10-04)
 
 Every option of every subcommand is resolved through four layers, a higher one replacing a

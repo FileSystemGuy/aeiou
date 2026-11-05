@@ -193,9 +193,15 @@ fn ebpf_gives_the_calls_strace_gives() {
     assert_eq!(el, sl);
     assert_eq!(metrics(&eb, &root), metrics(&st, &root));
 
-    // the trace begins at the command's exec, as strace's does
+    // the trace begins at the command's exec, as strace's does, after the header of its format
+    // when io_uring's requests are traced (DESIGN_REVIEW.md §3.98)
     let first = std::fs::read_to_string(eb.join("trace.txt")).unwrap();
-    let first = first.lines().next().unwrap();
+    let mut lines = first.lines();
+    let mut first = lines.next().unwrap();
+    if rec["uring"]["traced"] == true {
+        assert!(first.starts_with("0 ") && first.contains(" --- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe ---"), "{first}");
+        first = lines.next().unwrap();
+    }
     assert!(first.contains(" execve(\"") && first.contains("python3"), "{first}");
     // the failed open, as strace prints it
     let body = std::fs::read_to_string(eb.join("trace.txt")).unwrap();
@@ -375,4 +381,73 @@ fn a_program_outside_the_command_is_not_traced_and_no_exited_process_stays_in_th
     assert_eq!(rec["losses"]["untraced_processes"], 0, "{}", rec["losses"]);
     // the command and its three children have exited: none is still traced
     assert_eq!(rec["processes_traced_at_end"], 0, "{rec:#}");
+}
+
+/// The runner's own `io_uring` engine as the traced application (DESIGN_REVIEW.md §3.98, brief
+/// item 54 phase 4): `aeiou run --posix io_uring` of npy_per_sample's smoke set opens, reads,
+/// and closes in the ring, and its capture under eBPF reads as the same run under `--posix
+/// sync` does, the same reads of the same bytes of the same files and the same `fstat`s (the
+/// engine's `IORING_OP_STATX` of a descriptor), with and without a kernel
+/// submission thread (SQPOLL, whose requests no call of the application's submits). What each
+/// thread's order decides (runs, reuse) differs between the backends by design and is not
+/// compared.
+#[test]
+fn io_uring_requests_are_traced_and_read_as_the_calls_they_do() {
+    let exe = privileged();
+    let t = tmp("uring");
+    let root = t.join("data");
+    let m = crate::common::workloads().join("input-pipeline/map/npy-per-sample");
+    let (ast, params) = (m.join("npy_per_sample.ast.json"), m.join("params/smoke.params.json"));
+    let aeiou = env!("CARGO_BIN_EXE_aeiou");
+    let o = Command::new(aeiou).args(["datagen", s(&ast), "--params-file", s(&params), "--root", s(&root)]).env_remove("AEIOU_CONFIG").output().unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    let dry = t.join("dry.json");
+    let o = Command::new(aeiou).args(["dry-run", s(&ast), "--params-file", s(&params), "--gpus", "1", "--metrics-json", s(&dry)]).env_remove("AEIOU_CONFIG").output().unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    let dry: Value = serde_json::from_str(&std::fs::read_to_string(&dry).unwrap()).unwrap();
+    // what the order of a thread's calls does not decide
+    let fixed = |m: &Value| {
+        let t = &m["total"];
+        serde_json::json!({
+            "bytes_read": t["bytes_read"], "bytes_written": t["bytes_written"],
+            "read": t["counts"]["read"], "open": t["counts"]["open"], "close": t["counts"]["close"],
+            "fstat": t["counts"]["fstat"], "stat": t["counts"]["stat"],
+            "request_size": t["request_size"], "popularity_bytes": t["popularity_bytes"], "popularity_objects": t["popularity_objects"],
+        })
+    };
+    let mut seen = Vec::new();
+    for (tag, posix, extra) in [("sync", "sync", &[][..]), ("uring", "io_uring", &[][..]), ("sqpoll", "io_uring", &["--sqpoll", "10"][..])] {
+        let out = t.join(format!("cap-{tag}"));
+        let mut args = vec!["--source", "ebpf", "--root", s(&root), "-o", s(&out), "--", aeiou, "run", s(&ast), "--params-file", s(&params), "--param", "step_time=0", "--gpus", "1", "--root", s(&root), "--posix", posix];
+        args.extend_from_slice(extra);
+        let o = Command::new(&exe).arg("capture").args(WAIVE).args(&args).env_remove("AEIOU_CONFIG").output().unwrap();
+        assert!(o.status.success(), "{tag}: {}", text(&o));
+        let rec = record(&out);
+        assert_eq!(rec["complete"], true, "{tag}: {}", rec["losses"]);
+        assert_eq!(rec["uring"]["traced"], true, "{tag}: {}", rec["uring"]);
+        let not_seen = rec["not_seen"].to_string();
+        assert!(!not_seen.contains("the submission queue's entries are not") && not_seen.contains("SQPOLL"), "{tag}: {not_seen}");
+        assert_eq!(rec["conversion"]["uring_completions_unmatched"], 0, "{tag}: {}", rec["conversion"]);
+        let body = std::fs::read_to_string(out.join("trace.txt")).unwrap();
+        let sqes = body.lines().filter(|l| l.contains(" aeiou_uring_sqe(") && l.contains("op=IORING_OP_READ,")).count();
+        if posix == "sync" {
+            assert_eq!(sqes, 0, "{tag}");
+        } else {
+            assert!(sqes as u64 >= dry["total"]["counts"]["read"].as_u64().unwrap(), "{tag}: {sqes} reads in the ring");
+            assert!(body.contains("op=IORING_OP_OPENAT, dirfd=") && body.contains(" aeiou_uring_cqe("), "{tag}");
+        }
+        let got = metrics(&out, &root);
+        if posix != "sync" {
+            // the engine's statx in the ring is noted by name, never dropped in silence
+            assert!(got["notes"].as_object().unwrap().keys().all(|k| !k.starts_with("not_counted:aeiou_uring_sqe:IORING_OP_READ")), "{tag}: {}", got["notes"]);
+        }
+        seen.push((tag, fixed(&got)));
+    }
+    // the dry run counts the lengths the abstract asks for, a read past a file's end included; a
+    // trace the bytes each call returned
+    let (got, asked) = (seen[0].1["bytes_read"].as_u64().unwrap(), dry["total"]["bytes_read"].as_u64().unwrap());
+    assert!(got > 0 && got <= asked, "the sync run read {got} of the {asked} bytes the dry run asks");
+    for (tag, f) in &seen[1..] {
+        assert_eq!(f, &seen[0].1, "{tag} against sync");
+    }
 }

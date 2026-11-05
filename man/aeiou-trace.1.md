@@ -84,7 +84,8 @@ descriptor are `fstat`, on a path `stat`; `getdents64` is `readdir`, once per li
 other call that names a path or a descriptor under the root is not counted and is noted by
 name (`not_counted:readlink`; an `fcntl` by its command, `F_SETFL` with the flags it set, and
 none for a command that changes nothing on the file), as is every `io_uring_setup`, whose
-ring's I/O no `strace` shows. A failed call counts as its op. Nothing that frees or moves a file's space is left out: `export`
+ring's I/O no `strace` shows (unless the trace holds the ring's requests, an eBPF capture's,
+below). A failed call counts as its op. Nothing that frees or moves a file's space is left out: `export`
 writes a `truncate` with its length and a `fallocate` with its mode by flag name, and a mode
 with a bit no flag names is left out and noted, never written as another. A descriptor used
 without the open that made it, held from before `strace` began (attached with `strace -p` to
@@ -105,7 +106,19 @@ reaped by the matching `io_getevents`: its reads and writes, vectored ones by th
 bytes, among the first as many as the call returned (the kernel takes no request past them);
 any other request, a sync, a poll, a no-op, is noted (`aio_requests_not_counted`). Not visible to `strace`: `io_uring` submissions and
 page faults on a mapping; an application that reads through a mapping leaves every row
-unseen.
+unseen. An eBPF capture's trace holds the `io_uring` requests (`DESIGN_REVIEW.md` §3.98):
+after a header line, `--- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe ---`,
+each request is an `aeiou_uring_sqe(ring=R, id=N, op=IORING_OP_NAME, ...)` record when the
+kernel takes it and an `aeiou_uring_cqe(ring=R, id=N, ...) = RES` at each completion, paired by
+`id` (`runner/REFERENCE.md` §13 gives the grammar). A read or write counts at its completion
+with the bytes it moved, at its offset (or the file's position, which it moves); the reads and
+writes one `io_uring_enter` submits are a fan-out, exported as one `submit` line (a vectored
+one, whose length the record does not hold, and a multishot's results are left out of the
+export and noted); an open, a close, an fsync, and a statx count as the calls they do; an
+open into the ring's table is noted (`uring_direct_opens_not_counted`), and any other
+operation by name (`not_counted:aeiou_uring_sqe:IORING_OP_NAME`) on a file under the root, and
+always on paths the record does not hold. A record of a kind a reader does not know is skipped
+and noted by name, and a header of a newer format noted (`trace_format_newer`).
 
 ## COMMANDS
 
@@ -329,6 +342,18 @@ root, or the file capabilities `cap_bpf,cap_perfmon` (`cap_sys_admin` before Lin
 once by an administrator on a node-local copy of `aeiou-trace` (`setcap
 cap_bpf,cap_perfmon+ep`; not over NFS, which carries no capabilities), and a kernel with BTF
 (`/sys/kernel/btf/vmlinux`), from which it takes the offsets it reads in kernel structures.
+**`io_uring`'s requests** (`DESIGN_REVIEW.md` §3.98, brief item 54 phase 4): where the kernel
+has the tracepoints `io_uring_submit_req` and `io_uring_complete` (`capture.json`'s `uring`
+says whether, and why not; the capture goes on without them), probes there record each
+request of the command's processes as the kernel takes it, after it reads the submission
+entry (the descriptor, offset, length, and an open's or a statx's path), and each completion on
+a ring they submitted to, whoever posts it (an interrupt, the kernel's SQPOLL thread); the
+ring a descriptor is, at `io_uring_setup`'s return, and the files `io_uring_register`
+registers, so a registered file's index names its path. They are written as the
+`aeiou_uring_sqe` and `aeiou_uring_cqe` records above. Under SQPOLL a request is the kernel
+submission thread's, not the thread's that asked for it; a completion reaped from the ring's
+memory shows no reap; `IORING_OP_URING_CMD`'s contents are not decoded; each request is two
+records in the buffer.
 The probes are attached and every capability given up for good before the command is
 started; the command runs as the invoking user, in the environment the tool was started with
 (a binary with capabilities is secure-exec, and the variables glibc strips from it,
@@ -352,8 +377,8 @@ count those lines (`events_lost` in the notes of `metrics`, `export`, and `diges
 `trace_incomplete` saying what it means), a descriptor whose open fell in a window is printed
 without a path, never guessed, and `compare` says first that a side is incomplete. Not
 implemented yet: the `sudo -n` helper for hosts where file capabilities cannot be granted
-(phase 3b of brief item 54), and the request heads by uprobe, mapping faults, and `io_uring`
-(phase 4).
+(phase 3b of brief item 54), and the request heads by uprobe, mapping faults, libaio's real
+completion, and POSIX AIO's issuer (phase 4, after `io_uring`, built 2026-11-04).
 
 **Object requests.** With an `--endpoint`, the command also runs with the capture's library
 preloaded (`--requests shim`, the default then; `--requests none` leaves it out), put in the

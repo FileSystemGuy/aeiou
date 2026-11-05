@@ -136,7 +136,15 @@ impl Btf {
                     }
                     12 * vlen
                 }
-                6 | 13 => 8 * vlen,
+                13 => {
+                    // a function's prototype: its parameters, as members of no offset
+                    for m in 0..vlen {
+                        let o = at + 8 * m;
+                        members.push((s_at(rd(o)?), rd(o + 4)?, 0));
+                    }
+                    8 * vlen
+                }
+                6 => 8 * vlen,
                 15 | 19 => 12 * vlen,
                 _ => 0,
             };
@@ -159,6 +167,37 @@ impl Btf {
     pub fn offset(&self, name: &str, member: &str) -> Option<u32> {
         let (bits, bitfield) = self.find(self.strukt(name)?, member, 0)?;
         (!bitfield && bits % 8 == 0).then_some(bits / 8)
+    }
+
+    /// What a tracepoint passes its raw program (`btf_trace_NAME`'s prototype, its first
+    /// parameter `void *__data` left out): for each argument the struct it points to, or an
+    /// empty name for any other type; `None` when the kernel has no such tracepoint.
+    pub fn tracepoint_args(&self, name: &str) -> Option<Vec<String>> {
+        let want = format!("btf_trace_{name}");
+        let td = self.types.iter().position(|(n, k, _, _, _)| *k == 8 && *n == want)?;
+        let skip = |mut t: usize| {
+            while let Some((_, 8..=11 | 18, _, _, next)) = self.types.get(t) {
+                t = *next as usize;
+            }
+            t
+        };
+        let ptr = skip(self.types[td].4 as usize);
+        let (_, 2, _, _, proto) = self.types.get(ptr)? else { return None };
+        let proto = skip(*proto as usize);
+        let (_, 13, _, params, _) = self.types.get(proto)? else { return None };
+        Some(
+            params
+                .iter()
+                .skip(1)
+                .map(|(_, t, _)| match self.types.get(skip(*t as usize)) {
+                    Some((_, 2, _, _, to)) => match self.types.get(skip(*to as usize)) {
+                        Some((n, 4, _, _, _)) => n.clone(),
+                        _ => String::new(),
+                    },
+                    _ => String::new(),
+                })
+                .collect(),
+        )
     }
 
     fn find(&self, id: usize, member: &str, depth: u32) -> Option<(u32, bool)> {
@@ -252,11 +291,18 @@ fn pid_ns() -> Result<(u64, u64)> {
 }
 
 /// The kernel structures' offsets the probes read, from the kernel's BTF, in a `Config` with
-/// no namespace and no seed.
-pub fn kernel_layout() -> Result<Config> {
+/// no namespace and no seed; and what `io_uring`'s probes need (`uring_layout`), or why they
+/// cannot run here.
+pub fn kernel_layout() -> Result<(Config, std::result::Result<Value, String>)> {
     let p = "/sys/kernel/btf/vmlinux";
     let raw = std::fs::read(p).with_context(|| format!("{p}: the kernel's BTF (CONFIG_DEBUG_INFO_BTF), which the eBPF source needs"))?;
     let btf = Btf::parse(&raw).ok_or_else(|| anyhow!("{p}: not BTF"))?;
+    let mut cfg = base_layout(&btf, p)?;
+    let uring = uring_layout(&btf, &mut cfg);
+    Ok((cfg, uring))
+}
+
+fn base_layout(btf: &Btf, p: &str) -> Result<Config> {
     let off = |s: &str, m: &str| btf.offset(s, m).ok_or_else(|| anyhow!("{p}: no {s}.{m}"));
     Ok(Config {
         tgid_off: off("task_struct", "tgid")?,
@@ -271,10 +317,63 @@ pub fn kernel_layout() -> Result<Config> {
     })
 }
 
+/// What `io_uring`'s probes read (DESIGN_REVIEW.md §3.98), from the kernel's BTF, set in `cfg`
+/// (`uring` 1): the tracepoints' prototypes, the request's fields, and the descriptor table's
+/// way to a ring; and, for the converter, the offsets in the request's first `CMD_SIZE` bytes
+/// of each operation's fields, the header's `uring.layout`. `Err` says why the probes cannot
+/// run on this kernel, and the capture goes on without them.
+pub fn uring_layout(btf: &Btf, cfg: &mut Config) -> std::result::Result<Value, String> {
+    let sqe = btf.tracepoint_args("io_uring_submit_req").ok_or("the kernel has no io_uring tracepoints (CONFIG_IO_URING)")?;
+    let cqe = btf.tracepoint_args("io_uring_complete").ok_or("the kernel has no tracepoint io_uring_complete")?;
+    let req_arg = sqe.iter().position(|t| t == "io_kiocb").ok_or("io_uring_submit_req passes no struct io_kiocb")?;
+    if req_arg > 1 || cqe.len() < 3 {
+        return Err(format!("io_uring's tracepoints are not of a form the probes read (io_uring_submit_req {sqe:?}, io_uring_complete {cqe:?})"));
+    }
+    let cqe_struct = cqe[2] == "io_uring_cqe";
+    if !cqe_struct && cqe.len() < 5 {
+        return Err(format!("io_uring_complete is not of a form the probes read ({cqe:?})"));
+    }
+    let off = |s: &str, m: &str| btf.offset(s, m).ok_or_else(|| format!("the kernel's BTF has no {s}.{m}"));
+    let size = |s: &str| btf.size(s).ok_or_else(|| format!("the kernel's BTF has no struct {s}"));
+    // the operation's own structure is the request's first member
+    if off("io_kiocb", "file")? != 0 {
+        return Err("struct io_kiocb does not begin with the operation's structure".into());
+    }
+    for s in ["io_rw", "io_open", "io_close", "io_sync", "io_statx"] {
+        if size(s)? as usize > CMD_SIZE {
+            return Err(format!("struct {s} is larger than the {CMD_SIZE} bytes the probe copies"));
+        }
+    }
+    let cqe_off = off("io_kiocb", "cqe")?;
+    cfg.uring = 1;
+    cfg.sqe_req_arg = req_arg as u32;
+    cfg.cqe_struct = cqe_struct as u32;
+    cfg.req_opcode_off = off("io_kiocb", "opcode")?;
+    cfg.req_flags_off = off("io_kiocb", "flags")?;
+    cfg.req_user_data_off = cqe_off + off("io_cqe", "user_data")?;
+    cfg.req_fd_off = cqe_off + off("io_cqe", "fd")?;
+    cfg.req_ctx_off = off("io_kiocb", "ctx")?;
+    cfg.open_filename_off = off("io_open", "filename")?;
+    cfg.filename_name_off = off("filename", "name")?;
+    cfg.statx_filename_off = off("io_statx", "filename")?;
+    cfg.task_files_off = off("task_struct", "files")?;
+    cfg.files_fdt_off = off("files_struct", "fdt")?;
+    cfg.fdt_fd_off = off("fdtable", "fd")?;
+    cfg.file_private_off = off("file", "private_data")?;
+    let how = off("io_open", "how")?;
+    Ok(json!({
+        "rw": {"pos": off("io_rw", "kiocb")? + off("kiocb", "ki_pos")?, "addr": off("io_rw", "addr")?, "len": off("io_rw", "len")?, "flags": off("io_rw", "flags")?},
+        "open": {"dfd": off("io_open", "dfd")?, "file_slot": off("io_open", "file_slot")?, "flags": how + off("open_how", "flags")?, "mode": how + off("open_how", "mode")?, "resolve": how + off("open_how", "resolve")?},
+        "close": {"fd": off("io_close", "fd")?, "file_slot": off("io_close", "file_slot")?},
+        "sync": {"len": off("io_sync", "len")?, "off": off("io_sync", "off")?, "flags": off("io_sync", "flags")?},
+        "statx": {"dfd": off("io_statx", "dfd")?, "mask": off("io_statx", "mask")?, "flags": off("io_statx", "flags")?},
+    }))
+}
+
 /// The probes loaded (and the verifier's verdict on them) with a ring buffer of `buffer` bytes,
 /// the traced calls marked, and `task_struct`'s offsets set; nothing attached.
-pub fn load(buffer: u64) -> Result<aya::Ebpf> {
-    let mut config = kernel_layout()?;
+pub fn load(buffer: u64) -> Result<(aya::Ebpf, std::result::Result<Value, String>)> {
+    let (mut config, uring) = kernel_layout()?;
     (config.ns_dev, config.ns_ino) = pid_ns()?;
     // found by the probe when it adds the command (record::Config)
     config.ns_level = u32::MAX;
@@ -290,14 +389,37 @@ pub fn load(buffer: u64) -> Result<aya::Ebpf> {
         let mut cfg: aya::maps::Array<_, Config> = aya::maps::Array::try_from(bpf.map_mut("CONFIG").expect("CONFIG"))?;
         cfg.set(0, config, 0)?;
     }
-    for name in PROGRAMS {
+    for name in PROGRAMS.iter().chain(URING_PROGRAMS.iter()) {
         let p: &mut aya::programs::RawTracePoint = bpf.program_mut(name).expect("a program of the object").try_into()?;
         p.load().with_context(|| format!("the verifier, on the program {name}"))?;
     }
-    Ok(bpf)
+    Ok((bpf, uring))
 }
 
 const PROGRAMS: [&str; 4] = ["sys_enter", "sys_exit", "sched_process_fork", "sched_process_exit"];
+/// `io_uring`'s programs, loaded always; attached when the kernel has what they read
+/// (`uring_layout`), one of each tracepoint's forms (`uring_programs`).
+const URING_PROGRAMS: [&str; 5] = ["io_uring_submit_req", "io_uring_submit_req_after_ring", "io_uring_complete", "io_uring_complete_fields", "uring_calls"];
+
+/// The programs of `io_uring` this kernel's tracepoints take (`Config.sqe_req_arg`, `cqe_struct`):
+/// a raw program that reads past a tracepoint's last argument is refused at attach.
+fn uring_programs(c: &Config) -> [&'static str; 3] {
+    [
+        if c.sqe_req_arg == 0 { "io_uring_submit_req" } else { "io_uring_submit_req_after_ring" },
+        if c.cqe_struct == 1 { "io_uring_complete" } else { "io_uring_complete_fields" },
+        "uring_calls",
+    ]
+}
+
+/// The tracepoint a program attaches to.
+fn tracepoint_of(program: &str) -> &str {
+    match program {
+        "uring_calls" => "sys_exit",
+        "io_uring_submit_req_after_ring" => "io_uring_submit_req",
+        "io_uring_complete_fields" => "io_uring_complete",
+        p => p,
+    }
+}
 
 /// The source's check: a privilege to load with, the kernel's BTF, and the object loaded and
 /// passed by the verifier (then unloaded): `Err` says why the source cannot run here.
@@ -305,25 +427,41 @@ pub fn usable() -> std::result::Result<String, String> {
     let how = privilege().ok_or_else(|| {
         "eBPF needs root or the file capabilities cap_bpf,cap_perfmon on a node-local copy of aeiou-trace (setcap cap_bpf,cap_perfmon+ep; cap_sys_admin before Linux 5.8); --source strace runs as any user".to_string()
     })?;
-    load(1 << 16).map_err(|e| format!("{e:#}"))?;
-    Ok(format!("loaded and verified as {how}, kernel BTF"))
+    let (_, uring) = load(1 << 16).map_err(|e| format!("{e:#}"))?;
+    Ok(match uring {
+        Ok(_) => format!("loaded and verified as {how}, kernel BTF, io_uring's requests"),
+        Err(why) => format!("loaded and verified as {how}, kernel BTF; io_uring's requests not traced: {why}"),
+    })
 }
 
 /// The probes attached to a command not yet started: `seed` is its pid as this process sees it.
 pub struct Probes {
     bpf: aya::Ebpf,
     links: usize,
+    /// `io_uring`'s layout for the converter (`uring_layout`), or why its probes are not attached.
+    pub uring: std::result::Result<Value, String>,
 }
 
 impl Probes {
-    pub fn attach(mut bpf: aya::Ebpf) -> Result<Probes> {
+    pub fn attach((mut bpf, uring): (aya::Ebpf, std::result::Result<Value, String>)) -> Result<Probes> {
         let mut links = 0;
-        for name in PROGRAMS {
+        let cfg: aya::maps::Array<_, Config> = aya::maps::Array::try_from(bpf.map("CONFIG").expect("CONFIG"))?;
+        let c = cfg.get(&0, 0)?;
+        let names: &[&str] = if uring.is_ok() { &[&PROGRAMS[..], &uring_programs(&c)[..]].concat() } else { &PROGRAMS };
+        for name in names {
             let p: &mut aya::programs::RawTracePoint = bpf.program_mut(name).expect("a program").try_into()?;
-            p.attach(name).with_context(|| format!("attaching {name}"))?;
+            p.attach(tracepoint_of(name)).with_context(|| format!("attaching {name}"))?;
             links += 1;
         }
-        Ok(Probes { bpf, links })
+        Ok(Probes { bpf, links, uring })
+    }
+
+    /// The header's `uring`: whether `io_uring`'s requests are traced, and the converter's layout.
+    pub fn uring_header(&self) -> Value {
+        match &self.uring {
+            Ok(layout) => json!({"traced": true, "layout": layout}),
+            Err(why) => json!({"traced": false, "why": why}),
+        }
     }
 
     /// The process to trace, by its pid here: the probe adds it at its next call.
@@ -433,12 +571,13 @@ pub fn losses_record(losses: &[Loss], reading: &Reading, buffer: u64, windows: &
         "buffer": buffer,
         "suggested_buffer": (total > 0).then_some(suggested),
         "untraced_processes": losses.iter().map(|l| l.untraced).sum::<u64>(),
+        "untraced_rings": losses.iter().map(|l| l.rings).sum::<u64>(),
     })
 }
 
 /// Whether a capture's `losses` leave its trace incomplete: an event lost, or a process untraced.
 pub fn incomplete(rec: &Value) -> bool {
-    rec["events"].as_u64().unwrap_or(0) > 0 || rec["untraced_processes"].as_u64().unwrap_or(0) > 0
+    rec["events"].as_u64().unwrap_or(0) > 0 || rec["untraced_processes"].as_u64().unwrap_or(0) > 0 || rec["untraced_rings"].as_u64().unwrap_or(0) > 0
 }
 
 /// The loud box at the end of a capture that lost events: what was lost and what to do.
@@ -460,6 +599,13 @@ pub fn loss_box(rec: &Value) -> String {
             format!("{u} process(es) of the command not traced: the probes' table of {TREE_PROCESSES} live processes was full"),
         ]);
     }
+    let rings = rec["untraced_rings"].as_u64().unwrap_or(0);
+    if rings > 0 {
+        lines.extend([
+            if n > 0 || u > 0 { "and".to_string() } else { "THE TRACE IS INCOMPLETE:".to_string() },
+            format!("{rings} io_uring ring(s) of the command whose completions were not traced: the probes' table of {URING_RINGS} rings was full"),
+        ]);
+    }
     lines.push("capture.json says complete: false. To capture it whole:".to_string());
     if n > 0 {
         lines.extend([
@@ -476,6 +622,9 @@ pub fn loss_box(rec: &Value) -> String {
     }
     s + &bar
 }
+
+/// The most rings the probes' `RINGS` holds (`capture-ebpf/src/main.rs`).
+pub const URING_RINGS: u32 = 4096;
 
 /// The most processes the probes' `TREE` holds at once (`capture-ebpf/src/main.rs`).
 pub const TREE_PROCESSES: u32 = 65536;
@@ -559,7 +708,7 @@ mod tests {
 
     #[test]
     fn the_kernel_btf_has_the_layout() {
-        let c = kernel_layout().unwrap();
+        let (c, _) = kernel_layout().unwrap();
         assert!(c.tgid_off > 0 && c.exit_code_off > 0 && c.tgid_off != c.exit_code_off && c.thread_pid_off > 0);
         assert!(c.numbers_off > c.level_off && c.upid_size >= 12);
         // where a process's living threads are counted, so the tree can let it go
@@ -585,7 +734,7 @@ mod tests {
 
     #[test]
     fn the_loss_record_suggests_a_buffer_and_the_box_says_what_to_do() {
-        let l = [Loss { total: 0, ..Default::default() }, Loss { total: 7, pending: 0, first: 1, last: 2, untraced: 0 }];
+        let l = [Loss { total: 0, ..Default::default() }, Loss { total: 7, pending: 0, first: 1, last: 2, ..Default::default() }];
         let r = Reading { peak_bytes_per_s: 600 << 20, ..Default::default() };
         let rec = losses_record(&l, &r, 256 << 20, &[(1, 7, 1_000_000_000, 3_500_000_000)]);
         assert_eq!(rec["events"], 7);
@@ -611,5 +760,76 @@ mod tests {
         assert!(b.contains("THE TRACE IS INCOMPLETE") && b.contains("3 process(es) of the command not traced"), "{b}");
         assert!(!b.contains("--buffer"), "a larger buffer does not help: {b}");
         assert!(b.lines().all(|l| l.chars().count() == b.lines().next().unwrap().chars().count()));
+
+        // a ring the full table of rings could not hold: its completions are not traced
+        let rings = losses_record(&[Loss { rings: 1, ..Default::default() }], &r, 256 << 20, &[]);
+        assert_eq!(rings["untraced_rings"], 1);
+        assert!(incomplete(&rings));
+        let b = loss_box(&rings);
+        assert!(b.contains("1 io_uring ring(s) of the command whose completions were not traced"), "{b}");
+        assert!(b.lines().all(|l| l.chars().count() == b.lines().next().unwrap().chars().count()));
+    }
+
+    #[test]
+    fn a_kernel_whose_io_uring_differs_is_said_why_and_not_traced() {
+        let raw = std::fs::read("/sys/kernel/btf/vmlinux").unwrap();
+        // the kernel's BTF with one thing changed, as another kernel would have it
+        let changed = |f: &dyn Fn(&mut Btf)| {
+            let mut b = Btf::parse(&raw).unwrap();
+            f(&mut b);
+            uring_layout(&b, &mut Config::default()).unwrap_err()
+        };
+        let rename = |b: &mut Btf, kind: u32, from: &str, to: &str| {
+            let t = b.types.iter_mut().find(|t| t.1 == kind && t.0 == from).unwrap();
+            t.0 = to.into();
+        };
+        let member = |b: &mut Btf, s: &str, from: &str, to: &str| {
+            let t = b.types.iter_mut().find(|t| t.1 == 4 && t.0 == s).unwrap();
+            t.3.iter_mut().find(|m| m.0 == from).unwrap().0 = to.into();
+        };
+        assert!(changed(&|b| rename(b, 8, "btf_trace_io_uring_submit_req", "x")).contains("no io_uring tracepoints"));
+        assert!(changed(&|b| rename(b, 8, "btf_trace_io_uring_complete", "x")).contains("no tracepoint io_uring_complete"));
+        // the request passed as no struct io_kiocb
+        assert!(changed(&|b| rename(b, 4, "io_kiocb", "x")).contains("passes no struct io_kiocb"));
+        assert!(changed(&|b| member(b, "io_kiocb", "opcode", "x")).contains("no io_kiocb.opcode"));
+        assert!(changed(&|b| rename(b, 4, "io_statx", "x")).contains("no struct io_statx"));
+        assert!(changed(&|b| {
+            let t = b.types.iter_mut().find(|t| t.1 == 4 && t.0 == "io_rw").unwrap();
+            t.4 = 100;
+        })
+        .contains("larger than the 64 bytes"));
+        // the operation's structure not first in the request
+        assert!(changed(&|b| {
+            let t = b.types.iter_mut().find(|t| t.1 == 4 && t.0 == "io_kiocb").unwrap();
+            let m = t.3.iter_mut().find(|m| m.0.is_empty()).unwrap();
+            m.2 = 64;
+        })
+        .contains("does not begin with the operation's structure"));
+    }
+
+    #[test]
+    fn the_kernel_btf_has_io_uring_s_layout() {
+        let p = "/sys/kernel/btf/vmlinux";
+        let btf = Btf::parse(&std::fs::read(p).unwrap()).unwrap();
+        // this box's kernel (6.18): the request alone, and the posted cqe
+        assert_eq!(btf.tracepoint_args("io_uring_submit_req").unwrap(), vec!["io_kiocb"]);
+        assert_eq!(btf.tracepoint_args("io_uring_complete").unwrap(), vec!["io_ring_ctx", "", "io_uring_cqe"]);
+        assert!(btf.tracepoint_args("no_such_tracepoint").is_none());
+        let mut c = Config::default();
+        let l = uring_layout(&btf, &mut c).unwrap();
+        assert_eq!((c.uring, c.sqe_req_arg, c.cqe_struct), (1, 0, 1));
+        assert_eq!(uring_programs(&c), ["io_uring_submit_req", "io_uring_complete", "uring_calls"]);
+        let old = Config { sqe_req_arg: 1, cqe_struct: 0, ..c };
+        assert_eq!(uring_programs(&old), ["io_uring_submit_req_after_ring", "io_uring_complete_fields", "uring_calls"]);
+        assert!(uring_programs(&old).iter().all(|p| URING_PROGRAMS.contains(p)));
+        assert_eq!(tracepoint_of("io_uring_complete_fields"), "io_uring_complete");
+        assert!(c.req_opcode_off >= CMD_SIZE as u32 && c.req_fd_off > c.req_user_data_off && c.req_ctx_off > 0, "{c:?}");
+        assert!(c.task_files_off > 0 && c.fdt_fd_off > 0 && c.file_private_off > 0);
+        assert_eq!(l["rw"]["pos"], 8);
+        assert_eq!((&l["statx"]["dfd"], c.statx_filename_off), (&json!(8), 24));
+        assert!(l["rw"]["len"].as_u64().unwrap() < CMD_SIZE as u64 && l["open"]["flags"].as_u64().unwrap() < CMD_SIZE as u64);
+        // the probes' only kernel types: a kernel without io_uring is said so, the capture goes on
+        let b = Btf { types: vec![(String::new(), 0, false, Vec::new(), 0)] };
+        assert!(uring_layout(&b, &mut Config::default()).unwrap_err().contains("no io_uring tracepoints"));
     }
 }
