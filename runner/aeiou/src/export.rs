@@ -207,6 +207,8 @@ pub struct Plan {
     t0: Option<f64>,
     positioned: Vec<bool>,
     rets: HashMap<(usize, usize), Value>,
+    /// The members the trace shows were never done (`member_dropped`).
+    dropped: HashSet<(usize, usize)>,
     /// A synthesized open's access mode, by open id.
     synth: HashMap<usize, &'static str>,
 }
@@ -224,6 +226,9 @@ pub struct Exporter {
     creates: Vec<String>,
     created: HashSet<String>,
     rets: HashMap<(usize, usize), Value>,
+    dropped: HashSet<(usize, usize)>,
+    /// Each `submit`'s members, by its line's index: one whose every member is dropped is no line.
+    submits: HashMap<usize, usize>,
     /// The lines of the second pass, until the driver takes them.
     pub queue: Vec<Event>,
     /// The opens synthesized (`synthesize`), for the header.
@@ -261,6 +266,8 @@ impl Exporter {
             creates: Vec::new(),
             created: HashSet::new(),
             rets: HashMap::new(),
+            dropped: HashSet::new(),
+            submits: HashMap::new(),
             queue: Vec::new(),
             missing: Vec::new(),
         }
@@ -380,6 +387,14 @@ impl Exporter {
                         if let Some(r) = plan.rets.get(&(index, j)) {
                             m.ret = r.clone();
                         }
+                    }
+                    let mut j = 0;
+                    ops.retain(|_| {
+                        j += 1;
+                        !plan.dropped.contains(&(index, j - 1))
+                    });
+                    if ops.is_empty() {
+                        return;
                     }
                 }
                 self.queue.push(e);
@@ -509,6 +524,7 @@ impl Exporter {
         }
         let index = self.events;
         let n = ops.len();
+        self.submits.insert(index, n);
         self.event(when, Event { op: "submit", ops: Some(ops), ..Default::default() });
         (0..n).map(|j| (index, j)).collect()
     }
@@ -517,6 +533,14 @@ impl Exporter {
     pub fn member_ret(&mut self, member: (usize, usize), ret: Value) {
         if self.first_pass() {
             self.rets.insert(member, ret);
+        }
+    }
+
+    /// A member the trace shows was never done (a POSIX AIO request refused, canceled, or never
+    /// served): left out of its line, and a line left with none left out.
+    pub fn member_dropped(&mut self, member: (usize, usize)) {
+        if self.first_pass() {
+            self.dropped.insert(member);
         }
     }
 
@@ -642,13 +666,13 @@ impl Exporter {
             notes.entry(k.clone()).or_insert(json!(v));
         }
         let synth = self.opens.iter().enumerate().filter(|(_, o)| o.synth).map(|(i, o)| (i, match (o.reads, o.writes) { (_, false) => "RDONLY", (false, true) => "WRONLY", (true, true) => "RDWR" })).collect();
-        let plan = Plan { t0: self.t0, positioned: self.opens.iter().map(|o| o.multi || o.pinned).collect(), rets: self.rets.clone(), synth };
+        let plan = Plan { t0: self.t0, positioned: self.opens.iter().map(|o| o.multi || o.pinned).collect(), rets: self.rets.clone(), dropped: self.dropped.clone(), synth };
         let header = json!({
             "aeiou_trace": TRACE_FORMAT,
             "source": source,
             "root": root,
             "lanes": self.lanes.len(),
-            "lines": self.events,
+            "lines": self.events - self.submits.iter().filter(|(i, n)| (0..**n).all(|j| self.dropped.contains(&(**i, j)))).count(),
             "opens": self.opens.len(),
             "creates": self.creates,
             "notes": notes,

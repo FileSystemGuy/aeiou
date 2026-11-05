@@ -68,6 +68,19 @@ fn capture(exe: &Path, args: &[&str]) -> Output {
     Command::new(exe).arg("capture").args(WAIVE).args(args).output().unwrap()
 }
 
+/// A capture as root, of the built binary with no file capabilities: POSIX AIO's uprobes need
+/// `CAP_SYS_ADMIN` (DESIGN_REVIEW.md §3.98 "Phase 4 step 4", brief item 68). `sudo -n`, as the
+/// grant is (password-less in CI; locally after `sudo -v` in a terminal); what it wrote under
+/// `own` is given back to the user after.
+fn capture_as_root(args: &[&str], own: &Path) -> Output {
+    let o = Command::new("sudo").args(["-n", bin(), "capture"]).args(WAIVE).args(args).output().unwrap();
+    assert!(!text(&o).contains("sudo: a password is required"), "the POSIX AIO tests capture as root: run `sudo -v` in a terminal first, or leave the eBPF tests out with AEIOU_WITHOUT=ebpf");
+    let id = |f: &str| String::from_utf8(Command::new("id").arg(f).output().unwrap().stdout).unwrap().trim().to_string();
+    let c = Command::new("sudo").args(["-n", "chown", "-R", &format!("{}:{}", id("-u"), id("-g"))]).arg(own).output().unwrap();
+    assert!(c.status.success(), "{}", text(&c));
+    o
+}
+
 fn record(dir: &Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(dir.join("capture.json")).unwrap()).unwrap()
 }
@@ -176,6 +189,11 @@ fn ebpf_gives_the_calls_strace_gives() {
     let rec = record(&eb);
     assert_eq!(rec["source"]["name"], "ebpf");
     assert_eq!(rec["source"]["privilege"], "cap_bpf,cap_perfmon");
+    // POSIX AIO's uprobes need CAP_SYS_ADMIN: under file capabilities it is said why, and the
+    // trace's POSIX AIO is strace's (brief item 68)
+    assert_eq!(rec["posix_aio"]["traced"], false, "{}", rec["posix_aio"]);
+    assert!(rec["posix_aio"]["why"].as_str().unwrap().contains("CAP_SYS_ADMIN"), "{}", rec["posix_aio"]);
+    assert!(rec["not_seen"].to_string().contains("which thread issued a POSIX AIO request"), "{}", rec["not_seen"]);
     assert_eq!(rec["complete"], true, "{}", rec["losses"]);
     assert_eq!(rec["losses"]["events"], 0);
     assert_eq!(rec["reader"]["file"], "syscalls.bin");
@@ -201,8 +219,9 @@ fn ebpf_gives_the_calls_strace_gives() {
     let first = std::fs::read_to_string(eb.join("trace.txt")).unwrap();
     let mut lines = first.lines();
     let mut first = lines.next().unwrap();
-    // and libaio's completions (phase 4 step 3)
-    let kinds = [("uring", "aeiou_uring_sqe aeiou_uring_cqe"), ("faults", "aeiou_fault"), ("aio", "aeiou_aio_issue aeiou_aio_complete")]
+    // and libaio's completions (phase 4 step 3), and POSIX AIO (step 4)
+    let paio = "aeiou_aio_read aeiou_aio_write aeiou_aio_fsync aeiou_lio_listio aeiou_aio_serve aeiou_aio_suspend aeiou_aio_return aeiou_aio_cancel aeiou_aio_refused";
+    let kinds = [("uring", "aeiou_uring_sqe aeiou_uring_cqe"), ("faults", "aeiou_fault"), ("aio", "aeiou_aio_issue aeiou_aio_complete"), ("posix_aio", paio)]
         .iter()
         .filter(|(k, _)| rec[*k]["traced"] == true)
         .map(|(_, v)| *v)
@@ -527,6 +546,160 @@ fn libaio_completions_are_traced_and_read_as_the_calls_they_do() {
         }
         assert_eq!(seen[1].1, seen[0].1, "{} against {}", seen[1].0, seen[0].0);
     }
+}
+
+/// The runner's own POSIX AIO engine as the traced application (DESIGN_REVIEW.md §3.98 "Phase 4
+/// step 4"): `aeiou run --posix posix-aio` of npy_per_sample's smoke set, captured under eBPF,
+/// reads as the same run under `--posix sync` does, every request served by a glibc helper's
+/// call and collected by `aio_return`, none ambiguous or left in flight, and the export's data in
+/// as many lanes as the sync run's (each actor's thread its own), none in a glibc helper's.
+#[test]
+fn posix_aio_requests_are_traced_and_read_as_the_calls_they_do() {
+    let t = tmp("paio");
+    let root = t.join("data");
+    let m = crate::common::workloads().join("input-pipeline/map/npy-per-sample");
+    let (ast, params) = (m.join("npy_per_sample.ast.json"), m.join("params/smoke.params.json"));
+    let aeiou = env!("CARGO_BIN_EXE_aeiou");
+    let o = Command::new(aeiou).args(["datagen", s(&ast), "--params-file", s(&params), "--root", s(&root)]).env_remove("AEIOU_CONFIG").output().unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    let fixed = |m: &Value| {
+        let t = &m["total"];
+        serde_json::json!({
+            "bytes_read": t["bytes_read"], "bytes_written": t["bytes_written"],
+            "read": t["counts"]["read"], "open": t["counts"]["open"], "close": t["counts"]["close"],
+            "request_size": t["request_size"], "popularity_bytes": t["popularity_bytes"], "popularity_objects": t["popularity_objects"],
+        })
+    };
+    let mut seen = Vec::new();
+    let mut data_lanes = 0;
+    for posix in ["sync", "posix-aio"] {
+        let out = t.join(format!("cap-{posix}"));
+        let args = ["--source", "ebpf", "--root", s(&root), "-o", s(&out), "--", aeiou, "run", s(&ast), "--params-file", s(&params), "--param", "step_time=0", "--gpus", "1", "--root", s(&root), "--posix", posix];
+        let o = capture_as_root(&args, &t);
+        assert!(o.status.success(), "{posix}: {}", text(&o));
+        let rec = record(&out);
+        assert_eq!(rec["complete"], true, "{posix}: {}", rec["losses"]);
+        assert_eq!(rec["posix_aio"]["traced"], true, "{posix}: {}", rec["posix_aio"]);
+        assert!(rec["source"]["line"][0].as_str().unwrap().contains("(POSIX AIO)"), "{}", rec["source"]["line"]);
+        assert!(!rec["not_seen"].to_string().contains("which thread issued a POSIX AIO request"), "{posix}: {}", rec["not_seen"]);
+        let c = &rec["conversion"];
+        let n = c["posix_aio_requests"].as_u64().unwrap();
+        assert_eq!(
+            (c["posix_aio_served"].as_u64(), c["posix_aio_ambiguous"].as_u64(), c["posix_aio_never_collected"].as_u64(), c["posix_aio_in_flight_at_end"].as_u64(), c["posix_aio_libraries_not_traced"].as_array().map(Vec::len)),
+            (Some(n), Some(0), Some(0), Some(0), Some(0)),
+            "{posix}: {c}"
+        );
+        let body = std::fs::read_to_string(out.join("trace.txt")).unwrap();
+        let serves = body.lines().filter(|l| l.contains(" aeiou_aio_serve(")).count() as u64;
+        let got = metrics(&out, &root);
+        let (_, lanes) = parsed(&out, &root);
+        let with_data = lanes.iter().filter(|l| l.iter().any(|op| op["op"] == "submit" || op["op"] == "read")).count();
+        if posix == "sync" {
+            assert_eq!((n, serves), (0, 0), "{posix}");
+            data_lanes = with_data;
+        } else {
+            assert!(n > 0 && serves == n, "{posix}: {n} requests, {serves} served lines, {c}");
+            let notes = got["notes"].as_object().unwrap();
+            assert!(notes.keys().all(|k| !k.starts_with("posix_aio_")), "{posix}: {notes:?}");
+            // the reads in the actors' lanes, as the sync run's are: a helper's would be a lane more
+            assert_eq!(with_data, data_lanes, "{posix}: {lanes:#?}");
+            eprintln!("{posix}: {n} requests served by glibc's helpers");
+        }
+        seen.push((posix, fixed(&got)));
+    }
+    assert_eq!(seen[1].1, seen[0].1, "{} against {}", seen[1].0, seen[0].0);
+}
+
+/// POSIX AIO through the C library, by ctypes: two writes waited for by `aio_suspend`, one to an
+/// `O_APPEND` file at an offset the kernel ignores, an `aio_fsync(O_DSYNC)`, a `lio_listio`
+/// (`LIO_WAIT`) of two reads with a null entry between them, and a read.
+const PAIO: &str = r#"
+import ctypes, os, struct, sys
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+d = sys.argv[1]
+def cb(fd, op, buf, n, off):
+    b = ctypes.create_string_buffer(168)
+    struct.pack_into("ii", b, 0, fd, op)
+    struct.pack_into("QQ", b, 16, ctypes.addressof(buf), n)
+    struct.pack_into("i", b, 44, 1)
+    struct.pack_into("q", b, 128, off)
+    return b
+def wait(c):
+    lst = (ctypes.c_void_p * 1)(ctypes.addressof(c))
+    while libc.aio_error(c) == 115:
+        libc.aio_suspend(lst, 1, None)
+    return libc.aio_return(c)
+fd = os.open(d + "/f", os.O_CREAT | os.O_RDWR | os.O_TRUNC, 0o644)
+fa = os.open(d + "/g", os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_TRUNC, 0o644)
+bufs = [ctypes.create_string_buffer(b"w" * 4096, 4096) for _ in range(4)]
+ws = [cb(fd, 1, bufs[i], 4096, i * 4096) for i in range(2)]
+for c in ws:
+    assert libc.aio_write(c) == 0
+for c in ws:
+    assert wait(c) == 4096
+a = cb(fa, 1, bufs[2], 100, 999999)
+assert libc.aio_write(a) == 0 and wait(a) == 100
+s = cb(fd, 0, bufs[3], 0, 0)
+assert libc.aio_fsync(os.O_DSYNC, s) == 0 and wait(s) == 0
+rs = [cb(fd, 0, bufs[i], 4096, i * 4096) for i in range(2)]
+lst = (ctypes.c_void_p * 3)(ctypes.addressof(rs[0]), None, ctypes.addressof(rs[1]))
+assert libc.lio_listio(0, lst, 3, None) == 0
+for c in rs:
+    assert libc.aio_return(c) == 4096
+r = cb(fd, 0, bufs[0], 1000, 0)
+assert libc.aio_read(r) == 0 and wait(r) == 1000
+os.close(fd)
+os.close(fa)
+"#;
+
+/// Every POSIX AIO function the probes take, through ctypes (`PAIO`): under eBPF each request is
+/// numbered and served, collected, and counted in the issuing thread, the `lio_listio` one line
+/// of its two reads, the fsync the issuer's `fdatasync`; the metrics are strace's, which counts
+/// the same calls as the helpers' own.
+#[test]
+fn every_posix_aio_function_is_traced() {
+    let t = tmp("paio-fns");
+    let root = t.join("data");
+    let prog = t.join("paio.py");
+    std::fs::write(&prog, PAIO).unwrap();
+    let mut got = Vec::new();
+    for source in ["strace", "ebpf"] {
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let out = t.join(format!("cap-{source}"));
+        let args = ["--source", source, "--root", s(&root), "-o", s(&out), "--", "python3", s(&prog), s(&root)];
+        let o = if source == "ebpf" { capture_as_root(&args, &t) } else { capture(Path::new(bin()), &args) };
+        assert!(o.status.success(), "{source}: {}", text(&o));
+        assert_eq!(std::fs::metadata(root.join("g")).unwrap().len(), 100, "the append");
+        let m = metrics(&out, &root);
+        let total = &m["total"];
+        assert_eq!((total["bytes_read"].as_u64(), total["bytes_written"].as_u64(), total["counts"]["fdatasync"].as_u64()), (Some(8192 + 1000), Some(8192 + 100), Some(1)), "{source}: {total}");
+        got.push(total.clone());
+        if source == "strace" {
+            assert!(record(&out)["not_seen"].to_string().contains("which thread issued a POSIX AIO request"));
+            continue;
+        }
+        let rec = record(&out);
+        let c = &rec["conversion"];
+        assert_eq!(
+            (c["posix_aio_requests"].as_u64(), c["posix_aio_served"].as_u64(), c["posix_aio_never_collected"].as_u64(), c["posix_aio_in_flight_at_end"].as_u64(), c["posix_aio_ambiguous"].as_u64()),
+            (Some(7), Some(7), Some(0), Some(0), Some(0)),
+            "{c}"
+        );
+        let body = std::fs::read_to_string(out.join("trace.txt")).unwrap();
+        let count = |k: &str| body.lines().filter(|l| l.contains(&format!(" {k}("))).count();
+        assert_eq!((count("aeiou_aio_write"), count("aeiou_aio_fsync"), count("aeiou_lio_listio"), count("aeiou_aio_read"), count("aeiou_aio_serve"), count("aeiou_aio_return")), (3, 1, 1, 1, 7, 7), "{body}");
+        let lio = body.lines().find(|l| l.contains(" aeiou_lio_listio(")).unwrap();
+        assert!(lio.contains("mode=LIO_WAIT") && lio.matches("op=LIO_READ").count() == 2 && lio.contains("nent=3"), "{lio}");
+        assert!(body.lines().any(|l| l.contains(" aeiou_aio_fsync(") && l.contains("op=O_DSYNC")), "{body}");
+        assert!(body.lines().any(|l| l.contains(" aeiou_aio_suspend(ids=[")), "{body}");
+        // the data ops in the python thread's lane alone
+        let (_, lanes) = parsed(&out, &root);
+        let with_data = lanes.iter().filter(|l| l.iter().any(|op| matches!(op["op"].as_str(), Some("submit" | "read" | "write" | "fdatasync")))).count();
+        assert_eq!(with_data, 1, "{lanes:#?}");
+    }
+    assert_eq!(got[1]["bytes_read"], got[0]["bytes_read"]);
+    assert_eq!(got[1]["counts"], got[0]["counts"]);
 }
 
 /// A file written a page at a time (so it is cached in folios of a page: a large write caches

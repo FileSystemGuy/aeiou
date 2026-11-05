@@ -52,6 +52,13 @@
 //! completions out of order, a short read, an error, a completion inside its call, a request on
 //! a file outside the root, an fsync not counted, a call that took fewer than it was given, a
 //! request with no completion, a completion of no request, results never collected by a call.
+//! And POSIX AIO (2026-11-05, phase 4 step 4; two cases, each checked by hand against its input):
+//! a capture of this runner's `--posix posix-aio` engine (npy_per_sample at 20 samples; paths
+//! rewritten as above), and these, written by hand: requests counted in their issuer when the
+//! helper's call they name returns, a short read, a write to an `O_APPEND` file interrupted and
+//! served again, an fdatasync as the issuer's, a `lio_listio` of a read, a write served by a
+//! second helper, and a read outside the root, a request refused, one canceled, and one never
+//! served left out of the export, results never collected, the helper's own read in its lane.
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths

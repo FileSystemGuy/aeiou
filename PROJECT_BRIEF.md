@@ -1311,9 +1311,24 @@ numbers; the order is this note's.
     `io_submit` line, a request's number and its place in the array) and `aeiou_aio_complete`
     (`in_submit=1` for one posted before its call returned) records; a request counted at its
     completion with the bytes it moved, paired by its number, not `aio_data`, `io_getevents`
-    only collecting (notes `aio_completed_in_submit`, `aio_completed_never_reaped`). Not
+    only collecting (notes `aio_completed_in_submit`, `aio_completed_never_reaped`). ~~Not
     implemented yet: POSIX AIO's uprobes (phase 4 step 4, next), the rest of phase 4, phase 3b,
-    readers of a set, the set digest; readahead traced for diagnosis.
+    readers of a set, the set digest; readahead traced for diagnosis.~~
+    *Phase 4 step 4, POSIX AIO, proposed and agreed with the user 2026-11-05 and built the same
+    day* (§3.98 "Phase 4 step 4"): a uprobe and a uretprobe of glibc's `aio_read`, `aio_write`,
+    `aio_fsync`, `lio_listio`, `aio_return`, `aio_suspend`, and `aio_cancel` (not `aio_error`,
+    polled in loops) in the C library the capture runs on (`librt.so.1` too before glibc 2.34),
+    attached by file offset from its `.dynsym`, as root alone (a uprobe needs `CAP_SYS_ADMIN`,
+    found at the grant; under file capabilities said why, item 68 to lift it); each request written at its issue
+    (`aeiou_aio_read`, `aeiou_aio_write`, `aeiou_aio_fsync`, `aeiou_lio_listio`), the glibc
+    helper's call that serves it preceded by an `aeiou_aio_serve` naming it (matched by process,
+    descriptor, buffer, length, and offset), and `aeiou_aio_suspend`, `aeiou_aio_return`,
+    `aeiou_aio_cancel`, `aeiou_aio_refused`; a request counted once, in the issuing thread, with
+    the bytes the helper's call moved. A program linked statically or on another C library
+    (musl, a container's) is not traced, and the C libraries the command mapped that the probes
+    were not on are named. Not implemented yet: vectored libaio requests counted (their iovec
+    arrays copied), the request heads by libssl uprobes (phase 4 step 5), cuFile and libnfs
+    (step 6), phase 3b, readers of a set, the set digest; readahead traced for diagnosis.
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no
@@ -1449,6 +1464,17 @@ numbers; the order is this note's.
     `set_pte_range`'s count, `finish_fault`), which kernels have it in BTF and not inlined, and
     the record's field (the pages mapped with each fault, a run's sum), so a reader knows each
     fault's extent.
+
+68. **POSIX AIO under file capabilities, by `uprobe_multi` links (queued by the user 2026-11-05
+    with item 54 phase 4 step 4; not started).** A uprobe attached through `perf_event_open`
+    needs `CAP_SYS_ADMIN` (`perf_uprobe_event_init`, Linux 6.18, src), so a capture under
+    `cap_bpf,cap_perfmon` does not trace POSIX AIO, and says so (`DESIGN_REVIEW.md` §3.98
+    "Phase 4 step 4", found at the grant). A `uprobe_multi` link (`BPF_LINK_CREATE`,
+    `BPF_TRACE_UPROBE_MULTI`, Linux 6.6) needs only `CAP_BPF` and `CAP_PERFMON`, but its program
+    must be loaded with that expected attach type, which aya 0.14's `UProbe::load` never sets.
+    To build: a patch of aya under `[patch.crates-io]` (load with the attach type, create the
+    link with every offset of a library at once), or the same upstream; root's `perf_event_open`
+    kept below 6.6.
 
 ## 7. Environment
 

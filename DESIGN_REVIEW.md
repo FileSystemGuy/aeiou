@@ -10065,6 +10065,123 @@ file, offset, and asked length from `io_submit`'s line, which leaves a vectored 
 written, as before. The `json!` of `capture.json` reached the macro's recursion limit with one
 key more: `aio` is set after it.
 
+**Phase 4 step 4, POSIX AIO (proposed by this side and agreed by the user 2026-11-05:
+"proceed").** The experiment above, repeated with writes, an `O_APPEND` file, `aio_fsync`, and
+`lio_listio` (glibc 2.39, box): the helper's calls are `pwrite64` at the `aiocb`'s offset (on
+an `O_APPEND` file too, where the kernel ignores it), `pread64`, and `fdatasync` for
+`O_DSYNC`; one descriptor's requests run one after another on one helper; an idle helper waits
+about a second and exits. The storage's side is whole in either source; the application's (who
+issued, when, how long the request waited in glibc's queue, how many were outstanding, when the
+result was collected) is in neither, and both count the helper's call as a read of a thread
+the application never made. Proposed and agreed:
+
+- *Probes:* a uprobe and a uretprobe of each of `aio_read`, `aio_write`, `aio_fsync`,
+  `lio_listio` (the issue; the `struct aiocb`'s descriptor, opcode, buffer, length, offset, and
+  notification copied, a list's first 32), `aio_return` (the collection), `aio_suspend` (the
+  wait, its list and timeout), and `aio_cancel`; not `aio_error`, which applications poll in a
+  loop. On the exported functions: libc has no symbol table and no USDT note for AIO (box). The
+  `*64` aliases share their addresses. Attached system-wide by file, filtered by `TREE`.
+- *The library:* the `libc.so.6` the capture itself runs on (the system's), and `librt.so.1`
+  beside it for glibc before 2.34; glibc's 64-bit `struct aiocb` (`aio_fildes` 0,
+  `aio_lio_opcode` 4, `aio_reqprio` 8, `aio_buf` 16, `aio_nbytes` 24, `aio_sigevent` 32,
+  `aio_offset` 128, box on x86_64; aarch64 the same by the ABI, rec). A program linked
+  statically, or on another C library (a container's, musl's, whose `aiocb` and helpers
+  differ), is not traced, and the converter names the C libraries the command mapped that the
+  probes were not on. musl not built.
+- *Records:* `aeiou_aio_read`, `aeiou_aio_write`, `aeiou_aio_fsync`, `aeiou_lio_listio` (the
+  issue, named for the library's call, since no system call carries it as `io_submit` carries
+  libaio's), `aeiou_aio_serve` (before the helper's call that serves a request: the helper's
+  line itself unchanged, so the strace source's trace stays a subset), `aeiou_aio_suspend`,
+  `aeiou_aio_return`, `aeiou_aio_cancel`; `aeiou_aio_issue` and `aeiou_aio_complete` stay
+  libaio's.
+- *Pairing, in the converter:* an issue to the helper's call by process, descriptor, buffer,
+  length, and offset among the requests in flight (an fsync by descriptor and kind, the earliest
+  first); `aio_return`, `aio_suspend`, and `aio_cancel` by the `aiocb`'s address, unique while
+  its request is in flight (POSIX forbids reusing it before), so unlike step 3's the address is a
+  key here, while the request is in flight only; a request whose `aiocb` is issued again before
+  `aio_return` collected it is done uncollected; a helper's call that matches nothing is an
+  ordinary call; one that matches several takes the earliest, and is counted. The numbers are
+  the pool `io_uring` and libaio take theirs from.
+- *Readers:* a request counted once, in the issuing thread, when the helper's call returns,
+  with the bytes it moved; the helper's call not counted again; notes for the requests refused,
+  canceled, never served, never collected; durations (glibc's queue, the call) recorded, not
+  reported as metrics; each issue a `submit` of the export in the issuer's lane. A trace without
+  the records reads as before.
+
+The user's questions answered by agreement: whether `cap_perfmon` lets the capture attach a
+uprobe (~~believed, Linux 5.8 and on; the first grant to tell~~ it does not: "Found at the grant"
+below), `aio_error` left out (an
+application that polls it and never calls `aio_return`, which POSIX requires, shows its
+requests served and never collected), and musl and static programs said untraced only.
+
+*Built (2026-11-05).* `capture-ebpf/src/record.rs`: `PAIO_ENTER` (an `Enter`, `nr` the
+function), `PAIO_EXIT` (an `Exit`), the functions' numbers and names, `AIOCB_SIZE` (136, to
+`aio_offset`'s end), `AIOCB_LIST`. `capture-ebpf/src/main.rs`: `paio_entry` (the `aiocb` of
+`aio_read`'s and `aio_write`'s first argument and `aio_fsync`'s second, a `lio_listio`'s list
+and its entries one after another, a null entry or one not read marked `LIO_NOP` so each keeps
+its place, `aio_suspend`'s list and timeout), `paio_return` (the result, on the program's
+stack), a uprobe and a uretprobe of each function by a macro. `ebpf.rs`: `paio_layout` (the C
+library from `/proc/self/maps`, canonical; `librt.so.1` beside it if present), `paio_layout_of`
+(each function from the first library that defines it), `elf_functions` (the `.dynsym`'s
+functions of those names at file offsets, one per address, so `lio_listio`'s two, its version
+before glibc 2.4 a function of its own, box), `load_paio`, the attach by absolute offset
+(`UProbeScope::AllProcesses`), the header's and the source check's `posix_aio`. `ebpf_text.rs`:
+`paio_enter` (an issue's line at the function's entry, since a helper may serve it before the
+function returns; a `lio_listio`'s members in one line, a null or `LIO_NOP` entry left out),
+`paio_serve` (at the helper's call's entry: a `pread64` or `pwrite64` by descriptor, buffer,
+length, and offset; after `EINTR` the same call again, after `ESPIPE` a `read` or `write` with
+no offset, glibc's fallback for a pipe or socket, rec; an `fsync` or `fdatasync` by descriptor),
+`paio_exit` (`aio_return`'s, `aio_suspend`'s, and `aio_cancel`'s lines at their return, stamped
+with their entry; a refused issue as `aeiou_aio_refused(id=N) = -1`, a fifth record kind found
+needed in the building; `aio_cancel`'s requests of its descriptor or `aiocb` no helper had taken,
+its return printed as strace prints a return it decodes, `0 (AIO_CANCELED)`, since the readers
+take a return as a number), the conversion's `posix_aio_requests`, `_served`, `_ambiguous`,
+`_refused`, `_canceled`, `_never_collected`, `_in_flight_at_end`, `_libraries_not_traced`.
+`strace.rs`: an issue held by its number; `aeiou_aio_serve` marks the thread's next read,
+write, or sync call as the request's, counted in the issuer (an `O_APPEND` write at the file's
+known end; an fsync as the issuer's call), an interrupted one waiting for the next; the notes
+`posix_aio_refused`, `_canceled`, `_never_served`, `_never_collected`; the fan-out of each
+issue's data requests; the export's `submit` per issue, its members' results from the helper's
+calls. Found in the building: the export wrote a request refused, canceled, or never served as
+a member taken as complete, which a replay would do though the application's moved no bytes;
+`export.rs` gained `member_dropped` (the first pass names the member, the second leaves it out,
+and a `submit` with none left, the header's `lines` counting what is written), noted
+`not_exported:posix_aio:refused`, `canceled`, `never served`. `capture.rs`: the header's `posix_aio`, the source line, `capture.json`'s `posix_aio`
+(`traced`, `why`, `libraries`), `not_seen` (strace's line on POSIX AIO, new; eBPF's two,
+`NOT_SEEN_PAIO`, in its place).
+
+*Found at the grant: a uprobe needs `CAP_SYS_ADMIN` (decided with the user 2026-11-05, "1 now,
+queue 2 on the brief").* Under `cap_bpf,cap_perfmon` the 14 programs passed the verifier and the
+first attach failed in `perf_event_open`: Linux 6.18's `perf_uprobe_event_init` checks
+`capable(CAP_SYS_ADMIN)` (`kernel/events/core.c`, src), where `perf_kprobe_event_init` moved to
+`perfmon_capable()` in 5.8; this side's belief was wrong. A `uprobe_multi` link (Linux 6.6,
+`BPF_LINK_CREATE`) needs only `CAP_BPF` and `CAP_PERFMON` (`bpf_uprobe_multi_link_attach`, src),
+but its program must be loaded with the expected attach type `BPF_TRACE_UPROBE_MULTI`, which aya
+0.14's `UProbe::load` never sets. Options put to the user: (1) POSIX AIO traced as root alone,
+said why under file capabilities; (2) `uprobe_multi` links through a patch of aya, (1) below 6.6;
+(3) `cap_sys_admin` in the setcap line, against the brief's choice of the least privilege. The
+user chose (1), and (2) queued (brief item 68). Built: the probes are neither loaded nor
+attached without `CAP_SYS_ADMIN` in the effective set, `posix_aio.why` saying so
+(`PAIO_NEEDS_ROOT`), and the trace's POSIX AIO is then strace's (its `not_seen` line kept); an
+attach error prints its whole chain of causes. The POSIX AIO tests capture as root by `sudo -n`
+(the binary as built, no file capabilities), giving what it wrote back to the user after; the
+file-capabilities test checks the reason.
+
+*Tests.* Unit: the converter (`ebpf_text.rs`: each function's record, a request served, one
+interrupted and served again, an fsync, a `lio_listio` with a null and a `LIO_NOP` entry, the
+issuer's own call of the same buffer left alone, a refused, a canceled, and an uncollected
+request, one in flight at the end, two a call could serve, a C library not probed, the records
+without the header); the reader (`strace.rs`: counted in the issuer at the serve, the retry,
+the fsync, the notes, the fan-out, the export's lanes and results, and the same trace without
+the records read as strace's); the layout (`ebpf.rs`: this box's libc, each function found,
+`lio_listio` at two offsets, the aliases, refusals of a file that is no ELF, cut short, or
+without the functions, the first library defining each) and the source check's wording.
+Privileged (`tests/capture_ebpf.rs`, the POSIX AIO captures as root): `aeiou run --posix
+posix-aio` of npy_per_sample's smoke set reads as `--posix sync` does, every request served and collected, the data in one lane; a
+Python program calling each function through ctypes (two writes waited for by `aio_suspend`, an
+`O_APPEND` write, `aio_fsync(O_DSYNC)`, a `lio_listio` with a null entry, a read) gives
+strace's metrics, its seven requests each served and collected.
+
 
 ## 4. Plan changes
 

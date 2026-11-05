@@ -321,17 +321,118 @@ pub fn kernel_layout() -> Result<(Config, Layouts)> {
     let uring = uring_layout(&btf, &mut cfg);
     let faults = fault_layout(&btf, &mut cfg);
     let aio = aio_layout(&btf, &mut cfg);
-    Ok((cfg, Layouts { uring, faults, aio }))
+    Ok((cfg, Layouts { uring, faults, aio, paio: paio_layout() }))
 }
 
 /// What the kernel's BTF allows of the probes beyond the calls': `io_uring`'s requests, the
-/// faults on mappings, and libaio's completions, each the converter's layout or why its probes
-/// cannot run here.
+/// faults on mappings, and libaio's completions; and what the C library allows of POSIX AIO's;
+/// each the converter's layout or why its probes cannot run here.
 #[derive(Debug, Clone)]
 pub struct Layouts {
     pub uring: std::result::Result<Value, String>,
     pub faults: std::result::Result<Value, String>,
     pub aio: std::result::Result<Value, String>,
+    pub paio: std::result::Result<Value, String>,
+}
+
+/// What POSIX AIO's uprobes attach to (DESIGN_REVIEW.md §3.98 "Phase 4 step 4"): the C library
+/// this program runs on, the system's, which a dynamically linked command loads too (one that
+/// carries its own, a container's, musl's, or none, the converter names from its mappings), and
+/// `librt.so.1` beside it, where glibc before 2.34 kept AIO.
+pub fn paio_layout() -> std::result::Result<Value, String> {
+    let maps = std::fs::read_to_string("/proc/self/maps").map_err(|e| format!("/proc/self/maps: {e}"))?;
+    let Some(libc) = maps.lines().filter_map(|l| l.split_whitespace().nth(5)).find(|p| p.rsplit('/').next().is_some_and(|n| n.starts_with("libc.so"))) else {
+        return paio_layout_of(&[]);
+    };
+    let libc = std::fs::canonicalize(libc).map_err(|e| format!("{libc}: {e}"))?;
+    let mut libs = vec![libc.clone()];
+    let rt = libc.with_file_name("librt.so.1");
+    if rt.exists() {
+        libs.push(std::fs::canonicalize(&rt).unwrap_or(rt));
+    }
+    paio_layout_of(&libs)
+}
+
+/// The layout of `paio_layout` from these libraries: each function of `PAIO_FUNCTIONS` (and its
+/// `*64` alias) at every address the first library that defines it has for it, as file offsets
+/// (a function of an older symbol version is another address: `lio_listio`'s before glibc 2.4);
+/// the libraries that define any.
+pub fn paio_layout_of(libs: &[std::path::PathBuf]) -> std::result::Result<Value, String> {
+    if libs.is_empty() {
+        return Err("this program maps no C library (libc.so.6) to find POSIX AIO's functions in".into());
+    }
+    let mut found: Vec<Option<(String, Vec<u64>)>> = vec![None; PAIO_FUNCTIONS.len()];
+    for lib in libs {
+        let bytes = std::fs::read(lib).map_err(|e| format!("{}: {e}", lib.display()))?;
+        let names: Vec<String> = PAIO_FUNCTIONS.iter().flat_map(|f| [f.to_string(), format!("{f}64")]).collect();
+        let fs = elf_functions(&bytes, &names.iter().map(String::as_str).collect::<Vec<_>>()).map_err(|e| format!("{}: {e}", lib.display()))?;
+        for (i, f) in PAIO_FUNCTIONS.iter().enumerate() {
+            if found[i].is_some() {
+                continue;
+            }
+            let mut offs: Vec<u64> = fs.get(*f).into_iter().chain(fs.get(&format!("{f}64"))).flatten().copied().collect();
+            offs.sort_unstable();
+            offs.dedup();
+            if !offs.is_empty() {
+                found[i] = Some((lib.display().to_string(), offs));
+            }
+        }
+    }
+    let mut probes = Vec::new();
+    let mut libraries: Vec<String> = Vec::new();
+    for (f, hit) in PAIO_FUNCTIONS.iter().zip(found) {
+        let (lib, offs) = hit.ok_or_else(|| format!("{} defines no {f}", libs.iter().map(|l| l.display().to_string()).collect::<Vec<_>>().join(" or ")))?;
+        if !libraries.contains(&lib) {
+            libraries.push(lib.clone());
+        }
+        probes.push(json!({"function": f, "library": lib, "offsets": offs}));
+    }
+    Ok(json!({"libraries": libraries, "probes": probes}))
+}
+
+/// The functions an ELF shared object exports (`.dynsym`) of these names, each at its addresses
+/// as offsets in the file (where a uprobe attaches), one per symbol version that is a function
+/// of its own.
+pub fn elf_functions(b: &[u8], names: &[&str]) -> std::result::Result<std::collections::HashMap<String, Vec<u64>>, String> {
+    if b.len() < 64 || &b[..4] != b"\x7fELF" || b[4] != 2 || b[5] != 1 {
+        return Err("not an ELF 64-bit little-endian object".into());
+    }
+    let short = || "cut short".to_string();
+    let u16_ = |o: usize| b.get(o..o + 2).map(|x| u16::from_le_bytes([x[0], x[1]])).ok_or_else(short);
+    let u32_ = |o: usize| b.get(o..o + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap())).ok_or_else(short);
+    let u64_ = |o: usize| b.get(o..o + 8).map(|x| u64::from_le_bytes(x.try_into().unwrap())).ok_or_else(short);
+    let (shoff, shentsize, shnum) = (u64_(0x28)? as usize, u16_(0x3a)? as usize, u16_(0x3c)? as usize);
+    // (type, addr, offset, size, link) of each section
+    let mut sec = Vec::with_capacity(shnum);
+    for i in 0..shnum {
+        let h = shoff + i * shentsize;
+        sec.push((u32_(h + 4)?, u64_(h + 16)?, u64_(h + 24)?, u64_(h + 32)?, u32_(h + 40)? as usize));
+    }
+    let mut out: std::collections::HashMap<String, Vec<u64>> = std::collections::HashMap::new();
+    for &(ty, _, off, size, link) in &sec {
+        if ty != 11 {
+            continue; // SHT_DYNSYM
+        }
+        let (_, _, stroff, strsize, _) = *sec.get(link).ok_or_else(short)?;
+        let strtab = b.get(stroff as usize..(stroff + strsize) as usize).ok_or_else(short)?;
+        for k in 0..(size / 24) as usize {
+            let e = off as usize + k * 24;
+            let (name, info, shndx, value) = (u32_(e)? as usize, *b.get(e + 4).ok_or_else(short)?, u16_(e + 6)? as usize, u64_(e + 8)?);
+            // a function (or an indirect one) defined here
+            if !(info & 0xf == 2 || info & 0xf == 10) || shndx == 0 || shndx >= sec.len() {
+                continue;
+            }
+            let n = strtab.get(name..).and_then(|s| s.split(|c| *c == 0).next()).ok_or_else(short)?;
+            let Some(n) = names.iter().find(|x| x.as_bytes() == n) else { continue };
+            let (_, addr, soff, _, _) = sec[shndx];
+            let at = value.wrapping_sub(addr).wrapping_add(soff);
+            let v = out.entry(n.to_string()).or_default();
+            if !v.contains(&at) {
+                v.push(at);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// What libaio's probes read (DESIGN_REVIEW.md §3.98 "Phase 4 step 3"), from the kernel's BTF,
@@ -522,6 +623,14 @@ pub fn load(buffer: u64) -> Result<(aya::Ebpf, Layouts)> {
             config.aio = 0;
         }
     }
+    if layouts.paio.is_ok() && effective() & (1 << CAP_SYS_ADMIN) == 0 {
+        layouts.paio = Err(PAIO_NEEDS_ROOT.into());
+    }
+    if layouts.paio.is_ok() {
+        if let Err(why) = load_paio(&mut bpf) {
+            layouts.paio = Err(why);
+        }
+    }
     {
         let mut cfg: aya::maps::Array<_, Config> = aya::maps::Array::try_from(bpf.map_mut("CONFIG").expect("CONFIG"))?;
         cfg.set(0, config, 0)?;
@@ -547,6 +656,27 @@ fn load_aio(bpf: &mut aya::Ebpf, functions: &[String]) -> std::result::Result<()
         p.load(f, &btf).map_err(|e| format!("the kernel would not load a program on {f}'s entry: {e}"))?;
     }
     Ok(())
+}
+
+/// Why POSIX AIO is not traced under file capabilities (DESIGN_REVIEW.md §3.98 "Phase 4 step 4"):
+/// the kernel attaches a uprobe through `perf_event_open` only for `CAP_SYS_ADMIN`.
+pub const PAIO_NEEDS_ROOT: &str = "a uprobe needs CAP_SYS_ADMIN (the kernel's perf_uprobe_event_init), which cap_bpf,cap_perfmon is not: capture as root to trace POSIX AIO (brief item 68)";
+
+/// POSIX AIO's programs, a uprobe and a uretprobe of each function (`paio_program`).
+fn load_paio(bpf: &mut aya::Ebpf) -> std::result::Result<(), String> {
+    for f in PAIO_FUNCTIONS {
+        for ret in [false, true] {
+            let name = paio_program(f, ret);
+            let p: &mut aya::programs::UProbe = bpf.program_mut(&name).expect("a program of the object").try_into().map_err(|e| format!("{e}"))?;
+            p.load().map_err(|e| format!("the kernel would not load the program {name}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// The program of a POSIX AIO function's entry, or of its return.
+fn paio_program(function: &str, ret: bool) -> String {
+    format!("paio_{function}{}", if ret { "_ret" } else { "" })
 }
 
 /// The faults' programs (`fault_layout`): an `fentry` and an `fexit` of `handle_mm_fault`.
@@ -591,8 +721,9 @@ pub fn usable() -> std::result::Result<String, String> {
 fn usable_text(how: &str, l: &Layouts) -> String {
     let mut what = format!("loaded and verified as {how}, kernel BTF");
     let mut not = vec![];
-    for (name, r) in [("io_uring's requests", &l.uring), ("faults on mappings", &l.faults), ("libaio's completions", &l.aio)] {
+    for (name, r) in [("io_uring's requests", &l.uring), ("faults on mappings", &l.faults), ("libaio's completions", &l.aio), ("POSIX AIO", &l.paio)] {
         match r {
+            Ok(v) if v["libraries"].is_array() => what += &format!(", {name} ({})", v["libraries"].as_array().unwrap().iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")),
             Ok(_) => what += &format!(", {name}"),
             Err(why) => not.push(format!("{name} not traced: {why}")),
         }
@@ -611,6 +742,7 @@ pub struct Probes {
     _faults: Vec<aya::programs::fentry::FEntryLinkId>,
     _faults_exit: Vec<aya::programs::fexit::FExitLinkId>,
     _aio: Vec<aya::programs::fentry::FEntryLinkId>,
+    _paio: Vec<aya::programs::uprobe::UProbeLinkId>,
 }
 
 impl Probes {
@@ -665,7 +797,29 @@ impl Probes {
                 }
             }
         }
-        Ok(Probes { bpf, links, layouts, _faults: fe, _faults_exit: fx, _aio: fa })
+        let mut fu = vec![];
+        if let Ok(l) = &layouts.paio {
+            let l = l.clone();
+            let r = (|| -> std::result::Result<(), String> {
+                for p in l["probes"].as_array().into_iter().flatten() {
+                    let (f, lib) = (p["function"].as_str().unwrap_or(""), p["library"].as_str().unwrap_or(""));
+                    for o in p["offsets"].as_array().into_iter().flatten().filter_map(Value::as_u64) {
+                        for ret in [false, true] {
+                            let prog: &mut aya::programs::UProbe = bpf.program_mut(&paio_program(f, ret)).expect("a program").try_into().map_err(|e| format!("{e}"))?;
+                            let at = aya::programs::uprobe::UProbeAttachLocation::AbsoluteOffset(o);
+                            fu.push(prog.attach(at, lib, aya::programs::uprobe::UProbeScope::AllProcesses).map_err(|e| format!("attaching to {f} in {lib}: {:#}", anyhow!(e)))?);
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            match r {
+                Ok(()) => links += fu.len(),
+                // the probes attached record what the converter, without the header's layout, skips
+                Err(why) => layouts.paio = Err(why),
+            }
+        }
+        Ok(Probes { bpf, links, layouts, _faults: fe, _faults_exit: fx, _aio: fa, _paio: fu })
     }
 
     /// The header's `uring`: whether `io_uring`'s requests are traced, and the converter's layout.
@@ -681,6 +835,11 @@ impl Probes {
     /// The header's `aio`: whether libaio's completions are traced, and the converter's layout.
     pub fn aio_header(&self) -> Value {
         traced_header(&self.layouts.aio)
+    }
+
+    /// The header's `posix_aio`: whether POSIX AIO is traced, and the libraries its probes are on.
+    pub fn paio_header(&self) -> Value {
+        traced_header(&self.layouts.paio)
     }
 
     /// The process to trace, by its pid here: the probe adds it at its next call.
@@ -1000,13 +1159,61 @@ mod tests {
 
     #[test]
     fn the_source_check_says_what_is_traced_and_why_not() {
-        let all = Layouts { uring: Ok(json!({})), faults: Ok(json!({})), aio: Ok(json!({})) };
-        assert_eq!(usable_text("root", &all), "loaded and verified as root, kernel BTF, io_uring's requests, faults on mappings, libaio's completions");
-        let some = Layouts { faults: Err("no trampolines".into()), aio: Err("aio_prep_rw inlined".into()), ..all };
+        let all = Layouts { uring: Ok(json!({})), faults: Ok(json!({})), aio: Ok(json!({})), paio: Ok(json!({"libraries": ["/lib/libc.so.6"]})) };
+        assert_eq!(usable_text("root", &all), "loaded and verified as root, kernel BTF, io_uring's requests, faults on mappings, libaio's completions, POSIX AIO (/lib/libc.so.6)");
+        let some = Layouts { faults: Err("no trampolines".into()), aio: Err("aio_prep_rw inlined".into()), paio: Err("no C library".into()), ..all };
         assert_eq!(
             usable_text("cap_bpf", &some),
-            "loaded and verified as cap_bpf, kernel BTF, io_uring's requests; faults on mappings not traced: no trampolines; libaio's completions not traced: aio_prep_rw inlined"
+            "loaded and verified as cap_bpf, kernel BTF, io_uring's requests; faults on mappings not traced: no trampolines; libaio's completions not traced: aio_prep_rw inlined; POSIX AIO not traced: no C library"
         );
+    }
+
+    /// POSIX AIO's probes (DESIGN_REVIEW.md §3.98 "Phase 4 step 4"): this program's C library
+    /// (glibc 2.34 and on: AIO in libc.so.6) defines every function, each at a file offset with
+    /// its `*64` alias at the same one, and `lio_listio` at two (its version before glibc 2.4,
+    /// kept for old programs, a function of its own); a file that is no ELF, cut short, or
+    /// without the functions is refused, said why.
+    #[test]
+    fn the_c_library_s_posix_aio_functions_are_found() {
+        let l = paio_layout().unwrap();
+        let lib = l["libraries"][0].as_str().unwrap().to_string();
+        assert!(lib.starts_with('/') && lib.rsplit('/').next().unwrap().starts_with("libc.so"), "{l}");
+        assert_eq!(std::fs::canonicalize(&lib).unwrap().to_str().unwrap(), lib);
+        let probes = l["probes"].as_array().unwrap();
+        let names: Vec<&str> = probes.iter().map(|p| p["function"].as_str().unwrap()).collect();
+        assert_eq!(names, PAIO_FUNCTIONS, "{l}");
+        let bytes = std::fs::read(&lib).unwrap();
+        for p in probes {
+            let offs = p["offsets"].as_array().unwrap();
+            assert!(!offs.is_empty() && p["library"] == lib.as_str(), "{p}");
+            for o in offs {
+                // a function's first bytes: endbr64 on x86_64 (CET), a bti or a stp on aarch64
+                let o = o.as_u64().unwrap() as usize;
+                assert!(o > 0 && o + 4 < bytes.len(), "{p}");
+            }
+        }
+        let lio = &probes[PAIO_LIO_LISTIO as usize];
+        assert_eq!(lio["offsets"].as_array().unwrap().len(), 2, "{lio}");
+        // the aliases add no address
+        let f = elf_functions(&bytes, &["aio_read", "aio_read64"]).unwrap();
+        assert_eq!(f["aio_read"], f["aio_read64"]);
+
+        // refusals
+        assert!(elf_functions(b"not an elf at all, no", &["aio_read"]).unwrap_err().contains("not an ELF"));
+        assert!(elf_functions(&bytes[..200], &["aio_read"]).unwrap_err().contains("cut short"));
+        let me = std::fs::read("/proc/self/exe").unwrap();
+        assert!(elf_functions(&me, &["aio_read"]).unwrap().get("aio_read").is_none());
+        let t = std::env::temp_dir().join(format!("aeiou-paio-{}", std::process::id()));
+        std::fs::write(&t, &me).unwrap();
+        let e = paio_layout_of(&[t.clone()]).unwrap_err();
+        assert!(e.contains("defines no aio_read") && e.contains(t.to_str().unwrap()), "{e}");
+        // where libc.so.6 lacks them (glibc before 2.34), librt.so.1 beside it: each function
+        // from the first that defines it, and only those libraries listed
+        let two = paio_layout_of(&[t.clone(), std::path::PathBuf::from(&lib)]).unwrap();
+        assert_eq!(two["libraries"], json!([lib]), "{two}");
+        let _ = std::fs::remove_file(&t);
+        assert!(paio_layout_of(&[]).unwrap_err().contains("no C library"));
+        assert!(paio_layout_of(&["/nonexistent/libc.so.6".into()]).unwrap_err().contains("/nonexistent/libc.so.6"));
     }
 
     #[test]

@@ -59,10 +59,11 @@ pub const MAX_OFFSET_S: f64 = 0.010;
 pub const CLOCK_ROUNDS: usize = 8;
 
 /// What a capture under strace cannot see, recorded in every record.
-pub const NOT_SEEN_STRACE: [&str; 5] = [
+pub const NOT_SEEN_STRACE: [&str; 6] = [
     "loads and stores to mapped memory (mmap): the page faults they cause are not system calls",
     "io_uring operations: io_uring_enter is traced, the submission queue's entries are not",
     "when a libaio request completed: io_getevents shows when its result was collected, and a result read from the context's ring in user space, with no call, is not seen at all",
+    "which thread issued a POSIX AIO request (aio_read, lio_listio), when, and when its result was collected: glibc's helper threads make its calls, traced as their own",
     "object-store requests: the sockets' calls are traced, the HTTP heads are not (the capture's library, --requests shim, or the store's own log)",
     "which reads the page cache served",
 ];
@@ -88,6 +89,13 @@ pub const NOT_SEEN_FAULTS: [&str; 5] = [
     "faults on anonymous memory and on code: not file data",
     "first touches of the other pages of a large folio: a fault maps the whole folio its page is in (up to 2 MiB), as the file happened to be cached (by large writes, or readahead), so an aeiou_fault is where touches began, at the granularity the kernel mapped; the pages each fault mapped are not recorded (brief item 67)",
     "first touches of pages the kernel's fault-around mapped beside a faulting one: the fault-around check was waived",
+];
+
+/// What a capture under eBPF cannot see of POSIX AIO when its functions are traced (in place of
+/// strace's line on it, `NOT_SEEN_STRACE[3]`; DESIGN_REVIEW.md §3.98 "Phase 4 step 4").
+pub const NOT_SEEN_PAIO: [&str; 2] = [
+    "POSIX AIO of a program linked statically or run on another C library than the one probed (musl's, a container's): its helper threads' calls are traced as their own (conversion.posix_aio_libraries_not_traced names those the command mapped)",
+    "when an application noticed a POSIX AIO request was done by polling aio_error, which is not traced (a loop calls it); aio_return, aio_suspend, and the helper's call are",
 ];
 
 /// What a capture under eBPF cannot see beyond what strace cannot, recorded in every record.
@@ -1204,6 +1212,14 @@ pub fn run(o: Opts) -> Result<i32> {
     if let Some(f) = &aio_at {
         line[0] += &format!(", fentry:{f} (libaio's completions)");
     }
+    let paio = probes.as_ref().map(|p| p.paio_header());
+    let paio_traced = paio.as_ref().is_some_and(|a| a["traced"] == true);
+    if let Some(Value::String(why)) = paio.as_ref().map(|a| &a["why"]) {
+        say(&format!("POSIX AIO is not traced: {why}"));
+    }
+    if let Some(Value::Array(libs)) = paio.as_ref().map(|a| &a["layout"]["libraries"]) {
+        line[0] += &format!(", uprobe,uretprobe:{} (POSIX AIO)", libs.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","));
+    }
 
     catch(libc::SIGINT);
     catch(libc::SIGTERM);
@@ -1233,6 +1249,7 @@ pub fn run(o: Opts) -> Result<i32> {
                 "uring": p.uring_header(),
                 "faults": faults,
                 "aio": aio,
+                "posix_aio": paio,
             });
             let reader = p.read_into(&bin, &header, stop.clone())?;
             unsafe {
@@ -1379,8 +1396,9 @@ pub fn run(o: Opts) -> Result<i32> {
     }
     let not_seen = NOT_SEEN_STRACE
             .iter()
-            .filter(|n| !(uring_traced && n.starts_with("io_uring operations")) && !(faults_traced && n.starts_with("loads and stores")) && !(aio_at.is_some() && n.starts_with("when a libaio request")))
+            .filter(|n| !(uring_traced && n.starts_with("io_uring operations")) && !(faults_traced && n.starts_with("loads and stores")) && !(aio_at.is_some() && n.starts_with("when a libaio request")) && !(paio_traced && n.starts_with("which thread issued a POSIX AIO")))
             .chain(if aio_at.as_deref() == Some("aio_complete_rw") { [NOT_SEEN_AIO_RW].iter() } else { [].iter() })
+            .chain(if paio_traced { NOT_SEEN_PAIO.iter() } else { [].iter() })
             .chain(if uring_traced { NOT_SEEN_URING.iter() } else { [].iter() })
             .chain(if faults_traced { NOT_SEEN_FAULTS[..if first_touch == Some(true) { 4 } else { 5 }].iter() } else { [].iter() })
             .chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() })
@@ -1437,6 +1455,7 @@ pub fn run(o: Opts) -> Result<i32> {
     });
     // apart: one key more and the macro passes its recursion limit
     rec["aio"] = json!(aio_rec);
+    rec["posix_aio"] = json!(paio.as_ref().map(|a| json!({"traced": a["traced"], "why": a.get("why"), "libraries": a["layout"].get("libraries")})));
     write_json(&out.join("capture.json"), &rec)?;
     for c in &changes {
         say(&format!("changed during the capture: {}", c.as_str().unwrap_or("")));

@@ -2178,6 +2178,55 @@ moved, paired through its issue's `id` (not by `aio_data`, which applications re
 completion is taken as complete (`aio_results_assumed_complete`). The export's `submit` members
 carry their completions' results. A trace without them is read as strace's.
 
+POSIX AIO (2026-11-05, `DESIGN_REVIEW.md` §3.98 "Phase 4 step 4"), written by the eBPF source
+running as root (a uprobe needs `CAP_SYS_ADMIN`; brief item 68) when the C library it runs on
+exports glibc's functions (`capture.json`'s `posix_aio`, its
+`libraries` the files probed; the header's records then end `aeiou_aio_read aeiou_aio_write
+aeiou_aio_fsync aeiou_lio_listio aeiou_aio_serve aeiou_aio_suspend aeiou_aio_return
+aeiou_aio_cancel aeiou_aio_refused`):
+
+```
+TID TIME aeiou_aio_read(id=N, aiocb=0xA, fd=F, off=O, len=L, notify=K) = 0
+TID TIME aeiou_aio_write(id=N, aiocb=0xA, fd=F, off=O, len=L, notify=K) = 0
+TID TIME aeiou_aio_fsync(id=N, aiocb=0xA, fd=F, op=O_SYNC|O_DSYNC, notify=K) = 0
+TID TIME aeiou_lio_listio(mode=LIO_WAIT|LIO_NOWAIT, list=[{id=N, aiocb=0xA, op=LIO_READ|LIO_WRITE, fd=F, off=O, len=L, notify=K}, ...], nent=E) = 0
+TID TIME aeiou_aio_refused(id=N) = -1
+HID TIME aeiou_aio_serve(id=N) = 0
+TID TIME aeiou_aio_suspend(ids=[N, ...], timeout=NULL|{tv_sec=S, tv_nsec=NS}) = RET <DUR>
+TID TIME aeiou_aio_return(id=N) = RES
+TID TIME aeiou_aio_cancel(fd=F, aiocb=0xA|NULL, canceled=[N, ...]) = RET (AIO_CANCELED|AIO_NOTCANCELED|AIO_ALLDONE) <DUR>
+```
+
+- An issue is written at its function's entry (a helper may serve the request before the
+  function returns), `id` a number from the pool `io_uring`'s and libaio's requests take theirs
+  from, held while the request is in flight; `aiocb` the application's `struct aiocb`, unique
+  while its request is in flight; `notify` its `sigev_notify` (`SIGEV_NONE`, `SIGEV_SIGNAL`,
+  `SIGEV_THREAD`, `SIGEV_THREAD_ID`). A `lio_listio`'s null and `LIO_NOP` entries are left out
+  of its list, `nent` the count it was given; its members past the 32nd are not copied.
+  `aeiou_aio_refused` follows an issue glibc returned -1 for (it could not queue it).
+- `aeiou_aio_serve`, under the glibc helper thread `HID`, comes just before the line of its call
+  that serves request `N`: a `pread64` or `pwrite64` of the request's descriptor, buffer,
+  length, and offset (the earliest issued when several match, counted
+  `conversion.posix_aio_ambiguous`), after an `EINTR` the same call again, after an `ESPIPE` a
+  `read` or `write` at no offset, an `fsync` (`O_SYNC`) or `fdatasync` (`O_DSYNC`) of the
+  descriptor. The call's line is as strace prints it.
+- `aeiou_aio_suspend`, `aeiou_aio_return`, and `aeiou_aio_cancel` are written at their return,
+  stamped with their call's start; `ids` the requests in flight of the list, `canceled` those of
+  the descriptor (or the one `aiocb`) no helper had taken, done. A request is done at its
+  `aeiou_aio_return`, when its `aiocb` is issued again (`posix_aio_never_collected` if it was
+  served), or at the end.
+
+With these records the readers count a read or a write once, in the issuing thread, when the
+helper's call its `aeiou_aio_serve` names returns, with the bytes it moved (an `O_APPEND` write
+at the file's known end), and an fsync as the issuer's call; the helper's call is not counted
+again, and one interrupted waits for the next. Each issue's data requests are a fan-out, and,
+exported, a `submit` in the issuer's lane, its members' results the helper's calls', a request
+refused, canceled, or never served left out of it (`not_exported:posix_aio:WHY`, and the
+`submit` with it when none is left), since it moved no bytes. Notes:
+`posix_aio_refused`, `posix_aio_canceled`, `posix_aio_never_served` (not counted),
+`posix_aio_never_collected`. A trace without the records is read as strace's: the helper's
+calls are its own.
+
 ## 14. The option layers (2026-10-04)
 
 Every option of every subcommand is resolved through four layers, a higher one replacing a

@@ -15,9 +15,9 @@ use aya_ebpf::{
         bpf_get_current_pid_tgid, bpf_get_ns_current_pid_tgid, bpf_get_smp_processor_id, bpf_ktime_get_ns,
         bpf_probe_read_kernel, generated as gen,
     },
-    macros::{fentry, fexit, map, raw_tracepoint},
+    macros::{fentry, fexit, map, raw_tracepoint, uprobe, uretprobe},
     maps::{Array, HashMap, LruHashMap, PerCpuArray, RingBuf},
-    programs::{FEntryContext, FExitContext, RawTracePointContext},
+    programs::{FEntryContext, FExitContext, ProbeContext, RawTracePointContext, RetProbeContext},
 };
 use core::mem::size_of;
 use record::*;
@@ -731,6 +731,115 @@ fn aio_emit(cfg: &Config, kind: u16, req: *const u8, res: i64) -> i32 {
     }
     0
 }
+
+/// A POSIX AIO function of the C library called by a traced thread (a uprobe on its entry,
+/// DESIGN_REVIEW.md §3.98 "Phase 4 step 4"): its arguments, and the `struct aiocb`s they name
+/// (`aio_read`'s and `aio_write`'s first, `aio_fsync`'s second, a `lio_listio`'s list and each
+/// of its entries), `aio_suspend`'s list and timeout, as they are at the call: the converter
+/// matches each request to the helper thread's call that serves it.
+#[inline(always)]
+fn paio_entry(ctx: &ProbeContext, func: u32) -> u32 {
+    if !traced() {
+        return 0;
+    }
+    let Some(buf) = BUF.get_ptr_mut(0) else { return 0 };
+    let buf = buf as *mut u8;
+    let mut args = [0u64; 6];
+    for (i, a) in args.iter_mut().enumerate() {
+        *a = ctx.arg(i).unwrap_or(0);
+    }
+    unsafe { *(buf as *mut Enter) = Enter { head: head(PAIO_ENTER), nr: func, pad: 0, args } };
+    let mut off = size_of::<Enter>();
+    match func {
+        PAIO_READ | PAIO_WRITE => off = put_bytes(buf, off, 0, args[0], AIOCB_SIZE, AIOCB_SIZE),
+        PAIO_FSYNC => off = put_bytes(buf, off, 1, args[1], AIOCB_SIZE, AIOCB_SIZE),
+        PAIO_LIO_LISTIO => {
+            off = put_bytes(buf, off, 1, args[1], args[2] as usize * 8, MAX_ELEMS * 8);
+            off = put_aiocbs(buf, off, args[2], args[1]);
+        }
+        PAIO_SUSPEND => {
+            off = put_bytes(buf, off, 0, args[0], args[1] as usize * 8, MAX_ELEMS * 8);
+            if args[2] != 0 {
+                off = put_bytes(buf, off, 2, args[2], TIMESPEC_SIZE, TIMESPEC_SIZE);
+            }
+        }
+        _ => {}
+    }
+    emit(buf, off);
+    0
+}
+
+/// The `struct aiocb`s a `lio_listio`'s `nr` entries at `list` point to, up to `MAX_ELEMS`, one
+/// after another in one blob; an entry not read (a null pointer) marked `LIO_NOP`, so each keeps
+/// its place.
+#[inline(always)]
+fn put_aiocbs(buf: *mut u8, off: usize, nr: u64, list: u64) -> usize {
+    let off = off & (SCRATCH - 1);
+    let nr = if nr > MAX_ELEMS as u64 { MAX_ELEMS } else { nr as usize };
+    let data = unsafe { buf.add(off + size_of::<Blob>()) };
+    let mut got = 0usize;
+    for i in 0..MAX_ELEMS {
+        if i >= nr {
+            break;
+        }
+        let mut p: u64 = 0;
+        if unsafe { gen::bpf_probe_read_user(&mut p as *mut u64 as *mut _, 8, (list + 8 * i as u64) as *const _) } != 0 {
+            break;
+        }
+        let at = unsafe { data.add(i * AIOCB_SIZE) };
+        if p == 0 || unsafe { gen::bpf_probe_read_user(at as *mut _, AIOCB_SIZE as u32, p as *const _) } != 0 {
+            // LIO_NOP in aio_lio_opcode
+            unsafe { *(at.add(4) as *mut u32) = 2 };
+        }
+        got = i + 1;
+    }
+    let len = got * AIOCB_SIZE;
+    unsafe { *(buf.add(off) as *mut Blob) = Blob { arg: AIOCB_LIST, what: BYTES, len: len as u16, pad: 0 } };
+    off + size_of::<Blob>() + len
+}
+
+/// Its return (a uretprobe): what it returned, the record built on this program's stack.
+#[inline(always)]
+fn paio_return(ctx: &RetProbeContext, func: u32) -> u32 {
+    if !traced() {
+        return 0;
+    }
+    let ret: i64 = ctx.ret();
+    let rec = Exit { head: Head { len: size_of::<Exit>() as u16, ..head(PAIO_EXIT) }, nr: func, pad: 0, ret };
+    let Some(loss) = LOSSES.get_ptr_mut(0) else { return 0 };
+    let loss = unsafe { &mut *loss };
+    if EVENTS.output::<Exit>(&rec, 0).is_err() {
+        if loss.pending == 0 {
+            loss.first = rec.head.ts;
+        }
+        loss.pending += 1;
+        loss.last = rec.head.ts;
+        loss.total += 1;
+    }
+    0
+}
+
+/// A uprobe and a uretprobe of each POSIX AIO function, named as `aeiou::ebpf::paio_program`
+/// names them.
+macro_rules! paio {
+    ($entry:ident, $ret:ident, $func:expr) => {
+        #[uprobe]
+        pub fn $entry(ctx: ProbeContext) -> u32 {
+            paio_entry(&ctx, $func)
+        }
+        #[uretprobe]
+        pub fn $ret(ctx: RetProbeContext) -> u32 {
+            paio_return(&ctx, $func)
+        }
+    };
+}
+paio!(paio_aio_read, paio_aio_read_ret, PAIO_READ);
+paio!(paio_aio_write, paio_aio_write_ret, PAIO_WRITE);
+paio!(paio_aio_fsync, paio_aio_fsync_ret, PAIO_FSYNC);
+paio!(paio_lio_listio, paio_lio_listio_ret, PAIO_LIO_LISTIO);
+paio!(paio_aio_return, paio_aio_return_ret, PAIO_RETURN);
+paio!(paio_aio_suspend, paio_aio_suspend_ret, PAIO_SUSPEND);
+paio!(paio_aio_cancel, paio_aio_cancel_ret, PAIO_CANCEL);
 
 #[cfg(not(test))]
 #[panic_handler]

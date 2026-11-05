@@ -132,6 +132,21 @@ the line's array, and an `aeiou_aio_complete(ctx=0xC, id=N, data=0xD, in_submit=
 when the kernel posted its result, `in_submit=1` before the call returned; a read or write then
 counts at its completion with the bytes it moved, paired by `id`, not `aio_data`, and
 `io_getevents` only collects (notes `aio_completed_in_submit`, `aio_completed_never_reaped`).
+And POSIX AIO (`DESIGN_REVIEW.md` §3.98 "Phase 4 step 4"; `aeiou_aio_read aeiou_aio_write
+aeiou_aio_fsync aeiou_lio_listio aeiou_aio_serve aeiou_aio_suspend aeiou_aio_return
+aeiou_aio_cancel aeiou_aio_refused` in the header's records): each request at its issue,
+`aeiou_aio_read(id=N, aiocb=0xA, fd=F, off=O, len=L, notify=K) = 0` (`aeiou_aio_write` the same,
+`aeiou_aio_fsync(id=N, aiocb=0xA, fd=F, op=O_SYNC|O_DSYNC, notify=K) = 0`,
+`aeiou_lio_listio(mode=LIO_WAIT|LIO_NOWAIT, list=[{id=N, aiocb=0xA, op=LIO_READ|LIO_WRITE, fd=F,
+off=O, len=L, notify=K}, ...], nent=E) = 0`); `aeiou_aio_serve(id=N) = 0` under the glibc
+helper thread, just before its call that serves the request (its line as strace prints it);
+`aeiou_aio_suspend(ids=[N, ...], timeout=T) = RET <DUR>`, `aeiou_aio_return(id=N) = RES`,
+`aeiou_aio_cancel(fd=F, aiocb=0xA|NULL, canceled=[N, ...]) = RET <DUR>` at their return,
+stamped with their call; `aeiou_aio_refused(id=N) = -1` for an issue glibc could not queue. A
+request counts once, in the thread that issued it, when the helper's call returns, with the
+bytes it moved (notes `posix_aio_refused`, `posix_aio_canceled`, `posix_aio_never_served`,
+`posix_aio_never_collected`); `export` leaves a request refused, canceled, or never served out
+of its `submit` (`not_exported:posix_aio:WHY`).
 `metrics` counts the faults apart from the calls, in `faults` (FILES; the
 note `faults_kernel_observed` says what they are: the kernel's view of first touches, weaker
 evidence than a call), `export` keeps a mapping as one read of its range (`mmap_as_read`) and
@@ -407,6 +422,20 @@ function records that request's completion, whoever posts it (an interrupt, a wo
 by the kernel's own request, never printed (the application's `struct iocb` is copied by the
 kernel, and its address may be reused at once). A poll request is not traced. They are
 written as the `aeiou_aio_issue` and `aeiou_aio_complete` records above.
+**POSIX AIO** (`DESIGN_REVIEW.md` §3.98 "Phase 4 step 4"): as root alone (the kernel attaches
+a uprobe only for `CAP_SYS_ADMIN`; under file capabilities `capture.json`'s `posix_aio` says so
+and the trace's POSIX AIO is strace's, brief item 68), where the C library the tool runs on
+(the system's `libc.so.6`, and `librt.so.1` beside it before glibc 2.34) exports them, a uprobe
+and a uretprobe of `aio_read`, `aio_write`, `aio_fsync`, `lio_listio`, `aio_return`,
+`aio_suspend`, and `aio_cancel` record each call of the command's threads with the `struct
+aiocb`s it names (`capture.json`'s `posix_aio` says which libraries, or why not; the source
+line names them). glibc serves a request on a helper thread of its own, by an ordinary
+`pread64`, `pwrite64`, `fsync`, or `fdatasync`; the converter matches that call to the request
+by descriptor, buffer, length, and offset, and writes the records above. `aio_error`, which
+applications poll in a loop, is not traced. A program linked statically, or on another C library
+(musl's, a container's), is not traced: its helpers' calls are its own, as under strace, and
+`conversion.posix_aio_libraries_not_traced` names the C libraries the command mapped that the
+probes were not on.
 The probes are attached and every capability given up for good before the command is
 started; the command runs as the invoking user, in the environment the tool was started with
 (a binary with capabilities is secure-exec, and the variables glibc strips from it,
@@ -430,8 +459,9 @@ count those lines (`events_lost` in the notes of `metrics`, `export`, and `diges
 `trace_incomplete` saying what it means), a descriptor whose open fell in a window is printed
 without a path, never guessed, and `compare` says first that a side is incomplete. Not
 implemented yet: the `sudo -n` helper for hosts where file capabilities cannot be granted
-(phase 3b of brief item 54), and the request heads by uprobe and POSIX AIO's issuer (phase 4,
-after `io_uring`, mapping faults, and libaio's completions, built 2026-11-04); a `trace` node that replays faults as touches through a mapping (brief item 65).
+(phase 3b of brief item 54), and the request heads by uprobe (phase 4, after `io_uring`,
+mapping faults, and libaio's completions, built 2026-11-04, and POSIX AIO, built 2026-11-05);
+a `trace` node that replays faults as touches through a mapping (brief item 65).
 
 **Object requests.** With an `--endpoint`, the command also runs with the capture's library
 preloaded (`--requests shim`, the default then; `--requests none` leaves it out), put in the

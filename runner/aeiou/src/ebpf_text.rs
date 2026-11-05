@@ -38,6 +38,8 @@ enum Rec {
     Fault { h: Head, address: u64, vm_start: u64, pgoff: u64, ino: u64, dev: u32, flags: u32, ret: u32, end: u64 },
     AioIssue { h: Head, req: u64 },
     AioDone { h: Head, req: u64, ctx: u64, data: u64, res: i64 },
+    PaioEnter { h: Head, func: u32, args: [u64; 6], blobs: Vec<(u8, u8, Vec<u8>)> },
+    PaioExit { h: Head, func: u32, ret: i64 },
 }
 
 fn u16_at(b: &[u8], o: usize) -> u16 {
@@ -69,8 +71,8 @@ fn blobs_of(b: &[u8], mut at: usize) -> Result<Vec<(u8, u8, Vec<u8>)>> {
 fn decode(b: &[u8]) -> Result<Rec> {
     let h = head_of(b);
     let fixed = match h.kind {
-        ENTER => std::mem::size_of::<Enter>(),
-        EXIT | GONE | FORK => std::mem::size_of::<Exit>(),
+        ENTER | PAIO_ENTER => std::mem::size_of::<Enter>(),
+        EXIT | GONE | FORK | PAIO_EXIT => std::mem::size_of::<Exit>(),
         GAP => std::mem::size_of::<Gap>(),
         URING_SQE => std::mem::size_of::<Sqe>(),
         URING_CQE => std::mem::size_of::<Cqe>(),
@@ -91,6 +93,14 @@ fn decode(b: &[u8]) -> Result<Rec> {
             Rec::Enter { h, nr: u32_at(b, 24), args, blobs: blobs_of(b, std::mem::size_of::<Enter>())? }
         }
         EXIT => Rec::Exit { h, nr: u32_at(b, 24), ret: u64_at(b, 32) as i64, blobs: blobs_of(b, std::mem::size_of::<Exit>())? },
+        PAIO_ENTER => {
+            let mut args = [0u64; 6];
+            for (i, a) in args.iter_mut().enumerate() {
+                *a = u64_at(b, 32 + 8 * i);
+            }
+            Rec::PaioEnter { h, func: u32_at(b, 24), args, blobs: blobs_of(b, std::mem::size_of::<Enter>())? }
+        }
+        PAIO_EXIT => Rec::PaioExit { h, func: u32_at(b, 24), ret: u64_at(b, 32) as i64 },
         GAP => Rec::Gap { h, lost: u64_at(b, 24), first: u64_at(b, 32), last: u64_at(b, 40) },
         GONE => Rec::Gone { h, code: u64_at(b, 32) as i64 },
         FORK => Rec::Fork { h, child: u32_at(b, 24), thread: u32_at(b, 28) == 1 },
@@ -127,7 +137,7 @@ pub const DEFAULT_FAULT_GAP_NS: u64 = 1_000_000;
 impl Rec {
     fn head(&self) -> &Head {
         match self {
-            Rec::Enter { h, .. } | Rec::Exit { h, .. } | Rec::Gap { h, .. } | Rec::Gone { h, .. } | Rec::Fork { h, .. } | Rec::Sqe { h, .. } | Rec::Cqe { h, .. } | Rec::UringCall { h, .. } | Rec::Fault { h, .. } | Rec::AioIssue { h, .. } | Rec::AioDone { h, .. } => h,
+            Rec::Enter { h, .. } | Rec::Exit { h, .. } | Rec::Gap { h, .. } | Rec::Gone { h, .. } | Rec::Fork { h, .. } | Rec::Sqe { h, .. } | Rec::Cqe { h, .. } | Rec::UringCall { h, .. } | Rec::Fault { h, .. } | Rec::AioIssue { h, .. } | Rec::AioDone { h, .. } | Rec::PaioEnter { h, .. } | Rec::PaioExit { h, .. } => h,
         }
     }
 }
@@ -176,6 +186,35 @@ struct Held {
     ctx: u64,
     data: u64,
     res: i64,
+}
+
+/// A POSIX AIO request in flight (`paio_reqs`, by its process and `struct aiocb`'s address,
+/// which POSIX forbids reusing until the request is done): the number its records carry, the
+/// thread that issued it and when (its order), what the helper's call that serves it names (a
+/// read 0, a write 1, an fsync 2, an fdatasync 3; the descriptor, buffer, length, and offset),
+/// the helper serving it now, and whether it was served; `retry` once a call serving it was
+/// interrupted (`EINTR`) or refused its offset (`ESPIPE`: glibc reads or writes a pipe or socket
+/// at none), so the next may be another.
+struct PaioReq {
+    id: u64,
+    seq: u64,
+    kind: u8,
+    fd: i64,
+    buf: u64,
+    len: u64,
+    off: i64,
+    serving: Option<u32>,
+    served: bool,
+    retry: bool,
+}
+
+/// A POSIX AIO function between its entry and its return, by thread: the function, its entry's
+/// time, arguments, and structures.
+struct PaioCall {
+    func: u32,
+    ts: u64,
+    args: [u64; 6],
+    blobs: Vec<(u8, u8, Vec<u8>)>,
 }
 
 type Files = Rc<RefCell<HashMap<i64, Fd>>>;
@@ -270,11 +309,16 @@ struct Pending {
     blobs: Vec<(u8, u8, Vec<u8>)>,
     /// Printed and cut short (`<unfinished ...>`).
     unfinished: bool,
+    /// The POSIX AIO request this call serves (a glibc helper's), by its key in `paio_reqs`.
+    serves: Option<(u32, u64)>,
     silent: bool,
     /// The entry's text, `TID TIME NAME(ARGS`, a string the probe could not read yet a
     /// placeholder (`hole`) filled when the line is written.
     line: String,
 }
+
+/// The records of POSIX AIO (DESIGN_REVIEW.md §3.98 "Phase 4 step 4"), as the header lists them.
+pub const PAIO_RECORDS: [&str; 9] = ["aeiou_aio_read", "aeiou_aio_write", "aeiou_aio_fsync", "aeiou_lio_listio", "aeiou_aio_serve", "aeiou_aio_suspend", "aeiou_aio_return", "aeiou_aio_cancel", "aeiou_aio_refused"];
 
 /// Where a string argument the entry could not read goes in its line, until the return reads it.
 fn hole(arg: usize) -> String {
@@ -327,6 +371,19 @@ pub struct Stats {
     pub aio_completions_unmatched: u64,
     pub aio_completed_in_submit: u64,
     pub aio_in_flight_at_end: u64,
+    /// POSIX AIO's requests (DESIGN_REVIEW.md §3.98 "Phase 4 step 4"): written, served by a
+    /// helper's call, served by one that would have served another too (the earlier issued
+    /// taken), refused at once, canceled, done with no `aio_return` (their `aiocb` issued again,
+    /// or the end), and not served by the end; and the C libraries the command's processes
+    /// mapped that the probes were not on.
+    pub posix_aio_requests: u64,
+    pub posix_aio_served: u64,
+    pub posix_aio_ambiguous: u64,
+    pub posix_aio_refused: u64,
+    pub posix_aio_canceled: u64,
+    pub posix_aio_never_collected: u64,
+    pub posix_aio_in_flight_at_end: u64,
+    pub posix_aio_libraries_not_traced: Vec<String>,
 }
 
 impl Stats {
@@ -352,6 +409,14 @@ impl Stats {
             "aio_completions_unmatched": self.aio_completions_unmatched,
             "aio_completed_in_submit": self.aio_completed_in_submit,
             "aio_in_flight_at_end": self.aio_in_flight_at_end,
+            "posix_aio_requests": self.posix_aio_requests,
+            "posix_aio_served": self.posix_aio_served,
+            "posix_aio_ambiguous": self.posix_aio_ambiguous,
+            "posix_aio_refused": self.posix_aio_refused,
+            "posix_aio_canceled": self.posix_aio_canceled,
+            "posix_aio_never_collected": self.posix_aio_never_collected,
+            "posix_aio_in_flight_at_end": self.posix_aio_in_flight_at_end,
+            "posix_aio_libraries_not_traced": self.posix_aio_libraries_not_traced,
         })
     }
 }
@@ -475,6 +540,12 @@ struct Text<W: Write> {
     /// its completion when it was posted inside the call (the kernel frees a request it
     /// completed there, and the call's next one may take its address), by its thread.
     issued: HashMap<u32, Vec<(u64, Option<Held>)>>,
+    /// The C libraries POSIX AIO's probes are on (the header's `posix_aio.layout.libraries`), when
+    /// they are; its requests in flight, the functions not yet returned, and the issue count.
+    paio: Option<Vec<String>>,
+    paio_reqs: HashMap<(u32, u64), PaioReq>,
+    paio_calls: HashMap<u32, PaioCall>,
+    paio_seq: u64,
 }
 
 impl<W: Write> Text<W> {
@@ -487,6 +558,7 @@ impl<W: Write> Text<W> {
             files.insert(fd, Fd { path: (!target.is_empty()).then(|| target.to_string()), cloexec: false });
         }
         let seed = hdr["seed"].as_u64().unwrap_or(0) as u32;
+        let paio = (hdr["posix_aio"]["traced"] == json!(true)).then(|| hdr["posix_aio"]["layout"]["libraries"].as_array().map(|a| a.iter().filter_map(|l| l.as_str().map(str::to_string)).collect()).unwrap_or_default());
         let mut tasks = HashMap::new();
         tasks.insert(seed, Task { files: Rc::new(RefCell::new(files)), cwd: Rc::new(RefCell::new(cwd)), maps: new_maps() });
         Text {
@@ -501,7 +573,7 @@ impl<W: Write> Text<W> {
             real: HashMap::new(),
             gone: HashSet::new(),
             uring: hdr["uring"]["layout"].is_object().then(|| hdr["uring"]["layout"].clone()),
-            header_due: hdr["uring"]["traced"] == json!(true) || hdr["faults"]["traced"] == json!(true) || hdr["aio"]["traced"] == json!(true),
+            header_due: hdr["uring"]["traced"] == json!(true) || hdr["faults"]["traced"] == json!(true) || hdr["aio"]["traced"] == json!(true) || paio.is_some(),
             rings: HashMap::new(),
             reqs: HashMap::new(),
             free_ids: BinaryHeap::new(),
@@ -515,6 +587,10 @@ impl<W: Write> Text<W> {
             aio: (hdr["aio"]["traced"] == json!(true)).then(|| hdr["aio"]["layout"]["complete"].as_str().unwrap_or("aio_complete").to_string()),
             aios: HashMap::new(),
             issued: HashMap::new(),
+            paio,
+            paio_reqs: HashMap::new(),
+            paio_calls: HashMap::new(),
+            paio_seq: 0,
         }
     }
 
@@ -561,6 +637,9 @@ impl<W: Write> Text<W> {
             if self.aio.is_some() {
                 kinds.extend(["aeiou_aio_issue", "aeiou_aio_complete"]);
             }
+            if self.paio.is_some() {
+                kinds.extend(PAIO_RECORDS);
+            }
             self.w.write_all(format!("0 {} --- aeiou: trace format {}, records {} ---\n", self.when(ts), crate::strace::TRACE_FORMAT, kinds.join(" ")).as_bytes())?;
             if self.faults.is_some() && !self.first_touch {
                 self.w.write_all(format!("0 {} --- aeiou: faults: a first touch of a page may not fault (the capture's fault-around check was waived) ---\n", self.when(ts)).as_bytes())?;
@@ -588,6 +667,8 @@ impl<W: Write> Text<W> {
                 Ok(())
             }
             Rec::AioDone { h, req, ctx, data, res } => self.aio_done(h, req, ctx, data, res),
+            Rec::PaioEnter { h, func, args, blobs } => self.paio_enter(h, func, args, blobs),
+            Rec::PaioExit { h, func, ret } => self.paio_exit(h, func, ret),
             Rec::UringCall { h, nr, ret, args, blobs } => {
                 if nr == NR_IO_URING_SETUP {
                     if let Some(b) = blob(&blobs, 0).filter(|b| b.len() == 8) {
@@ -669,9 +750,11 @@ impl<W: Write> Text<W> {
         let silent = self.silent(h.tid);
         self.stats.paths_not_copied += blobs.iter().filter(|b| b.1 == STR_FAULT).count() as u64;
         let mut line = String::new();
+        let mut serves = None;
         if !silent {
             self.cut()?;
             self.stats.calls += 1;
+            serves = self.paio_serve(h, c.name, &args)?;
             let task = self.task(h.tid);
             let (head, _) = self.args(&c, &args, &blobs, &task, None);
             line = format!("{} {} {}({head}", h.tid, self.when(h.ts), c.name);
@@ -682,7 +765,7 @@ impl<W: Write> Text<W> {
             let task = self.task(h.tid);
             task.files.borrow_mut().remove(&(args[0] as i32 as i64));
         }
-        if let Some(old) = self.pending.insert(h.tid, Pending { nr, ts: h.ts, args, blobs, unfinished: false, silent, line }) {
+        if let Some(old) = self.pending.insert(h.tid, Pending { nr, ts: h.ts, args, blobs, unfinished: false, serves, silent, line }) {
             // an entry whose exit was lost
             if !old.silent {
                 self.stats.entries_without_exit += 1;
@@ -711,6 +794,16 @@ impl<W: Write> Text<W> {
             }
         }
         let task = self.task(h.tid);
+        if let Some(r) = p.serves.and_then(|k| self.paio_reqs.get_mut(&k)) {
+            // interrupted, or a pipe's or socket's offset refused: glibc calls again
+            r.serving = None;
+            if ret == -(libc::EINTR as i64) || ret == -(libc::ESPIPE as i64) {
+                r.retry = true;
+            } else {
+                r.served = true;
+                self.stats.posix_aio_served += 1;
+            }
+        }
         let ret_path = self.apply(h.pid, h.tid, &c, &p, ret, &task);
         if !p.silent {
             let (_, tail) = self.args(&c, &p.args, &p.blobs, &task, Some((ret, &xblobs)));
@@ -829,7 +922,207 @@ impl<W: Write> Text<W> {
         }
     }
 
+    // ---- POSIX AIO (DESIGN_REVIEW.md §3.98 "Phase 4 step 4")
+
+    /// A POSIX AIO function's entry: each request it issues written now, numbered, since a
+    /// helper may serve it before the function returns; the function kept for its return.
+    fn paio_enter(&mut self, h: Head, func: u32, args: [u64; 6], blobs: Vec<(u8, u8, Vec<u8>)>) -> Result<()> {
+        if self.paio.is_none() || self.silent(h.tid) {
+            return Ok(());
+        }
+        let task = self.task(h.tid);
+        let when = self.when(h.ts);
+        match func {
+            PAIO_READ | PAIO_WRITE | PAIO_FSYNC => {
+                let (arg, at) = if func == PAIO_FSYNC { (1, args[1]) } else { (0, args[0]) };
+                if let Some(cb) = blob(&blobs, arg).filter(|b| b.len() >= AIOCB_SIZE) {
+                    let kind = match func {
+                        PAIO_READ => 0,
+                        PAIO_WRITE => 1,
+                        _ if args[0] as i32 == libc::O_DSYNC => 3,
+                        _ => 2,
+                    };
+                    let id = self.paio_issue(h.pid, at, kind, cb);
+                    let fields = self.paio_fields(&task, kind, cb);
+                    self.cut()?;
+                    self.w.write_all(format!("{} {when} aeiou_{}(id={id}, aiocb={at:#x}, {fields}) = 0\n", h.tid, PAIO_FUNCTIONS[func as usize]).as_bytes())?;
+                }
+            }
+            PAIO_LIO_LISTIO => {
+                let ptrs = blob(&blobs, 1).unwrap_or(&[]).to_vec();
+                let cbs = blob(&blobs, AIOCB_LIST).unwrap_or(&[]).to_vec();
+                let mut list = Vec::new();
+                for (i, p) in ptrs.chunks_exact(8).enumerate() {
+                    let at = u64_at(p, 0);
+                    let Some(cb) = cbs.get(i * AIOCB_SIZE..(i + 1) * AIOCB_SIZE) else { break };
+                    let op = u32_at(cb, 4);
+                    // a null entry, or LIO_NOP
+                    if at == 0 || op > 1 {
+                        continue;
+                    }
+                    let id = self.paio_issue(h.pid, at, op as u8, cb);
+                    let fields = self.paio_fields(&task, op as u8, cb);
+                    list.push(format!("{{id={id}, aiocb={at:#x}, op={}, {fields}}}", if op == 0 { "LIO_READ" } else { "LIO_WRITE" }));
+                }
+                let mode = match args[0] {
+                    0 => "LIO_WAIT".to_string(),
+                    1 => "LIO_NOWAIT".to_string(),
+                    m => m.to_string(),
+                };
+                self.cut()?;
+                self.w.write_all(format!("{} {when} aeiou_lio_listio(mode={mode}, list=[{}], nent={}) = 0\n", h.tid, list.join(", "), args[2] as i32).as_bytes())?;
+            }
+            _ => {}
+        }
+        self.paio_calls.insert(h.tid, PaioCall { func, ts: h.ts, args, blobs });
+        Ok(())
+    }
+
+    /// A request in flight from now, numbered; one its `aiocb` held before done with uncollected.
+    fn paio_issue(&mut self, pid: u32, at: u64, kind: u8, cb: &[u8]) -> u64 {
+        if let Some(old) = self.paio_reqs.remove(&(pid, at)) {
+            self.paio_done(old);
+        }
+        let id = self.take_id();
+        self.paio_seq += 1;
+        self.stats.posix_aio_requests += 1;
+        let r = PaioReq { id, seq: self.paio_seq, kind, fd: u32_at(cb, 0) as i32 as i64, buf: u64_at(cb, 16), len: u64_at(cb, 24), off: u64_at(cb, 128) as i64, serving: None, served: false, retry: false };
+        self.paio_reqs.insert((pid, at), r);
+        id
+    }
+
+    /// A request no `aio_return` collected, its number freed: served, never collected; not, in
+    /// flight.
+    fn paio_done(&mut self, r: PaioReq) {
+        self.free_ids.push(Reverse(r.id));
+        if r.served {
+            self.stats.posix_aio_never_collected += 1;
+        } else {
+            self.stats.posix_aio_in_flight_at_end += 1;
+        }
+    }
+
+    /// What a request's line says of its `struct aiocb`: the descriptor, then a read's or a
+    /// write's offset and length or an fsync's kind, and how its completion is notified.
+    fn paio_fields(&mut self, task: &Task, kind: u8, cb: &[u8]) -> String {
+        let fd = self.fd(task, u32_at(cb, 0) as u64);
+        let notify = match u32_at(cb, 44) {
+            0 => "SIGEV_SIGNAL".to_string(),
+            1 => "SIGEV_NONE".to_string(),
+            2 => "SIGEV_THREAD".to_string(),
+            4 => "SIGEV_THREAD_ID".to_string(),
+            n => n.to_string(),
+        };
+        match kind {
+            2 => format!("fd={fd}, op=O_SYNC, notify={notify}"),
+            3 => format!("fd={fd}, op=O_DSYNC, notify={notify}"),
+            _ => format!("fd={fd}, off={}, len={}, notify={notify}", u64_at(cb, 128) as i64, u64_at(cb, 24)),
+        }
+    }
+
+    /// A POSIX AIO function's return: a request refused (glibc could not queue it), collected
+    /// (`aio_return`), waited for (`aio_suspend`), or canceled (`aio_cancel`, those of its
+    /// descriptor or its `aiocb` no helper had taken), each written stamped with its entry.
+    fn paio_exit(&mut self, h: Head, func: u32, ret: i64) -> Result<()> {
+        if self.paio.is_none() {
+            return Ok(());
+        }
+        let Some(c) = self.paio_calls.remove(&h.tid).filter(|c| c.func == func) else { return Ok(()) };
+        let (when, dur) = (self.when(c.ts), format!("<{:.6}>", h.ts.saturating_sub(c.ts) as f64 / 1e9));
+        let line = match func {
+            PAIO_READ | PAIO_WRITE | PAIO_FSYNC if ret != 0 => {
+                let at = if func == PAIO_FSYNC { c.args[1] } else { c.args[0] };
+                let Some(r) = self.paio_reqs.remove(&(h.pid, at)) else { return Ok(()) };
+                self.free_ids.push(Reverse(r.id));
+                self.stats.posix_aio_refused += 1;
+                format!("aeiou_aio_refused(id={}) = {ret}", r.id)
+            }
+            PAIO_RETURN => {
+                let Some(r) = self.paio_reqs.remove(&(h.pid, c.args[0])) else { return Ok(()) };
+                self.free_ids.push(Reverse(r.id));
+                format!("aeiou_aio_return(id={}) = {ret}", r.id)
+            }
+            PAIO_SUSPEND => {
+                let ids: Vec<String> = blob(&c.blobs, 0).unwrap_or(&[]).chunks_exact(8).filter_map(|p| self.paio_reqs.get(&(h.pid, u64_at(p, 0)))).map(|r| r.id.to_string()).collect();
+                let timeout = match blob(&c.blobs, 2) {
+                    Some(t) if t.len() >= TIMESPEC_SIZE => format!("{{tv_sec={}, tv_nsec={}}}", u64_at(t, 0) as i64, u64_at(t, 8) as i64),
+                    _ => ptr(c.args[2]),
+                };
+                format!("aeiou_aio_suspend(ids=[{}], timeout={timeout}) = {ret} {dur}", ids.join(", "))
+            }
+            PAIO_CANCEL => {
+                let (fd, at) = (c.args[0] as i32 as i64, c.args[1]);
+                let mut gone: Vec<(u64, (u32, u64))> = Vec::new();
+                if ret == 0 || ret == 1 {
+                    gone = self.paio_reqs.iter().filter(|(k, r)| k.0 == h.pid && r.fd == fd && (at == 0 || k.1 == at) && !r.served && r.serving.is_none()).map(|(k, r)| (r.seq, *k)).collect();
+                    gone.sort();
+                }
+                let mut ids = Vec::new();
+                for (_, k) in gone {
+                    let r = self.paio_reqs.remove(&k).unwrap();
+                    self.free_ids.push(Reverse(r.id));
+                    self.stats.posix_aio_canceled += 1;
+                    ids.push(r.id.to_string());
+                }
+                // as strace prints a return it decodes (fcntl's F_GETFL)
+                let what = match ret {
+                    0 => "0 (AIO_CANCELED)".to_string(),
+                    1 => "1 (AIO_NOTCANCELED)".to_string(),
+                    2 => "2 (AIO_ALLDONE)".to_string(),
+                    r => r.to_string(),
+                };
+                let task = self.task(h.tid);
+                format!("aeiou_aio_cancel(fd={}, aiocb={}, canceled=[{}]) = {what} {dur}", self.fd(&task, fd as u64), ptr(at), ids.join(", "))
+            }
+            _ => return Ok(()),
+        };
+        self.cut()?;
+        self.w.write_all(format!("{} {when} {line}\n", h.tid).as_bytes())?;
+        Ok(())
+    }
+
+    /// The request a call of a helper thread serves, its line written before the call's: one
+    /// of the call's process in flight and not taken that names what the call does (a
+    /// `pread64` or `pwrite64` the descriptor, buffer, length, and offset; after `ESPIPE` a `read`
+    /// or `write` without the offset; an `fsync` or `fdatasync` the descriptor), the earliest
+    /// issued when several do.
+    fn paio_serve(&mut self, h: Head, name: &str, a: &[u64; 6]) -> Result<Option<(u32, u64)>> {
+        if self.paio_reqs.is_empty() {
+            return Ok(None);
+        }
+        let fits = |r: &PaioReq| {
+            let same = r.buf == a[1] && r.len == a[2];
+            !r.served
+                && r.serving.is_none()
+                && r.fd == a[0] as i32 as i64
+                && match name {
+                    "pread64" => r.kind == 0 && same && r.off == a[3] as i64,
+                    "pwrite64" => r.kind == 1 && same && r.off == a[3] as i64,
+                    "read" => r.kind == 0 && r.retry && same,
+                    "write" => r.kind == 1 && r.retry && same,
+                    "fsync" => r.kind == 2,
+                    "fdatasync" => r.kind == 3,
+                    _ => false,
+                }
+        };
+        let hits: Vec<(u64, (u32, u64))> = self.paio_reqs.iter().filter(|(k, r)| k.0 == h.pid && fits(r)).map(|(k, r)| (r.seq, *k)).collect();
+        let Some(&(_, key)) = hits.iter().min() else { return Ok(None) };
+        if hits.len() > 1 {
+            self.stats.posix_aio_ambiguous += 1;
+        }
+        let r = self.paio_reqs.get_mut(&key).unwrap();
+        r.serving = Some(h.tid);
+        let id = r.id;
+        self.w.write_all(format!("{} {} aeiou_aio_serve(id={id}) = 0\n", h.tid, self.when(h.ts)).as_bytes())?;
+        Ok(Some(key))
+    }
+
     fn end(&mut self) -> Result<()> {
+        let mut left: Vec<PaioReq> = self.paio_reqs.drain().map(|(_, r)| r).collect();
+        left.sort_by_key(|r| r.seq);
+        for r in left {
+            self.paio_done(r);
+        }
         self.flush_runs()?;
         self.cut()?;
         self.stats.uring_in_flight_at_end += self.reqs.len() as u64;
@@ -1372,7 +1665,14 @@ impl<W: Write> Text<W> {
             "mmap" => {
                 // a file's mapping kept, an anonymous one over it taking its place
                 let file = a[3] & libc::MAP_ANONYMOUS as u64 == 0 && (a[4] as i32) >= 0;
-                task.maps.borrow_mut().map(ret as u64, a[1], if file { fd_path(task, a[4]) } else { None }, a[5]);
+                let path = if file { fd_path(task, a[4]) } else { None };
+                if let (Some(libs), Some(p)) = (&self.paio, &path) {
+                    // a C library the probes are not on: its POSIX AIO is not seen
+                    if is_c_library(p) && !libs.contains(p) && !self.stats.posix_aio_libraries_not_traced.contains(p) {
+                        self.stats.posix_aio_libraries_not_traced.push(p.clone());
+                    }
+                }
+                task.maps.borrow_mut().map(ret as u64, a[1], path, a[5]);
                 None
             }
             "munmap" => {
@@ -1450,6 +1750,12 @@ impl<W: Write> Text<W> {
 /// request's descriptor is the submission's; for any other the kernel leaves it unset.
 fn uring_takes_file(op: u8) -> bool {
     matches!(op, 1..=6 | 8..=10 | 13 | 16 | 17 | 22..=24 | 26 | 27 | 29 | 30 | 33 | 34 | 40 | 41 | 43 | 46..=49 | 54..=61)
+}
+
+/// Whether a file is a C library a program's POSIX AIO may be in: glibc's `libc.so.6`, musl's.
+fn is_c_library(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.starts_with("libc.so") || name.starts_with("ld-musl-") || name.starts_with("libc.musl-")
 }
 
 /// An `io_uring` opcode's name (`include/uapi/linux/io_uring.h`, `enum io_uring_op`, as this
@@ -1933,8 +2239,10 @@ mod tests {
         if extra["faults"].get("traced").is_some() {
             hdr["faults"] = extra["faults"].clone();
         }
-        if extra["aio"].get("traced").is_some() {
-            hdr["aio"] = extra["aio"].clone();
+        for k in ["aio", "posix_aio"] {
+            if extra[k].get("traced").is_some() {
+                hdr[k] = extra[k].clone();
+            }
         }
         f.extend_from_slice(serde_json::to_string(&hdr).unwrap().as_bytes());
         f.push(b'\n');
@@ -2657,5 +2965,176 @@ mod tests {
         let (t, st) = text(&r);
         assert!(t.contains("io_submit(0xc, 1, [{aio_data=0x1, aio_lio_opcode=IOCB_CMD_PREAD") && !t.contains("aeiou_aio") && !t.contains("trace format"), "{t}");
         assert_eq!((st.aio_requests, st.aio_completions_unmatched), (0, 0));
+    }
+
+    /// A POSIX AIO function's entry by thread `tid` of process 10 (its uprobe).
+    fn paio_enter(ts: u64, tid: u32, func: u32, args: [u64; 6], blobs: &[(u8, u8, &[u8])]) -> Vec<u8> {
+        let mut b = Vec::new();
+        head(&mut b, PAIO_ENTER, ts, 10, tid);
+        b.extend_from_slice(&func.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        for a in args {
+            b.extend_from_slice(&a.to_le_bytes());
+        }
+        for (a, w, d) in blobs {
+            blob(&mut b, *a, *w, d);
+        }
+        done(b)
+    }
+
+    /// Its return (its uretprobe).
+    fn paio_exit(ts: u64, tid: u32, func: u32, ret: i64) -> Vec<u8> {
+        let mut b = Vec::new();
+        head(&mut b, PAIO_EXIT, ts, 10, tid);
+        b.extend_from_slice(&func.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&ret.to_le_bytes());
+        done(b)
+    }
+
+    /// A `struct aiocb` as the probe copies it: `(descriptor, lio opcode, buffer, length, offset,
+    /// sigev_notify)`.
+    fn aiocb(fd: u32, op: u32, buf: u64, n: u64, off: u64, notify: u32) -> Vec<u8> {
+        let mut e = vec![0u8; AIOCB_SIZE];
+        e[0..4].copy_from_slice(&fd.to_le_bytes());
+        e[4..8].copy_from_slice(&op.to_le_bytes());
+        e[16..24].copy_from_slice(&buf.to_le_bytes());
+        e[24..32].copy_from_slice(&n.to_le_bytes());
+        e[44..48].copy_from_slice(&notify.to_le_bytes());
+        e[128..136].copy_from_slice(&off.to_le_bytes());
+        e
+    }
+
+    fn pointers(p: &[u64]) -> Vec<u8> {
+        p.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    /// A call of thread `tid` whole: its entry and its return a moment later.
+    fn call(ts: u64, tid: u32, name: &str, args: [u64; 6], ret: i64) -> Vec<Vec<u8>> {
+        vec![enter(ts, 10, tid, name, args, &[]), exit(ts + 5, 10, tid, name, ret, &[])]
+    }
+
+    fn paio_header() -> Value {
+        json!({"posix_aio": {"traced": true, "layout": {"libraries": ["/lib/libc.so.6"]}}})
+    }
+
+    /// POSIX AIO (DESIGN_REVIEW.md §3.98 "Phase 4 step 4"): each request written at its
+    /// function's entry, numbered; the helper thread's call that serves it (its descriptor,
+    /// buffer, length, and offset; an fsync's descriptor and kind) preceded by an
+    /// `aeiou_aio_serve` naming it, a call interrupted and retried served again, the same call
+    /// with no request in flight left alone; a `lio_listio`'s members in one line, a null or
+    /// `LIO_NOP` one left out; `aio_suspend`, `aio_return`, and `aio_cancel` written at their
+    /// return, stamped with their entry; a request refused, canceled, or never collected (its
+    /// `aiocb` issued again), and one in flight at the end, counted; a mapping of a C library
+    /// other than the one probed named.
+    #[test]
+    fn posix_aio_requests_are_numbered_and_served_by_the_helper_s_calls() {
+        let rd = aiocb(5, 0, 0xb000, 4096, 0, 1);
+        let wr = aiocb(5, 1, 0xb100, 100, 8192, 2);
+        let fs = aiocb(5, 0, 0, 0, 0, 1);
+        let lio = [aiocb(5, 0, 0xb200, 10, 0, 1), aiocb(5, 2, 0, 0, 0, 1)].concat();
+        let mut r = exec(S);
+        r.push(other(FORK, 2 * S, 10, 10, 11, 1, 0));
+        r.extend([
+            paio_enter(3 * S, 10, PAIO_READ, [0xa000, 0, 0, 0, 0, 0], &[(0, BYTES, &rd)]),
+            paio_exit(3 * S + 10, 10, PAIO_READ, 0),
+            paio_enter(3 * S + 15, 10, PAIO_SUSPEND, [0xc000, 1, 0, 0, 0, 0], &[(0, BYTES, &pointers(&[0xa000]))]),
+            paio_exit(3 * S + 40, 10, PAIO_SUSPEND, 0),
+            paio_enter(3 * S + 50, 10, PAIO_RETURN, [0xa000, 0, 0, 0, 0, 0], &[]),
+            paio_exit(3 * S + 51, 10, PAIO_RETURN, 4096),
+            paio_enter(4 * S, 10, PAIO_WRITE, [0xa100, 0, 0, 0, 0, 0], &[(0, BYTES, &wr)]),
+            paio_exit(4 * S + 1, 10, PAIO_WRITE, 0),
+            paio_enter(5 * S, 10, PAIO_FSYNC, [libc::O_DSYNC as u64, 0xa180, 0, 0, 0, 0], &[(1, BYTES, &fs)]),
+            paio_exit(5 * S + 1, 10, PAIO_FSYNC, 0),
+            paio_enter(6 * S, 10, PAIO_LIO_LISTIO, [1, 0xd000, 3, 0, 0, 0], &[(1, BYTES, &pointers(&[0xa200, 0, 0xa300])), (AIOCB_LIST, BYTES, &[&lio[..AIOCB_SIZE], &[0u8; AIOCB_SIZE][..], &lio[AIOCB_SIZE..]].concat())]),
+            paio_exit(6 * S + 1, 10, PAIO_LIO_LISTIO, 0),
+            // refused at once (glibc could not queue it)
+            paio_enter(7 * S, 10, PAIO_READ, [0xa400, 0, 0, 0, 0, 0], &[(0, BYTES, &aiocb(5, 0, 0xb400, 1, 0, 1))]),
+            paio_exit(7 * S + 1, 10, PAIO_READ, -1),
+            // queued and canceled before a helper took it
+            paio_enter(8 * S, 10, PAIO_READ, [0xa500, 0, 0, 0, 0, 0], &[(0, BYTES, &aiocb(5, 0, 0xb500, 1, 0, 1))]),
+            paio_exit(8 * S + 1, 10, PAIO_READ, 0),
+            paio_enter(8 * S + 2, 10, PAIO_CANCEL, [5, 0, 0, 0, 0, 0], &[]),
+            paio_exit(8 * S + 3, 10, PAIO_CANCEL, 0),
+            // the lio member's aiocb issued again, its result never collected
+            paio_enter(9 * S, 10, PAIO_READ, [0xa200, 0, 0, 0, 0, 0], &[(0, BYTES, &aiocb(5, 0, 0xb200, 10, 10, 1))]),
+            paio_exit(9 * S + 1, 10, PAIO_READ, 0),
+        ]);
+        // the helper's calls, each after its request's issue
+        r.extend(call(3 * S + 20, 11, "pread64", [5, 0xb000, 4096, 0, 0, 0], 4096));
+        r.extend(call(4 * S + 10, 11, "pwrite64", [5, 0xb100, 100, 8192, 0, 0], -4));
+        r.extend(call(4 * S + 20, 11, "pwrite64", [5, 0xb100, 100, 8192, 0, 0], 100));
+        r.extend(call(5 * S + 10, 11, "fdatasync", [5, 0, 0, 0, 0, 0], 0));
+        r.extend(call(6 * S + 10, 11, "pread64", [5, 0xb200, 10, 0, 0, 0], 10));
+        // the issuer's own read of the same buffer, no request of it in flight
+        r.extend(call(6 * S + 30, 10, "pread64", [5, 0xb200, 10, 0, 0, 0], 10));
+        // a C library other than the one probed
+        r.extend([
+            enter(10 * S, 10, 10, "openat", [FDCWD, 0x10, 0, 0, 0, 0], &[(1, STR, b"/opt/c/libc.so.6")]),
+            exit(10 * S + 1, 10, 10, "openat", 7, &[]),
+            enter(10 * S + 2, 10, 10, "mmap", [0, 4096, 1, 2, 7, 0], &[]),
+            exit(10 * S + 3, 10, 10, "mmap", 0x7000_0000, &[]),
+        ]);
+        let (t, st) = text_with(&r, paio_header());
+        assert!(t.contains("--- aeiou: trace format 1, records aeiou_aio_read aeiou_aio_write aeiou_aio_fsync aeiou_lio_listio aeiou_aio_serve aeiou_aio_suspend aeiou_aio_return aeiou_aio_cancel aeiou_aio_refused ---"), "{t}");
+        let lines: Vec<&str> = t.lines().filter(|l| (l.contains(" aeiou_") || l.contains(" pread64(") || l.contains(" pwrite64(") || l.contains(" fdatasync(")) && !l.contains("--- aeiou")).collect();
+        assert_eq!(
+            lines,
+            [
+                "10 1003.000000 aeiou_aio_read(id=1, aiocb=0xa000, fd=5</w/held>, off=0, len=4096, notify=SIGEV_NONE) = 0",
+                "11 1003.000000 aeiou_aio_serve(id=1) = 0",
+                "11 1003.000000 pread64(5</w/held>, 0xb000, 4096, 0) = 4096 <0.000000>",
+                "10 1003.000000 aeiou_aio_suspend(ids=[1], timeout=NULL) = 0 <0.000000>",
+                "10 1003.000000 aeiou_aio_return(id=1) = 4096",
+                "10 1004.000000 aeiou_aio_write(id=1, aiocb=0xa100, fd=5</w/held>, off=8192, len=100, notify=SIGEV_THREAD) = 0",
+                "11 1004.000000 aeiou_aio_serve(id=1) = 0",
+                "11 1004.000000 pwrite64(5</w/held>, 0xb100, 100, 8192) = -1 EINTR (Interrupted system call) <0.000000>",
+                "11 1004.000000 aeiou_aio_serve(id=1) = 0",
+                "11 1004.000000 pwrite64(5</w/held>, 0xb100, 100, 8192) = 100 <0.000000>",
+                "10 1005.000000 aeiou_aio_fsync(id=2, aiocb=0xa180, fd=5</w/held>, op=O_DSYNC, notify=SIGEV_NONE) = 0",
+                "11 1005.000000 aeiou_aio_serve(id=2) = 0",
+                "11 1005.000000 fdatasync(5</w/held>) = 0 <0.000000>",
+                "10 1006.000000 aeiou_lio_listio(mode=LIO_NOWAIT, list=[{id=3, aiocb=0xa200, op=LIO_READ, fd=5</w/held>, off=0, len=10, notify=SIGEV_NONE}], nent=3) = 0",
+                "11 1006.000000 aeiou_aio_serve(id=3) = 0",
+                "11 1006.000000 pread64(5</w/held>, 0xb200, 10, 0) = 10 <0.000000>",
+                "10 1006.000000 pread64(5</w/held>, 0xb200, 10, 0) = 10 <0.000000>",
+                "10 1007.000000 aeiou_aio_read(id=4, aiocb=0xa400, fd=5</w/held>, off=0, len=1, notify=SIGEV_NONE) = 0",
+                "10 1007.000000 aeiou_aio_refused(id=4) = -1",
+                "10 1008.000000 aeiou_aio_read(id=4, aiocb=0xa500, fd=5</w/held>, off=0, len=1, notify=SIGEV_NONE) = 0",
+                "10 1008.000000 aeiou_aio_cancel(fd=5</w/held>, aiocb=NULL, canceled=[4]) = 0 (AIO_CANCELED) <0.000000>",
+                "10 1009.000000 aeiou_aio_read(id=3, aiocb=0xa200, fd=5</w/held>, off=10, len=10, notify=SIGEV_NONE) = 0",
+            ],
+            "{t}"
+        );
+        assert_eq!(
+            (st.posix_aio_requests, st.posix_aio_served, st.posix_aio_refused, st.posix_aio_canceled, st.posix_aio_never_collected, st.posix_aio_in_flight_at_end, st.posix_aio_ambiguous),
+            (7, 4, 1, 1, 3, 1, 0),
+            "{st:?}"
+        );
+        assert_eq!(st.posix_aio_libraries_not_traced, ["/opt/c/libc.so.6"]);
+        assert_eq!(st.json()["posix_aio_libraries_not_traced"], json!(["/opt/c/libc.so.6"]));
+
+        // two requests the same call would serve: the earlier issued, counted ambiguous; an
+        // exit or entry of a function the converter has no entry of is nothing
+        let same = aiocb(5, 0, 0xb000, 10, 0, 1);
+        let mut r = exec(S);
+        r.extend([
+            paio_enter(3 * S, 10, PAIO_READ, [0xa000, 0, 0, 0, 0, 0], &[(0, BYTES, &same)]),
+            paio_exit(3 * S + 1, 10, PAIO_READ, 0),
+            paio_enter(3 * S + 2, 10, PAIO_READ, [0xa100, 0, 0, 0, 0, 0], &[(0, BYTES, &same)]),
+            paio_exit(3 * S + 3, 10, PAIO_READ, 0),
+            paio_exit(3 * S + 4, 10, PAIO_RETURN, 1),
+            paio_enter(4 * S, 10, PAIO_RETURN, [0xdead, 0, 0, 0, 0, 0], &[]),
+            paio_exit(4 * S + 1, 10, PAIO_RETURN, 0),
+        ]);
+        r.extend(call(3 * S + 10, 10, "pread64", [5, 0xb000, 10, 0, 0, 0], 10));
+        let (t, st) = text_with(&r, paio_header());
+        assert!(t.contains("10 1003.000000 aeiou_aio_serve(id=1) = 0") && !t.contains("aeiou_aio_return("), "{t}");
+        assert_eq!((st.posix_aio_requests, st.posix_aio_served, st.posix_aio_ambiguous, st.posix_aio_in_flight_at_end), (2, 1, 1, 1), "{st:?}");
+
+        // without the header's posix_aio, the probes' records are nothing
+        let (t, st) = text(&r);
+        assert!(!t.contains("aeiou_aio") && !t.contains("trace format"), "{t}");
+        assert_eq!(st.posix_aio_requests, 0);
     }
 }

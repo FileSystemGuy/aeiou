@@ -37,6 +37,32 @@ pub const AIO_DONE: u16 = 10;
 /// and write; `aio_fsync`): `AioRec`, `res` 0. A call's requests are prepared in its array's
 /// order, so the converter knows each one's place.
 pub const AIO_ISSUE: u16 = 11;
+/// A POSIX AIO function of the C library called by a traced thread (a uprobe, DESIGN_REVIEW.md
+/// §3.98 "Phase 4 step 4"): `Enter`, `nr` the function (`PAIO_READ` ...), `args` its first six
+/// arguments, then the structures they name (`AIOCB_SIZE` bytes of each `struct aiocb`, a list's
+/// pointers, `aio_suspend`'s timeout).
+pub const PAIO_ENTER: u16 = 12;
+/// Its return (a uretprobe): `Exit`, `nr` the function, `ret` what it returned.
+pub const PAIO_EXIT: u16 = 13;
+
+/// The POSIX AIO functions traced, by the number their records carry: glibc's names, each
+/// with its `*64` alias at the same address.
+pub const PAIO_READ: u32 = 0;
+pub const PAIO_WRITE: u32 = 1;
+pub const PAIO_FSYNC: u32 = 2;
+pub const PAIO_LIO_LISTIO: u32 = 3;
+pub const PAIO_RETURN: u32 = 4;
+pub const PAIO_SUSPEND: u32 = 5;
+pub const PAIO_CANCEL: u32 = 6;
+pub const PAIO_FUNCTIONS: [&str; 7] = ["aio_read", "aio_write", "aio_fsync", "lio_listio", "aio_return", "aio_suspend", "aio_cancel"];
+/// The bytes of a `struct aiocb` copied: glibc's 64-bit layout to its `aio_offset`, the same on
+/// x86_64 and aarch64 (`aio_fildes` 0, `aio_lio_opcode` 4, `aio_reqprio` 8, `aio_buf` 16,
+/// `aio_nbytes` 24, `aio_sigevent` 32 with `sigev_notify` at 44, `aio_offset` 128).
+pub const AIOCB_SIZE: usize = 136;
+/// A blob's argument number for the `struct aiocb`s a `lio_listio`'s list points to, one after
+/// another, zeros for a null pointer (the list's pointers are argument 1's blob).
+pub const AIOCB_LIST: u8 = 6;
+pub const TIMESPEC_SIZE: usize = 16;
 
 /// The start of every record: its kind and whole length, the CPU, the monotonic clock, and the
 /// process and thread as the traced command's own PID namespace numbers them.

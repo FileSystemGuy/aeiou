@@ -83,6 +83,15 @@ request, where strace shows only when the application collected the result, and 
 the application reads from the ring's memory with no call. The record's `aio` says whether
 libaio's completions were traced, and why not.
 
+For an application that uses POSIX AIO (`aio_read`, `lio_listio`), a capture run as root (the
+kernel attaches the probes it needs only for root; not under the file capabilities above)
+records which thread issued each request and when, and when the application collected the
+result, where strace sees only glibc's helper threads making the calls. It probes the C library the tool itself
+runs on: a program linked statically, or one running on another C library (a container's,
+musl), is traced as under strace, and the record's `conversion.posix_aio_libraries_not_traced`
+names the C libraries your command loaded that were not probed. The record's `posix_aio` says
+whether POSIX AIO was traced, and why not.
+
 The probes cannot make your application wait, so when the application makes calls faster
 than the tool writes them down, the ring buffer fills and calls are lost. Any loss ends the
 capture with a box saying how many, where, and what to do: usually `--buffer 1GiB` (or what
@@ -182,8 +191,9 @@ does: send its digest, not the trace.
   `sudo -n` helper (phase 3b of brief item 54).
 - Object requests over TLS inside the program, Go, or HTTP/2 (libssl uprobes come with the
   eBPF source, phase 4): the record's `not_seen` lists what this capture could not see.
-  `io_uring`'s requests, page faults on mappings, and libaio's completions are traced by the
-  eBPF source (2026-11-04) where the kernel allows; under strace they are not.
+  `io_uring`'s requests, page faults on mappings, and libaio's completions (2026-11-04), and
+  POSIX AIO's issuers (2026-11-05), are traced by the eBPF source where the kernel and the C
+  library allow; under strace they are not.
 - One node's interruption stopping the others (each node stops on its own signal, which
   `aeiou-launch` sends to every node), and comparing per-node records afterward for captures
   taken without a coordinator.

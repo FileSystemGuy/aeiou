@@ -805,6 +805,7 @@ fn handled(name: &str) -> bool {
         || fd_op_of(name).is_some()
         || path_op_of(name).is_some()
         || matches!(name, "close" | "lseek" | "io_setup" | "io_submit" | "io_getevents" | "io_pgetevents" | "chdir" | "fchdir" | "mmap" | "aeiou_uring_sqe" | "aeiou_uring_cqe" | "aeiou_fault" | "aeiou_aio_issue" | "aeiou_aio_complete")
+        || crate::ebpf_text::PAIO_RECORDS.contains(&name)
 }
 
 /// When a call started and returned, and by whom: `(tid, issued, done)`.
@@ -835,6 +836,18 @@ struct Uring {
     /// A request at the file's position (offset -1): the open file whose position it reads at
     /// issue and moves by its result, as a `read` or `write` does.
     cur: Option<FileRef>,
+}
+
+/// A POSIX AIO request between its issue and the helper's call that serves it (DESIGN_REVIEW.md
+/// §3.98 "Phase 4 step 4"): the thread that issued it and when, a read or a write to count
+/// (`None` off the roots), whether its file appends (the kernel ignores the offset glibc's
+/// `pwrite64` passes), or the fsync it is, as the issuer's call (its name and descriptor).
+struct Paio {
+    tid: i64,
+    issued: Option<f64>,
+    data: Option<Waiting>,
+    append: bool,
+    sync: Option<(&'static str, String)>,
 }
 
 /// The `key=value` arguments of an `aeiou_` record (DESIGN_REVIEW.md §3.98).
@@ -895,6 +908,12 @@ pub struct Tracer {
     aio_completed: u64,
     aio_reaped: u64,
     aio_unused: BTreeMap<String, u64>,
+    /// POSIX AIO's requests by number (`aeiou_aio_read`, ...) until served; the request each
+    /// helper thread's next call serves (`aeiou_aio_serve`); those served whose result no
+    /// `aio_return` has collected.
+    paio: HashMap<String, Paio>,
+    serving: HashMap<i64, String>,
+    paio_uncollected: std::collections::HashSet<String>,
     clock: f64,
     pub notes: BTreeMap<String, u64>,
     pub tids: std::collections::HashSet<i64>,
@@ -942,6 +961,9 @@ impl Tracer {
             aio_completed: 0,
             aio_reaped: 0,
             aio_unused: BTreeMap::new(),
+            paio: HashMap::new(),
+            serving: HashMap::new(),
+            paio_uncollected: Default::default(),
             clock: 0.0,
             notes: BTreeMap::new(),
             tids: Default::default(),
@@ -1676,6 +1698,119 @@ impl Tracer {
         Ok(())
     }
 
+    /// A POSIX AIO issue: each request held until the helper's call that serves it, a read or a
+    /// write under a root one member of the fan-out the call is (and, exported, of one `submit`
+    /// in the issuer's lane).
+    fn paio_issue(&mut self, tid: i64, inst: Option<i64>, name: &str, a: &[String], issued: Option<f64>) -> Result<()> {
+        let k = keyed(a);
+        let reqs: Vec<HashMap<String, String>> = if name == "aeiou_lio_listio" {
+            let list = k.get("list").map(|l| l.trim_start_matches('[').trim_end_matches(']').to_string()).unwrap_or_default();
+            split_args(&list).iter().map(|m| keyed(&split_args(m.trim_start_matches('{').trim_end_matches('}')))).collect()
+        } else {
+            let mut r = k.clone();
+            match name {
+                "aeiou_aio_read" => r.insert("op".into(), "LIO_READ".into()),
+                "aeiou_aio_write" => r.insert("op".into(), "LIO_WRITE".into()),
+                _ => None,
+            };
+            vec![r]
+        };
+        let mut mem = Vec::new();
+        let mut at = Vec::new();
+        let mut fan = 0u64;
+        for r in reqs {
+            let Some(id) = r.get("id").cloned() else { continue };
+            if self.paio_uncollected.remove(&id) {
+                // its number free again: the request before was done, and no aio_return collected it
+                self.note("posix_aio_never_collected", 1);
+            }
+            let fd_tok = r.get("fd").cloned().unwrap_or_default();
+            let (fd, path) = fd_arg(&fd_tok);
+            let f = self.file(tid, fd, path.as_deref());
+            let fp = path.or_else(|| f.as_ref().and_then(|f| f.borrow().path.clone()));
+            let p = self.under(fp.as_deref());
+            let mut req = Paio { tid, issued, data: None, append: false, sync: None };
+            let read = match r.get("op").map(String::as_str) {
+                Some("LIO_READ") => Some(true),
+                Some("LIO_WRITE") => Some(false),
+                Some("O_DSYNC") => {
+                    req.sync = Some(("fdatasync", fd_tok.clone()));
+                    None
+                }
+                _ => {
+                    req.sync = Some(("fsync", fd_tok.clone()));
+                    None
+                }
+            };
+            if let (Some(read), Some(p), Some(inst)) = (read, p, inst) {
+                let int = |key: &str| r.get(key).and_then(|v| int0(v)).unwrap_or(-1);
+                let held = f.as_ref().and_then(|f| f.borrow().file);
+                req.append = !read && f.as_ref().is_some_and(|f| f.borrow().append);
+                let w = Waiting { kind: if read { R } else { W }, inst, tid, path: p, file: held, off: int("off"), nbytes: int("len"), member: None };
+                if let Some(Ok(Some(oid))) = self.export.is_some().then(|| self.oid_or_note(f.as_ref(), if read { "read" } else { "write" }, (tid, issued, issued))) {
+                    mem.push((if read { "read" } else { "write" }, oid, w.off, w.nbytes));
+                    at.push(id.clone());
+                }
+                req.data = Some(w);
+                fan += 1;
+            }
+            if self.paio.insert(id, req).is_some() {
+                self.note("posix_aio_never_served", 1);
+            }
+        }
+        if fan > 0 {
+            if let Some(m) = self.metrics.as_mut() {
+                *m.m.fan_out.entry(fan).or_insert(0) += 1;
+            }
+        }
+        if !mem.is_empty() {
+            let members = self.export.as_mut().unwrap().submit((tid, issued, issued), &mem);
+            for (id, m) in at.into_iter().zip(members) {
+                if let Some(w) = self.paio.get_mut(&id).and_then(|p| p.data.as_mut()) {
+                    w.member = Some(m);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A POSIX AIO request never done: its member of the export's `submit` left out, said why.
+    fn paio_not_done(&mut self, p: Paio, why: &str) {
+        if let (Some(m), Some(ex)) = (p.data.and_then(|w| w.member), self.export.as_mut()) {
+            ex.member_dropped(m);
+            ex.note("calls_not_exported", 1);
+            ex.note(&format!("not_exported:posix_aio:{why}"), 1);
+        }
+    }
+
+    /// The helper's call that serves a POSIX AIO request returned: a read or a write counted in
+    /// the issuer's thread with the bytes it moved (an append at the file's end), an fsync as the
+    /// issuer's call; one interrupted or refused its offset waits for the call glibc makes next.
+    fn paio_served(&mut self, id: &str, ret: i64, done: Option<f64>, err: Option<&str>) -> Result<()> {
+        if matches!(err, Some("EINTR" | "ESPIPE")) {
+            return Ok(());
+        }
+        let Some(p) = self.paio.remove(id) else { return Ok(()) };
+        self.paio_uncollected.insert(id.to_string());
+        if let Some(w) = p.data {
+            let n = ret.max(0);
+            let off = if p.append { self.extent.get(&w.path).copied().unwrap_or(w.off) } else { w.off };
+            self.data(w.kind, w.inst, w.tid, &w.path, w.file, off, w.nbytes, n)?;
+            if w.kind == W && n > 0 && off >= 0 {
+                if let Some(e) = self.extent.get_mut(&w.path) {
+                    *e = (*e).max(off + n);
+                }
+            }
+            if let (Some(m), Some(ex)) = (w.member, self.export.as_mut()) {
+                ex.member_ret(m, if ret >= 0 { json!(ret) } else { json!(err.unwrap_or("EIO")) });
+            }
+        }
+        if let Some((name, fd)) = p.sync {
+            self.call(p.tid, name, &[fd], ret, None, p.issued, done, err.map(str::to_string))?;
+        }
+        Ok(())
+    }
+
     /// Requests whose results the trace does not show, taken as complete.
     fn assume_complete(&mut self, ws: Vec<Waiting>) -> Result<()> {
         for w in ws {
@@ -1757,6 +1892,43 @@ impl Tracer {
         if name == "aeiou_aio_complete" {
             return self.aio_complete(a, ret, err);
         }
+        if let Some(id) = self.serving.remove(&tid) {
+            if matches!(name, "pread64" | "pwrite64" | "read" | "write" | "fsync" | "fdatasync") {
+                return self.paio_served(&id, ret, done, err);
+            }
+        }
+        match name {
+            "aeiou_aio_serve" => {
+                if let Some(id) = keyed(a).remove("id") {
+                    self.serving.insert(tid, id);
+                }
+                return Ok(());
+            }
+            "aeiou_aio_return" => {
+                if let Some(id) = keyed(a).get("id") {
+                    self.paio_uncollected.remove(id);
+                }
+                return Ok(());
+            }
+            "aeiou_aio_refused" | "aeiou_aio_cancel" => {
+                let k = keyed(a);
+                let ids: Vec<String> = match (k.get("id"), k.get("canceled")) {
+                    (Some(id), _) => vec![id.clone()],
+                    (_, Some(l)) => split_args(l.trim_start_matches('[').trim_end_matches(']')),
+                    _ => vec![],
+                };
+                for id in ids {
+                    if let Some(p) = self.paio.remove(&id) {
+                        let why = if name == "aeiou_aio_refused" { "refused" } else { "canceled" };
+                        self.note(&format!("posix_aio_{why}"), 1);
+                        self.paio_not_done(p, why);
+                    }
+                }
+                return Ok(());
+            }
+            "aeiou_aio_suspend" => return Ok(()),
+            _ => {}
+        }
         let inst = self.instance(tid);
         if inst.is_none() {
             // the descriptor tables are still kept: a child inside an instance may inherit them
@@ -1769,6 +1941,9 @@ impl Tracer {
         if name == "aeiou_fault" {
             self.fault(tid, inst, a, issued);
             return Ok(());
+        }
+        if matches!(name, "aeiou_aio_read" | "aeiou_aio_write" | "aeiou_aio_fsync" | "aeiou_lio_listio") {
+            return self.paio_issue(tid, inst, name, a, issued);
         }
         if OPENS.contains(&name) {
             let pi = if name == "openat" || name == "openat2" { 1 } else { 0 };
@@ -2399,6 +2574,20 @@ impl Tracer {
             left.extend(ws.into_iter().map(|(_, w)| (Default::default(), w)));
         }
         self.assume_complete(left.into_iter().map(|(_, w)| w).collect())?;
+        // POSIX AIO's requests no helper's call served (the capture ended first, or the record
+        // was lost) are not counted: the call that would have moved the bytes is not in the trace
+        if !self.paio.is_empty() {
+            let mut left: Vec<(String, Paio)> = self.paio.drain().collect();
+            left.sort_by(|a, b| a.0.cmp(&b.0));
+            self.note("posix_aio_never_served", left.len() as u64);
+            for (_, p) in left {
+                self.paio_not_done(p, "never served");
+            }
+        }
+        if !self.paio_uncollected.is_empty() {
+            let n = self.paio_uncollected.drain().count() as u64;
+            self.note("posix_aio_never_collected", n);
+        }
         if self.aio_completed > self.aio_reaped {
             // a result read from the context's ring in user space, with no call
             self.note("aio_completed_never_reaped", self.aio_completed - self.aio_reaped);
@@ -2741,6 +2930,82 @@ mod tests {
         let rets = |e: &Value| e["ops"].as_array().unwrap().iter().map(|m| m["ret"].clone()).collect::<Vec<_>>();
         assert_eq!(rets(subs[0]), [json!(1000), json!(100)], "{ev:?}");
         assert_eq!(rets(subs[1]), [json!("EIO"), json!(4096)], "{ev:?}");
+    }
+
+    /// POSIX AIO in an eBPF capture (DESIGN_REVIEW.md §3.98 "Phase 4 step 4"): a request counted
+    /// once, in the thread that issued it, when the helper's call its `aeiou_aio_serve` names
+    /// returns, with the bytes it moved (an interrupted call waiting for its retry); an fsync as
+    /// the issuer's; the helper's other calls its own; a request refused, canceled, or never
+    /// served not counted, and noted, as are those whose results no `aio_return` collected; the
+    /// issue's members a fan-out, and the export's submits carry their results.
+    #[test]
+    fn posix_aio_requests_count_in_their_issuer_when_served() {
+        let lines = [
+            "0 1.000000 --- aeiou: trace format 1, records aeiou_aio_read aeiou_aio_write aeiou_aio_fsync aeiou_lio_listio aeiou_aio_serve aeiou_aio_suspend aeiou_aio_return aeiou_aio_cancel aeiou_aio_refused ---",
+            "1 1.000001 openat(AT_FDCWD</d>, \"/d/a\", O_RDWR) = 7</d/a> <0.000010>",
+            "1 1.000002 openat(AT_FDCWD</d>, \"/d/g\", O_WRONLY|O_CREAT|O_APPEND|O_TRUNC, 0644) = 8</d/g> <0.000010>",
+            "1 1.000003 aeiou_aio_read(id=1, aiocb=0xa000, fd=7</d/a>, off=0, len=4096, notify=SIGEV_NONE) = 0",
+            "1 1.000004 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x1, parent_tid=0x1, exit_signal=0, stack=0x1, stack_size=0x6000, tls=0x1} => {parent_tid=[2]}, 88) = 2 <0.000010>",
+            "2 1.000005 aeiou_aio_serve(id=1) = 0",
+            "2 1.000005 pread64(7</d/a>, 0x1, 4096, 0) = 1000 <0.000010>",
+            "1 1.000006 aeiou_aio_suspend(ids=[1], timeout=NULL) = 0 <0.000010>",
+            "1 1.000016 aeiou_aio_return(id=1) = 1000",
+            "1 1.000020 aeiou_aio_write(id=1, aiocb=0xa100, fd=8</d/g>, off=999999, len=100, notify=SIGEV_THREAD) = 0",
+            "2 1.000021 aeiou_aio_serve(id=1) = 0",
+            "2 1.000021 pwrite64(8</d/g>, 0x1, 100, 999999) = -1 EINTR (Interrupted system call) <0.000001>",
+            "2 1.000022 aeiou_aio_serve(id=1) = 0",
+            "2 1.000022 pwrite64(8</d/g>, 0x1, 100, 999999) = 100 <0.000001>",
+            "1 1.000030 aeiou_aio_fsync(id=2, aiocb=0xa180, fd=7</d/a>, op=O_DSYNC, notify=SIGEV_NONE) = 0",
+            "2 1.000031 aeiou_aio_serve(id=2) = 0",
+            "2 1.000031 fdatasync(7</d/a>) = 0 <0.000100>",
+            "1 1.000040 aeiou_lio_listio(mode=LIO_WAIT, list=[{id=3, aiocb=0xa200, op=LIO_READ, fd=7</d/a>, off=0, len=10, notify=SIGEV_NONE}, {id=4, aiocb=0xa300, op=LIO_READ, fd=7</d/a>, off=4096, len=10, notify=SIGEV_NONE}], nent=2) = 0",
+            "2 1.000041 aeiou_aio_serve(id=3) = 0",
+            "2 1.000041 pread64(7</d/a>, 0x1, 10, 0) = 10 <0.000001>",
+            "2 1.000042 aeiou_aio_serve(id=4) = 0",
+            "2 1.000042 pread64(7</d/a>, 0x1, 10, 4096) = 10 <0.000001>",
+            "1 1.000050 aeiou_aio_read(id=5, aiocb=0xa400, fd=7</d/a>, off=0, len=1, notify=SIGEV_NONE) = 0",
+            "1 1.000050 aeiou_aio_refused(id=5) = -1",
+            "1 1.000060 aeiou_aio_read(id=5, aiocb=0xa500, fd=7</d/a>, off=0, len=1, notify=SIGEV_NONE) = 0",
+            "1 1.000060 aeiou_aio_cancel(fd=7</d/a>, aiocb=NULL, canceled=[5]) = 0 (AIO_CANCELED) <0.000001>",
+            "1 1.000070 aeiou_aio_read(id=5, aiocb=0xa600, fd=7</d/a>, off=0, len=7, notify=SIGEV_NONE) = 0",
+            // the helper thread's own call
+            "2 1.000080 pread64(7</d/a>, 0x1, 3, 0) = 3 <0.000001>",
+        ]
+        .join("\n");
+        let o = Opts { roots: vec!["/d".into()], ..Opts::default() };
+        let (doc, _) = metrics(lines.as_bytes(), &o).unwrap();
+        let total = &doc["total"];
+        assert_eq!((total["bytes_read"].as_u64(), total["bytes_written"].as_u64()), (Some(1000 + 10 + 10 + 3), Some(100)), "{total}");
+        assert_eq!((total["counts"]["read"].as_u64(), total["counts"]["write"].as_u64(), total["counts"]["fdatasync"].as_u64()), (Some(4), Some(1), Some(1)), "{total}");
+        assert_eq!(total["fan_out"], json!({"1": 5, "2": 1}), "{total}");
+        let notes = &doc["notes"];
+        assert_eq!((notes["posix_aio_refused"].as_u64(), notes["posix_aio_canceled"].as_u64(), notes["posix_aio_never_served"].as_u64(), notes["posix_aio_never_collected"].as_u64()), (Some(1), Some(1), Some(1), Some(4)), "{notes}");
+        assert!(notes.get("not_counted:aeiou_aio_suspend").is_none() && notes.get("not_counted:aeiou_aio_serve").is_none(), "{notes}");
+        // the same trace without the records: the helper's calls counted as its own, as strace's are
+        let plain: String = lines.lines().filter(|l| !l.contains("aeiou_")).collect::<Vec<_>>().join("\n");
+        let (doc, _) = metrics(plain.as_bytes(), &o).unwrap();
+        assert!(doc["notes"].get("posix_aio_never_served").is_none(), "{}", doc["notes"]);
+        assert_eq!(doc["total"]["counts"]["write"], 2, "{}", doc["total"]);
+
+        // the export: each issue a submit in the issuer's lane, its members' results from the
+        // helper's calls; the fsync the issuer's; the helper's own read in its lane
+        let opener = || -> std::io::Result<Box<dyn BufRead + '_>> { Ok(Box::new(lines.as_bytes())) };
+        let mut out = Vec::new();
+        crate::export::strace(&opener, "/d", &[], None, &mut out).unwrap();
+        let ev: Vec<Value> = out.split(|b| *b == b'\n').filter(|l| !l.is_empty()).skip(1).map(|l| serde_json::from_slice(l).unwrap()).collect();
+        let lane = |op: &str| ev.iter().filter(|e| e["op"] == op).map(|e| e["lane"].as_u64().unwrap()).collect::<Vec<_>>();
+        let subs: Vec<&Value> = ev.iter().filter(|e| e["op"] == "submit").collect();
+        let rets = |e: &Value| e["ops"].as_array().unwrap().iter().map(|m| m["ret"].clone()).collect::<Vec<_>>();
+        // the requests refused, canceled, and never served are not replayed: their submits gone
+        assert_eq!(subs.iter().map(|s| rets(s)).collect::<Vec<_>>(), [vec![json!(1000)], vec![json!(100)], vec![json!(10), json!(10)]], "{ev:?}");
+        let head: Value = serde_json::from_slice(out.split(|b| *b == b'\n').next().unwrap()).unwrap();
+        let n = &head["notes"];
+        assert_eq!((n["not_exported:posix_aio:refused"].as_u64(), n["not_exported:posix_aio:canceled"].as_u64(), n["not_exported:posix_aio:never served"].as_u64(), n["calls_not_exported"].as_u64()), (Some(1), Some(1), Some(1), Some(3)), "{head}");
+        let issuer = subs[0]["lane"].as_u64().unwrap();
+        assert!(subs.iter().all(|s| s["lane"] == issuer), "{ev:?}");
+        assert_eq!(lane("fdatasync"), [issuer], "{ev:?}");
+        assert_eq!(lane("read").len(), 1, "{ev:?}");
+        assert_ne!(lane("read"), [issuer], "{ev:?}");
     }
 
     #[test]

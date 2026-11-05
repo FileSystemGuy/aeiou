@@ -1,0 +1,39 @@
+0 1700000000.000000 --- aeiou: trace format 1, records aeiou_aio_read aeiou_aio_write aeiou_aio_fsync aeiou_lio_listio aeiou_aio_serve aeiou_aio_suspend aeiou_aio_return aeiou_aio_cancel aeiou_aio_refused ---
+10 1700000000.000000 execve("/bin/app", 0x20, 0x30) = 0 <0.000001>
+10 1700000000.000010 openat(AT_FDCWD</d>, "a", O_RDWR|O_CREAT, 0644) = 7</d/a> <0.000002>
+10 1700000000.000020 openat(AT_FDCWD</d>, "g", O_WRONLY|O_CREAT|O_APPEND|O_TRUNC, 0644) = 8</d/g> <0.000002>
+10 1700000000.000025 openat(AT_FDCWD</e>, "x", O_RDONLY) = 9</e/x> <0.000002>
+10 1700000000.000030 aeiou_aio_read(id=1, aiocb=0x7ffd0000a000, fd=7</d/a>, off=0, len=4096, notify=SIGEV_NONE) = 0
+10 1700000000.000031 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f0000001910, parent_tid=0x7f0000001910, exit_signal=0, stack=0x7f0000000000, stack_size=0x6000, tls=0x7f0000001640} => {parent_tid=[11]}, 88) = 11 <0.000020>
+11 1700000000.000040 aeiou_aio_serve(id=1) = 0
+11 1700000000.000040 pread64(7</d/a>, 0x7f00000b0000, 4096, 0) = 1000 <0.000010>
+10 1700000000.000035 aeiou_aio_suspend(ids=[1], timeout=NULL) = 0 <0.000020>
+10 1700000000.000060 aeiou_aio_return(id=1) = 1000
+10 1700000000.000070 aeiou_aio_write(id=1, aiocb=0x7ffd0000a100, fd=8</d/g>, off=999999, len=100, notify=SIGEV_THREAD) = 0
+11 1700000000.000071 aeiou_aio_serve(id=1) = 0
+11 1700000000.000071 pwrite64(8</d/g>, 0x7f00000b1000, 100, 999999) = -1 EINTR (Interrupted system call) <0.000001>
+11 1700000000.000073 aeiou_aio_serve(id=1) = 0
+11 1700000000.000073 pwrite64(8</d/g>, 0x7f00000b1000, 100, 999999) = 100 <0.000002>
+10 1700000000.000080 aeiou_aio_fsync(id=2, aiocb=0x7ffd0000a180, fd=7</d/a>, op=O_DSYNC, notify=SIGEV_NONE) = 0
+11 1700000000.000081 aeiou_aio_serve(id=2) = 0
+11 1700000000.000081 fdatasync(7</d/a>) = 0 <0.000100>
+10 1700000000.000200 aeiou_lio_listio(mode=LIO_WAIT, list=[{id=3, aiocb=0x7ffd0000a200, op=LIO_READ, fd=7</d/a>, off=0, len=10, notify=SIGEV_NONE}, {id=4, aiocb=0x7ffd0000a300, op=LIO_WRITE, fd=7</d/a>, off=8192, len=20, notify=SIGEV_NONE}, {id=5, aiocb=0x7ffd0000a400, op=LIO_READ, fd=9</e/x>, off=0, len=30, notify=SIGEV_NONE}], nent=4) = 0
+11 1700000000.000201 aeiou_aio_serve(id=3) = 0
+11 1700000000.000201 pread64(7</d/a>, 0x7f00000b2000, 10, 0) = 10 <0.000001>
+12 1700000000.000202 aeiou_aio_serve(id=4) = 0
+12 1700000000.000202 pwrite64(7</d/a>, 0x7f00000b3000, 20, 8192) = 20 <0.000001>
+11 1700000000.000203 aeiou_aio_serve(id=5) = 0
+11 1700000000.000203 pread64(9</e/x>, 0x7f00000b4000, 30, 0) = 30 <0.000001>
+10 1700000000.000210 aeiou_aio_return(id=3) = 10
+10 1700000000.000211 aeiou_aio_return(id=4) = 20
+10 1700000000.000212 aeiou_aio_return(id=5) = 30
+10 1700000000.000300 aeiou_aio_read(id=3, aiocb=0x7ffd0000a500, fd=7</d/a>, off=0, len=1, notify=SIGEV_NONE) = 0
+10 1700000000.000300 aeiou_aio_refused(id=3) = -1
+10 1700000000.000310 aeiou_aio_read(id=3, aiocb=0x7ffd0000a600, fd=7</d/a>, off=4096, len=1, notify=SIGEV_NONE) = 0
+10 1700000000.000311 aeiou_aio_cancel(fd=7</d/a>, aiocb=NULL, canceled=[3]) = 0 (AIO_CANCELED) <0.000001>
+10 1700000000.000320 aeiou_aio_read(id=3, aiocb=0x7ffd0000a700, fd=7</d/a>, off=0, len=7, notify=SIGEV_SIGNAL) = 0
+11 1700000000.000400 pread64(7</d/a>, 0x7f00000b5000, 3, 0) = 3 <0.000001>
+10 1700000000.000500 close(7</d/a>) = 0 <0.000001>
+10 1700000000.000501 close(8</d/g>) = 0 <0.000001>
+10 1700000000.000600 exit_group(0) = ?
+10 1700000000.000601 +++ exited with 0 +++
