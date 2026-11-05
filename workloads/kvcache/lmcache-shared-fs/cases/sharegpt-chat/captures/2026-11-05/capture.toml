@@ -1,9 +1,9 @@
 # The capture (DESIGN_REVIEW.md §3.66): what `aeiou-trace compare --judge` gives on each of its traces against
 # the case's abstract at the capture's parameters, at the case's first GPU count, the abstract at three
 # other seeds as its own spread (builder/tests/test_trace.py walks these files).
-raw_trace = "not retained"   # a scratch capture: the metrics are kept, never the trace
+raw_trace = "not retained"   # the metrics and each trace's capture record (*.capture.json, with the trace's SHA-256) are kept, never the trace
+# traced by eBPF (aeiou-trace capture --source ebpf, cap_bpf,cap_perfmon; --accept fault-around: LMCache maps no file of the store)
 # the writer's store order (two threads) stays outside
-# the writer's read-after-write and popularity rows stay outside since FS_API_SWEEP.md S-18 (2026-11-03): its metrics predate it
 
 [[pair]]
 trace = "writer.trace"   # writer.trace.metrics.json

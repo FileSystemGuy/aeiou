@@ -1,0 +1,277 @@
+{
+  "aeiou_capture": 1,
+  "aio": {
+    "completions_at": "aio_complete",
+    "traced": true,
+    "why": null
+  },
+  "anchors": [],
+  "barrier": {
+    "arrived": 1793905900.5188773,
+    "released": 1793905900.5188777
+  },
+  "cache": "not dropped",
+  "cache_drop": null,
+  "capture_id": null,
+  "captures_on_host": 1,
+  "changes_at_end": [],
+  "checks": [
+    {
+      "detail": "ebpf aeiou-trace 0.4.0 (loaded and verified as cap_bpf,cap_perfmon, kernel BTF, io_uring's requests, faults on mappings, libaio's completions; POSIX AIO not traced: a uprobe needs CAP_SYS_ADMIN (the kernel's perf_uprobe_event_init), which cap_bpf,cap_perfmon is not: capture as root to trace POSIX AIO (brief item 68)) (--source ebpf)",
+      "name": "source",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "/mnt/aeiou-nfs/kv-ebpf on nfs4 localhost:/srv/aeiou-export at /mnt/aeiou-nfs",
+      "name": "root",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "synchronized, estimated error 110407 µs, at most 199829 µs",
+      "name": "clock",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "/home/curtis/MLPerfStorage/lmcache-recapture/caps/ebpf-writer on ext4",
+      "name": "output-local",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "/home/curtis/MLPerfStorage/lmcache-recapture/caps/ebpf-writer is under no --root",
+      "name": "output-outside-roots",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "23.39 GiB free",
+      "name": "space",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "no other capture on this host",
+      "name": "alone",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "not asked: the page cache is as the host left it",
+      "name": "cold",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "not asked: no library preloaded (--requests none)",
+      "name": "requests",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "a mapped page touched beside one touched before does not fault here (the kernel's fault-around maps the cached pages beside a faulting one), so the trace would miss the application's first touches: as root, note `cat /sys/kernel/debug/fault_around_bytes`, `echo 4096 > /sys/kernel/debug/fault_around_bytes` before the capture, and put the noted value back after; or run the capture as root, which does both; or waive fault-around (faults then shaped by the host, and said so)",
+      "name": "fault-around",
+      "node": null,
+      "ok": false,
+      "waived": true
+    }
+  ],
+  "clock": {
+    "end": {
+      "esterror_us": 306216,
+      "maxerror_us": 468794,
+      "state": 0,
+      "synchronized": true
+    },
+    "start": "synchronized, estimated error 110407 µs, at most 199829 µs"
+  },
+  "command": {
+    "argv": [
+      "sh",
+      "/home/curtis/MLPerfStorage/aeiou/workloads/kvcache/lmcache-local-disk/kit/serve.sh"
+    ],
+    "argv_kept": "recorded",
+    "as_root": false,
+    "cwd": "/home/curtis/MLPerfStorage/aeiou/workloads/kvcache/lmcache-local-disk/kit",
+    "gid": 106,
+    "redacted": [],
+    "uid": 1000
+  },
+  "complete": true,
+  "conversion": {
+    "aio_completed_in_submit": 0,
+    "aio_completions_unmatched": 0,
+    "aio_in_flight_at_end": 0,
+    "aio_requests": 0,
+    "calls": 9483153,
+    "descriptors_unresolved": 23017,
+    "entries_without_exit": 0,
+    "exits_without_entry": 0,
+    "fault_records": 12294,
+    "faults": 43159,
+    "faults_failed": 0,
+    "faults_major": 355,
+    "faults_retried": 591,
+    "faults_unresolved": 4103,
+    "paths_not_copied": 0,
+    "posix_aio_ambiguous": 0,
+    "posix_aio_canceled": 0,
+    "posix_aio_in_flight_at_end": 0,
+    "posix_aio_libraries_not_traced": [],
+    "posix_aio_never_collected": 0,
+    "posix_aio_refused": 0,
+    "posix_aio_requests": 0,
+    "posix_aio_served": 0,
+    "records": 19012664,
+    "uring_completions_unmatched": 0,
+    "uring_in_flight_at_end": 0,
+    "uring_requests": 939,
+    "vectored_aio_left_out": 0
+  },
+  "coordinator": null,
+  "end": {
+    "realtime": 1793906729.297209,
+    "realtime_minus_monotonic": 1793577126.0666385
+  },
+  "endpoints": [],
+  "environment": {},
+  "exit": {
+    "status": 0
+  },
+  "faults": {
+    "fault_around": {
+      "before": null,
+      "set_by_capture": false
+    },
+    "first_touch_at_end": null,
+    "first_touch_observed": false,
+    "gap_ns": 1000000,
+    "traced": true,
+    "why": null
+  },
+  "host": {
+    "cgroup_memory_max": null,
+    "cpus": 20,
+    "cpus_online": 20,
+    "distribution": "Ubuntu 24.04.1 LTS",
+    "kernel": "6.18.54.1-microsoft-standard-WSL2",
+    "memory": 33449443328,
+    "name": "DESKTOP-JS4EFLH"
+  },
+  "inherited_descriptors": [
+    {
+      "fd": 0,
+      "target": "/dev/null"
+    },
+    {
+      "fd": 1,
+      "target": "/home/curtis/MLPerfStorage/lmcache-recapture/logs/ebpf-writer.serve.log"
+    },
+    {
+      "fd": 2,
+      "target": "/home/curtis/MLPerfStorage/lmcache-recapture/logs/ebpf-writer.serve.log"
+    }
+  ],
+  "interrupted": "SIGTERM",
+  "losses": {
+    "buffer": 268435456,
+    "events": 0,
+    "per_cpu": [],
+    "suggested_buffer": null,
+    "untraced_processes": 0,
+    "untraced_rings": 0,
+    "windows": []
+  },
+  "mountstats": "not taken: a traced run's wire counts are not the application's (strace -yy adds a GETATTR to each READ); take them from an untraced run",
+  "not_seen": [
+    "which thread issued a POSIX AIO request (aio_read, lio_listio), when, and when its result was collected: glibc's helper threads make its calls, traced as their own",
+    "object-store requests: the sockets' calls are traced, the HTTP heads are not (the capture's library, --requests shim, or the store's own log)",
+    "which reads the page cache served",
+    "which thread asked for an io_uring request the kernel's SQPOLL thread submitted: its records carry that thread's id",
+    "the contents of IORING_OP_URING_CMD requests (a driver's own commands, NVMe passthrough): their operation alone",
+    "when an io_uring completion was reaped: an application reads them from the ring's shared memory with no call",
+    "loads and stores to a mapped page after its first: a page faults once, and stays mapped until it is unmapped or reclaimed",
+    "the readahead a fault starts and the writeback a store leads to: the kernel's own reads and writes, not the application's",
+    "faults on anonymous memory and on code: not file data",
+    "first touches of the other pages of a large folio: a fault maps the whole folio its page is in (up to 2 MiB), as the file happened to be cached (by large writes, or readahead), so an aeiou_fault is where touches began, at the granularity the kernel mapped; the pages each fault mapped are not recorded (brief item 67)",
+    "first touches of pages the kernel's fault-around mapped beside a faulting one: the fault-around check was waived",
+    "the lengths of vectored AIO requests (IOCB_CMD_PREADV, IOCB_CMD_PWRITEV): their iovec arrays are not copied, the requests are left out of trace.txt and counted (conversion.vectored_aio_left_out)",
+    "execve's arguments and environment: not copied (the path is), so no secret in them reaches the trace",
+    "the descriptors a recvmsg receives (SCM_RIGHTS), and those pipe, pipe2, and socketpair return: calls on them show no path",
+    "the paths of descriptors as the kernel named them: they are resolved from the recorded opens, their directories' symbolic links as they are when the capture is converted"
+  ],
+  "paths_not_copied": 0,
+  "posix_aio": {
+    "libraries": null,
+    "traced": false,
+    "why": "a uprobe needs CAP_SYS_ADMIN (the kernel's perf_uprobe_event_init), which cap_bpf,cap_perfmon is not: capture as root to trace POSIX AIO (brief item 68)"
+  },
+  "processes_traced_at_end": 0,
+  "rank": null,
+  "ranks": null,
+  "reader": {
+    "bytes": 1172529440,
+    "file": "syscalls.bin",
+    "peak_bytes_per_s": 18711687,
+    "peak_records_per_s": 293303,
+    "records": 19012664,
+    "seconds": 841.006603165
+  },
+  "requests": {
+    "source": "none",
+    "why": "not asked (--requests none, the default without an --endpoint)"
+  },
+  "roots": [
+    {
+      "export": "/srv/aeiou-export",
+      "fs_type": "nfs4",
+      "mount_point": "/mnt/aeiou-nfs",
+      "options": "rw,relatime",
+      "path": "/mnt/aeiou-nfs/kv-ebpf",
+      "resolved": "/mnt/aeiou-nfs/kv-ebpf",
+      "server": "localhost",
+      "source": "localhost:/srv/aeiou-export",
+      "super_options": "rw,vers=4.2,rsize=1048576,wsize=1048576,namlen=255,hard,fatal_neterrors=none,proto=tcp,timeo=600,retrans=2,sec=sys,clientaddr=127.0.0.1,local_lock=none,addr=127.0.0.1"
+    }
+  ],
+  "source": {
+    "line": [
+      "raw_tracepoint:sys_enter,sys_exit (209 calls: trace=%file,%desc,%process,%network,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy), raw_tracepoint:sched_process_fork,sched_process_exit; ring buffer 256MiB, fentry,fexit:handle_mm_fault (faults on mappings of files; runs end after 1000 µs quiet), fentry:aio_complete (libaio's completions)"
+    ],
+    "name": "ebpf",
+    "privilege": "cap_bpf,cap_perfmon",
+    "version": "aeiou-trace 0.4.0 (loaded and verified as cap_bpf,cap_perfmon, kernel BTF, io_uring's requests, faults on mappings, libaio's completions; POSIX AIO not traced: a uprobe needs CAP_SYS_ADMIN (the kernel's perf_uprobe_event_init), which cap_bpf,cap_perfmon is not: capture as root to trace POSIX AIO (brief item 68))",
+    "why": "--source ebpf"
+  },
+  "start": {
+    "realtime": 1793905900.518882,
+    "realtime_minus_monotonic": 1793577156.0698338
+  },
+  "tool": {
+    "name": "aeiou-trace",
+    "version": "0.4.0"
+  },
+  "trace": {
+    "bytes": 945940807,
+    "file": "trace.txt",
+    "sha256": "7017b14dc4b8f9d7fd95de19e965c13f4223aed73e93bc84c7ac7eaf0695c5ad"
+  },
+  "uring": {
+    "traced": true,
+    "why": null
+  },
+  "waivers": [
+    "fault-around"
+  ]
+}

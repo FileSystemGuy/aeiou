@@ -812,7 +812,7 @@ def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
 def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     """`workloads/kvcache/lmcache-shared-fs`: vLLM with LMCache's `fs://` backend, the 300 requests of
     the row above sent to an engine on an empty store and then to a restarted engine on the
-    filled one, traced 2026-10-02. A chunk file is a 28-byte header and the chunk, read as one
+    filled one, traced 2026-10-02 and again 2026-11-05 under each source (the same counts). A chunk file is a 28-byte header and the chunk, read as one
     buffer and the rest; the writer renames every file into place and the reader writes
     nothing. The writer stores and loads what the local-disk engine did, chunk for chunk; the
     abstract's counts at seed 1 are the low end of its seeds (`ABSTRACTS.md` §8)."""
@@ -823,7 +823,9 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
         r = subprocess.run([str(RUNNER), "dry-run", str(ast_path(ast)), "--gpus", "1", "--seed", "1",
                             "--params-file", str(case / params), "--metrics-json", str(dry)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
-        t, d = json.loads((case / f"captures/2026-10-02/{who}.trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+        traced = [json.loads((case / f"captures/{c}/{who}.trace.metrics.json").read_text())["total"] for c in ("2026-11-05", "2026-11-05-strace")]
+        assert traced[0]["counts"] == traced[1]["counts"]                 # the eBPF source and strace, the same load
+        t, d = traced[0], json.loads(dry.read_text())["total"]
         got[who] = (t["counts"], d["counts"])
         for c in (t["counts"], d["counts"]):              # Python's open around every file; a load is two reads
             assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"]

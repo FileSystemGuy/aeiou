@@ -3,7 +3,7 @@
   "unseen": [
     {
       "metric": "run length, read",
-      "reason": "a run belongs to a thread, and the two reads of a load are issued by different threads of the pool on one descriptor (checked in the raw trace)"
+      "reason": "a run belongs to a thread, and the two reads of a load are issued by different threads of the pool on one descriptor (checked in the raw trace: 1,107 of its 1,124 loads)"
     },
     {
       "metric": "fan-out",

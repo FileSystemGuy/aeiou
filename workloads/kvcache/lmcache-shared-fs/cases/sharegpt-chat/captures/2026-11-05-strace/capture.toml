@@ -1,0 +1,16 @@
+# The capture (DESIGN_REVIEW.md §3.66): what `aeiou-trace compare --judge` gives on each of its traces against
+# the case's abstract at the capture's parameters, at the case's first GPU count, the abstract at three
+# other seeds as its own spread (builder/tests/test_trace.py walks these files).
+raw_trace = "not retained"   # the metrics and each trace's capture record (*.capture.json, with the trace's SHA-256) are kept, never the trace
+# traced by strace (aeiou-trace capture --source strace), the cross-check of the eBPF capture 2026-11-05 under the same load (the model's replies byte for byte the same)
+# the writer's store order (two threads) stays outside
+
+[[pair]]
+trace = "writer.trace"   # writer.trace.metrics.json
+ast = "lmcache_shared_fs"
+verdict = "not-accepted"
+
+[[pair]]
+trace = "reader.trace"   # reader.trace.metrics.json
+ast = "lmcache_shared_fs_reader"
+verdict = "accepted"
