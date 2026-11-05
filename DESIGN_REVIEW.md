@@ -9835,8 +9835,8 @@ the same files with the same opens, closes, reads, `fstat`s, `stat`s, request si
 popularity as `--posix sync`, every completion matched; the seven earlier eBPF tests unchanged.
 Not tested here: fixed files and direct opens from a real application (the runner registers
 none; the converter's unit test holds them), an older kernel's tracepoint forms (CI's kernel may
-differ from this box's), `io_uring` from an application other than this runner (LMCache's is
-the next to trace). Brief item 54.
+differ from this box's), `io_uring` from an application other than this runner ~~(LMCache's is
+the next to trace)~~ (LMCache's fs:// and local-disk backends make none: the note of 2026-11-05 below). Brief item 54.
 
 *Risks.* A static function the compiler inlined fires no fentry (the tracepoints preferred);
 field meanings drift between kernels (`io_kiocb.cmd` at offset 0 only since about 5.19, rec;
@@ -10211,6 +10211,25 @@ posix-aio` of npy_per_sample's smoke set reads as `--posix sync` does, every req
 Python program calling each function through ctypes (two writes waited for by `aio_suspend`, an
 `O_APPEND` write, `aio_fsync(O_DSYNC)`, a `lio_listio` with a null entry, a read) gives
 strace's metrics, its seven requests each served and collected.
+
+**LMCache's `io_uring`, read off its source and an eBPF capture (2026-11-05).** "LMCache uses
+`io_uring` for some operations" (how this section came up) holds for one backend only. In
+LMCache 0.5.5 (src, the installed package of `workloads/kvcache/lmcache-local-disk/kit`) the
+local-disk backend reads and writes on a thread pool (`local_disk_backend.py`: `write`,
+`readinto`, `O_DIRECT` under `use_odirect`) and the `fs://` connector through `aiofiles`, whose
+threads make the ordinary calls (`connector/fs_connector.py`); `io_uring` is the `io_engine` of
+the Rust raw-block plugin (`plugins/rust_raw_block_backend.py`, fixed buffers and `uring_cmd`
+optional), on an NVMe block device of its own, which no case here uses. So the strace captures
+of both mechanisms missed no request of the store. The shared store's pair captured again under
+each source the same day (user's choice; `workloads/kvcache/lmcache-shared-fs`, captures
+`2026-11-05` and `2026-11-05-strace`, the model's replies byte for byte the same) confirms it,
+box: the counts and bytes of the 2026-10-02 strace capture exactly, the sources differing only
+in what the threads' timing orders, and the only rings libuv's in the API server (939
+`IORING_OP_EPOLL_CTL`) and two caio's `linux_uring` makes at import to test the kernel and never
+submits to (with one `io_setup` likewise, the note `aio_contexts_without_io_submit`). The five
+rows the writer put outside for predating S-18 are within tolerance in both. The raw-block
+plugin is the `io_uring` application still to trace, and only with a raw device and that scope
+decided (not queued). `CAPTURE.md` named LMCache as an `io_uring` application, corrected.
 
 
 ## 4. Plan changes

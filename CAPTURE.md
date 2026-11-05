@@ -55,7 +55,7 @@ distribution's). `--source auto`, the default, takes eBPF when the copy can load
 and strace when it cannot, and the `source` check says which and why.
 
 It also sees what strace cannot: the requests an application hands the kernel through
-`io_uring` (LMCache does for some of its operations), each
+`io_uring` (LMCache's raw-block backend does, on an NVMe device of its own), each
 recorded when the kernel takes it and when it completes. Under strace a ring's I/O is only its
 `io_uring_enter` calls, so for such an application use the eBPF source. The record's `uring`
 says whether this kernel's `io_uring` was traced, and why not.
