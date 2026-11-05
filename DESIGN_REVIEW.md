@@ -9572,6 +9572,16 @@ its environment, its options, a URL, and the bytes it writes, reads, and sends o
 under each source, and find none in any file of the capture; `tests/trace_tool.rs` the
 warning and its absence.
 
+**A decoded address is not a call's bytes (found 2026-11-05).** The strace capture of
+LMCache's shared store (`workloads/kvcache/lmcache-shared-fs`, captures `2026-11-05-strace`)
+was warned of, 20 calls with their bytes printed, under the capture's own line: every one a
+`recvmsg` of a netlink socket, whose messages strace decodes under `-s 0` too, an IPv6 address
+written `inet_pton(AF_INET6, "::1")` after a `, ` (a datagram's sender in `recvfrom` and
+`recvmsg` likewise; `inet_addr("…")` and `if_nametoindex("…")` follow a `(`, and never
+matched). `strace::printed` no longer takes a quoted argument after `inet_pton(AF_INET6, ` for
+a call's bytes; one after it still is. Tests: the unit test's clean lines (a netlink listing,
+a sender of each family) and a datagram whose bytes are printed beside its sender's address.
+
 ### 3.98 One trace format for every source: strace's text, extended by records of our own, and the probes of phase 4 (researched, debated with the user, and decided 2026-11-04; phase 4 step 1, `io_uring`, built the same day)
 
 **How it came up.** After item 62 the user asked when the probes for `io_uring` and mapping

@@ -583,7 +583,9 @@ pub(crate) fn int0(s: &str) -> Option<i64> {
 /// The note for a line that prints what the capture's line keeps out (`ARGUMENTS_PRINTED`,
 /// `DATA_PRINTED`): `args` from the call's `(`, or a resumed line's rest. A quoted argument
 /// begins after `, ` or `iov_base=`, or a resumed line's rest; `-s 0` prints each as `""...`.
-/// A `-yy` path escapes its quotes, and a socket address's `sun_path="` follows no `, `.
+/// A `-yy` path escapes its quotes, and a socket address's `sun_path="` follows no `, `; an
+/// IPv6 address strace decodes (a datagram's sender, a netlink listing's) is
+/// `inet_pton(AF_INET6, "::1")` under `-s 0` too, and is not the call's bytes.
 fn printed(name: &str, args: &str) -> Option<&'static str> {
     if name == "execve" || name == "execveat" {
         return args.contains("\", [").then_some(ARGUMENTS_PRINTED);
@@ -591,7 +593,10 @@ fn printed(name: &str, args: &str) -> Option<&'static str> {
     if !DATA_CALLS.contains(&name) {
         return None;
     }
-    let quoted = |m: &str| args.match_indices(m).any(|(j, _)| args.as_bytes().get(j + m.len()) != Some(&b'"'));
+    let quoted = |m: &str| {
+        args.match_indices(m)
+            .any(|(j, _)| args.as_bytes().get(j + m.len()) != Some(&b'"') && !args[..j].ends_with("inet_pton(AF_INET6"))
+    };
     (quoted(", \"") || quoted("iov_base=\"") || (args.starts_with('"') && !args.starts_with("\"\""))).then_some(DATA_PRINTED)
 }
 
@@ -3078,6 +3083,10 @@ mod tests {
             r#"1 1.000000 write(1</d/a>, "", 0) = 0 <0.000010>"#,
             r#"1 1.000000 writev(3</d/a>, [{iov_base=""..., iov_len=1}, {iov_base=""..., iov_len=2}], 2) = 3 <0.000010>"#,
             r#"1 1.000000 sendto(4<UNIX-STREAM:[9,"/run/s"]>, ""..., 3, 0, {sa_family=AF_UNIX, sun_path="/run/s"}, 9) = 3 <0.000010>"#,
+            // an address strace decodes, under -s 0 too: a netlink listing's, a datagram's sender (LMCache's capture, 2026-11-05)
+            r#"1 1.000000 recvmsg(21<NETLINK:[ROUTE:1]>, {msg_name={sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, msg_namelen=12, msg_iov=[{iov_base=[[{nlmsg_len=80, nlmsg_type=RTM_NEWADDR, nlmsg_flags=NLM_F_MULTI, nlmsg_seq=1, nlmsg_pid=1}, {ifa_family=AF_INET6, ifa_prefixlen=128, ifa_flags=IFA_F_PERMANENT, ifa_scope=RT_SCOPE_HOST, ifa_index=if_nametoindex("lo")}, [[{nla_len=20, nla_type=IFA_ADDRESS}, inet_pton(AF_INET6, "::1")], [{nla_len=5, nla_type=IFA_PROTO}, ""...]]]], iov_len=4096}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 80 <0.000010>"#,
+            r#"1 1.000000 recvfrom(5<UDP:[2]>, ""..., 512, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("10.0.0.1")}, [16]) = 40 <0.000010>"#,
+            r#"1 1.000000 recvfrom(5<UDPv6:[3]>, ""..., 512, 0, {sa_family=AF_INET6, sin6_port=htons(53), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "fe80::1", &sin6_addr), sin6_scope_id=0}, [28]) = 40 <0.000010>"#,
             r#"1 1.000000 read(3</d/a>,  <unfinished ...>"#,
             r#"1 1.000100 <... read resumed>""..., 5) = 5 <0.000100>"#,
             r#"1 1.000000 openat(AT_FDCWD</d>, "/d/a", O_RDONLY) = 3</d/a> <0.000010>"#,
@@ -3094,6 +3103,7 @@ mod tests {
             (r#"1 1.000000 write(1</d/a>, "key=v"..., 5) = 5 <0.000010>"#, DATA_PRINTED),
             (r#"1 1.000000 writev(3</d/a>, [{iov_base=""..., iov_len=1}, {iov_base="Authorization: x", iov_len=16}], 2) = 17 <0.000010>"#, DATA_PRINTED),
             (r#"1 1.000100 <... read resumed>"secret"..., 5) = 5 <0.000100>"#, DATA_PRINTED),
+            (r#"1 1.000000 recvfrom(5<UDPv6:[3]>, "secret"..., 512, 0, {sa_family=AF_INET6, sin6_port=htons(53), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "fe80::1", &sin6_addr), sin6_scope_id=0}, [28]) = 40 <0.000010>"#, DATA_PRINTED),
         ];
         for (l, k) in printing {
             let mut t = Tracer::new(&o, true, None);
