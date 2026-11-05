@@ -70,6 +70,9 @@ struct CaptureArgs {
     /// The eBPF source's ring buffer, a power of two from 64KiB to 2GiB: a full one loses events, and the capture says so and suggests a larger one [default: 256MiB]
     #[arg(long, value_name = "SIZE")]
     buffer: Option<String>,
+    /// The eBPF source's faults on mappings: a thread's faults on a file, one after another at one stride, are one record until one comes more than DURATION after the last ended (ns, us, ms, s), so a pause in the application ends a run [default: 1ms]
+    #[arg(long, value_name = "DURATION")]
+    fault_gap: Option<String>,
     /// What capture.json keeps of the command line: recorded, every argument, the value of an option or a variable named as a secret (password, token, key, auth, ...) and a URL's password replaced by <redacted>; none, the program alone, for a secret passed by position [default: recorded]
     #[arg(long, value_name = "MODE", value_parser = ["recorded", "none"])]
     argv: Option<String>,
@@ -784,6 +787,11 @@ fn capture_cmd(a: CaptureArgs) -> Result<()> {
         Some(b) => aeiou::ebpf::parse_buffer(b).map_err(usage::err)?,
         None => aeiou::ebpf::DEFAULT_BUFFER,
     };
+    let fault_gap_ns = match &a.fault_gap {
+        Some(_) if a.source.as_deref() == Some("strace") => return Err(usage::err("--fault-gap: the eBPF source's runs of faults; strace traces no faults (not with --source strace)")),
+        Some(g) => capture::parse_duration_ns(g).map_err(|e| usage::err(format!("--fault-gap {g}: {e}")))?,
+        None => aeiou::ebpf_text::DEFAULT_FAULT_GAP_NS,
+    };
     let source = match a.source.as_deref().unwrap_or("auto") {
         "ebpf" => capture::ebpf_source("--source ebpf"),
         "strace" => capture::strace_source("--source strace"),
@@ -805,6 +813,7 @@ fn capture_cmd(a: CaptureArgs) -> Result<()> {
         requests,
         requests_buffer,
         buffer,
+        fault_gap_ns,
         capture_id: a.capture_id.or_else(|| std::env::var("SLURM_JOB_ID").ok().filter(|v| !v.is_empty())),
         ranks,
         rank,

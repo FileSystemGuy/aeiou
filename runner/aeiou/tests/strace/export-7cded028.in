@@ -1,0 +1,19 @@
+0 1700000000.000000 --- aeiou: trace format 1, records aeiou_fault ---
+10 1700000000.000000 execve("/bin/app", 0x20, 0x30) = 0 <0.000001>
+10 1700000000.000010 openat(AT_FDCWD</d>, "a", O_RDONLY|O_CLOEXEC) = 3</d/a> <0.000002>
+10 1700000000.000020 mmap(NULL, 1048576, PROT_READ, MAP_SHARED, 3</d/a>, 0) = 0x7f0000000000 <0.000003>
+10 1700000000.000030 close(3</d/a>) = 0 <0.000001>
+10 1700000000.000100 aeiou_fault(path="/d/a", off=0, stride=4096, count=128, major=128, write=0, in_call=0, page=4096, span_ns=4000000, gap_max_ns=40000, addr=0x7f0000000000) = 0 <0.003500>
+10 1700000000.010000 aeiou_fault(path="/d/a", off=524288, stride=4096, count=128, major=0, write=0, in_call=0, page=4096, span_ns=300000, gap_max_ns=5000, addr=0x7f0000080000) = 0 <0.000200>
+10 1700000000.020000 openat(AT_FDCWD</d>, "b", O_RDWR|O_CREAT|O_CLOEXEC, 0644) = 4</d/b> <0.000002>
+11 1700000000.010100 aeiou_fault(path="/d/a", off=983040, stride=-65536, count=3, major=1, write=0, in_call=0, page=4096, span_ns=20000, gap_max_ns=4000, addr=0x7f00000f0000) = 0 <0.000012>
+10 1700000000.020010 mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_SHARED, 4</d/b>, 0) = 0x7f1000000000 <0.000002>
+10 1700000000.020020 aeiou_fault(path="/d/b", off=0, stride=4096, count=2, major=0, write=1, in_call=0, page=4096, span_ns=3000, gap_max_ns=1000, addr=0x7f1000000000) = 0 <0.000002>
+10 1700000000.020100 msync(0x7f1000000000, 8192, MS_SYNC) = 0 <0.000100>
+10 1700000000.020200 munmap(0x7f1000000000, 8192) = 0 <0.000010>
+10 1700000000.020300 read(4</d/b>, 0x7f0000002000, 4096 <unfinished ...>
+10 1700000000.020301 aeiou_fault(path="/d/a", off=8192, stride=0, count=1, major=0, write=0, in_call=1, page=4096, span_ns=1000, gap_max_ns=0, addr=0x7f0000002000) = 0 <0.000001>
+10 1700000000.020400 <... read resumed>) = 4096 <0.000100>
+10 1700000000.020500 aeiou_fault(path="/usr/lib/x86_64-linux-gnu/libc.so.6", off=0, stride=4096, count=4, major=0, write=0, in_call=0, page=4096, span_ns=8000, gap_max_ns=1000, addr=0x7f2000000000) = 0 <0.000004>
+10 1700000000.030000 close(4</d/b>) = 0 <0.000001>
+10 1700000000.040000 +++ exited with 0 +++

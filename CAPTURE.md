@@ -60,6 +60,24 @@ recorded when the kernel takes it and when it completes. Under strace a ring's I
 `io_uring_enter` calls, so for such an application use the eBPF source. The record's `uring`
 says whether this kernel's `io_uring` was traced, and why not.
 
+And it sees reads and writes through a mapping (`mmap`), which strace cannot: each page fault
+on a mapped file, where the application first touched a page, written as runs of faults.
+A page beside a faulting one is mapped with it where the kernel's fault-around is above one
+page, and the capture checks that before it starts (the `fault-around` check). (A fault also
+maps the whole folio its page is in, up to 2 MiB, however the file came to be cached; no
+setting changes that, and the record's `not_seen` says so.) As root it sets it for the capture and
+puts it back. Under the file capabilities it cannot, so, where the check fails, have root run
+before the capture
+
+```
+cat /sys/kernel/debug/fault_around_bytes          # note it: 65536 by default
+echo 4096 | sudo tee /sys/kernel/debug/fault_around_bytes
+```
+
+and put the noted value back after. Every program on the host takes more faults while it is
+set. If you cannot, `--accept fault-around` captures anyway, and the record says the faults
+missed some first touches. The record's `faults` says whether faults were traced, and why not.
+
 The probes cannot make your application wait, so when the application makes calls faster
 than the tool writes them down, the ring buffer fills and calls are lost. Any loss ends the
 capture with a box saying how many, where, and what to do: usually `--buffer 1GiB` (or what
@@ -158,9 +176,9 @@ does: send its digest, not the trace.
 - For the eBPF source on hosts where file capabilities cannot be granted, a password-less
   `sudo -n` helper (phase 3b of brief item 54).
 - Object requests over TLS inside the program, Go, or HTTP/2 (libssl uprobes come with the
-  eBPF source, phase 4), and page faults on mappings (phase 4): the record's `not_seen` lists
-  what this capture could not see. `io_uring`'s requests are traced by the eBPF source
-  (2026-11-04) where the kernel has its tracepoints; under strace they are not.
+  eBPF source, phase 4): the record's `not_seen` lists what this capture could not see.
+  `io_uring`'s requests and page faults on mappings are traced by the eBPF source
+  (2026-11-04) where the kernel allows; under strace they are not.
 - One node's interruption stopping the others (each node stops on its own signal, which
   `aeiou-launch` sends to every node), and comparing per-node records afterward for captures
   taken without a coordinator.

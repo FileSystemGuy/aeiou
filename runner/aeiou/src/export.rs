@@ -218,7 +218,7 @@ pub struct Exporter {
     lanes: HashMap<i64, usize>,
     opens: Vec<Open>,
     t0: Option<f64>,
-    notes: BTreeMap<String, Value>,
+    pub(crate) notes: BTreeMap<String, Value>,
     events: usize,
     seen: HashSet<String>,
     creates: Vec<String>,

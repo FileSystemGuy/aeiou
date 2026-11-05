@@ -508,8 +508,10 @@ uses them. A trace that prints them is noted (`execve_arguments_printed`,
   recoverable, and that row of the comparison says `none`.
 - **Not visible to `strace`:** `io_uring` submissions and page faults on a mapping (an eBPF
   capture's trace holds the `io_uring` requests as `aeiou_uring_sqe` and `aeiou_uring_cqe`
-  records, read as the calls they do: `runner/REFERENCE.md` §13, since 2026-11-04). Not
-  counted: `sendfile`, `splice`, `copy_file_range`.
+  records, read as the calls they do: `runner/REFERENCE.md` §13, since 2026-11-04; and the
+  faults on mappings of files as `aeiou_fault` runs, counted apart from the calls in the
+  metrics' `faults` and not replayed, the same day). Not counted: `sendfile`, `splice`,
+  `copy_file_range`.
 - **`compare`.** One row per metric with both values and a distance in [0, 1]: the
   difference of two shares (mix, ops by kind, first touches, bytes in multi-op runs,
   popularity of the top 0.1/1/10 %), the largest difference between two histograms'
@@ -688,7 +690,8 @@ are not that interleaving), as is every read and write on an open whose `O_APPEN
 went to a known end of the file (`append_positions_resolved`, the writes; that offset is
 the file's size, not the open's position),
 an `mmap` of a file range is one positioned `read` of the range
-(`mmap_as_read`; `metrics` does not count a mapping), and a call the schema has no op for
+(`mmap_as_read`; `metrics` does not count a mapping as a call; an eBPF capture's faults in
+it are noted, `faults_not_replayed`, brief item 65), and a call the schema has no op for
 (`truncate` by path, `sendfile`, an `ioctl` or `fadvise` the schema does not name) is
 dropped by name. `metrics` reads an exported file as it reads an strace (the header is
 sniffed), with a lane as the context and the file as one instance, and **gives the same

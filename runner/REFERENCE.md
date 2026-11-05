@@ -2055,7 +2055,8 @@ begins with a header line every strace reader skips:
 0 1762250000.000000 --- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe ---
 ```
 
-A record keeps strace's line form, `TID TIME NAME(ARGS) = RET`, with no `<duration>`; its name
+A record keeps strace's line form, `TID TIME NAME(ARGS) = RET`, with no `<duration>` but for
+`aeiou_fault`'s; its name
 begins `aeiou_`; every argument is `key=value`, in the order the record kind gives, never read by
 position; a value is an integer, a hexadecimal `0x...`, a flag set as strace prints one
 (`O_RDONLY|O_CLOEXEC`), a C-escaped quoted string, a descriptor as `-yy` prints it (`7</d/a>`,
@@ -2107,6 +2108,42 @@ on paths the record does not hold (`RENAMEAT`, `UNLINKAT`, `MKDIRAT`, `SYMLINKAT
 `SETXATTR`, `GETXATTR`). A completion of no submission the trace shows is noted
 (`uring_completions_without_submission`), a request never completed is taken as complete
 (`uring_results_assumed_complete`). With the records an `io_uring_setup` is no longer noted.
+
+Faults on mappings of files (2026-11-04, `DESIGN_REVIEW.md` §3.98 "Phase 4 step 2"), written by
+the eBPF source when the kernel can attach to `handle_mm_fault` (`capture.json`'s `faults`; the
+header's records then end `aeiou_fault`):
+
+```
+TID TIME aeiou_fault(path="P", off=N, stride=S, count=C, major=M, write=0|1, in_call=0|1, page=B, span_ns=T, gap_max_ns=G, addr=0xA) = 0 <DUR>
+```
+
+- One record is a run: a thread's `count` faults on one file (`path`, absolute, the mapping's
+  its address was in, from the process's `mmap`s, `munmap`s, and `mremap`s), all loads or all
+  stores (`write`), all from the application's own instructions or all inside a call's copy of
+  a mapped buffer (`in_call`), the first at the file offset `off` (the page's, from the
+  kernel's mapping), each after the one before by `stride` bytes (0 for a run of one;
+  negative going down), none starting more than the capture's `--fault-gap` after the one
+  before ended. `TIME` is the first fault's start; the line is written when the run ends (at
+  the thread's next record of another kind, a loss, or once the gap has passed), so it can
+  follow other threads' lines stamped later, never its own thread's.
+- `major` the faults that read the disk; `page` the page size; `span_ns` from the first
+  fault's start to the last's end; `gap_max_ns` the longest quiet time between two of its
+  faults (one's end to the next's start); `<DUR>` the time its faults took, a retried fault's
+  attempts summed; `addr` the first fault's address, for a person.
+- A fault maps the whole folio its page is in (up to 2 MiB, as the file happened to be cached),
+  so a run is where touches began, at the granularity the kernel mapped; the pages each fault
+  mapped are not recorded (brief item 67).
+- A capture whose `fault-around` check was waived (a first touch may not fault: the kernel
+  mapped the pages beside a faulting one) has the line
+  `0 TIME --- aeiou: faults: a first touch of a page may not fault (the capture's fault-around check was waived) ---`
+  after the header, noted as `faults_first_touch_unseen`.
+
+`metrics` counts the runs on files under a root apart from the calls, in the document's
+`faults` (`faults`, `major`, `write`, `in_call`, `runs`, `bytes` the faults' pages, `run_bytes`
+each run's span `|stride|·(count−1)+page`, `run_faults`, `stride` by the faults after a run's
+first, `quiet_us` between a thread's runs on a file), with the note `faults_kernel_observed`;
+`export` keeps a mapping as one read of its range (`mmap_as_read`) and notes the faults it does
+not replay (`faults_not_replayed`; replaying them is brief item 65).
 
 ## 14. The option layers (2026-10-04)
 

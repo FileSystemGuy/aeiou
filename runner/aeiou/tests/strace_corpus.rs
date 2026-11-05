@@ -39,7 +39,11 @@
 //! of a path, a path operation and an fadvise noted by name, an error, a completion of no
 //! submission, a ring of no setup, a record of a kind not known), and two captures of this
 //! runner's own `--posix io_uring` engine (npy_per_sample at 20 samples), with and without
-//! SQPOLL, their paths rewritten to `/t/...`, `/u/...`, and `/src/aeiou`.
+//! SQPOLL, their paths rewritten to `/t/...`, `/u/...`, and `/src/aeiou`. And its faults on
+//! mappings (2026-11-04, phase 4 step 2; two cases, each checked by hand against its input):
+//! runs of loads, of stores, going down, inside a call, on a file outside the root, a run line
+//! written after a later-stamped one, the quiet times between a thread's runs; and a capture
+//! whose fault-around check was waived, fault-around's stride and the note it carries.
 //! Three of
 //! the straces are of this
 //! runner (`file_per_sample`, `lmcache_local_disk`, `diskann_search`), their temporary paths

@@ -92,7 +92,7 @@ order, another reader), not just in sizes, it is path C.
    why; a trace only shows what it did once. Note its I/O API: an `strace` sees POSIX calls
    and the kernel AIO calls, but not `io_uring` submissions or reads through a mapping (for
    those, exact call counts and a page-residency probe stand in, as for the model-load and
-   IVF-search workloads).
+   IVF-search workloads, or the eBPF capture's records of both, since 2026-11-04).
 2. **Capture an strace** of the real application, at a size small enough to trace, on the
    storage you will name with `--root`:
 
@@ -475,6 +475,15 @@ each completion, written as `aeiou_uring_sqe` and `aeiou_uring_cqe` records afte
 the trace's format (`runner/REFERENCE.md` §13), and read as the calls they do, one
 `io_uring_enter`'s a fan-out; a capture of this runner's own `--posix io_uring` engine, with and
 without SQPOLL, reads as its `--posix sync` run does.
+Since 2026-11-04 (phase 4, step 2, §3.98 "Phase 4 step 2") it traces the page faults on mappings
+of files too: a thread's faults on a file, one after another at one stride and ended by a quiet
+time (`--fault-gap`, 1 ms), written as `aeiou_fault` runs and counted by `metrics` apart from
+the calls (`faults`), not replayed by `export` (brief item 65); the `fault-around` check makes
+a capture where the kernel maps no page beside a faulting one (`fault_around_bytes` at one page: set and
+put back by root, else set by the owner or waived); a fault still maps the whole folio its page
+is in, up to 2 MiB, which no setting changes (the pages each mapped, brief item 67). Decided with it: the abstract holds what the
+application demands, and readahead, caching, and the rest of the storage stack's response are
+the system under test's, judged by the performance it delivers.
 
 `aeiou cases` (2026-10-23, item 40) lists the use cases a binary can run by `--case NAME`,
 filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows
@@ -497,7 +506,7 @@ Not built, in rough order of interest:
 - The capture's other sources (brief item 54): ~~the HTTP-head shim for object requests (phase
   2),~~ (built 2026-11-03) ~~eBPF system calls that do not slow the application (phase 3),~~
   (built 2026-11-03) the `sudo -n` helper for hosts without file capabilities (phase 3b), and
-  uprobes, faults on mappings, ~~and `io_uring`~~ (`io_uring` built 2026-11-04) (phase 4; decided
+  uprobes, ~~faults on mappings, and `io_uring`~~ (`io_uring` and faults built 2026-11-04) (phase 4; decided
   2026-11-04 with the trace format they write, strace's text extended by records of aeiou's own,
   `DESIGN_REVIEW.md` §3.98).
 

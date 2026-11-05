@@ -47,6 +47,10 @@ const UNFINISHED: &str = "<unfinished ...>";
 /// The note of the events an eBPF capture lost (its `--- aeiou: N event(s) lost` lines): the
 /// numbers come from an incomplete trace.
 pub const EVENTS_LOST: &str = "events_lost";
+/// The note of a trace whose faults may miss first touches: its capture's fault-around check
+/// was waived, so the kernel mapped pages ahead of a fault and their touches did not fault.
+pub const FIRST_TOUCH_UNSEEN: &str = "faults_first_touch_unseen";
+
 /// The notes of what the capture's line keeps out of a trace and this one prints (brief item 62,
 /// `DESIGN_REVIEW.md` §3.97): `execve`'s arguments and environment (`-v` without
 /// `-e verbose=!execve,execveat`), and a call's bytes (without `-s 0`), either of which can hold
@@ -800,7 +804,7 @@ fn handled(name: &str) -> bool {
         || DUPS.contains(&name)
         || fd_op_of(name).is_some()
         || path_op_of(name).is_some()
-        || matches!(name, "close" | "lseek" | "io_setup" | "io_submit" | "io_getevents" | "io_pgetevents" | "chdir" | "fchdir" | "mmap" | "aeiou_uring_sqe" | "aeiou_uring_cqe")
+        || matches!(name, "close" | "lseek" | "io_setup" | "io_submit" | "io_getevents" | "io_pgetevents" | "chdir" | "fchdir" | "mmap" | "aeiou_uring_sqe" | "aeiou_uring_cqe" | "aeiou_fault")
 }
 
 /// When a call started and returned, and by whom: `(tid, issued, done)`.
@@ -871,6 +875,9 @@ pub struct Tracer {
     aio_seq: u64,
     /// The trace's format (`--- aeiou: trace format N` at its start; 0, a plain strace, without).
     pub format: u64,
+    /// The trace says a first touch may not fault (`Some`), and whether a fault under the roots
+    /// has been counted since, which notes it.
+    first_touch_unseen: Option<bool>,
     /// `io_uring` requests in flight, by `(ring, id)` (`aeiou_uring_sqe`), at most a ring's depth.
     uring: HashMap<(String, String), Uring>,
     /// A thread's data requests submitted since its last other line: one fan-out.
@@ -915,6 +922,7 @@ impl Tracer {
             aio: HashMap::new(),
             aio_seq: 0,
             format: 0,
+            first_touch_unseen: None,
             uring: HashMap::new(),
             uring_batch: HashMap::new(),
             aio_submitted: false,
@@ -1284,6 +1292,12 @@ impl Tracer {
             }
             return;
         }
+        if body.starts_with("--- aeiou: faults: ") {
+            // the eBPF source's mark that its fault-around check was waived (ebpf_text.rs), noted
+            // with the first fault counted: a trace with none under the roots is a call trace
+            self.first_touch_unseen = Some(false);
+            return;
+        }
         if let Some(r) = body.strip_prefix("--- aeiou: ") {
             // the eBPF source's mark where its ring buffer lost records (capture.rs)
             if let Some(n) = r.split(' ').next().and_then(|n| n.parse().ok()).filter(|_| r.contains(" event(s) lost")) {
@@ -1401,6 +1415,31 @@ impl Tracer {
         let name = name.to_string();
         if let Err(e) = self.call(tid, &name, &args, ret, ret_path, issued, done, err) {
             self.error = Some(e);
+        }
+    }
+
+    // ---- faults on mappings (DESIGN_REVIEW.md §3.98 "Phase 4 step 2")
+
+    /// An `aeiou_fault`: a run of a thread's faults on a file, counted apart from the calls, and
+    /// not replayed (the export keeps a mapping as one read of its range, `mmap_as_read`).
+    fn fault(&mut self, tid: i64, inst: Option<i64>, a: &[String], issued: Option<f64>) {
+        let k = keyed(a);
+        let Some(path) = k.get("path").and_then(|p| c_string(p)) else { return };
+        let Some(p) = self.under(Some(&path)) else { return };
+        if inst.is_none() {
+            return;
+        }
+        let n = |key: &str| k.get(key).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let count = n("count").max(0) as u64;
+        if self.first_touch_unseen == Some(false) {
+            self.first_touch_unseen = Some(true);
+            self.note(FIRST_TOUCH_UNSEEN, 1);
+        }
+        if let Some(ex) = self.export.as_mut() {
+            ex.note("faults_not_replayed", count);
+        }
+        if let Some(m) = self.metrics.as_mut() {
+            m.faults.get_or_insert_with(Default::default).run(tid, &p, n("stride"), count, n("major").max(0) as u64, n("write") == 1, n("in_call") == 1, n("page").max(1) as u64, issued.unwrap_or(0.0), n("span_ns").max(0) as u64);
         }
     }
 
@@ -1664,6 +1703,10 @@ impl Tracer {
         }
         if name == "aeiou_uring_sqe" {
             self.uring_sqe(tid, inst, a, issued);
+            return Ok(());
+        }
+        if name == "aeiou_fault" {
+            self.fault(tid, inst, a, issued);
             return Ok(());
         }
         if OPENS.contains(&name) {
@@ -2338,8 +2381,14 @@ pub fn metrics_document(t: &Tracer, o: &Opts) -> Value {
     if ["aio_requests_truncated", "aio_events_truncated", "iov_arrays_truncated"].iter().any(|k| notes.contains_key(*k)) {
         notes.insert("arrays_truncated".into(), json!("trace again with strace -v: without it strace prints only the first 32 elements of an array"));
     }
+    if m.faults.is_some() {
+        notes.insert(
+            "faults_kernel_observed".into(),
+            json!("faults counts the kernel's faults on mappings of files under the roots, apart from the calls: a page faults at its first touch only, a fault maps the whole folio its page is in (up to 2 MiB, as the file happened to be cached), and where the capture's fault-around check was waived (faults_first_touch_unseen) the cached pages beside it too; where touches began, at the granularity the kernel mapped: evidence of a mapped site's touches, weaker than a call"),
+        );
+    }
     let instances = m.instances.len().max(usize::from(o.instance_roots.is_empty()));
-    json!({
+    let mut doc = json!({
         "aeiou_metrics": METRICS_FORMAT,
         "source": "strace",
         "roots": t.roots,
@@ -2350,7 +2399,11 @@ pub fn metrics_document(t: &Tracer, o: &Opts) -> Value {
         "chain_gap_us": t.chain_gap.map(|g| g * 1e6),
         "notes": notes,
         "total": m.total(t.chain_gap.is_some()),
-    })
+    });
+    if let Some(f) = &m.faults {
+        doc["faults"] = serde_json::to_value(f.out()).unwrap();
+    }
+    doc
 }
 
 /// Why a trace gave no call to count: the roots matched none of its calls, or it is no strace.
@@ -2407,6 +2460,71 @@ mod tests {
         let mut t = Tracer::new(&o, true, None);
         t.line(&format!("0 1.000000 --- aeiou: trace format {}, records aeiou_x ---\n", TRACE_FORMAT + 1));
         assert_eq!(t.notes.get("trace_format_newer"), Some(&(TRACE_FORMAT + 1)));
+    }
+
+    #[test]
+    fn faults_are_counted_apart_from_the_calls_and_not_replayed() {
+        let o = Opts { roots: vec!["/d".into()], ..Opts::default() };
+        let lines = [
+            "0 1700000001.000000 --- aeiou: trace format 1, records aeiou_fault ---",
+            "1 1700000001.000001 openat(AT_FDCWD</d>, \"/d/a\", O_RDONLY) = 3</d/a> <0.000010>",
+            "1 1700000001.000020 mmap(NULL, 1048576, PROT_READ, MAP_SHARED, 3</d/a>, 0) = 0x7f0000000000 <0.000005>",
+            r#"1 1700000001.000100 aeiou_fault(path="/d/a", off=0, stride=4096, count=64, major=64, write=0, in_call=0, page=4096, span_ns=900000, gap_max_ns=20000, addr=0x7f0000000000) = 0 <0.000800>"#,
+            // the same thread on the same file 5 ms after the first run ended
+            r#"1 1700000001.005900 aeiou_fault(path="/d/a", off=262144, stride=65536, count=4, major=0, write=1, in_call=0, page=4096, span_ns=10000, gap_max_ns=2000, addr=0x7f0000040000) = 0 <0.000004>"#,
+            r#"2 1700000001.006000 aeiou_fault(path="/d/a", off=8192, stride=0, count=1, major=0, write=0, in_call=1, page=4096, span_ns=1000, gap_max_ns=0, addr=0x7f0000002000) = 0 <0.000001>"#,
+            // a library's: not under the root
+            r#"1 1700000001.007000 aeiou_fault(path="/usr/lib/libc.so.6", off=0, stride=0, count=1, major=0, write=0, in_call=0, page=4096, span_ns=1000, gap_max_ns=0, addr=0x7f1000000000) = 0 <0.000001>"#,
+        ];
+        let mut t = Tracer::new(&o, true, None);
+        for l in lines {
+            t.line(l);
+        }
+        t.finish().unwrap();
+        let doc = metrics_document(&t, &o);
+        let f = &doc["faults"];
+        assert_eq!((f["faults"].as_u64(), f["major"].as_u64(), f["write"].as_u64(), f["in_call"].as_u64(), f["runs"].as_u64()), (Some(69), Some(64), Some(4), Some(1), Some(3)), "{f}");
+        assert_eq!(f["bytes"], 69 * 4096);
+        assert_eq!(f["stride"], json!({"4096": 63, "65536": 3}));
+        // a run's span: 63 strides and a page; 3 strides of 64 KiB and a page; a page
+        assert_eq!(f["run_bytes"]["max"], 64 * 4096);
+        assert_eq!(f["run_faults"]["n"], 3);
+        // the quiet time between thread 1's two runs on the file: 5.9 ms less the first's 0.9 ms
+        assert_eq!((f["quiet_us"]["n"].as_u64(), f["quiet_us"]["max"].as_u64()), (Some(1), Some(4900)), "{f}");
+        assert!(doc["notes"]["faults_kernel_observed"].as_str().unwrap().contains("weaker than a call"));
+        assert!(doc["notes"].get(FIRST_TOUCH_UNSEEN).is_none());
+        // the calls' numbers are the calls' alone: a mapping is not a read to the metrics
+        assert!(doc["total"]["counts"].get("read").is_none(), "{}", doc["total"]["counts"]);
+
+        // a capture whose fault-around check was waived says so
+        let mut t = Tracer::new(&o, true, None);
+        t.line("0 1700000001.000000 --- aeiou: trace format 1, records aeiou_fault ---");
+        t.line("0 1700000001.000000 --- aeiou: faults: a first touch of a page may not fault (the capture's fault-around check was waived) ---");
+        t.line(lines[3]);
+        t.finish().unwrap();
+        assert_eq!(metrics_document(&t, &o)["notes"][FIRST_TOUCH_UNSEEN], 1);
+        // and says nothing of it where no fault under the roots was counted
+        let mut t = Tracer::new(&o, true, None);
+        t.line("0 1700000001.000000 --- aeiou: faults: a first touch of a page may not fault (the capture's fault-around check was waived) ---");
+        t.line(lines[1]);
+        t.line(lines[6]);
+        t.finish().unwrap();
+        assert!(metrics_document(&t, &o)["notes"].get(FIRST_TOUCH_UNSEEN).is_none());
+
+        // without faults, no section
+        let mut t = Tracer::new(&o, true, None);
+        t.line(lines[1]);
+        t.finish().unwrap();
+        assert!(metrics_document(&t, &o).get("faults").is_none());
+
+        // the export keeps the mapping as one read of its range and notes the faults it does not replay
+        let mut t = Tracer::new(&o, false, Some(crate::export::Exporter::new("/d")));
+        for l in &lines[..6] {
+            t.line(l);
+        }
+        let ex = t.export.as_ref().unwrap();
+        assert_eq!(ex.notes.get("faults_not_replayed"), Some(&json!(69)), "{:?}", ex.notes);
+        assert_eq!(ex.notes.get("mmap_as_read"), Some(&json!(1)), "{:?}", ex.notes);
     }
 
     #[test]

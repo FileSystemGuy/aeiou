@@ -144,7 +144,14 @@ impl Btf {
                     }
                     8 * vlen
                 }
-                6 => 8 * vlen,
+                6 => {
+                    // an enum's values, as members of that offset
+                    for m in 0..vlen {
+                        let o = at + 8 * m;
+                        members.push((s_at(rd(o)?), 0, rd(o + 4)?));
+                    }
+                    8 * vlen
+                }
                 15 | 19 => 12 * vlen,
                 _ => 0,
             };
@@ -198,6 +205,19 @@ impl Btf {
                 })
                 .collect(),
         )
+    }
+
+    /// The value of an enum's constant (`VM_FAULT_MAJOR`), whichever enum declares it.
+    pub fn enum_value(&self, name: &str) -> Option<u32> {
+        self.types.iter().filter(|t| t.1 == 6).find_map(|t| t.3.iter().find(|m| m.0 == name).map(|m| m.2))
+    }
+
+    /// A kernel function's parameters' names (its `FUNC`'s prototype); `None` when the BTF has no
+    /// such function, which an `fentry` cannot attach to.
+    pub fn function_params(&self, name: &str) -> Option<Vec<String>> {
+        let f = self.types.iter().position(|(n, k, _, _, _)| *k == 12 && n == name)?;
+        let (_, 13, _, params, _) = self.types.get(self.types[f].4 as usize)? else { return None };
+        Some(params.iter().map(|p| p.0.clone()).collect())
     }
 
     fn find(&self, id: usize, member: &str, depth: u32) -> Option<(u32, bool)> {
@@ -291,15 +311,64 @@ fn pid_ns() -> Result<(u64, u64)> {
 }
 
 /// The kernel structures' offsets the probes read, from the kernel's BTF, in a `Config` with
-/// no namespace and no seed; and what `io_uring`'s probes need (`uring_layout`), or why they
-/// cannot run here.
-pub fn kernel_layout() -> Result<(Config, std::result::Result<Value, String>)> {
+/// no namespace and no seed; and what `io_uring`'s probes need (`uring_layout`) and the faults'
+/// (`fault_layout`), or why they cannot run here.
+pub fn kernel_layout() -> Result<(Config, Layouts)> {
     let p = "/sys/kernel/btf/vmlinux";
     let raw = std::fs::read(p).with_context(|| format!("{p}: the kernel's BTF (CONFIG_DEBUG_INFO_BTF), which the eBPF source needs"))?;
     let btf = Btf::parse(&raw).ok_or_else(|| anyhow!("{p}: not BTF"))?;
     let mut cfg = base_layout(&btf, p)?;
     let uring = uring_layout(&btf, &mut cfg);
-    Ok((cfg, uring))
+    let faults = fault_layout(&btf, &mut cfg);
+    Ok((cfg, Layouts { uring, faults }))
+}
+
+/// What the kernel's BTF allows of the probes beyond the calls': `io_uring`'s requests and the
+/// faults on mappings, each the converter's layout or why its probes cannot run here.
+#[derive(Debug, Clone)]
+pub struct Layouts {
+    pub uring: std::result::Result<Value, String>,
+    pub faults: std::result::Result<Value, String>,
+}
+
+/// What the faults' probes read (DESIGN_REVIEW.md §3.98 "Phase 4 step 2"), from the kernel's
+/// BTF, set in `cfg` (`faults` 1): `handle_mm_fault`'s parameters as the probes take them, the
+/// mapping's, file's, and inode's fields; and, for the converter, the `FAULT_FLAG_` and
+/// `VM_FAULT_` values that decode a record and the page size, the header's `faults.layout`.
+/// `Err` says why faults cannot be traced on this kernel, and the capture goes on without them.
+pub fn fault_layout(btf: &Btf, cfg: &mut Config) -> std::result::Result<Value, String> {
+    let params = btf.function_params("handle_mm_fault").ok_or("the kernel's BTF has no function handle_mm_fault")?;
+    if params != ["vma", "address", "flags", "regs"] {
+        return Err(format!("handle_mm_fault's parameters are not those the probes read ({params:?})"));
+    }
+    let off = |s: &str, m: &str| btf.offset(s, m).ok_or_else(|| format!("the kernel's BTF has no {s}.{m}"));
+    let val = |n: &str| btf.enum_value(n).ok_or_else(|| format!("the kernel's BTF has no {n}"));
+    let layout = json!({
+        "page": page_size(),
+        "flag_write": val("FAULT_FLAG_WRITE")?,
+        "flag_user": val("FAULT_FLAG_USER")?,
+        "major": val("VM_FAULT_MAJOR")?,
+        "retry": val("VM_FAULT_RETRY")?,
+        "error": val("VM_FAULT_OOM")? | val("VM_FAULT_SIGBUS")? | val("VM_FAULT_SIGSEGV")? | val("VM_FAULT_HWPOISON")? | val("VM_FAULT_HWPOISON_LARGE")?,
+    });
+    *cfg = Config {
+        faults: 1,
+        vma_start_off: off("vm_area_struct", "vm_start")?,
+        vma_pgoff_off: off("vm_area_struct", "vm_pgoff")?,
+        vma_file_off: off("vm_area_struct", "vm_file")?,
+        vma_flags_off: off("vm_area_struct", "vm_flags")?,
+        file_inode_off: off("file", "f_inode")?,
+        inode_ino_off: off("inode", "i_ino")?,
+        inode_sb_off: off("inode", "i_sb")?,
+        sb_dev_off: off("super_block", "s_dev")?,
+        ..*cfg
+    };
+    Ok(layout)
+}
+
+/// This host's page size, which a fault's offset is counted in.
+pub fn page_size() -> u64 {
+    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
 }
 
 fn base_layout(btf: &Btf, p: &str) -> Result<Config> {
@@ -371,9 +440,12 @@ pub fn uring_layout(btf: &Btf, cfg: &mut Config) -> std::result::Result<Value, S
 }
 
 /// The probes loaded (and the verifier's verdict on them) with a ring buffer of `buffer` bytes,
-/// the traced calls marked, and `task_struct`'s offsets set; nothing attached.
-pub fn load(buffer: u64) -> Result<(aya::Ebpf, std::result::Result<Value, String>)> {
-    let (mut config, uring) = kernel_layout()?;
+/// the traced calls marked, and `task_struct`'s offsets set; nothing attached. The faults'
+/// probes are loaded when the kernel's BTF has what they read, and a kernel that cannot attach
+/// a program to a function (no BPF trampolines: `CONFIG_FUNCTION_TRACER`, arm64 before 6.0)
+/// leaves them out, said why.
+pub fn load(buffer: u64) -> Result<(aya::Ebpf, Layouts)> {
+    let (mut config, mut layouts) = kernel_layout()?;
     (config.ns_dev, config.ns_ino) = pid_ns()?;
     // found by the probe when it adds the command (record::Config)
     config.ns_level = u32::MAX;
@@ -385,16 +457,35 @@ pub fn load(buffer: u64) -> Result<(aya::Ebpf, std::result::Result<Value, String
             specs.set(c.nr, spec(c), 0)?;
         }
     }
-    {
-        let mut cfg: aya::maps::Array<_, Config> = aya::maps::Array::try_from(bpf.map_mut("CONFIG").expect("CONFIG"))?;
-        cfg.set(0, config, 0)?;
-    }
     for name in PROGRAMS.iter().chain(URING_PROGRAMS.iter()) {
         let p: &mut aya::programs::RawTracePoint = bpf.program_mut(name).expect("a program of the object").try_into()?;
         p.load().with_context(|| format!("the verifier, on the program {name}"))?;
     }
-    Ok((bpf, uring))
+    if layouts.faults.is_ok() {
+        if let Err(why) = load_faults(&mut bpf) {
+            layouts.faults = Err(why);
+            config.faults = 0;
+        }
+    }
+    {
+        let mut cfg: aya::maps::Array<_, Config> = aya::maps::Array::try_from(bpf.map_mut("CONFIG").expect("CONFIG"))?;
+        cfg.set(0, config, 0)?;
+    }
+    Ok((bpf, layouts))
 }
+
+/// The faults' two programs, on `handle_mm_fault`, loaded against the kernel's BTF.
+fn load_faults(bpf: &mut aya::Ebpf) -> std::result::Result<(), String> {
+    let btf = aya::Btf::from_sys_fs().map_err(|e| format!("the kernel's BTF: {e}"))?;
+    let p: &mut aya::programs::FEntry = bpf.program_mut(FAULT_PROGRAMS[0]).expect("a program of the object").try_into().map_err(|e| format!("{e}"))?;
+    p.load("handle_mm_fault", &btf).map_err(|e| format!("the kernel would not load a program on handle_mm_fault's entry: {e}"))?;
+    let p: &mut aya::programs::FExit = bpf.program_mut(FAULT_PROGRAMS[1]).expect("a program of the object").try_into().map_err(|e| format!("{e}"))?;
+    p.load("handle_mm_fault", &btf).map_err(|e| format!("the kernel would not load a program on handle_mm_fault's return: {e}"))?;
+    Ok(())
+}
+
+/// The faults' programs (`fault_layout`): an `fentry` and an `fexit` of `handle_mm_fault`.
+const FAULT_PROGRAMS: [&str; 2] = ["fault_entry", "fault_exit"];
 
 const PROGRAMS: [&str; 4] = ["sys_enter", "sys_exit", "sched_process_fork", "sched_process_exit"];
 /// `io_uring`'s programs, loaded always; attached when the kernel has what they read
@@ -427,41 +518,71 @@ pub fn usable() -> std::result::Result<String, String> {
     let how = privilege().ok_or_else(|| {
         "eBPF needs root or the file capabilities cap_bpf,cap_perfmon on a node-local copy of aeiou-trace (setcap cap_bpf,cap_perfmon+ep; cap_sys_admin before Linux 5.8); --source strace runs as any user".to_string()
     })?;
-    let (_, uring) = load(1 << 16).map_err(|e| format!("{e:#}"))?;
-    Ok(match uring {
-        Ok(_) => format!("loaded and verified as {how}, kernel BTF, io_uring's requests"),
-        Err(why) => format!("loaded and verified as {how}, kernel BTF; io_uring's requests not traced: {why}"),
-    })
+    let (_, l) = load(1 << 16).map_err(|e| format!("{e:#}"))?;
+    let mut what = format!("loaded and verified as {how}, kernel BTF");
+    let mut not = vec![];
+    for (name, r) in [("io_uring's requests", &l.uring), ("faults on mappings", &l.faults)] {
+        match r {
+            Ok(_) => what += &format!(", {name}"),
+            Err(why) => not.push(format!("{name} not traced: {why}")),
+        }
+    }
+    Ok(if not.is_empty() { what } else { format!("{what}; {}", not.join("; ")) })
 }
 
 /// The probes attached to a command not yet started: `seed` is its pid as this process sees it.
 pub struct Probes {
     bpf: aya::Ebpf,
     links: usize,
-    /// `io_uring`'s layout for the converter (`uring_layout`), or why its probes are not attached.
-    pub uring: std::result::Result<Value, String>,
+    /// `io_uring`'s layout for the converter (`uring_layout`) and the faults' (`fault_layout`),
+    /// or why their probes are not attached.
+    pub layouts: Layouts,
+    // the faults' links, kept: an fentry's link is the program's attachment
+    _faults: Vec<aya::programs::fentry::FEntryLinkId>,
+    _faults_exit: Vec<aya::programs::fexit::FExitLinkId>,
 }
 
 impl Probes {
-    pub fn attach((mut bpf, uring): (aya::Ebpf, std::result::Result<Value, String>)) -> Result<Probes> {
+    pub fn attach((mut bpf, mut layouts): (aya::Ebpf, Layouts)) -> Result<Probes> {
         let mut links = 0;
         let cfg: aya::maps::Array<_, Config> = aya::maps::Array::try_from(bpf.map("CONFIG").expect("CONFIG"))?;
         let c = cfg.get(&0, 0)?;
-        let names: &[&str] = if uring.is_ok() { &[&PROGRAMS[..], &uring_programs(&c)[..]].concat() } else { &PROGRAMS };
+        let names: &[&str] = if layouts.uring.is_ok() { &[&PROGRAMS[..], &uring_programs(&c)[..]].concat() } else { &PROGRAMS };
         for name in names {
             let p: &mut aya::programs::RawTracePoint = bpf.program_mut(name).expect("a program").try_into()?;
             p.attach(tracepoint_of(name)).with_context(|| format!("attaching {name}"))?;
             links += 1;
         }
-        Ok(Probes { bpf, links, uring })
+        let (mut fe, mut fx) = (vec![], vec![]);
+        if layouts.faults.is_ok() {
+            let r = (|| -> std::result::Result<(), String> {
+                let p: &mut aya::programs::FEntry = bpf.program_mut(FAULT_PROGRAMS[0]).expect("a program").try_into().map_err(|e| format!("{e}"))?;
+                fe.push(p.attach().map_err(|e| format!("attaching to handle_mm_fault's entry: {e}"))?);
+                let p: &mut aya::programs::FExit = bpf.program_mut(FAULT_PROGRAMS[1]).expect("a program").try_into().map_err(|e| format!("{e}"))?;
+                fx.push(p.attach().map_err(|e| format!("attaching to handle_mm_fault's return: {e}"))?);
+                Ok(())
+            })();
+            match r {
+                Ok(()) => links += 2,
+                Err(why) => {
+                    // the entry's program alone records nothing: the capture goes on without faults
+                    let mut cfg: aya::maps::Array<_, Config> = aya::maps::Array::try_from(bpf.map_mut("CONFIG").expect("CONFIG"))?;
+                    cfg.set(0, Config { faults: 0, ..c }, 0)?;
+                    layouts.faults = Err(why);
+                }
+            }
+        }
+        Ok(Probes { bpf, links, layouts, _faults: fe, _faults_exit: fx })
     }
 
     /// The header's `uring`: whether `io_uring`'s requests are traced, and the converter's layout.
     pub fn uring_header(&self) -> Value {
-        match &self.uring {
-            Ok(layout) => json!({"traced": true, "layout": layout}),
-            Err(why) => json!({"traced": false, "why": why}),
-        }
+        traced_header(&self.layouts.uring)
+    }
+
+    /// The header's `faults`: whether faults on mappings are traced, and the converter's layout.
+    pub fn faults_header(&self) -> Value {
+        traced_header(&self.layouts.faults)
     }
 
     /// The process to trace, by its pid here: the probe adds it at its next call.
@@ -623,6 +744,13 @@ pub fn loss_box(rec: &Value) -> String {
     s + &bar
 }
 
+fn traced_header(r: &std::result::Result<Value, String>) -> Value {
+    match r {
+        Ok(layout) => json!({"traced": true, "layout": layout}),
+        Err(why) => json!({"traced": false, "why": why}),
+    }
+}
+
 /// The most rings the probes' `RINGS` holds (`capture-ebpf/src/main.rs`).
 pub const URING_RINGS: u32 = 4096;
 
@@ -708,7 +836,8 @@ mod tests {
 
     #[test]
     fn the_kernel_btf_has_the_layout() {
-        let (c, _) = kernel_layout().unwrap();
+        let (c, l) = kernel_layout().unwrap();
+        assert!(l.uring.is_ok() && l.faults.is_ok(), "{l:?}");
         assert!(c.tgid_off > 0 && c.exit_code_off > 0 && c.tgid_off != c.exit_code_off && c.thread_pid_off > 0);
         assert!(c.numbers_off > c.level_off && c.upid_size >= 12);
         // where a process's living threads are counted, so the tree can let it go
@@ -805,6 +934,44 @@ mod tests {
             m.2 = 64;
         })
         .contains("does not begin with the operation's structure"));
+    }
+
+    #[test]
+    fn the_kernel_btf_has_the_faults_layout_and_another_kernel_is_said_why() {
+        let raw = std::fs::read("/sys/kernel/btf/vmlinux").unwrap();
+        let btf = Btf::parse(&raw).unwrap();
+        assert_eq!(btf.function_params("handle_mm_fault").unwrap(), ["vma", "address", "flags", "regs"]);
+        assert!(btf.function_params("no_such_function").is_none());
+        assert_eq!(btf.enum_value("VM_FAULT_MAJOR"), Some(4));
+        assert_eq!(btf.enum_value("FAULT_FLAG_USER"), Some(64));
+        assert!(btf.enum_value("NO_SUCH_CONSTANT").is_none());
+        let mut c = Config::default();
+        let l = fault_layout(&btf, &mut c).unwrap();
+        assert_eq!(c.faults, 1);
+        assert_eq!((l["page"].as_u64(), l["flag_write"].as_u64(), l["retry"].as_u64()), (Some(page_size()), Some(1), Some(0x400)));
+        // OOM, SIGBUS, HWPOISON, HWPOISON_LARGE, SIGSEGV
+        assert_eq!(l["error"], 0x73);
+        assert!(c.vma_file_off > c.vma_start_off && c.vma_pgoff_off > 0 && c.vma_flags_off > 0 && c.file_inode_off > 0 && c.inode_sb_off > 0, "{c:?}");
+        // the other kernel's: no function, other parameters, a field gone, a constant gone
+        let changed = |f: &dyn Fn(&mut Btf)| {
+            let mut b = Btf::parse(&raw).unwrap();
+            f(&mut b);
+            let mut c = Config::default();
+            let e = fault_layout(&b, &mut c).unwrap_err();
+            assert_eq!(c.faults, 0);
+            e
+        };
+        let func = |b: &mut Btf, to: &str| b.types.iter_mut().find(|t| t.1 == 12 && t.0 == "handle_mm_fault").unwrap().0 = to.into();
+        assert!(changed(&|b| func(b, "x")).contains("no function handle_mm_fault"));
+        assert!(changed(&|b| {
+            let proto = b.types.iter().find(|t| t.1 == 12 && t.0 == "handle_mm_fault").unwrap().4 as usize;
+            b.types[proto].3[0].0 = "area".into();
+        })
+        .contains("not those the probes read"));
+        assert!(changed(&|b| b.types.iter_mut().find(|t| t.1 == 4 && t.0 == "vm_area_struct").unwrap().3.iter_mut().find(|m| m.0 == "vm_pgoff").unwrap().0 = "x".into()).contains("no vm_area_struct.vm_pgoff"));
+        assert!(changed(&|b| b.types.iter_mut().filter(|t| t.1 == 6).flat_map(|t| t.3.iter_mut()).find(|m| m.0 == "VM_FAULT_RETRY").unwrap().0 = "x".into()).contains("no VM_FAULT_RETRY"));
+        let none = Btf { types: vec![(String::new(), 0, false, Vec::new(), 0)] };
+        assert!(fault_layout(&none, &mut Config::default()).unwrap_err().contains("no function handle_mm_fault"));
     }
 
     #[test]

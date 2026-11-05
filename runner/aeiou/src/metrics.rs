@@ -1227,6 +1227,88 @@ pub struct TraceMetrics {
     runs: HashMap<i64, HashMap<(u64, usize), (Run, i64)>>,
     /// The instances whose data ops moved bytes at an offset.
     pub instances: std::collections::BTreeSet<i64>,
+    /// An eBPF capture's faults on mappings of files under the roots (`aeiou_fault`), counted
+    /// apart from the calls: the kernel's view of first touches, not the application's calls.
+    pub faults: Option<Faults>,
+}
+
+/// The faults on mappings a trace holds (DESIGN_REVIEW.md §3.98 "Phase 4 step 2"): how many, how
+/// many read the disk, were stores, or came inside a call (its copy of a mapped buffer); the
+/// runs they came in (a thread's faults on a file one after another at one stride, no quieter
+/// between than the capture's `--fault-gap`), each run's span in bytes and its faults; the
+/// strides, by faults (the page size where every page faults, a folio's or the kernel's fault-around
+/// where not); and the quiet time between a context's runs on a file, in µs.
+#[derive(Debug, Default)]
+pub struct Faults {
+    pub faults: u64,
+    pub major: u64,
+    pub write: u64,
+    pub in_call: u64,
+    pub runs: u64,
+    pub bytes: u64,
+    pub run_bytes: LogHist,
+    pub run_faults: LogHist,
+    pub stride: BTreeMap<i64, u64>,
+    pub quiet_us: LogHist,
+    /// Each context's last run's end on each file (seconds), for `quiet_us`.
+    last_end: HashMap<(i64, u64), f64>,
+}
+
+#[derive(Serialize)]
+pub struct FaultsOut {
+    faults: u64,
+    major: u64,
+    write: u64,
+    in_call: u64,
+    runs: u64,
+    bytes: u64,
+    run_bytes: HistOut,
+    run_faults: HistOut,
+    stride: BTreeMap<i64, u64>,
+    quiet_us: HistOut,
+}
+
+impl Faults {
+    /// One `aeiou_fault` record: `count` faults from `off` at `stride`, of `page` bytes each,
+    /// begun at `start` (seconds) and lasting `span_ns`, by `context` on `path`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run(&mut self, context: i64, path: &str, stride: i64, count: u64, major: u64, write: bool, in_call: bool, page: u64, start: f64, span_ns: u64) {
+        self.faults += count;
+        self.major += major;
+        if write {
+            self.write += count;
+        }
+        if in_call {
+            self.in_call += count;
+        }
+        self.runs += 1;
+        self.bytes += count * page;
+        self.run_bytes.add(stride.unsigned_abs() * count.saturating_sub(1) + page, 1);
+        self.run_faults.add(count, 1);
+        if count > 1 {
+            *self.stride.entry(stride).or_insert(0) += count - 1;
+        }
+        let key = (context, xxh3_64(path.as_bytes()));
+        let end = start + span_ns as f64 / 1e9;
+        if let Some(prev) = self.last_end.insert(key, end) {
+            self.quiet_us.add(((start - prev) * 1e6).round().max(0.0) as u64, 1);
+        }
+    }
+
+    pub fn out(&self) -> FaultsOut {
+        FaultsOut {
+            faults: self.faults,
+            major: self.major,
+            write: self.write,
+            in_call: self.in_call,
+            runs: self.runs,
+            bytes: self.bytes,
+            run_bytes: HistOut::of(&self.run_bytes),
+            run_faults: HistOut::of(&self.run_faults),
+            stride: self.stride.clone(),
+            quiet_us: HistOut::of(&self.quiet_us),
+        }
+    }
 }
 
 impl TraceMetrics {

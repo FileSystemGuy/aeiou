@@ -1287,8 +1287,21 @@ numbers; the order is this note's.
     registered files at `io_uring_register`'s, written as `aeiou_uring_sqe` and
     `aeiou_uring_cqe` records after the format's header line, paired by a number the converter
     gives (not `user_data`), and read as the calls they do; `STATX` decoded too, beyond the
-    agreed set, since the runner's own engine does its `fstat`s so. Not implemented yet: the
-    rest of phase 4 (mapping faults next), phase 3b, readers of a set, the set digest.
+    agreed set, since the runner's own engine does its `fstat`s so. ~~Not implemented yet: the
+    rest of phase 4 (mapping faults next), phase 3b, readers of a set, the set digest.~~
+    *Phase 4 step 2, mapping faults, debated and agreed with the user and built 2026-11-04*
+    (§3.98 "Phase 4 step 2"): `fentry` and `fexit` of `handle_mm_fault` for faults an exception
+    raised on mappings of files, the converter naming each fault's file from the process's
+    mappings and writing a thread's faults as `aeiou_fault` runs (one file, one kind, one stride,
+    ended by `--fault-gap` of quiet, 1 ms by default, measured end to start), counted by
+    `metrics` apart from the calls (`faults`) and not replayed by `export`; the `fault-around`
+    check, so the kernel's fault-around maps no page beside a faulting one (root sets `fault_around_bytes` to a page and puts it
+    back; anyone else is told how, or waives it). Decided with it, the theme: the abstract holds
+    what the application demands, the storage stack's response (readahead, caching) is the
+    system under test's and is judged by the performance it delivers; a capture measures the
+    application's demand and think time, not the capture host's performance (items 65, 66). Not
+    implemented yet: libaio's real completion (phase 4 step 3, next), the rest of phase 4,
+    phase 3b, readers of a set, the set digest; readahead traced for diagnosis.
 
 55. **A storage-reported value needs evidence the application derives from it (decided with the
     user 2026-11-01, `DESIGN_REVIEW.md` §3.91; not started).** The trace side records no
@@ -1399,6 +1412,31 @@ numbers; the order is this note's.
     in `./dev.sh check all`, the other coverage pass, and five runs alone. To find: whether a
     loop's fdinfo can be read before its SQPOLL thread exists or after it is gone, and make the
     count exact or the assertion what the kernel guarantees.
+65. **A `trace` node that replays faults as touches through a mapping (queued 2026-11-04 with
+    item 54 phase 4 step 2, agreed by the user; not started).** The export writes a mapping as one
+    read of its whole range (`mmap_as_read`), one large demand where the application made many
+    small touches over time, and through `pread`'s readahead where the application's went through
+    a mapping's read-around: another workload by the theme of `DESIGN_REVIEW.md` §3.98 "Phase 4
+    step 2". To design: the `trace` node's op for a run of faults (its file, offset, stride,
+    count, and the quiet time between runs) executed under `--posix mmap` as touches of the
+    mapping, the export writing it where the trace holds faults and the mapping's range read
+    where not.
+66. **Readahead and fault-around as host facts (queued 2026-11-04 with item 54 phase 4 step 2,
+    agreed by the user; not started).** Readahead is the solution's by the interposition test, in
+    the client too (`read_ahead_kb` per backing device, NFS's `rsize` window), so a result
+    cannot be read without it. To build: `aeiou run` and `aeiou-trace capture` record, for each
+    `--root`'s mount, its backing device's `read_ahead_kb` and the host's `fault_around_bytes`
+    (where readable) beside the mount options; whether a submitter may tune them is the WG's rule
+    (§8), not the tool's.
+67. **The pages each fault mapped (queued by the user 2026-11-04 with item 54 phase 4 step 2; not
+    started).** A fault maps the whole folio its page is in (up to 2 MiB, as the file was cached
+    by large writes or readahead), and where the `fault-around` check was waived the cached
+    pages beside it too, so an `aeiou_fault` shows where touches began, not how much the kernel
+    mapped ahead unseen (`DESIGN_REVIEW.md` §3.98 "Phase 4 step 2", found at the grant). To
+    research before proposing: a probe of the step that maps them (`filemap_map_pages`'s range,
+    `set_pte_range`'s count, `finish_fault`), which kernels have it in BTF and not inlined, and
+    the record's field (the pages mapped with each fault, a run's sum), so a reader knows each
+    fault's extent.
 
 ## 7. Environment
 

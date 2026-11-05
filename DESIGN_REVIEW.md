@@ -9612,7 +9612,7 @@ cannot be probed: libc ships no symbol table (box).
 | `posix-aio` | uprobes on `aio_read`, `aio_write`, `lio_listio`, `aio_fsync`; the helper's call traced | uprobes on `aio_error`, `aio_return`, `aio_suspend` | the join by `aiocb` address |
 | `libaio` | `io_submit` entry (its `iocb`s copied, phase 3) | `io_getevents` exit is the reap; fentry `aio_complete_rw` (static, in BTF and kallsyms, box) the real completion, `ki_res.obj` the user `iocb` (box) | `fs/aio.c` has no tracepoints (src); a completion in interrupt context has no meaningful thread, so joined by pointer; a buffered request completes inside `io_submit` (rec) |
 | `io_uring` | tracepoint `io_uring_submit_req`: its record has no descriptor, offset, or length, but its argument is the `io_kiocb` after `prep` (`io_uring.c`, src), so a raw or BTF tracepoint reads `opcode`, `flags` (`REQ_F_FIXED_FILE`), `cqe.fd`, and `io_rw`'s `kiocb.ki_pos` and `len` (box) | tracepoint `io_uring_complete` (`req`, `user_data`, `res`, `cflags`, box) | under SQPOLL the issuer is the `iou-sqp` thread; a ring read without a call hides the reap; opens and closes inside the ring need fentry on `io_openat` or reading `io_open`; a fixed file's `cqe.fd` is an index, resolved from `io_uring_register(IORING_REGISTER_FILES)`'s array; `URING_CMD` opaque; a request punted to `iou-wrk` seen by `io_uring_queue_async_work` |
-| `mmap` faults | fentry `handle_mm_fault(vma, address, flags, regs)` (box); the file offset `vm_pgoff·PAGE + (address − vm_start)` | fexit: `VM_FAULT_MAJOR` in the return | `exceptions:page_fault_user` is x86 only and has no exit; filter `FAULT_FLAG_USER` (a `get_user_pages` of an `O_DIRECT` buffer faults too); a `VM_FAULT_RETRY` attempt summed with its retry (rec); the readahead a fault starts by `readahead:page_cache_ra_*` and `filemap:mm_filemap_*` (box), by inode |
+| `mmap` faults | fentry `handle_mm_fault(vma, address, flags, regs)` (box); the file offset `vm_pgoff·PAGE + (address − vm_start)` | fexit: `VM_FAULT_MAJOR` in the return | `exceptions:page_fault_user` is x86 only and has no exit; ~~filter `FAULT_FLAG_USER`~~ filter on `regs` set (a `get_user_pages` of an `O_DIRECT` buffer faults too, and passes none; the flag would drop a call's copy of a mapped buffer; 2026-11-04, "Phase 4 step 2"); a `VM_FAULT_RETRY` attempt summed with its retry (rec); the readahead a fault starts by `readahead:page_cache_ra_*` and `filemap:mm_filemap_*` (box), by inode |
 | `gds` (cuFile) | uprobes `cuFileRead`/`cuFileWrite`, `cuFileBatchIOSubmit`, the `*Async` forms; or the `nvidia-fs` ioctls (`nvfs-core.h`, src) | uretprobe, `cuFileBatchIOGetStatus` by cookie | an asynchronous completion is a GPU stream's, untimed from the CPU; the handle mapped to a descriptor by `cuFileHandleRegister`; compatibility mode appears to use `io_uring` through `syscall()` (box, strings only); untested without the hardware |
 | `nixl-posix` | libaio by default, liburing by option (README, src): the rows above | — | NIXL's own request identity needs uprobes on mangled C++ names |
 | `libnfs` | uprobes `nfs_pread_async`, `nfs_pwrite_async`, `nfs_open_async` (API v2 adds a buffer argument) | the callback, an address known at run time | the sockets alone show the wire only; matching by XID would read payload bytes, which §3.97 forbids |
@@ -9833,6 +9833,135 @@ field meanings drift between kernels (`io_kiocb.cmd` at offset 0 only since abou
 `len` counts iovecs for `READV`); `io_uring` doubles the records a request (submit and
 complete), which makes the 256 MiB `--buffer` question (§3.96) sooner; aarch64 has no
 `exceptions` tracepoints; nothing could be attached on this box without root. Brief item 54.
+
+**Phase 4 step 2, faults on mappings (proposed, debated, and agreed with the user 2026-11-04:
+"I agree, proceed").** This side proposed `fentry`/`fexit` on `handle_mm_fault`, the faults
+folded into runs by the converter, the export left as it is, readahead left out. The debate
+settled four points and a theme for judging such questions.
+- *Runs end at a quiet time, not only at a break in the stride* (the user). Without a cap on
+  the quiet time between two faults, a scan, a stretch of compute, and another scan that
+  happens to continue at the next offset read as one extent: a different workload (two bursts
+  with think time between them, storage idle in the gap). So a run ends when a fault starts
+  more than `--fault-gap` (1 ms by default) after the last ended, measured from one fault's
+  end to the next's start, so a fault's own time on the disk is not counted as quiet; the
+  value is in the trace's header, since a run cannot be split again after the capture; and a
+  run records its longest quiet time inside (`gap_max_ns`), so a reader tells a tight run from
+  one that only just stayed under. Agreed on every point.
+- *Major against minor is not the workload* (the user). A minor fault is a page already in the
+  cache mapped (no I/O, about a µs); a major one is a page read from storage with the thread
+  waiting, a synchronous read of the kernel's size, not the application's. Which a touch is
+  depends on the capture host's memory, its other programs, and its readahead: the touch is
+  the application's, its kind the host's. The user: "whether the application reads those
+  pages is what matters"; a bad readahead saturates a system under test sooner, and that is
+  the penalty, by its saturation point, never by a score. So one run holds both kinds, with a
+  count of majors (kept as evidence of the capture's conditions: a capture said cold that shows
+  no majors was warm), and each fault's time (a minor fault on a page still being read in is
+  slow and is not marked major, rec).
+- *Readahead is the system under test's, not the application's* (the user's statement of it,
+  this side agreeing). Pages read ahead and never read are not the application's I/O, and are
+  not monitored or scored as waste; pages read ahead and then read are, and the system under
+  test that read them early is credited by the lower latency it delivers. So readahead never
+  enters an abstract or the export. The kernel does tell the two apart (`readahead:page_cache_sync_ra`
+  for a page asked for, its window beyond the page speculative; `page_cache_async_ra` all
+  speculative; whether a speculative page was later read by `filemap:mm_filemap_add_to_page_cache`
+  and `mm_filemap_delete_from_page_cache`; the tracepoints present in this kernel's BTF, box),
+  which is diagnosis, for a later step: why a replay and its capture differ on one host.
+- *The theme (the user, this side agreeing):* the abstract holds what the application demands;
+  everything the storage stack does in response is the system under test's own behavior, judged
+  only by the performance it delivers under that demand, never by how clever or wasteful it is.
+  Its inverse, this side's point and the user's restatement: a capture measures the
+  application's demand and think time, not the capture host's performance, so the time between
+  an I/O's end and the next's start is wanted and the time an I/O took on the capture host is
+  not. Consequences recorded: (1) the capture host is a system under test too, and its policy
+  shapes the trace: readahead does not hide a touch (a page read ahead still faults, minor, at
+  its first touch), but fault-around does (the cached pages beside a faulting one are mapped and
+  never fault), so fault-around is to be one page in a capture; a large-memory host hides a
+  re-touch that a smaller one would fault again (a blind spot); (2) the theme holds only if a
+  replay goes through the application's path: a mapping's read-around is not `pread`'s
+  readahead, and the export's one read of a mapping's whole range is another workload, kept only
+  because it is what the `trace` node can run today (brief item 65); (3) readahead is in the
+  client too (`read_ahead_kb`, NFS's `rsize` window), the solution's by the interposition test,
+  so a run and a capture should record it, and `fault_around_bytes`, as host facts, whether a
+  submitter may tune them the WG's rule (brief item 66); (4) the duration of an I/O on a
+  capture host is still recorded, for three reasons: the quiet time needs the end; a gap is
+  think time only where the thread waited on nothing else (a loader's consumer waits on its
+  producers, a rank at a collective), so a gap is evidence of structure and the abstract's
+  compute is its case's `step_time`, never a gap copied; and an application whose requests
+  follow its latency (the AWS CRT's parallel ranged GETs sized by measured throughput, adaptive
+  prefetch, timeouts) has a demand that is partly the capture host's speed, which only the
+  durations show and the digest should flag (not built); the depth an asynchronous application
+  reaches is likewise a lower bound of what it allows.
+- *`fault_around_bytes` one page, required* (the user: "mandating"). A host-wide setting, in
+  debugfs, root's alone. Found before building: debugfs is mode 0700 (box), so a capture under
+  the file capabilities can neither read nor write it. So the requirement is a check,
+  `fault-around`, of what it is for rather than of the setting: the capture maps a cached file
+  of its own (unnamed, `O_TMPFILE`, under `-o`'s nearest directory), touches a page and the
+  one beside it, and counts the second's faults with `getrusage`, which needs no privilege and
+  ~~catches large folios too~~ (it did, so it refused where no setting helps: corrected below, "Found at the grant"); on this box at the default, page 1 does not fault and page 20 does
+  (box). Root sets the value to one page, checks again, refuses if it still does not fault, and
+  puts the value back when the command ends (and on a panic); anyone else is told the two lines
+  to run as root, or to capture as root; `--accept fault-around` waives it (the capture's one
+  way to waive anything, not a flag of its own), and the record, `not_seen`, and a line in the
+  trace say the faults are the host's shape. The owner's cost: every program on the host faults
+  more while it lasts.
+
+*Built (2026-11-04).* `capture-ebpf/src/main.rs`: `fault_entry` on `handle_mm_fault`'s entry
+keeps a fault of a traced process that an exception raised (`regs` set: a load, a store, or a
+call's copy of a mapped buffer; a `get_user_pages`, an `O_DIRECT` buffer's pinning, passes
+none), on a mapping of a file (`vm_file`) that is not code (`VM_EXEC`), reading the mapping's
+start, `vm_pgoff`, and the file's inode and device at entry (a fault that drops the mmap lock
+may return with the mapping gone) into `FAULTS` by thread; `fault_exit` writes the record with
+the `VM_FAULT_` bits (the context's slot after the four arguments, so no helper newer than the
+trampolines) and the end. `ebpf.rs`: `fault_layout` from BTF (`handle_mm_fault`'s parameters by
+its `FUNC`'s prototype, the offsets, the `FAULT_FLAG_` and `VM_FAULT_` values from their enums,
+read now by `Btf`), the programs loaded and attached apart, so a kernel without trampolines
+keeps the capture going without faults, said why; `Layouts` in place of `io_uring`'s alone.
+`ebpf_text.rs`: each process's mappings of files kept from its `mmap`s, `munmap`s, and
+`mremap`s (shared by threads, copied at a fork, emptied at an `exec`), a fault's file the
+mapping its address is in, its offset the kernel's; a retried fault (`VM_FAULT_RETRY`) summed
+with its retry at the same address; the runs (one thread, one file and inode, one kind, read
+or store, from an exception or in a call, one stride, no quieter than the gap), a run written
+at the thread's next record of another kind (so a thread's lines keep their order), at a loss,
+or once no fault could continue it (a thread gone quiet), stamped with its first fault's start,
+so its line can follow lines of other threads stamped later; the header's records and the line
+of a waived check. `strace.rs` and `metrics.rs`: `aeiou_fault` counted apart from the calls, the
+document's `faults` (faults, majors, stores, in calls, runs, bytes, each run's span in bytes and
+its faults, the strides by faults, the quiet time between a thread's runs on a file in µs) and
+the note `faults_kernel_observed`; the export's `faults_not_replayed`. `capture.rs`: the check,
+`FaultAround`, `--fault-gap`, `capture.json`'s `faults`, `NOT_SEEN_FAULTS`. Grammar:
+`runner/REFERENCE.md` §13, `aeiou-trace(1)`.
+
+*Found in the building.* `decode` indexed a record's fields past a short record's end (a panic
+on a corrupt `syscalls.bin`; the unit test of an unknown kind used 9, now `FAULT`): every kind's
+fixed part is checked first. The probes' filter is `regs`, not `FAULT_FLAG_USER` as the hooks'
+table said: the flag is set only for a fault in user mode, which would drop a call's copy of a
+mapped buffer (a `write` from a mapping), the application's touch; `in_call=1` marks those.
+
+*Found at the grant: large folios (the user decided 2026-11-04, "option 2").* With
+`fault_around_bytes` at one page (set by the user for the test), a file cached by one large
+write still took one fault per 2 MiB (4,096 pages read, 8 faults), and the same file written a
+page at a time one per page (4,096 faults; box, 6.18, ext4): a fault maps the whole folio its
+page is in, and the page cache's folios are as large as the writes or the readahead that filled
+them made them. So no setting makes every first touch fault: fault-around is one cause, with a
+knob, and large folios another, the capture host's history. The check as first built wrote its
+file in one write, so it measured both and refused every capture, as root too, with no remedy
+but its waiver. This side offered three ways (the check measuring fault-around alone, the
+folio granularity recorded as a limit; that and a later probe of the pages each fault maps;
+the mandate dropped for host facts) and recommended the first; the user chose the second.
+Built: the check's file written a page at a time, so it measures fault-around alone (the
+mandate stands for the knob that has one); every capture that traces faults says in `not_seen`,
+and the metrics' note, that a fault maps the whole folio its page is in, up to 2 MiB, so a run is
+where touches began at the granularity the kernel mapped; the probe of the pages each fault
+mapped queued (brief item 67). The test's program writes its file a page at a time, so the
+check's verdict decides what it asserts.
+
+*Risks.* `handle_mm_fault` inlined or renamed in a kernel (its parameters checked by name from
+BTF, the capture going on without faults); `vm_flags` and the fault enums' values drift between
+kernels (read from BTF, but `VM_EXEC` is a `#define`, its value 0x4 since 2.6); a fault on a
+mapping the converter does not know (an inherited mapping it saw no `mmap` of: none, since the
+trace starts at the command's `exec`) is counted, not printed; a run of two faults at a random
+pair of offsets reads as a stride; faults on huge mappings of many files under one thread are
+one record per run, the size risk §3.98 named.
 
 ## 4. Plan changes
 

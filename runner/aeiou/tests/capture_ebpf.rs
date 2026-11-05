@@ -58,8 +58,11 @@ fn privileged() -> PathBuf {
     exe
 }
 
-/// The checks a test on a shared machine waives (`tests/capture.rs`).
-const WAIVE: [&str; 4] = ["--accept", "alone", "--accept", "clock"];
+/// The checks a test on a shared machine waives (`tests/capture.rs`), and `fault-around`, which
+/// fails on a host at the kernel's default under the file capabilities (no root to set it;
+/// `faults_on_a_mapping_are_traced_as_runs` and `the_fault_around_check_refuses_or_passes_as_the_host_is`
+/// are its tests).
+const WAIVE: [&str; 6] = ["--accept", "alone", "--accept", "clock", "--accept", "fault-around"];
 
 fn capture(exe: &Path, args: &[&str]) -> Output {
     Command::new(exe).arg("capture").args(WAIVE).args(args).output().unwrap()
@@ -198,9 +201,18 @@ fn ebpf_gives_the_calls_strace_gives() {
     let first = std::fs::read_to_string(eb.join("trace.txt")).unwrap();
     let mut lines = first.lines();
     let mut first = lines.next().unwrap();
-    if rec["uring"]["traced"] == true {
-        assert!(first.starts_with("0 ") && first.contains(" --- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe ---"), "{first}");
+    if rec["uring"]["traced"] == true || rec["faults"]["traced"] == true {
+        let kinds = match (rec["uring"]["traced"] == true, rec["faults"]["traced"] == true) {
+            (true, true) => "aeiou_uring_sqe aeiou_uring_cqe aeiou_fault",
+            (true, false) => "aeiou_uring_sqe aeiou_uring_cqe",
+            _ => "aeiou_fault",
+        };
+        assert!(first.starts_with("0 ") && first.contains(&format!(" --- aeiou: trace format 1, records {kinds} ---")), "{first}");
         first = lines.next().unwrap();
+        if rec["faults"]["first_touch_observed"] == false {
+            assert!(first.starts_with("0 ") && first.contains(" --- aeiou: faults: a first touch of a page may not fault"), "{first}");
+            first = lines.next().unwrap();
+        }
     }
     assert!(first.contains(" execve(\"") && first.contains("python3"), "{first}");
     // the failed open, as strace prints it
@@ -307,7 +319,7 @@ fn convert_writes_the_trace_again_from_the_records() {
 
 #[test]
 fn no_secret_reaches_an_ebpf_capture() {
-    crate::capture::no_secret_reaches_a_capture_file(&privileged(), "ebpf", &[]);
+    crate::capture::no_secret_reaches_a_capture_file(&privileged(), "ebpf", &["--accept", "fault-around"]);
 }
 
 /// A program outside the command, writing under the same root all through the capture: its
@@ -449,5 +461,124 @@ fn io_uring_requests_are_traced_and_read_as_the_calls_they_do() {
     assert!(got > 0 && got <= asked, "the sync run read {got} of the {asked} bytes the dry run asks");
     for (tag, f) in &seen[1..] {
         assert_eq!(f, &seen[0].1, "{tag} against sync");
+    }
+}
+
+/// A file written a page at a time (so it is cached in folios of a page: a large write caches
+/// large folios, and a fault maps the whole folio), mapped and read a page at a time, in two
+/// halves 50 ms apart, then one store.
+const MAPPED: &str = r#"
+import mmap, os, sys, time
+d, page, n = sys.argv[1], mmap.PAGESIZE, 128
+fd = os.open(d + "/m", os.O_CREAT | os.O_RDWR | os.O_TRUNC, 0o644)
+for i in range(n):
+    os.pwrite(fd, b"m" * page, i * page)
+m = mmap.mmap(fd, n * page, mmap.MAP_SHARED, mmap.PROT_READ)
+s = 0
+for i in range(0, n // 2):
+    s += m[i * page]
+time.sleep(0.05)
+for i in range(n // 2, n):
+    s += m[i * page]
+m.close()
+w = mmap.mmap(fd, page, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
+w[0] = 1
+w.close()
+os.close(fd)
+"#;
+
+/// Faults on a mapping (DESIGN_REVIEW.md §3.98 "Phase 4 step 2"): the file's faults in the trace
+/// as runs (each half one, the pause between them past `--fault-gap`, the store its own),
+/// counted by the metrics apart from the calls and not replayed by the export; every page
+/// where the host's fault-around is one page (the check's verdict), fault-around's stride where
+/// not; a longer `--fault-gap` makes the halves one run.
+#[test]
+fn faults_on_a_mapping_are_traced_as_runs() {
+    let exe = privileged();
+    let t = tmp("faults");
+    let root = t.join("data");
+    let prog = t.join("mapped.py");
+    std::fs::write(&prog, MAPPED).unwrap();
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+    let mut runs_of = Vec::new();
+    let mut observed_all = true;
+    for (tag, gap) in [("default", None), ("long-gap", Some("200ms"))] {
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let out = t.join(format!("cap-{tag}"));
+        let mut args = vec!["--source", "ebpf", "--root", s(&root), "-o", s(&out)];
+        if let Some(g) = gap {
+            args.extend(["--fault-gap", g]);
+        }
+        args.extend(["--", "python3", s(&prog), s(&root)]);
+        let o = capture(&exe, &args);
+        assert!(o.status.success(), "{tag}: {}", text(&o));
+        let rec = record(&out);
+        assert_eq!(rec["complete"], true, "{tag}: {}", rec["losses"]);
+        assert_eq!(rec["faults"]["traced"], true, "{tag}: {}", rec["faults"]);
+        assert_eq!(rec["faults"]["gap_ns"], if gap.is_some() { 200_000_000 } else { 1_000_000 });
+        assert!(rec["source"]["line"][0].as_str().unwrap().contains("fentry,fexit:handle_mm_fault"), "{}", rec["source"]["line"]);
+        let observed = rec["faults"]["first_touch_observed"] == true;
+        observed_all &= observed;
+        let not_seen = rec["not_seen"].to_string();
+        assert!(!not_seen.contains("the page faults they cause are not system calls") && not_seen.contains("after its first"), "{not_seen}");
+        assert_eq!(not_seen.contains("the fault-around check was waived"), !observed, "{not_seen}");
+        let body = std::fs::read_to_string(out.join("trace.txt")).unwrap();
+        let file = format!("aeiou_fault(path=\"{}/m\"", std::fs::canonicalize(&root).unwrap().display());
+        assert!(body.contains(&file), "{tag}: {body}");
+        let m = metrics(&out, &root);
+        let f = &m["faults"];
+        // a warm cache: no fault read the disk
+        assert_eq!((f["major"].as_u64(), f["write"].as_u64(), f["in_call"].as_u64()), (Some(0), Some(1), Some(0)), "{tag}: {f}");
+        let strides: Vec<i64> = f["stride"].as_object().unwrap().keys().map(|k| k.parse().unwrap()).collect();
+        if observed {
+            assert_eq!(f["faults"], 129, "{tag}: every page once, and the store: {f}");
+            assert_eq!(strides, [page as i64], "{tag}: {f}");
+        } else {
+            // the kernel mapped pages ahead (fault-around, large folios: on this box at the
+            // default, one fault mapped all 128 pages): the first touch and the store at least
+            let n = f["faults"].as_u64().unwrap();
+            assert!((2..129).contains(&n), "{tag}: {f}");
+            assert!(strides.iter().all(|&s| s > page as i64), "{tag}: {f}");
+        }
+        assert!(m["notes"]["faults_kernel_observed"].is_string());
+        assert_eq!(m["notes"].get("faults_first_touch_unseen").is_some(), !observed, "{}", m["notes"]);
+        assert_eq!(rec["conversion"]["faults_failed"], 0, "{}", rec["conversion"]);
+        runs_of.push(f["runs"].as_u64().unwrap());
+        // the export keeps the mappings as reads of their ranges and says what it does not replay
+        let exp = t.join(format!("export-{tag}.jsonl"));
+        let o = Command::new(bin()).args(["export", "--root", s(&root), "-o", s(&exp), s(&out)]).output().unwrap();
+        assert!(o.status.success(), "{}", text(&o));
+        let head: Value = serde_json::from_str(std::fs::read_to_string(&exp).unwrap().lines().next().unwrap()).unwrap();
+        assert_eq!(head["notes"]["faults_not_replayed"], f["faults"], "{head}");
+    }
+    // the halves, and the store, as runs; a gap longer than the pause joins the halves (where
+    // every page faults: where not, which touches fault is how the kernel cached the file that
+    // time, and a run is the first touch's and the store's at least)
+    if observed_all {
+        assert_eq!(runs_of, [3, 2]);
+    } else {
+        assert!(runs_of.iter().all(|&r| r >= 2), "{runs_of:?}");
+    }
+}
+
+/// `fault-around` fails where a first touch may not fault and nothing is started, saying how
+/// to set it; passes where it does.
+#[test]
+fn the_fault_around_check_refuses_or_passes_as_the_host_is() {
+    let exe = privileged();
+    let t = tmp("fault-around");
+    let root = t.join("data");
+    std::fs::create_dir_all(&root).unwrap();
+    let out = t.join("cap");
+    let o = Command::new(&exe).args(["capture", "--accept", "alone", "--accept", "clock", "--source", "ebpf", "--root", s(&root), "-o", s(&out), "--", "true"]).output().unwrap();
+    if aeiou::capture::first_touch_faults(&t).unwrap() {
+        assert!(o.status.success(), "{}", text(&o));
+        assert_eq!(record(&out)["faults"]["first_touch_observed"], true);
+    } else {
+        assert!(!o.status.success(), "{}", text(&o));
+        let msg = text(&o);
+        assert!(msg.contains("fault-around") && msg.contains("/sys/kernel/debug/fault_around_bytes") && msg.contains("nothing was started"), "{msg}");
+        assert!(!out.join("trace.txt").exists());
     }
 }

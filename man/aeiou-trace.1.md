@@ -117,8 +117,22 @@ one, whose length the record does not hold, and a multishot's results are left o
 export and noted); an open, a close, an fsync, and a statx count as the calls they do; an
 open into the ring's table is noted (`uring_direct_opens_not_counted`), and any other
 operation by name (`not_counted:aeiou_uring_sqe:IORING_OP_NAME`) on a file under the root, and
-always on paths the record does not hold. A record of a kind a reader does not know is skipped
-and noted by name, and a header of a newer format noted (`trace_format_newer`).
+always on paths the record does not hold. An eBPF capture's trace also holds the faults on
+mappings of files (`DESIGN_REVIEW.md` §3.98 "Phase 4 step 2"; `aeiou_fault` in the header's
+records): a thread's faults on one file, one after another at one stride and no quieter
+between than the capture's `--fault-gap`, are one `aeiou_fault(path="P", off=N, stride=S,
+count=C, major=M, write=0|1, in_call=0|1, page=B, span_ns=T, gap_max_ns=G, addr=A) = 0 <DUR>`,
+stamped with its first fault's start, `off` the first fault's page in the file, `major` the
+faults that read the disk, `in_call` a call's copy of a mapped buffer, `span_ns` from the first
+fault's start to the last's end, `gap_max_ns` the longest quiet time inside it, and `<DUR>`
+the time its faults took. `metrics` counts them apart from the calls, in `faults` (FILES; the
+note `faults_kernel_observed` says what they are: the kernel's view of first touches, weaker
+evidence than a call), `export` keeps a mapping as one read of its range (`mmap_as_read`) and
+notes the faults it does not replay (`faults_not_replayed`), and a capture whose
+`fault-around` check was waived says so in a line, `--- aeiou: faults: a first touch of a page
+may not fault ... ---`, noted as `faults_first_touch_unseen`. A record of a kind a reader does
+not know is skipped and noted by name, and a header of a newer format noted
+(`trace_format_newer`).
 
 ## COMMANDS
 
@@ -354,6 +368,28 @@ registers, so a registered file's index names its path. They are written as the
 submission thread's, not the thread's that asked for it; a completion reaped from the ring's
 memory shows no reap; `IORING_OP_URING_CMD`'s contents are not decoded; each request is two
 records in the buffer.
+**Faults on mappings** (`DESIGN_REVIEW.md` §3.98 "Phase 4 step 2"): where the kernel can attach
+programs to functions (BPF trampolines) and its BTF has what they read (`capture.json`'s
+`faults` says whether, and why not; the capture goes on without them), an `fentry` and an
+`fexit` of `handle_mm_fault` record each page fault of the command's processes that an
+exception raised (a load or a store, or a call's copy of a mapped buffer; not the pinning of
+an `O_DIRECT` buffer) on a mapping of a file that is not code: the file offset from the
+mapping's own, whether it read the disk, whether it was a store, and how long it took, a
+fault the kernel retries summed with its retry. The converter names each fault's file from
+the mapping its address is in (the `mmap`s, `munmap`s, and `mremap`s before it; a fault on a
+mapping the trace never showed, the program's own text and data mapped at its `exec`, is
+counted, `faults_unresolved`) and writes a thread's faults as runs, `aeiou_fault` above, a run
+ending at the thread's next record of another kind, at a fault on another file, of another
+kind, or off the stride, or after `--fault-gap` of quiet (the application's think time:
+measured from one fault's end to the next's start, so the disk's time is not counted in it).
+A page faults at its first touch only, and only where the kernel's fault-around (65,536
+bytes by default) does not map the cached pages beside a faulting one: the `fault-around`
+check (below) makes a capture where it does not, or says why not. And a fault maps the whole
+folio its page is in, up to 2 MiB, as the file happened to be cached (by large writes, or by
+readahead on a cold read), which no setting changes: an `aeiou_fault` is where the touches
+began, at the granularity the kernel mapped, and the pages each fault mapped are not recorded
+(brief item 67). What a fault shows is the kernel's view of the application's touches; the
+readahead it starts is the kernel's own I/O and is not in the trace.
 The probes are attached and every capability given up for good before the command is
 started; the command runs as the invoking user, in the environment the tool was started with
 (a binary with capabilities is secure-exec, and the variables glibc strips from it,
@@ -378,7 +414,8 @@ count those lines (`events_lost` in the notes of `metrics`, `export`, and `diges
 without a path, never guessed, and `compare` says first that a side is incomplete. Not
 implemented yet: the `sudo -n` helper for hosts where file capabilities cannot be granted
 (phase 3b of brief item 54), and the request heads by uprobe, mapping faults, libaio's real
-completion, and POSIX AIO's issuer (phase 4, after `io_uring`, built 2026-11-04).
+completion, and POSIX AIO's issuer (phase 4, after `io_uring` and mapping faults, built
+2026-11-04); a `trace` node that replays faults as touches through a mapping (brief item 65).
 
 **Object requests.** With an `--endpoint`, the command also runs with the capture's library
 preloaded (`--requests shim`, the default then; `--requests none` leaves it out), put in the
@@ -434,6 +471,16 @@ name with `--accept`, nothing starts and the exit status is 1. Each node checks 
 - `requests`: with `--requests shim`, the library is found: in a build tree beside the
   binary (`target/release/deps/`, `target/release/`), else in the release's `lib/` beside its
   `bin/`. Waived, the capture runs without it and the record says why.
+- `fault-around`: under eBPF where faults are traced, the kernel's fault-around maps no page
+  beside a faulting one: the check maps a file of its own (unnamed, under `-o`'s nearest
+  directory, written a page at a time so its folios are a page and only fault-around decides),
+  touches a page and the one beside it, and counts the second's faults (`getrusage`). Where it
+  does not fault, root sets
+  `/sys/kernel/debug/fault_around_bytes` to one page for the capture, checks again, and puts the
+  value back when the command ends (`faults.fault_around` in the record); anyone else is told
+  to set it as root beforehand, or to capture as root. Waived, the capture goes on, its faults
+  shaped by the host's fault-around, and the record and the trace say so. Setting it costs every
+  program on the host more faults while it lasts; a capture that cannot put it back says so.
 
 With `--ranks` above 1, rank 0 compares the nodes as well and prints one table:
 
@@ -769,6 +816,14 @@ command's working directory in the record (`command.cwd`) is the default `--cwd`
   The eBPF source's ring buffer, a power of two from `64KiB` to `2GiB`, in bytes or with
   `KiB`, `MiB`, or `GiB`. A full buffer loses events, and the capture says so and suggests a
   larger one. Default `256MiB`, about two seconds of one thread's cached calls; not with
+  `--source strace`.
+- **--fault-gap** *DURATION*
+
+  The eBPF source's runs of faults: a thread's faults on a file, one after another at one
+  stride, are one `aeiou_fault` record until one starts more than *DURATION* after the last
+  ended, with its unit (`ns`, `us`, `ms`, `s`; `0` for none), so a pause in the application
+  ends a run and two bursts that happen to be contiguous stay two. Recorded in the header of
+  `syscalls.bin` and in `capture.json` (`faults.gap_ns`). Default `1ms`; not with
   `--source strace`.
 - **--argv** *MODE*
 

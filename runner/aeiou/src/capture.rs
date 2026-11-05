@@ -34,9 +34,13 @@ use serde_json::{json, Value};
 use crate::coord::{Coordinator, Server, Tcp};
 use crate::run::{hostname, unix_now};
 
-/// Every check, by the name `--accept` waives it by. The first nine each node makes of
+/// Every check, by the name `--accept` waives it by. The first ten each node makes of
 /// itself; the last four rank 0 makes across the nodes.
-pub const CHECKS: [&str; 13] = ["source", "root", "clock", "output-local", "output-outside-roots", "space", "alone", "cold", "requests", "release", "same-source", "mounts", "clock-offset"];
+pub const CHECKS: [&str; 14] = ["source", "root", "clock", "output-local", "output-outside-roots", "space", "alone", "cold", "requests", "fault-around", "release", "same-source", "mounts", "clock-offset"];
+
+/// The kernel's setting of how many bytes around a faulting page a read fault maps when they
+/// are in the page cache (`mm/memory.c`, 65536 by default), in debugfs, root's alone.
+pub const FAULT_AROUND: &str = "/sys/kernel/debug/fault_around_bytes";
 
 /// The calls strace traces: the man page's set (`aeiou-trace(1)`), and `%network`, since an
 /// owner cannot know whether descriptors pass over a socket (`SCM_RIGHTS`) or an object client
@@ -68,6 +72,16 @@ pub const NOT_SEEN_URING: [&str; 3] = [
     "which thread asked for an io_uring request the kernel's SQPOLL thread submitted: its records carry that thread's id",
     "the contents of IORING_OP_URING_CMD requests (a driver's own commands, NVMe passthrough): their operation alone",
     "when an io_uring completion was reaped: an application reads them from the ring's shared memory with no call",
+];
+
+/// What a capture under eBPF cannot see of mapped memory when its faults are traced (in place of
+/// strace's line on it, `NOT_SEEN_STRACE[0]`); the last when a first touch may not fault.
+pub const NOT_SEEN_FAULTS: [&str; 5] = [
+    "loads and stores to a mapped page after its first: a page faults once, and stays mapped until it is unmapped or reclaimed",
+    "the readahead a fault starts and the writeback a store leads to: the kernel's own reads and writes, not the application's",
+    "faults on anonymous memory and on code: not file data",
+    "first touches of the other pages of a large folio: a fault maps the whole folio its page is in (up to 2 MiB), as the file happened to be cached (by large writes, or readahead), so an aeiou_fault is where touches began, at the granularity the kernel mapped; the pages each fault mapped are not recorded (brief item 67)",
+    "first touches of pages the kernel's fault-around mapped beside a faulting one: the fault-around check was waived",
 ];
 
 /// What a capture under eBPF cannot see beyond what strace cannot, recorded in every record.
@@ -563,7 +577,120 @@ pub fn node_checks(i: &NodeInput<'_>) -> (Vec<Check>, Vec<Value>, usize) {
             Err(e) => Check::new("requests", false, e),
         }
     });
+    checks.push(fault_around_check(i, &out));
     (checks, roots, siblings.len() + 1)
+}
+
+/// `fault-around` (DESIGN_REVIEW.md §3.98 "Phase 4 step 2"): the eBPF source traces faults on
+/// mappings, which show the application's first touches of pages only where every first touch
+/// faults: the kernel's fault-around maps the cached pages next to a faulting one, and their
+/// touches never fault. The check maps a file of its own and touches two pages side by side;
+/// root sets `fault_around_bytes` to one page for the capture (`FaultAround`); anyone else is
+/// told how to.
+fn fault_around_check(i: &NodeInput<'_>, out: &Path) -> Check {
+    if i.source.name != "ebpf" {
+        return Check::new("fault-around", true, format!("not needed: {} traces no faults", i.source.name));
+    }
+    if let Ok((_, l)) = crate::ebpf::kernel_layout() {
+        if let Err(why) = l.faults {
+            return Check::new("fault-around", true, format!("not needed: faults on mappings are not traced on this kernel ({why})"));
+        }
+    }
+    let dir = existing_dir(out);
+    let page = crate::ebpf::page_size();
+    match first_touch_faults(&dir) {
+        Ok(true) => Check::new("fault-around", true, format!("the kernel maps no page beside a faulting one (a {page}-byte page of a file cached a page at a time, touched beside one touched before, faults; a file under {}); a fault still maps the whole folio its page is in", dir.display())),
+        Ok(false) if unsafe { libc::geteuid() } == 0 && Path::new(FAULT_AROUND).exists() => {
+            Check::new("fault-around", true, format!("{FAULT_AROUND} {} set to {page} for the capture, then put back", std::fs::read_to_string(FAULT_AROUND).unwrap_or_default().trim()))
+        }
+        Ok(false) => Check::new(
+            "fault-around",
+            false,
+            format!("a mapped page touched beside one touched before does not fault here (the kernel's fault-around maps the cached pages beside a faulting one), so the trace would miss the application's first touches: as root, note `cat {FAULT_AROUND}`, `echo {page} > {FAULT_AROUND}` before the capture, and put the noted value back after; or run the capture as root, which does both; or waive fault-around (faults then shaped by the host, and said so)"),
+        ),
+        Err(e) => Check::new("fault-around", false, format!("the check could not map a file of its own under {}: {e}", dir.display())),
+    }
+}
+
+/// The nearest directory of `p` that exists.
+fn existing_dir(p: &Path) -> PathBuf {
+    let mut d = p.to_path_buf();
+    while !d.is_dir() {
+        if !d.pop() {
+            return PathBuf::from("/");
+        }
+    }
+    d
+}
+
+/// Whether a page of a cached file's mapping faults when the page before it was touched first:
+/// a file of 32 pages, unnamed (`O_TMPFILE`), written a page at a time so its pages are cached
+/// in folios of a page (one large write caches large folios, and a fault maps a whole folio
+/// whatever the setting: DESIGN_REVIEW.md §3.98 "Phase 4 step 2", found at the grant), mapped,
+/// and its pages 0 and 1 read, the second's faults counted by `getrusage`: so what it measures
+/// is the kernel's fault-around alone.
+pub fn first_touch_faults(dir: &Path) -> std::result::Result<bool, String> {
+    use std::os::unix::ffi::OsStrExt;
+    let page = crate::ebpf::page_size() as usize;
+    let len = 32 * page;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_TMPFILE | libc::O_RDWR, 0o600) };
+    if fd < 0 {
+        return Err(format!("O_TMPFILE: {}", std::io::Error::last_os_error()));
+    }
+    let buf = vec![0x5au8; page];
+    for i in 0..32 {
+        let w = unsafe { libc::pwrite(fd, buf.as_ptr() as *const libc::c_void, page, (i * page) as libc::off_t) };
+        if w != page as isize {
+            unsafe { libc::close(fd) };
+            return Err(format!("pwrite: {}", std::io::Error::last_os_error()));
+        }
+    }
+    let m = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, fd, 0) };
+    unsafe { libc::close(fd) };
+    if m == libc::MAP_FAILED {
+        return Err(format!("mmap: {}", std::io::Error::last_os_error()));
+    }
+    let faults = || {
+        let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(libc::RUSAGE_THREAD, &mut u) };
+        u.ru_minflt + u.ru_majflt
+    };
+    let p = m as *const u8;
+    let _ = unsafe { std::ptr::read_volatile(p) };
+    let before = faults();
+    let _ = unsafe { std::ptr::read_volatile(p.add(page)) };
+    let after = faults();
+    unsafe { libc::munmap(m, len) };
+    Ok(after > before)
+}
+
+/// `fault_around_bytes` set to one page by root for the capture, and put back when the capture
+/// ends however it ends (this dropped).
+pub struct FaultAround {
+    pub before: String,
+    at: PathBuf,
+}
+
+impl FaultAround {
+    pub fn set() -> Result<FaultAround> {
+        FaultAround::set_at(Path::new(FAULT_AROUND))
+    }
+
+    /// The setting at `at` (`FAULT_AROUND`, or a file standing for it) made one page.
+    pub fn set_at(at: &Path) -> Result<FaultAround> {
+        let before = std::fs::read_to_string(at).with_context(|| at.display().to_string())?.trim().to_string();
+        std::fs::write(at, crate::ebpf::page_size().to_string()).with_context(|| at.display().to_string())?;
+        Ok(FaultAround { before, at: at.to_path_buf() })
+    }
+}
+
+impl Drop for FaultAround {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::write(&self.at, &self.before) {
+            say(&format!("WARNING: {} could not be put back to {}: {e}; it stays at one page until it is", self.at.display(), self.before));
+        }
+    }
 }
 
 /// What rank 0 compares across the nodes: their documents by rank (`Hello`'s options block)
@@ -621,6 +748,8 @@ pub struct Opts {
     pub requests_buffer: u64,
     /// The eBPF source's ring buffer (`--buffer`).
     pub buffer: u64,
+    /// The quiet time between a thread's faults that ends a run of them (`--fault-gap`), ns.
+    pub fault_gap_ns: u64,
     pub capture_id: Option<String>,
     pub ranks: i64,
     pub rank: i64,
@@ -630,6 +759,26 @@ pub struct Opts {
     pub command: Vec<String>,
     /// `--argv recorded`: the command line kept, its secrets redacted; `none`: its program alone.
     pub argv_recorded: bool,
+}
+
+/// A duration with its unit (`500us`, `1ms`, `2s`, `0`), in nanoseconds.
+pub fn parse_duration_ns(s: &str) -> std::result::Result<u64, String> {
+    let t = s.trim();
+    let (num, unit) = t.split_at(t.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(t.len()));
+    let mult = match unit {
+        "ns" => 1.0,
+        "us" | "µs" => 1e3,
+        "ms" => 1e6,
+        "s" => 1e9,
+        "" if num.parse::<f64>() == Ok(0.0) => 1.0,
+        _ => return Err("a duration with its unit: ns, us, ms, or s (1ms)".into()),
+    };
+    let v: f64 = num.parse().map_err(|_| "a duration with its unit: ns, us, ms, or s (1ms)".to_string())?;
+    let ns = v * mult;
+    if !(0.0..=3.6e12).contains(&ns) {
+        return Err("at most an hour".into());
+    }
+    Ok(ns.round() as u64)
 }
 
 /// `-o`'s template: `%h` the host name, `%p` this process's id, `%%` a percent sign.
@@ -958,6 +1107,21 @@ pub fn run(o: Opts) -> Result<i32> {
     let inherited = inherited_descriptors();
     let cache_drop = if o.cold { Some(crate::cold::drop_caches()?) } else { None };
     let ebpf = o.source.name == "ebpf";
+    // every first touch of a page to fault (the fault-around check): set by root, then seen
+    let mut fault_around = None;
+    let mut first_touch = None;
+    if ebpf && crate::ebpf::kernel_layout().is_ok_and(|(_, l)| l.faults.is_ok()) {
+        let mut seen = first_touch_faults(&out).unwrap_or(false);
+        if !seen && unsafe { libc::geteuid() } == 0 && Path::new(FAULT_AROUND).exists() {
+            fault_around = Some(FaultAround::set()?);
+            seen = first_touch_faults(&out).unwrap_or(false);
+            let waived = checks.iter().any(|c| c.name == "fault-around" && c.waived);
+            if !seen && !waived {
+                bail!("{FAULT_AROUND} at one page, and a page of a file cached a page at a time, touched beside one touched before, still does not fault: the trace would miss the application's first touches; nothing was started. Waive fault-around to capture anyway");
+            }
+        }
+        first_touch = Some(seen);
+    }
     let mut line: Vec<String> = if ebpf {
         let n = crate::ebpf::calls().iter().flatten().count();
         vec![format!("raw_tracepoint:sys_enter,sys_exit ({n} calls: {TRACE_SET}), raw_tracepoint:sched_process_fork,sched_process_exit; ring buffer {}", crate::ebpf::human(o.buffer))]
@@ -1010,6 +1174,21 @@ pub fn run(o: Opts) -> Result<i32> {
     if let Some(Value::String(why)) = uring.as_ref().map(|u| &u["why"]) {
         say(&format!("io_uring's requests are not traced: {why}"));
     }
+    let faults = probes.as_ref().map(|p| {
+        let mut f = p.faults_header();
+        if f["traced"] == true {
+            f["gap_ns"] = json!(o.fault_gap_ns);
+            f["first_touch"] = json!(first_touch == Some(true));
+        }
+        f
+    });
+    let faults_traced = faults.as_ref().is_some_and(|f| f["traced"] == true);
+    if let Some(Value::String(why)) = faults.as_ref().map(|f| &f["why"]) {
+        say(&format!("faults on mappings are not traced: {why}"));
+    }
+    if faults_traced {
+        line[0] += &format!(", fentry,fexit:handle_mm_fault (faults on mappings of files; runs end after {} µs quiet)", o.fault_gap_ns as f64 / 1e3);
+    }
 
     catch(libc::SIGINT);
     catch(libc::SIGTERM);
@@ -1037,6 +1216,7 @@ pub fn run(o: Opts) -> Result<i32> {
                 "cwd": std::env::current_dir().ok(),
                 "inherited": inherited,
                 "uring": p.uring_header(),
+                "faults": faults,
             });
             let reader = p.read_into(&bin, &header, stop.clone())?;
             unsafe {
@@ -1099,6 +1279,8 @@ pub fn run(o: Opts) -> Result<i32> {
         }
     }
     let status = status.expect("the command's status");
+    // fault_around_bytes put back as soon as the command has ended
+    let fault_around: Option<String> = fault_around.map(|a| a.before.clone());
     let ebpf_rec = match (probes, reader) {
         (Some(p), Some(reader)) => {
             stop.store(true, Ordering::SeqCst);
@@ -1211,7 +1393,20 @@ pub fn run(o: Opts) -> Result<i32> {
         "reader": ebpf_rec.as_ref().map(|(_, r, _, _)| json!({"records": r.records, "bytes": r.bytes, "seconds": r.seconds, "peak_records_per_s": r.peak_records_per_s, "peak_bytes_per_s": r.peak_bytes_per_s, "file": crate::ebpf::FILE})),
         "conversion": ebpf_rec.as_ref().map(|(_, _, s, _)| s.json()),
         "uring": uring.as_ref().map(|u| json!({"traced": u["traced"], "why": u.get("why")})),
-        "not_seen": NOT_SEEN_STRACE.iter().filter(|n| !(uring_traced && n.starts_with("io_uring operations"))).chain(if uring_traced { NOT_SEEN_URING.iter() } else { [].iter() }).chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() }).map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>(),
+        "faults": faults.as_ref().map(|f| json!({
+            "traced": f["traced"],
+            "why": f.get("why"),
+            "gap_ns": f.get("gap_ns"),
+            "first_touch_observed": f.get("first_touch"),
+            "fault_around": {"set_by_capture": fault_around.is_some(), "before": fault_around},
+        })),
+        "not_seen": NOT_SEEN_STRACE
+            .iter()
+            .filter(|n| !(uring_traced && n.starts_with("io_uring operations")) && !(faults_traced && n.starts_with("loads and stores")))
+            .chain(if uring_traced { NOT_SEEN_URING.iter() } else { [].iter() })
+            .chain(if faults_traced { NOT_SEEN_FAULTS[..if first_touch == Some(true) { 4 } else { 5 }].iter() } else { [].iter() })
+            .chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() })
+            .map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>(),
         "requests": requests,
         "anchors": anchors,
         "mountstats": "not taken: a traced run's wire counts are not the application's (strace -yy adds a GETATTR to each READ); take them from an untraced run",
@@ -1430,6 +1625,69 @@ mod tests {
         assert_eq!(signal_name(15), "SIGTERM");
         assert_eq!(signal_name(40), "signal 40");
         assert_eq!(unescape("a\\040b\\134c"), "a b\\c");
+    }
+
+    #[test]
+    fn root_s_fault_around_is_one_page_for_the_capture_and_put_back_however_it_ends() {
+        let d = std::env::temp_dir().join(format!("aeiou-fault-around-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("fault_around_bytes");
+        std::fs::write(&f, "65536\n").unwrap();
+        {
+            let a = FaultAround::set_at(&f).unwrap();
+            assert_eq!(a.before, "65536");
+            assert_eq!(std::fs::read_to_string(&f).unwrap(), crate::ebpf::page_size().to_string());
+        }
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "65536");
+        // a panic in the capture puts it back too
+        let g = f.clone();
+        let r = std::panic::catch_unwind(move || {
+            let _a = FaultAround::set_at(&g).unwrap();
+            panic!("the capture failed");
+        });
+        assert!(r.is_err());
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "65536");
+        assert!(FaultAround::set_at(&d.join("missing")).is_err());
+        // one that cannot be put back says so and does not panic
+        let a = FaultAround::set_at(&f).unwrap();
+        std::fs::remove_dir_all(&d).unwrap();
+        drop(a);
+    }
+
+    #[test]
+    fn the_fault_gap_is_a_duration_with_its_unit() {
+        assert_eq!(parse_duration_ns("1ms"), Ok(1_000_000));
+        assert_eq!(parse_duration_ns("500us"), Ok(500_000));
+        assert_eq!(parse_duration_ns("2.5ms"), Ok(2_500_000));
+        assert_eq!(parse_duration_ns("1s"), Ok(1_000_000_000));
+        assert_eq!(parse_duration_ns("250ns"), Ok(250));
+        assert_eq!(parse_duration_ns("0"), Ok(0));
+        assert!(parse_duration_ns("5").unwrap_err().contains("with its unit"));
+        assert!(parse_duration_ns("ms").is_err());
+        assert!(parse_duration_ns("1m").is_err());
+        assert!(parse_duration_ns("2h").is_err());
+        assert!(parse_duration_ns("7200s").unwrap_err().contains("at most an hour"));
+    }
+
+    #[test]
+    fn the_first_touch_check_maps_a_file_of_its_own_and_leaves_nothing() {
+        let d = std::env::temp_dir().join(format!("aeiou-first-touch-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        // either answer is this host's; the check runs and leaves no file
+        let seen = first_touch_faults(&d).unwrap();
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0);
+        let around: Option<u64> = std::fs::read_to_string(FAULT_AROUND).ok().and_then(|v| v.trim().parse().ok());
+        if let Some(a) = around {
+            assert_eq!(seen, a <= crate::ebpf::page_size(), "fault_around_bytes {a}");
+        }
+        assert!(first_touch_faults(&d.join("missing")).unwrap_err().contains("O_TMPFILE"));
+        assert_eq!(existing_dir(&d.join("a/b/c")), d);
+        assert_eq!(existing_dir(Path::new("relative/none")), Path::new("/"));
+        std::fs::remove_dir_all(&d).unwrap();
+        // strace's source needs no such check
+        let src = strace_source("t");
+        let c = fault_around_check(&NodeInput { roots: &[], out: &d, cold: false, capture_id: None, source: &src, requests: false }, &d);
+        assert!(c.ok && c.detail.contains("traces no faults"), "{c:?}");
     }
 
     #[test]

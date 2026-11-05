@@ -35,6 +35,7 @@ enum Rec {
     Sqe { h: Head, ring: u64, req: u64, user_data: u64, flags: u64, fd: i32, opcode: u8, cmd: [u8; CMD_SIZE], blobs: Vec<(u8, u8, Vec<u8>)> },
     Cqe { h: Head, ring: u64, req: u64, user_data: u64, res: i32, cflags: u32 },
     UringCall { h: Head, nr: u32, ret: i64, args: [u64; 6], blobs: Vec<(u8, u8, Vec<u8>)> },
+    Fault { h: Head, address: u64, vm_start: u64, pgoff: u64, ino: u64, dev: u32, flags: u32, ret: u32, end: u64 },
 }
 
 fn u16_at(b: &[u8], o: usize) -> u16 {
@@ -65,6 +66,19 @@ fn blobs_of(b: &[u8], mut at: usize) -> Result<Vec<(u8, u8, Vec<u8>)>> {
 /// One record of `syscalls.bin`, its whole bytes.
 fn decode(b: &[u8]) -> Result<Rec> {
     let h = head_of(b);
+    let fixed = match h.kind {
+        ENTER => std::mem::size_of::<Enter>(),
+        EXIT | GONE | FORK => std::mem::size_of::<Exit>(),
+        GAP => std::mem::size_of::<Gap>(),
+        URING_SQE => std::mem::size_of::<Sqe>(),
+        URING_CQE => std::mem::size_of::<Cqe>(),
+        URING_CALL => std::mem::size_of::<UringCall>(),
+        FAULT => std::mem::size_of::<Fault>(),
+        _ => 0,
+    };
+    if b.len() < fixed {
+        bail!("a record of kind {} of {} bytes, shorter than its {fixed}", h.kind, b.len());
+    }
     Ok(match h.kind {
         ENTER => {
             let mut args = [0u64; 6];
@@ -95,9 +109,22 @@ fn decode(b: &[u8]) -> Result<Rec> {
             }
             Rec::UringCall { h, nr: u32_at(b, 24), ret: u64_at(b, 32) as i64, args, blobs: blobs_of(b, std::mem::size_of::<UringCall>())? }
         }
+        FAULT => Rec::Fault { h, address: u64_at(b, 24), vm_start: u64_at(b, 32), pgoff: u64_at(b, 40), ino: u64_at(b, 48), dev: u32_at(b, 56), flags: u32_at(b, 60), ret: u32_at(b, 64), end: u64_at(b, 72) },
         URING_CQE => Rec::Cqe { h, ring: u64_at(b, 24), req: u64_at(b, 32), user_data: u64_at(b, 40), res: u32_at(b, 48) as i32, cflags: u32_at(b, 52) },
         k => bail!("a record of kind {k}"),
     })
+}
+
+/// The quiet time between two faults of a thread past which the second begins another run
+/// (`aeiou-trace capture --fault-gap`), when the header gives none.
+pub const DEFAULT_FAULT_GAP_NS: u64 = 1_000_000;
+
+impl Rec {
+    fn head(&self) -> &Head {
+        match self {
+            Rec::Enter { h, .. } | Rec::Exit { h, .. } | Rec::Gap { h, .. } | Rec::Gone { h, .. } | Rec::Fork { h, .. } | Rec::Sqe { h, .. } | Rec::Cqe { h, .. } | Rec::UringCall { h, .. } | Rec::Fault { h, .. } => h,
+        }
+    }
 }
 
 /// A descriptor: the path it names (`None` for a socket, a pipe, or what the trace does not
@@ -129,11 +156,86 @@ struct Req {
 }
 type Files = Rc<RefCell<HashMap<i64, Fd>>>;
 type Cwd = Rc<RefCell<String>>;
+type Maps = Rc<RefCell<Mappings>>;
 
 #[derive(Debug, Clone)]
 struct Task {
     files: Files,
     cwd: Cwd,
+    /// The process's mappings of files (shared by its threads, copied at a fork).
+    maps: Maps,
+}
+
+fn new_maps() -> Maps {
+    Rc::new(RefCell::new(Mappings::default()))
+}
+
+/// A process's mappings of files, from its `mmap`s, `munmap`s, and `mremap`s, as the kernel
+/// keeps them: by start, each its end, the file's path, and the file offset at its start. A
+/// fault's file is the mapping its address is in (the probe has no path, and the descriptor the
+/// `mmap` named may be closed or reused by then).
+#[derive(Debug, Clone, Default)]
+struct Mappings(std::collections::BTreeMap<u64, (u64, String, u64)>);
+
+impl Mappings {
+    /// `[start, start + len)` mapped to `path` from `off`, over whatever was there (`MAP_FIXED`).
+    fn map(&mut self, start: u64, len: u64, path: Option<String>, off: u64) {
+        self.unmap(start, len);
+        if let Some(p) = path {
+            self.0.insert(start, (start.saturating_add(len), p, off));
+        }
+    }
+
+    /// `[start, start + len)` no longer mapped: the mappings over it cut, those across its ends kept in part.
+    fn unmap(&mut self, start: u64, len: u64) {
+        let end = start.saturating_add(len);
+        let hit: Vec<u64> = self.0.range(..end).filter(|(_, (e, _, _))| *e > start).map(|(k, _)| *k).collect();
+        for k in hit {
+            let (e, p, off) = self.0.remove(&k).unwrap();
+            if k < start {
+                self.0.insert(k, (start, p.clone(), off));
+            }
+            if e > end {
+                self.0.insert(end, (e, p, off + (end - k)));
+            }
+        }
+    }
+
+    /// The mapping `addr` is in: its path, and the file offset `addr` maps.
+    fn at(&self, addr: u64) -> Option<(&str, u64)> {
+        let (k, (e, p, off)) = self.0.range(..=addr).next_back()?;
+        (*e > addr).then(|| (p.as_str(), off + (addr - k)))
+    }
+
+    /// `mremap`: `[old, old + old_len)` moved to `new` and made `new_len` long.
+    fn remap(&mut self, old: u64, old_len: u64, new: u64, new_len: u64) {
+        let Some((p, off)) = self.at(old).map(|(p, o)| (p.to_string(), o)) else { return };
+        self.unmap(old, old_len);
+        self.map(new, new_len, Some(p), off);
+    }
+}
+
+/// A thread's faults on one file, of one kind, one after another at one stride, no quieter
+/// between than the capture's `--fault-gap`: one `aeiou_fault` record (DESIGN_REVIEW.md §3.98
+/// "Phase 4 step 2").
+#[derive(Debug, Clone)]
+struct FaultRun {
+    path: String,
+    /// The file's inode and device: a path renamed over while mapped is another file.
+    ino: u64,
+    dev: u32,
+    write: bool,
+    in_call: bool,
+    addr: u64,
+    first: u64,
+    last: u64,
+    stride: i64,
+    count: u64,
+    major: u64,
+    start: u64,
+    end: u64,
+    busy: u64,
+    gap_max: u64,
 }
 
 /// A call between its entry and its return.
@@ -185,6 +287,15 @@ pub struct Stats {
     pub uring_requests: u64,
     pub uring_completions_unmatched: u64,
     pub uring_in_flight_at_end: u64,
+    /// Faults on mappings: in all, those that read the disk, the records they were written as,
+    /// those on no mapping of a file the trace showed (the program's own, mapped at its `exec`),
+    /// those that failed (`SIGBUS`, `SIGSEGV`), and attempts retried and summed with their retry.
+    pub faults: u64,
+    pub faults_major: u64,
+    pub fault_records: u64,
+    pub faults_unresolved: u64,
+    pub faults_failed: u64,
+    pub faults_retried: u64,
 }
 
 impl Stats {
@@ -200,6 +311,12 @@ impl Stats {
             "uring_requests": self.uring_requests,
             "uring_completions_unmatched": self.uring_completions_unmatched,
             "uring_in_flight_at_end": self.uring_in_flight_at_end,
+            "faults": self.faults,
+            "faults_major": self.faults_major,
+            "fault_records": self.fault_records,
+            "faults_unresolved": self.faults_unresolved,
+            "faults_failed": self.faults_failed,
+            "faults_retried": self.faults_retried,
         })
     }
 }
@@ -301,6 +418,19 @@ struct Text<W: Write> {
     /// The numbers of requests no longer in flight, the smallest given first; then `next_id`.
     free_ids: BinaryHeap<Reverse<u64>>,
     next_id: u64,
+    /// The faults' layout (the header's `faults.layout`) when they were traced, and the quiet
+    /// time that ends a run (`faults.gap_ns`).
+    faults: Option<Value>,
+    fault_gap: u64,
+    /// Whether every first touch of a page faulted (the capture's fault-around check).
+    first_touch: bool,
+    /// Each thread's run of faults not yet written, and its fault the kernel is retrying (its
+    /// start, address, and whether it read the disk).
+    runs: HashMap<u32, FaultRun>,
+    retries: HashMap<u32, (u64, u64, bool)>,
+    /// No run can go on past this time (the earliest end of one plus the gap): a record after it
+    /// writes the runs that are over, so a thread gone quiet has its run where it ended.
+    runs_due: u64,
 }
 
 impl<W: Write> Text<W> {
@@ -314,7 +444,7 @@ impl<W: Write> Text<W> {
         }
         let seed = hdr["seed"].as_u64().unwrap_or(0) as u32;
         let mut tasks = HashMap::new();
-        tasks.insert(seed, Task { files: Rc::new(RefCell::new(files)), cwd: Rc::new(RefCell::new(cwd)) });
+        tasks.insert(seed, Task { files: Rc::new(RefCell::new(files)), cwd: Rc::new(RefCell::new(cwd)), maps: new_maps() });
         Text {
             w,
             offset: hdr["realtime_minus_monotonic"].as_f64().unwrap_or(0.0),
@@ -327,11 +457,17 @@ impl<W: Write> Text<W> {
             real: HashMap::new(),
             gone: HashSet::new(),
             uring: hdr["uring"]["layout"].is_object().then(|| hdr["uring"]["layout"].clone()),
-            header_due: hdr["uring"]["traced"] == json!(true),
+            header_due: hdr["uring"]["traced"] == json!(true) || hdr["faults"]["traced"] == json!(true),
             rings: HashMap::new(),
             reqs: HashMap::new(),
             free_ids: BinaryHeap::new(),
             next_id: 1,
+            faults: hdr["faults"]["layout"].is_object().then(|| hdr["faults"]["layout"].clone()),
+            fault_gap: hdr["faults"]["gap_ns"].as_u64().unwrap_or(DEFAULT_FAULT_GAP_NS),
+            first_touch: hdr["faults"]["first_touch"] != json!(false),
+            runs: HashMap::new(),
+            retries: HashMap::new(),
+            runs_due: u64::MAX,
         }
     }
 
@@ -344,7 +480,7 @@ impl<W: Write> Text<W> {
             return t.clone();
         }
         // a thread the trace showed no fork of (its record lost): what it holds is unknown
-        let t = Task { files: Rc::new(RefCell::new(HashMap::new())), cwd: Rc::new(RefCell::new("/".into())) };
+        let t = Task { files: Rc::new(RefCell::new(HashMap::new())), cwd: Rc::new(RefCell::new("/".into())), maps: new_maps() };
         self.tasks.insert(tid, t.clone());
         t
     }
@@ -367,12 +503,31 @@ impl<W: Write> Text<W> {
         if self.header_due {
             // DESIGN_REVIEW.md §3.98: the format, and the kinds of record the trace may hold
             self.header_due = false;
-            let ts = match &r {
-                Rec::Enter { h, .. } | Rec::Exit { h, .. } | Rec::Gap { h, .. } | Rec::Gone { h, .. } | Rec::Fork { h, .. } | Rec::Sqe { h, .. } | Rec::Cqe { h, .. } | Rec::UringCall { h, .. } => h.ts,
-            };
-            self.w.write_all(format!("0 {} --- aeiou: trace format {}, records aeiou_uring_sqe aeiou_uring_cqe ---\n", self.when(ts), crate::strace::TRACE_FORMAT).as_bytes())?;
+            let ts = r.head().ts;
+            let mut kinds = vec![];
+            if self.uring.is_some() {
+                kinds.extend(["aeiou_uring_sqe", "aeiou_uring_cqe"]);
+            }
+            if self.faults.is_some() {
+                kinds.push("aeiou_fault");
+            }
+            self.w.write_all(format!("0 {} --- aeiou: trace format {}, records {} ---\n", self.when(ts), crate::strace::TRACE_FORMAT, kinds.join(" ")).as_bytes())?;
+            if self.faults.is_some() && !self.first_touch {
+                self.w.write_all(format!("0 {} --- aeiou: faults: a first touch of a page may not fault (the capture's fault-around check was waived) ---\n", self.when(ts)).as_bytes())?;
+            }
+        }
+        // a thread's run of faults ends at its next record of any other kind, so its lines keep
+        // their order; a loss ends every run, since what was lost is not known
+        match &r {
+            Rec::Fault { .. } | Rec::Cqe { .. } => {}
+            Rec::Gap { .. } => self.flush_runs()?,
+            r => self.flush_run(r.head().tid)?,
+        }
+        if r.head().ts > self.runs_due {
+            self.flush_over(r.head().ts)?;
         }
         match r {
+            Rec::Fault { h, address, vm_start, pgoff, ino, dev, flags, ret, end } => self.fault(h, address, vm_start, pgoff, (ino, dev), flags, ret, end),
             Rec::Sqe { h, ring, req, user_data, flags, fd, opcode, cmd, blobs } => self.sqe(h, ring, req, user_data, flags, fd, opcode, &cmd, &blobs),
             Rec::Cqe { h, ring, req, user_data, res, cflags } => self.cqe(h, ring, req, user_data, res, cflags),
             Rec::UringCall { h, nr, ret, args, blobs } => {
@@ -429,9 +584,10 @@ impl<W: Write> Text<W> {
                 let flags = self.pending.get(&h.tid).map_or(libc::SIGCHLD as u64, |p| clone_flags(p.nr, &p.args, &p.blobs));
                 let files = if flags & libc::CLONE_FILES as u64 != 0 { parent.files.clone() } else { Rc::new(RefCell::new(parent.files.borrow().clone())) };
                 let cwd = if flags & libc::CLONE_FS as u64 != 0 { parent.cwd.clone() } else { Rc::new(RefCell::new(parent.cwd.borrow().clone())) };
+                let maps = if flags & libc::CLONE_VM as u64 != 0 { parent.maps.clone() } else { Rc::new(RefCell::new(parent.maps.borrow().clone())) };
                 let _ = thread;
                 self.gone.remove(&child);
-                self.tasks.insert(child, Task { files, cwd });
+                self.tasks.insert(child, Task { files, cwd, maps });
                 Ok(())
             }
         }
@@ -514,6 +670,7 @@ impl<W: Write> Text<W> {
     }
 
     fn end(&mut self) -> Result<()> {
+        self.flush_runs()?;
         self.cut()?;
         self.stats.uring_in_flight_at_end += self.reqs.len() as u64;
         let mut left: Vec<(u32, Pending)> = self.pending.drain().collect();
@@ -527,6 +684,115 @@ impl<W: Write> Text<W> {
             if p.unfinished {
                 self.w.write_all(format!("{tid} {} <... {name} resumed>) = ?\n", self.when(p.ts)).as_bytes())?;
             }
+        }
+        Ok(())
+    }
+
+    // ---- faults on mappings (DESIGN_REVIEW.md §3.98 "Phase 4 step 2")
+
+    /// A fault: its file the mapping its address is in, its offset the kernel's (the mapping's
+    /// first page in the file and the address's distance from its start), folded into its
+    /// thread's run, or ending it and beginning another.
+    #[allow(clippy::too_many_arguments)]
+    fn fault(&mut self, h: Head, address: u64, vm_start: u64, pgoff: u64, (ino, dev): (u64, u32), flags: u32, ret: u32, end: u64) -> Result<()> {
+        let Some(l) = self.faults.clone() else { return Ok(()) };
+        if self.silent(h.tid) {
+            return Ok(());
+        }
+        let v = |k: &str| l[k].as_u64().unwrap_or(0) as u32;
+        let page = l["page"].as_u64().unwrap_or(4096).max(1);
+        if ret & v("error") != 0 {
+            self.stats.faults_failed += 1;
+            return Ok(());
+        }
+        let mut major = ret & v("major") != 0;
+        if ret & v("retry") != 0 {
+            // the kernel dropped the lock to wait (for the disk, most often) and takes the fault again
+            self.retries.insert(h.tid, (h.ts, address, major));
+            self.stats.faults_retried += 1;
+            return Ok(());
+        }
+        let mut start = h.ts;
+        if let Some((s, a, m)) = self.retries.remove(&h.tid) {
+            if a == address {
+                start = s;
+                major |= m;
+            }
+        }
+        self.stats.faults += 1;
+        self.stats.faults_major += major as u64;
+        let task = self.uring_task(&h);
+        let Some(path) = task.maps.borrow().at(address).map(|(p, _)| p.to_string()) else {
+            self.stats.faults_unresolved += 1;
+            return Ok(());
+        };
+        let off = (pgoff.wrapping_mul(page)).wrapping_add(address.wrapping_sub(vm_start)) / page * page;
+        let (write, in_call) = (flags & v("flag_write") != 0, flags & v("flag_user") == 0);
+        let (gap, busy) = (self.fault_gap, end.saturating_sub(start));
+        if let Some(r) = self.runs.get_mut(&h.tid) {
+            let stride = off as i64 - r.last as i64;
+            let quiet = start.saturating_sub(r.end);
+            if r.path == path && (r.ino, r.dev) == (ino, dev) && r.write == write && r.in_call == in_call && stride != 0 && (r.count == 1 || stride == r.stride) && quiet <= gap {
+                r.stride = stride;
+                r.last = off;
+                r.count += 1;
+                r.major += major as u64;
+                r.end = r.end.max(end);
+                r.busy += busy;
+                r.gap_max = r.gap_max.max(quiet);
+                return Ok(());
+            }
+            self.flush_run(h.tid)?;
+        }
+        self.runs_due = self.runs_due.min(end.saturating_add(gap));
+        self.runs.insert(h.tid, FaultRun { path, ino, dev, write, in_call, addr: address, first: off, last: off, stride: 0, count: 1, major: major as u64, start, end, busy, gap_max: 0 });
+        Ok(())
+    }
+
+    /// A thread's run of faults written: stamped with its first fault's start, its duration the
+    /// time its faults took (`span_ns` the time from the first's start to the last's end).
+    fn flush_run(&mut self, tid: u32) -> Result<()> {
+        let Some(r) = self.runs.remove(&tid) else { return Ok(()) };
+        let page = self.faults.as_ref().and_then(|l| l["page"].as_u64()).unwrap_or(4096);
+        self.cut()?;
+        self.stats.fault_records += 1;
+        let path = string(0, 1, &[(0, STR, r.path.as_bytes().to_vec())]);
+        let line = format!(
+            "{tid} {} aeiou_fault(path={path}, off={}, stride={}, count={}, major={}, write={}, in_call={}, page={page}, span_ns={}, gap_max_ns={}, addr={:#x}) = 0 <{:.6}>\n",
+            self.when(r.start),
+            r.first,
+            r.stride,
+            r.count,
+            r.major,
+            r.write as u8,
+            r.in_call as u8,
+            r.end.saturating_sub(r.start),
+            r.gap_max,
+            r.addr,
+            r.busy as f64 / 1e9
+        );
+        self.w.write_all(line.as_bytes())?;
+        Ok(())
+    }
+
+    /// The runs no fault after `now` can go on, written, the earliest first.
+    fn flush_over(&mut self, now: u64) -> Result<()> {
+        let gap = self.fault_gap;
+        let mut over: Vec<(u64, u32)> = self.runs.iter().filter(|(_, r)| r.end.saturating_add(gap) < now).map(|(t, r)| (r.start, *t)).collect();
+        over.sort_unstable();
+        for (_, t) in over {
+            self.flush_run(t)?;
+        }
+        self.runs_due = self.runs.values().map(|r| r.end.saturating_add(gap)).min().unwrap_or(u64::MAX);
+        Ok(())
+    }
+
+    /// Every thread's run written, the earliest first.
+    fn flush_runs(&mut self) -> Result<()> {
+        let mut tids: Vec<(u64, u32)> = self.runs.iter().map(|(t, r)| (r.start, *t)).collect();
+        tids.sort_unstable();
+        for (_, t) in tids {
+            self.flush_run(t)?;
         }
         Ok(())
     }
@@ -941,9 +1207,23 @@ impl<W: Write> Text<W> {
             "execve" | "execveat" => {
                 // the table is the process's own from here, without what closes on exec
                 let kept: HashMap<i64, Fd> = task.files.borrow().iter().filter(|(_, f)| !f.cloexec).map(|(k, v)| (*k, v.clone())).collect();
-                let t = Task { files: Rc::new(RefCell::new(kept)), cwd: Rc::new(RefCell::new(task.cwd.borrow().clone())) };
+                let t = Task { files: Rc::new(RefCell::new(kept)), cwd: Rc::new(RefCell::new(task.cwd.borrow().clone())), maps: new_maps() };
                 // every thread of the process is gone but this one
                 self.tasks.insert(tid, t);
+                None
+            }
+            "mmap" => {
+                // a file's mapping kept, an anonymous one over it taking its place
+                let file = a[3] & libc::MAP_ANONYMOUS as u64 == 0 && (a[4] as i32) >= 0;
+                task.maps.borrow_mut().map(ret as u64, a[1], if file { fd_path(task, a[4]) } else { None }, a[5]);
+                None
+            }
+            "munmap" => {
+                task.maps.borrow_mut().unmap(a[0], a[1]);
+                None
+            }
+            "mremap" => {
+                task.maps.borrow_mut().remap(a[0], a[1], ret as u64, a[2]);
                 None
             }
             "socket" | "socketpair" | "pipe" | "pipe2" | "eventfd" | "eventfd2" | "epoll_create" | "epoll_create1" | "accept" | "accept4" | "memfd_create" | "timerfd_create" | "signalfd" | "signalfd4" | "inotify_init" | "inotify_init1" | "io_uring_setup" | "userfaultfd" | "perf_event_open" | "fanotify_init" | "pidfd_open" | "pidfd_getfd" | "bpf" | "memfd_secret" | "fsopen" | "fsmount" | "fspick" | "open_tree" | "landlock_create_ruleset" | "mq_open" => {
@@ -1462,6 +1742,12 @@ mod tests {
 
     /// `text` with the header's `uring` (`ebpf::Probes::uring_header`).
     fn text_of(records: &[Vec<u8>], uring: Value) -> (String, Stats) {
+        text_with(records, json!({"uring": uring}))
+    }
+
+    /// `text` with the header's entries `extra` adds (`uring`, `faults`; one without `traced` left out).
+    fn text_with(records: &[Vec<u8>], extra: Value) -> (String, Stats) {
+        let uring = extra["uring"].clone();
         let d = std::env::temp_dir().join(format!("aeiou-ebpf-text-{}-{}-{}", std::process::id(), records.len() ^ records.iter().map(|r| r.len()).sum::<usize>(), uring.is_object() && uring.get("traced").is_some()));
         std::fs::create_dir_all(&d).unwrap();
         let bin = d.join("syscalls.bin");
@@ -1469,6 +1755,9 @@ mod tests {
         let mut hdr = json!({"arch": crate::ebpf::ARCH, "realtime_minus_monotonic": 1000.0, "seed": 10, "cwd": "/w", "inherited": [{"fd": 1, "target": "pipe:[7]"}, {"fd": 5, "target": "/w/held"}, {"fd": 6}]});
         if uring.get("traced").is_some() {
             hdr["uring"] = uring;
+        }
+        if extra["faults"].get("traced").is_some() {
+            hdr["faults"] = extra["faults"].clone();
         }
         f.extend_from_slice(serde_json::to_string(&hdr).unwrap().as_bytes());
         f.push(b'\n');
@@ -1551,6 +1840,134 @@ mod tests {
         b.extend_from_slice(&res.to_le_bytes());
         b.extend_from_slice(&cflags.to_le_bytes());
         done(b)
+    }
+
+    /// A fault record: `flags` the `FAULT_FLAG_`s, `ret` the `VM_FAULT_`s (`faults_header`'s values).
+    #[allow(clippy::too_many_arguments)]
+    fn fault(ts: u64, end: u64, tid: u32, address: u64, vm_start: u64, pgoff: u64, flags: u32, ret: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        head(&mut b, FAULT, ts, 10, tid);
+        for v in [address, vm_start, pgoff, 77] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in [8u32, flags, ret, 0] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        b.extend_from_slice(&end.to_le_bytes());
+        done(b)
+    }
+
+    /// The header's `faults`, with this box's kernel's values.
+    fn faults_header() -> Value {
+        json!({"traced": true, "gap_ns": 1_000_000, "first_touch": true, "layout": {"page": 4096, "flag_write": 1, "flag_user": 64, "major": 4, "retry": 1024, "error": 0x73}})
+    }
+
+    #[test]
+    fn faults_print_as_runs_of_one_thread_one_file_one_stride() {
+        const M: u64 = 0x7f00_0000_0000;
+        const USER: u32 = 64;
+        let us = |n: u64| S + n * 1000;
+        let mut r = exec(S);
+        r.extend([
+            enter(us(10), 10, 10, "openat", [FDCWD, 1, 0, 0, 0, 0], &[(1, STR, b"data")]),
+            exit(us(11), 10, 10, "openat", 7, &[]),
+            // 32 pages of the file from its third (offset 8192), its descriptor closed after
+            enter(us(12), 10, 10, "mmap", [0, 32 * 4096, 1, 1, 7, 8192], &[]),
+            exit(us(13), 10, 10, "mmap", M as i64, &[]),
+            enter(us(14), 10, 10, "close", [7, 0, 0, 0, 0, 0], &[]),
+            exit(us(15), 10, 10, "close", 0, &[]),
+            // three pages in order, each 2 µs, 10 µs apart: one run at the kernel's offsets
+            fault(us(100), us(102), 10, M + 5, M, 2, USER, 0),
+            fault(us(110), us(112), 10, M + 4096, M, 2, USER, 0),
+            fault(us(120), us(122), 10, M + 8192, M, 2, USER, 4),
+            // the next page after a pause past the gap: another run
+            fault(us(2200), us(2201), 10, M + 12288, M, 2, USER, 0),
+            // a retried fault (the lock dropped to wait for the disk) and its retry: one major fault
+            fault(us(2210), us(2300), 10, M + 16384, M, 2, USER, 1024 | 4),
+            fault(us(2301), us(2302), 10, M + 16384, M, 2, USER, 0),
+            // a store: a run of its own
+            fault(us(2310), us(2311), 10, M + 20480, M, 2, USER | 1, 0),
+            // another thread of the process shares the mappings
+            enter(us(3000), 10, 10, "clone", [0x3d0f00, 0x1000, 0, 0, 0, 0], &[]),
+            other(FORK, us(3001), 10, 10, 11, 1, 0),
+            exit(us(3002), 10, 10, "clone", 11, &[]),
+            fault(us(3010), us(3011), 11, M + 40960, M, 2, USER, 0),
+            fault(us(3012), us(3013), 10, M + 45056, M, 2, USER, 0),
+            fault(us(3014), us(3015), 11, M + 36864, M, 2, USER, 0),
+            // a fault inside a call (a read into the mapping's memory), no FAULT_FLAG_USER
+            enter(us(4000), 10, 10, "read", [5, M + 49152, 4096, 0, 0, 0], &[]),
+            fault(us(4001), us(4002), 10, M + 49152, M, 2, 0, 0),
+            exit(us(4003), 10, 10, "read", 4096, &[]),
+            // a fault outside any mapping of a file, and one that failed
+            fault(us(5000), us(5001), 10, 0x5000, 0x5000, 0, USER, 0),
+            fault(us(5002), us(5003), 10, M + 53248, M, 2, USER, 2),
+            // the middle unmapped: a fault there is on no file, one after it still is
+            enter(us(6000), 10, 10, "munmap", [M + 65536, 4096, 0, 0, 0, 0], &[]),
+            exit(us(6001), 10, 10, "munmap", 0, &[]),
+            fault(us(6010), us(6011), 10, M + 65536, M, 2, USER, 0),
+            fault(us(6020), us(6021), 10, M + 69632, M + 69632, 2 + 17, USER, 0),
+        ]);
+        let (t, st) = text_with(&r, json!({"faults": faults_header()}));
+        let lines: Vec<&str> = t.lines().filter(|l| l.contains("aeiou_") || l.contains("read(") || l.contains("resumed")).collect();
+        assert!(t.lines().next().unwrap().ends_with("--- aeiou: trace format 1, records aeiou_fault ---"), "{t}");
+        let want = [
+            r#"10 1001.000100 aeiou_fault(path="/w/data", off=8192, stride=4096, count=3, major=1, write=0, in_call=0, page=4096, span_ns=22000, gap_max_ns=8000, addr=0x7f0000000005) = 0 <0.000006>"#,
+            r#"10 1001.002200 aeiou_fault(path="/w/data", off=20480, stride=4096, count=2, major=1, write=0, in_call=0, page=4096, span_ns=102000, gap_max_ns=9000, addr=0x7f0000003000) = 0 <0.000093>"#,
+            r#"10 1001.002310 aeiou_fault(path="/w/data", off=28672, stride=0, count=1, major=0, write=1, in_call=0, page=4096, span_ns=1000, gap_max_ns=0, addr=0x7f0000005000) = 0 <0.000001>"#,
+            r#"11 1001.003010 aeiou_fault(path="/w/data", off=49152, stride=-4096, count=2, major=0, write=0, in_call=0, page=4096, span_ns=5000, gap_max_ns=3000, addr=0x7f000000a000) = 0 <0.000002>"#,
+            r#"10 1001.003012 aeiou_fault(path="/w/data", off=53248, stride=0, count=1, major=0, write=0, in_call=0, page=4096, span_ns=1000, gap_max_ns=0, addr=0x7f000000b000) = 0 <0.000001>"#,
+        ];
+        for (i, w) in want.iter().enumerate() {
+            assert!(lines.contains(w), "line {i} missing: {w}\n{t}");
+        }
+        // the call's fault after its entry, its return resumed
+        let call: Vec<&&str> = lines.iter().filter(|l| l.contains("read(") || l.contains("in_call=1") || l.contains("read resumed")).collect();
+        assert_eq!(call.len(), 3, "{t}");
+        assert!(call[0].ends_with("<unfinished ...>") && call[1].contains("off=57344, stride=0, count=1") && call[1].contains("in_call=1") && call[2].contains("<... read resumed>"), "{t}");
+        // what was after the unmapped page is still the file's (its offset the kernel's)
+        assert!(t.contains(r#"aeiou_fault(path="/w/data", off=77824, stride=0, count=1"#), "{t}");
+        // a thread gone quiet has its run written where it ended, not at the trace's end
+        assert!(t.find("11 1001.003010 aeiou_fault").unwrap() < t.find("munmap(").unwrap(), "{t}");
+        assert_eq!((st.faults, st.faults_major, st.faults_retried, st.faults_failed, st.faults_unresolved), (13, 2, 1, 1, 2), "{st:?}");
+        assert_eq!(st.fault_records, 7, "{t}");
+        // runs ordered within each thread
+        let tens: Vec<&str> = lines.iter().filter(|l| l.starts_with("10 ") && l.contains("aeiou_fault")).copied().collect();
+        assert!(tens.windows(2).all(|w| w[0][3..18] <= w[1][3..18]), "{t}");
+    }
+
+    #[test]
+    fn faults_are_not_printed_without_the_header_s_layout_and_a_loss_ends_every_run() {
+        const M: u64 = 0x7f00_0000_0000;
+        let mut r = exec(S);
+        r.extend([
+            enter(S + 10, 10, 10, "mmap", [0, 8 * 4096, 1, 1, 5, 0], &[]),
+            exit(S + 11, 10, 10, "mmap", M as i64, &[]),
+            fault(S + 100, S + 101, 10, M, M, 0, 64, 0),
+            gap(2, 3, S + 150, S + 160),
+            fault(S + 200, S + 201, 10, M + 4096, M, 0, 64, 0),
+        ]);
+        let (t, st) = text(&r);
+        assert!(!t.contains("aeiou_fault") && st.faults == 0, "{t}");
+        let (t, st) = text_with(&r, json!({"faults": faults_header()}));
+        assert_eq!(st.fault_records, 2, "{t}");
+        let at = |s: &str| t.find(s).unwrap();
+        assert!(at("off=0, stride=0, count=1") < at("event(s) lost") && at("event(s) lost") < at("off=4096, stride=0, count=1"), "{t}");
+        // an anonymous mapping over the file's takes its place
+        let mut r = exec(S);
+        r.extend([
+            enter(S + 10, 10, 10, "mmap", [0, 8 * 4096, 1, 1, 5, 0], &[]),
+            exit(S + 11, 10, 10, "mmap", M as i64, &[]),
+            enter(S + 12, 10, 10, "mmap", [M, 4096, 3, 0x32, -1i64 as u64, 0], &[]),
+            exit(S + 13, 10, 10, "mmap", M as i64, &[]),
+            // moved with mremap: the file follows it
+            enter(S + 14, 10, 10, "mremap", [M + 4096, 4096, 8192, 3, M + (1 << 20), 0], &[]),
+            exit(S + 15, 10, 10, "mremap", (M + (1 << 20)) as i64, &[]),
+            fault(S + 100, S + 101, 10, M, M, 0, 64, 0),
+            fault(S + 200, S + 201, 10, M + (1 << 20) + 4096, M + (1 << 20), 1, 64, 0),
+        ]);
+        let (t, st) = text_with(&r, json!({"faults": faults_header()}));
+        assert_eq!(st.faults_unresolved, 1, "{t}");
+        assert!(t.contains(r#"aeiou_fault(path="/w/held", off=8192, stride=0, count=1"#), "{t}");
     }
 
     #[test]
@@ -1860,9 +2277,14 @@ mod tests {
         std::fs::write(&bin, &cut).unwrap();
         assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("cut short"));
         let mut odd = [MAGIC.as_slice(), hdr.as_bytes()].concat();
-        odd.extend_from_slice(&other(9, 1, 10, 10, 0, 0, 0));
+        odd.extend_from_slice(&other(99, 1, 10, 10, 0, 0, 0));
         std::fs::write(&bin, &odd).unwrap();
-        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("a record of kind 9"));
+        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("a record of kind 99"));
+        // a record shorter than its kind's fixed part
+        let mut small = [MAGIC.as_slice(), hdr.as_bytes()].concat();
+        small.extend_from_slice(&other(FAULT, 1, 10, 10, 0, 0, 0));
+        std::fs::write(&bin, &small).unwrap();
+        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("a record of kind 9 of 40 bytes, shorter than its 80"));
         assert!(convert(&d.join("missing"), &d.join("t")).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }

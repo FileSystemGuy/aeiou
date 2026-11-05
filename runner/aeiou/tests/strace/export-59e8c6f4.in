@@ -1,0 +1,8 @@
+0 1700000000.000000 --- aeiou: trace format 1, records aeiou_uring_sqe aeiou_uring_cqe aeiou_fault ---
+0 1700000000.000000 --- aeiou: faults: a first touch of a page may not fault (the capture's fault-around check was waived) ---
+10 1700000000.000000 execve("/bin/app", 0x20, 0x30) = 0 <0.000001>
+10 1700000000.000010 openat(AT_FDCWD</d>, "a", O_RDONLY|O_CLOEXEC) = 3</d/a> <0.000002>
+10 1700000000.000020 mmap(NULL, 1048576, PROT_READ, MAP_PRIVATE, 3</d/a>, 0) = 0x7f0000000000 <0.000003>
+10 1700000000.000100 aeiou_fault(path="/d/a", off=0, stride=65536, count=16, major=16, write=0, in_call=0, page=4096, span_ns=2000000, gap_max_ns=30000, addr=0x7f0000000000) = 0 <0.001800>
+10 1700000000.000200 pread64(3</d/a>, 0x5000, 4096, 0) = 4096 <0.000010>
+10 1700000000.040000 +++ exited with 0 +++

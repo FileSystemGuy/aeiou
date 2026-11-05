@@ -25,6 +25,9 @@ pub const URING_CQE: u16 = 7;
 /// descriptor is (8 bytes, a blob of argument 0, `Sqe.ring`'s value) and for
 /// `io_uring_register` the files it registers (`MAX_FILES`).
 pub const URING_CALL: u16 = 8;
+/// A page fault of a traced process on a file's mapping (`handle_mm_fault`, an `fentry` and an
+/// `fexit`, DESIGN_REVIEW.md §3.98 "Phase 4 step 2"): `Fault`, `head.ts` the fault's start.
+pub const FAULT: u16 = 9;
 
 /// The start of every record: its kind and whole length, the CPU, the monotonic clock, and the
 /// process and thread as the traced command's own PID namespace numbers them.
@@ -106,6 +109,43 @@ pub struct UringCall {
     pub ret: i64,
     pub args: [u64; 6],
 }
+
+/// A page fault on a file's mapping, as `handle_mm_fault` took it and returned: the user
+/// address, the mapping's start and `vm_pgoff` (its first page's index in the file) read at
+/// entry (the mapping may be gone by the return), the file's inode and device, the fault's
+/// `FAULT_FLAG_` bits, the `VM_FAULT_` bits it returned, and its end on the monotonic clock.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fault {
+    pub head: Head,
+    pub address: u64,
+    pub vm_start: u64,
+    pub pgoff: u64,
+    pub ino: u64,
+    pub dev: u32,
+    pub flags: u32,
+    pub ret: u32,
+    pub pad: u32,
+    pub end: u64,
+}
+
+/// What a fault's entry keeps for its return (`FAULTS`, by thread): the record's fields read at
+/// entry.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FaultStart {
+    pub ts: u64,
+    pub address: u64,
+    pub vm_start: u64,
+    pub pgoff: u64,
+    pub ino: u64,
+    pub dev: u32,
+    pub flags: u32,
+}
+
+/// `VM_EXEC` (include/linux/mm.h, a `#define` the BTF does not carry, the same since 2.6): a
+/// mapping of code, whose faults are the program's own text, not its data.
+pub const VM_EXEC: u64 = 0x4;
 
 /// Their numbers, the same on x86_64 and aarch64 (the calls added since 4.x share one table).
 pub const NR_IO_URING_SETUP: u32 = 425;
@@ -234,6 +274,19 @@ pub struct Config {
     pub fdt_fd_off: u32,
     pub file_private_off: u32,
     pub statx_filename_off: u32,
+    /// The faults' probes: whether they run (0, the kernel's structures are not those they
+    /// read, or `--source ebpf` was asked not to trace faults), and `vm_area_struct`'s, `file`'s,
+    /// `inode`'s, and `super_block`'s offsets they read.
+    pub faults: u32,
+    pub vma_start_off: u32,
+    pub vma_pgoff_off: u32,
+    pub vma_file_off: u32,
+    pub vma_flags_off: u32,
+    pub file_inode_off: u32,
+    pub inode_ino_off: u32,
+    pub inode_sb_off: u32,
+    pub sb_dev_off: u32,
+    pub pad_faults: u32,
 }
 
 /// One CPU's losses (`LOSSES`): records pending since the last one written, and in all; and

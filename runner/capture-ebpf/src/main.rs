@@ -15,9 +15,9 @@ use aya_ebpf::{
         bpf_get_current_pid_tgid, bpf_get_ns_current_pid_tgid, bpf_get_smp_processor_id, bpf_ktime_get_ns,
         bpf_probe_read_kernel, generated as gen,
     },
-    macros::{map, raw_tracepoint},
+    macros::{fentry, fexit, map, raw_tracepoint},
     maps::{Array, HashMap, PerCpuArray, RingBuf},
-    programs::RawTracePointContext,
+    programs::{FEntryContext, FExitContext, RawTracePointContext},
 };
 use core::mem::size_of;
 use record::*;
@@ -39,6 +39,9 @@ static RETRY: HashMap<u32, u32> = HashMap::with_max_entries(65536, 0);
 /// traced by its ring, since it may run in an interrupt or in a thread of no traced process.
 #[map]
 static RINGS: HashMap<u64, u8> = HashMap::with_max_entries(4096, 0);
+/// A fault between its entry and its return, by thread id.
+#[map]
+static FAULTS: HashMap<u32, FaultStart> = HashMap::with_max_entries(65536, 0);
 #[map]
 static LOSSES: PerCpuArray<Loss> = PerCpuArray::with_max_entries(1, 0);
 /// Twice the largest record, so a blob at any offset below `SCRATCH` fits without a check the
@@ -579,6 +582,64 @@ pub fn uring_calls(ctx: RawTracePointContext) -> i32 {
     let off = size_of::<UringCall>();
     let off = if nr == NR_IO_URING_SETUP as i32 { put_ring(buf, off, ret as u64) } else { put_files(buf, off, args[1], args[2], args[3]) };
     emit(buf, off);
+    0
+}
+
+/// A page fault of a traced process on a file's mapping (DESIGN_REVIEW.md §3.98 "Phase 4 step
+/// 2"), at `handle_mm_fault(vma, address, flags, regs)`'s entry: kept when the fault came from
+/// an exception (`regs` set: the application's load or store, or a call's copy of its buffer;
+/// a `get_user_pages`, an `O_DIRECT` buffer's pinning, passes none) on a mapping of a file that
+/// is not code. The mapping's fields are read here, since a fault that drops the mmap lock may
+/// return with the mapping gone.
+#[fentry(function = "handle_mm_fault")]
+pub fn fault_entry(ctx: FEntryContext) -> i32 {
+    let regs: u64 = ctx.arg(3);
+    if regs == 0 || !traced() {
+        return 0;
+    }
+    let Some(cfg) = CONFIG.get(0) else { return 0 };
+    if cfg.faults == 0 {
+        return 0;
+    }
+    let vma: *const u8 = ctx.arg(0);
+    let rd = |p: *const u8, o: u32| unsafe { bpf_probe_read_kernel(p.add(o as usize) as *const u64) }.unwrap_or(0);
+    let file = rd(vma, cfg.vma_file_off) as *const u8;
+    if file.is_null() || rd(vma, cfg.vma_flags_off) & VM_EXEC != 0 {
+        return 0;
+    }
+    let inode = rd(file, cfg.file_inode_off) as *const u8;
+    let sb = rd(inode, cfg.inode_sb_off) as *const u8;
+    let dev = unsafe { bpf_probe_read_kernel(sb.add(cfg.sb_dev_off as usize) as *const u32) }.unwrap_or(0);
+    let flags: u32 = ctx.arg(2);
+    let address: u64 = ctx.arg(1);
+    let start = FaultStart { ts: unsafe { bpf_ktime_get_ns() }, address, vm_start: rd(vma, cfg.vma_start_off), pgoff: rd(vma, cfg.vma_pgoff_off), ino: rd(inode, cfg.inode_ino_off), dev, flags };
+    let tid = bpf_get_current_pid_tgid() as u32;
+    let _ = FAULTS.insert(&tid, &start, 0);
+    0
+}
+
+/// The fault's return: its record, the `VM_FAULT_` bits it returned (the last of the
+/// arguments' slots, so no helper newer than the trampolines is needed) and its end.
+#[fexit(function = "handle_mm_fault")]
+pub fn fault_exit(ctx: FExitContext) -> i32 {
+    let tid = bpf_get_current_pid_tgid() as u32;
+    let Some(s) = (unsafe { FAULTS.get(&tid) }).copied() else { return 0 };
+    let _ = FAULTS.remove(&tid);
+    let ret: u64 = ctx.arg(4);
+    let mut h = head(FAULT);
+    h.len = size_of::<Fault>() as u16;
+    h.ts = s.ts;
+    let rec = Fault { head: h, address: s.address, vm_start: s.vm_start, pgoff: s.pgoff, ino: s.ino, dev: s.dev, flags: s.flags, ret: ret as u32, pad: 0, end: unsafe { bpf_ktime_get_ns() } };
+    let Some(loss) = LOSSES.get_ptr_mut(0) else { return 0 };
+    let loss = unsafe { &mut *loss };
+    if EVENTS.output::<Fault>(&rec, 0).is_err() {
+        if loss.pending == 0 {
+            loss.first = rec.head.ts;
+        }
+        loss.pending += 1;
+        loss.last = rec.head.ts;
+        loss.total += 1;
+    }
     0
 }
 
