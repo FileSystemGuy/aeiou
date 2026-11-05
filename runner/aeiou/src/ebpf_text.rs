@@ -134,6 +134,13 @@ fn decode(b: &[u8]) -> Result<Rec> {
 /// (`aeiou-trace capture --fault-gap`), when the header gives none.
 pub const DEFAULT_FAULT_GAP_NS: u64 = 1_000_000;
 
+/// Why a first touch of a page may not have faulted, in the trace's line saying so: the
+/// capture's `fault-around` check waived (the header's `faults.first_touch` false), or passed at
+/// the capture's start and failed at its end, taken again before the setting was put back
+/// (capture.rs; found in CI 2026-11-05, a capture as root ending under another).
+pub const FAULT_AROUND_WAIVED: &str = "the capture's fault-around check was waived";
+pub const FAULT_AROUND_CHANGED: &str = "the capture's fault-around check passed at its start and failed at its end: the host's fault-around changed during the capture";
+
 impl Rec {
     fn head(&self) -> &Head {
         match self {
@@ -439,8 +446,10 @@ fn read_header(r: &mut impl BufRead, bin: &Path) -> Result<Value> {
     serde_json::from_str(&line).with_context(|| format!("{}: its header line", bin.display()))
 }
 
-/// `bin` (`syscalls.bin`) converted to `out` (`trace.txt`).
-pub fn convert(bin: &Path, out: &Path) -> Result<Stats> {
+/// `bin` (`syscalls.bin`) converted to `out` (`trace.txt`); `first_touch_why`, where faults are
+/// traced, why a first touch may not have faulted, in place of the header's
+/// (`FAULT_AROUND_CHANGED`, which the header, written at the start, cannot know).
+pub fn convert(bin: &Path, out: &Path, first_touch_why: Option<&str>) -> Result<Stats> {
     let mut r = BufReader::with_capacity(8 << 20, std::fs::File::open(bin).with_context(|| bin.display().to_string())?);
     let hdr = read_header(&mut r, bin)?;
     if hdr["arch"].as_str() != Some(crate::ebpf::ARCH) {
@@ -448,6 +457,9 @@ pub fn convert(bin: &Path, out: &Path) -> Result<Stats> {
     }
     let w = BufWriter::with_capacity(8 << 20, std::fs::File::create(out).with_context(|| out.display().to_string())?);
     let mut t = Text::new(&hdr, w);
+    if let Some(why) = first_touch_why {
+        t.first_touch_unseen = Some(why.to_string());
+    }
     let mut heap: BinaryHeap<Reverse<(u64, u64, Vec<u8>)>> = BinaryHeap::new();
     let mut seq = 0u64;
     let mut head = [0u8; 24];
@@ -522,8 +534,9 @@ struct Text<W: Write> {
     /// time that ends a run (`faults.gap_ns`).
     faults: Option<Value>,
     fault_gap: u64,
-    /// Whether every first touch of a page faulted (the capture's fault-around check).
-    first_touch: bool,
+    /// Why a first touch of a page may not have faulted (the capture's fault-around check), or
+    /// `None` where every one did.
+    first_touch_unseen: Option<String>,
     /// Each thread's run of faults not yet written, and its fault the kernel is retrying (its
     /// start, address, and whether it read the disk).
     runs: HashMap<u32, FaultRun>,
@@ -580,7 +593,7 @@ impl<W: Write> Text<W> {
             next_id: 1,
             faults: hdr["faults"]["layout"].is_object().then(|| hdr["faults"]["layout"].clone()),
             fault_gap: hdr["faults"]["gap_ns"].as_u64().unwrap_or(DEFAULT_FAULT_GAP_NS),
-            first_touch: hdr["faults"]["first_touch"] != json!(false),
+            first_touch_unseen: (hdr["faults"]["first_touch"] == json!(false)).then(|| FAULT_AROUND_WAIVED.to_string()),
             runs: HashMap::new(),
             retries: HashMap::new(),
             runs_due: u64::MAX,
@@ -641,8 +654,8 @@ impl<W: Write> Text<W> {
                 kinds.extend(PAIO_RECORDS);
             }
             self.w.write_all(format!("0 {} --- aeiou: trace format {}, records {} ---\n", self.when(ts), crate::strace::TRACE_FORMAT, kinds.join(" ")).as_bytes())?;
-            if self.faults.is_some() && !self.first_touch {
-                self.w.write_all(format!("0 {} --- aeiou: faults: a first touch of a page may not fault (the capture's fault-around check was waived) ---\n", self.when(ts)).as_bytes())?;
+            if let (Some(_), Some(why)) = (&self.faults, &self.first_touch_unseen) {
+                self.w.write_all(format!("0 {} --- aeiou: faults: a first touch of a page may not fault ({why}) ---\n", self.when(ts)).as_bytes())?;
             }
         }
         // a thread's run of faults ends at its next record of any other kind, so its lines keep
@@ -2251,7 +2264,7 @@ mod tests {
         }
         std::fs::write(&bin, f).unwrap();
         let out = d.join("trace.txt");
-        let st = convert(&bin, &out).unwrap();
+        let st = convert(&bin, &out, extra["first_touch_why"].as_str()).unwrap();
         let t = std::fs::read_to_string(&out).unwrap();
         let _ = std::fs::remove_dir_all(&d);
         (t, st)
@@ -2453,6 +2466,31 @@ mod tests {
         let (t, st) = text_with(&r, json!({"faults": faults_header()}));
         assert_eq!(st.faults_unresolved, 1, "{t}");
         assert!(t.contains(r#"aeiou_fault(path="/w/held", off=8192, stride=0, count=1"#), "{t}");
+    }
+
+    /// The line saying a first touch may not fault: the header's (the check waived), or the
+    /// reason the capture found at its end in place of it (the host's fault-around changed).
+    #[test]
+    fn a_first_touch_that_may_not_fault_is_said_with_its_reason() {
+        const M: u64 = 0x7f00_0000_0000;
+        let mut r = exec(S);
+        r.extend([
+            enter(S + 10, 10, 10, "mmap", [0, 8 * 4096, 1, 1, 5, 0], &[]),
+            exit(S + 11, 10, 10, "mmap", M as i64, &[]),
+            fault(S + 100, S + 101, 10, M, M, 0, 64, 0),
+        ]);
+        let line = |t: &str| t.lines().find(|l| l.contains("--- aeiou: faults: ")).map(str::to_string);
+        let (t, _) = text_with(&r, json!({"faults": faults_header()}));
+        assert_eq!(line(&t), None, "{t}");
+        let mut waived = faults_header();
+        waived["first_touch"] = json!(false);
+        let (t, _) = text_with(&r, json!({"faults": waived}));
+        assert!(line(&t).unwrap().ends_with(&format!(" --- aeiou: faults: a first touch of a page may not fault ({FAULT_AROUND_WAIVED}) ---")), "{t}");
+        let (t, _) = text_with(&r, json!({"faults": faults_header(), "first_touch_why": FAULT_AROUND_CHANGED}));
+        let l = line(&t).unwrap();
+        assert!(l.ends_with(&format!(" --- aeiou: faults: a first touch of a page may not fault ({FAULT_AROUND_CHANGED}) ---")) && l.contains("changed during the capture"), "{t}");
+        // after the header's line, before the first call
+        assert!(t.lines().nth(1) == Some(l.as_str()), "{t}");
     }
 
     #[test]
@@ -2744,33 +2782,33 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let bin = d.join("syscalls.bin");
         std::fs::write(&bin, b"NOTMAGIC{}\n").unwrap();
-        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("not the eBPF source's records"));
+        assert!(convert(&bin, &d.join("t"), None).unwrap_err().to_string().contains("not the eBPF source's records"));
         assert!(header(&bin).is_err());
         std::fs::write(&bin, b"AEIO").unwrap();
-        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("shorter than its header"));
+        assert!(convert(&bin, &d.join("t"), None).unwrap_err().to_string().contains("shorter than its header"));
         std::fs::write(&bin, [MAGIC.as_slice(), b"{\"arch\": \"sparc\"}\n"].concat()).unwrap();
-        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("recorded on \"sparc\""));
+        assert!(convert(&bin, &d.join("t"), None).unwrap_err().to_string().contains("recorded on \"sparc\""));
         assert_eq!(header(&bin).unwrap()["arch"], "sparc");
         let hdr = format!("{{\"arch\": \"{}\"}}\n", crate::ebpf::ARCH);
         let mut short = [MAGIC.as_slice(), hdr.as_bytes()].concat();
         short.extend_from_slice(&[1, 0, 8, 0]);
         short.extend_from_slice(&[0; 20]);
         std::fs::write(&bin, &short).unwrap();
-        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("a record of 8 bytes"));
+        assert!(convert(&bin, &d.join("t"), None).unwrap_err().to_string().contains("a record of 8 bytes"));
         let mut cut = [MAGIC.as_slice(), hdr.as_bytes()].concat();
         cut.extend_from_slice(&enter(1, 10, 10, "read", [0; 6], &[])[..40]);
         std::fs::write(&bin, &cut).unwrap();
-        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("cut short"));
+        assert!(convert(&bin, &d.join("t"), None).unwrap_err().to_string().contains("cut short"));
         let mut odd = [MAGIC.as_slice(), hdr.as_bytes()].concat();
         odd.extend_from_slice(&other(99, 1, 10, 10, 0, 0, 0));
         std::fs::write(&bin, &odd).unwrap();
-        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("a record of kind 99"));
+        assert!(convert(&bin, &d.join("t"), None).unwrap_err().to_string().contains("a record of kind 99"));
         // a record shorter than its kind's fixed part
         let mut small = [MAGIC.as_slice(), hdr.as_bytes()].concat();
         small.extend_from_slice(&other(FAULT, 1, 10, 10, 0, 0, 0));
         std::fs::write(&bin, &small).unwrap();
-        assert!(convert(&bin, &d.join("t")).unwrap_err().to_string().contains("a record of kind 9 of 40 bytes, shorter than its 80"));
-        assert!(convert(&d.join("missing"), &d.join("t")).is_err());
+        assert!(convert(&bin, &d.join("t"), None).unwrap_err().to_string().contains("a record of kind 9 of 40 bytes, shorter than its 80"));
+        assert!(convert(&d.join("missing"), &d.join("t"), None).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
 

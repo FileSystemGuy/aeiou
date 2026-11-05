@@ -2136,7 +2136,11 @@ TID TIME aeiou_fault(path="P", off=N, stride=S, count=C, major=M, write=0|1, in_
 - A capture whose `fault-around` check was waived (a first touch may not fault: the kernel
   mapped the pages beside a faulting one) has the line
   `0 TIME --- aeiou: faults: a first touch of a page may not fault (the capture's fault-around check was waived) ---`
-  after the header, noted as `faults_first_touch_unseen`.
+  after the header, noted as `faults_first_touch_unseen`; one whose check passed at its start
+  and failed when taken again at the command's end (the host's setting changed during the
+  capture: `DESIGN_REVIEW.md` §3.98 "Phase 4 step 2", found in CI 2026-11-05) has the same line
+  with its reason, `(the capture's fault-around check passed at its start and failed at its end:
+  the host's fault-around changed during the capture)`. A reader takes either from the prefix.
 
 `metrics` counts the runs on files under a root apart from the calls, in the document's
 `faults` (`faults`, `major`, `write`, `in_call`, `runs`, `bytes` the faults' pages, `run_bytes`

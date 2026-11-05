@@ -76,7 +76,9 @@ echo 4096 | sudo tee /sys/kernel/debug/fault_around_bytes
 
 and put the noted value back after. Every program on the host takes more faults while it is
 set. If you cannot, `--accept fault-around` captures anyway, and the record says the faults
-missed some first touches. The record's `faults` says whether faults were traced, and why not.
+missed some first touches. The setting is the whole host's: if it changes during the capture
+(another capture run as root on the node ending, or someone resetting it), the capture finds
+that when the command ends, warns, and the record and the trace say so. The record's `faults` says whether faults were traced, and why not.
 
 For an application that uses libaio (`io_submit`), it records when the kernel completed each
 request, where strace shows only when the application collected the result, and sees results

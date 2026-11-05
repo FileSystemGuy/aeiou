@@ -2665,7 +2665,7 @@ pub fn metrics_document(t: &Tracer, o: &Opts) -> Value {
     if m.faults.is_some() {
         notes.insert(
             "faults_kernel_observed".into(),
-            json!("faults counts the kernel's faults on mappings of files under the roots, apart from the calls: a page faults at its first touch only, a fault maps the whole folio its page is in (up to 2 MiB, as the file happened to be cached), and where the capture's fault-around check was waived (faults_first_touch_unseen) the cached pages beside it too; where touches began, at the granularity the kernel mapped: evidence of a mapped site's touches, weaker than a call"),
+            json!("faults counts the kernel's faults on mappings of files under the roots, apart from the calls: a page faults at its first touch only, a fault maps the whole folio its page is in (up to 2 MiB, as the file happened to be cached), and where the capture's fault-around check was waived, or the host's fault-around changed during the capture (faults_first_touch_unseen), the cached pages beside it too; where touches began, at the granularity the kernel mapped: evidence of a mapped site's touches, weaker than a call"),
         );
     }
     let instances = m.instances.len().max(usize::from(o.instance_roots.is_empty()));

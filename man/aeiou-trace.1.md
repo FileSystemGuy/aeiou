@@ -151,8 +151,9 @@ of its `submit` (`not_exported:posix_aio:WHY`).
 note `faults_kernel_observed` says what they are: the kernel's view of first touches, weaker
 evidence than a call), `export` keeps a mapping as one read of its range (`mmap_as_read`) and
 notes the faults it does not replay (`faults_not_replayed`), and a capture whose
-`fault-around` check was waived says so in a line, `--- aeiou: faults: a first touch of a page
-may not fault ... ---`, noted as `faults_first_touch_unseen`. A record of a kind a reader does
+`fault-around` check was waived, or failed when taken again at the command's end, says so in a
+line, `--- aeiou: faults: a first touch of a page may not fault (WHY) ---`, noted as
+`faults_first_touch_unseen`. A record of a kind a reader does
 not know is skipped and noted by name, and a header of a newer format noted
 (`trace_format_newer`).
 
@@ -525,7 +526,11 @@ name with `--accept`, nothing starts and the exit status is 1. Each node checks 
   `/sys/kernel/debug/fault_around_bytes` to one page for the capture, checks again, and puts the
   value back when the command ends (`faults.fault_around` in the record); anyone else is told
   to set it as root beforehand, or to capture as root. Waived, the capture goes on, its faults
-  shaped by the host's fault-around, and the record and the trace say so. Setting it costs every
+  shaped by the host's fault-around, and the record and the trace say so. Passed, it is taken
+  again when the command ends (before root puts the value back), since the setting is the
+  host's: where another capture as root or an administrator changed it, the capture warns, and
+  the record (`faults.first_touch_at_end`, `first_touch_observed` false), `not_seen`, and the
+  trace say so. Setting it costs every
   program on the host more faults while it lasts; a capture that cannot put it back says so.
 
 With `--ranks` above 1, rank 0 compares the nodes as well and prints one table:

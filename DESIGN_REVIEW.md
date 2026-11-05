@@ -9955,6 +9955,26 @@ where touches began at the granularity the kernel mapped; the probe of the pages
 mapped queued (brief item 67). The test's program writes its file a page at a time, so the
 check's verdict decides what it asserts.
 
+*Found in CI 2026-11-05: the setting changed under a capture (the user chose "1 and 2
+together").* `fault_around_bytes` is the host's, and a capture as root sets it to a page for its
+command and puts it back when the command ends. Phase 4 step 4's tests are the first to capture
+as root, and in CI one of them (`every_posix_aio_function_is_traced`) ran beside the faults test
+under the file capabilities: the root capture's setting let the faults test's check pass, and its
+end put 65,536 back while the faults test's command ran, so 128 pages faulted as 8 at a 64 KiB
+stride and a capture recorded `first_touch_observed: true` of faults fault-around had shaped. A
+real capture meets the same thing from another capture as root on the node, or an
+administrator. Built: (1) the tests that change the setting or depend on it hold one lock (a
+`flock` on a file of the temporary directory, across nextest's processes); (2) a capture whose
+check passed at its start takes it again when the command ends, before root puts the setting
+back, and where it fails says so on the terminal, records `faults.first_touch_at_end: false` and
+`first_touch_observed: false`, puts the reason in `not_seen`, and the converter writes the
+trace's line `a first touch of a page may not fault (... the host's fault-around changed during
+the capture)` (noted `faults_first_touch_unseen`), which `--convert` writes again from the
+record (the header of `syscalls.bin`, written at the start, cannot hold it). Two captures as root
+on one host are left to (2) and the `alone` check, not shared: the one that loses the setting
+says so. A change made and undone inside one capture is not seen (taken at the start and the
+end alone).
+
 *Risks.* `handle_mm_fault` inlined or renamed in a kernel (its parameters checked by name from
 BTF, the capture going on without faults); `vm_flags` and the fault enums' values drift between
 kernels (read from BTF, but `VM_EXEC` is a `#define`, its value 0x4 since 2.6); a fault on a

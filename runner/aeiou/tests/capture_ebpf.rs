@@ -68,10 +68,22 @@ fn capture(exe: &Path, args: &[&str]) -> Output {
     Command::new(exe).arg("capture").args(WAIVE).args(args).output().unwrap()
 }
 
+/// The host's `fault_around_bytes`, held by a test that changes it (every capture as root sets
+/// it to a page for its command, then puts it back) or whose faults depend on it, for as long as
+/// the test runs: tests run in parallel, and a capture as root ending put it back under a
+/// capture of the faults test's (CI, 2026-11-05). A lock on a file of the temporary directory,
+/// so it holds across nextest's processes; released when dropped.
+fn fault_around_lock() -> std::fs::File {
+    use std::os::fd::AsRawFd;
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(std::env::temp_dir().join("aeiou-capture-ebpf-fault-around.lock")).unwrap();
+    assert_eq!(unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) }, 0, "{}", std::io::Error::last_os_error());
+    f
+}
+
 /// A capture as root, of the built binary with no file capabilities: POSIX AIO's uprobes need
 /// `CAP_SYS_ADMIN` (DESIGN_REVIEW.md §3.98 "Phase 4 step 4", brief item 68). `sudo -n`, as the
 /// grant is (password-less in CI; locally after `sudo -v` in a terminal); what it wrote under
-/// `own` is given back to the user after.
+/// `own` is given back to the user after. Its test holds `fault_around_lock`.
 fn capture_as_root(args: &[&str], own: &Path) -> Output {
     let o = Command::new("sudo").args(["-n", bin(), "capture"]).args(WAIVE).args(args).output().unwrap();
     assert!(!text(&o).contains("sudo: a password is required"), "the POSIX AIO tests capture as root: run `sudo -v` in a terminal first, or leave the eBPF tests out with AEIOU_WITHOUT=ebpf");
@@ -555,6 +567,7 @@ fn libaio_completions_are_traced_and_read_as_the_calls_they_do() {
 /// as many lanes as the sync run's (each actor's thread its own), none in a glibc helper's.
 #[test]
 fn posix_aio_requests_are_traced_and_read_as_the_calls_they_do() {
+    let _held = fault_around_lock();
     let t = tmp("paio");
     let root = t.join("data");
     let m = crate::common::workloads().join("input-pipeline/map/npy-per-sample");
@@ -658,6 +671,7 @@ os.close(fa)
 /// the same calls as the helpers' own.
 #[test]
 fn every_posix_aio_function_is_traced() {
+    let _held = fault_around_lock();
     let t = tmp("paio-fns");
     let root = t.join("data");
     let prog = t.join("paio.py");
@@ -732,6 +746,7 @@ os.close(fd)
 /// not; a longer `--fault-gap` makes the halves one run.
 #[test]
 fn faults_on_a_mapping_are_traced_as_runs() {
+    let _held = fault_around_lock();
     let exe = privileged();
     let t = tmp("faults");
     let root = t.join("data");
@@ -757,6 +772,9 @@ fn faults_on_a_mapping_are_traced_as_runs() {
         assert_eq!(rec["faults"]["gap_ns"], if gap.is_some() { 200_000_000 } else { 1_000_000 });
         assert!(rec["source"]["line"][0].as_str().unwrap().contains("fentry,fexit:handle_mm_fault"), "{}", rec["source"]["line"]);
         let observed = rec["faults"]["first_touch_observed"] == true;
+        // the check taken again at the end, where the start passed (held by the lock: no capture
+        // as root changes the setting under this one)
+        assert_eq!(rec["faults"]["first_touch_at_end"] == true, observed, "{tag}: {}", rec["faults"]);
         observed_all &= observed;
         let not_seen = rec["not_seen"].to_string();
         assert!(!not_seen.contains("the page faults they cause are not system calls") && not_seen.contains("after its first"), "{not_seen}");
@@ -800,10 +818,71 @@ fn faults_on_a_mapping_are_traced_as_runs() {
     }
 }
 
+/// `MAPPED`'s first half, then the host's fault-around made 16 pages (the program runs as root),
+/// then its second half: the change another capture as root, ending, or an administrator makes.
+const MAPPED_THEN_AROUND: &str = r#"
+import mmap, os, sys
+d, page, n = sys.argv[1], mmap.PAGESIZE, 128
+fd = os.open(d + "/m", os.O_CREAT | os.O_RDWR | os.O_TRUNC, 0o644)
+for i in range(n):
+    os.pwrite(fd, b"m" * page, i * page)
+m = mmap.mmap(fd, n * page, mmap.MAP_SHARED, mmap.PROT_READ)
+s = 0
+for i in range(0, n // 2):
+    s += m[i * page]
+with open("/sys/kernel/debug/fault_around_bytes", "w") as f:
+    f.write(str(16 * page))
+for i in range(n // 2, n):
+    s += m[i * page]
+m.close()
+os.close(fd)
+"#;
+
+/// A host's fault-around changed during a capture (DESIGN_REVIEW.md §3.98 "Phase 4 step 2", found
+/// in CI 2026-11-05): the check, passed at the start, is taken again when the command ends and
+/// fails, so the record, `not_seen`, the trace's line, and the metrics say a first touch may not
+/// have faulted and why, and `--convert` writes the same line again from the record. As root:
+/// the setting is the host's, put back as the test found it.
+#[test]
+fn a_fault_around_changed_during_the_capture_is_said() {
+    let _held = fault_around_lock();
+    const AT: &str = "/sys/kernel/debug/fault_around_bytes";
+    let sudo = |args: &[&str]| {
+        let o = Command::new("sudo").arg("-n").args(args).output().unwrap();
+        assert!(o.status.success(), "sudo -n {args:?}: {}", text(&o));
+        String::from_utf8(o.stdout).unwrap().trim().to_string()
+    };
+    let before = sudo(&["cat", AT]);
+    let t = tmp("around-changed");
+    let root = t.join("data");
+    std::fs::create_dir_all(&root).unwrap();
+    let prog = t.join("mapped.py");
+    std::fs::write(&prog, MAPPED_THEN_AROUND).unwrap();
+    let out = t.join("cap");
+    let args = ["--source", "ebpf", "--root", s(&root), "-o", s(&out), "--", "python3", s(&prog), s(&root)];
+    let o = capture_as_root(&args, &t);
+    sudo(&["sh", "-c", &format!("echo {before} > {AT}")]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(text(&o).contains("fault-around changed during the capture"), "{}", text(&o));
+    let rec = record(&out);
+    let f = &rec["faults"];
+    assert_eq!((&f["traced"], &f["first_touch_observed"], &f["first_touch_at_end"]), (&Value::Bool(true), &Value::Bool(false), &Value::Bool(false)), "{f}");
+    let not_seen = rec["not_seen"].to_string();
+    assert!(not_seen.contains("changed during the capture") && !not_seen.contains("the fault-around check was waived"), "{not_seen}");
+    let line = |out: &Path| std::fs::read_to_string(out.join("trace.txt")).unwrap().lines().find(|l| l.contains("--- aeiou: faults: ")).map(str::to_string);
+    let l = line(&out).unwrap();
+    assert!(l.contains("a first touch of a page may not fault") && l.contains("changed during the capture"), "{l}");
+    assert!(metrics(&out, &root)["notes"]["faults_first_touch_unseen"].is_number());
+    let o = Command::new(bin()).args(["capture", "--convert", s(&out)]).output().unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(line(&out).unwrap(), l);
+}
+
 /// `fault-around` fails where a first touch may not fault and nothing is started, saying how
 /// to set it; passes where it does.
 #[test]
 fn the_fault_around_check_refuses_or_passes_as_the_host_is() {
+    let _held = fault_around_lock();
     let exe = privileged();
     let t = tmp("fault-around");
     let root = t.join("data");

@@ -91,6 +91,31 @@ pub const NOT_SEEN_FAULTS: [&str; 5] = [
     "first touches of pages the kernel's fault-around mapped beside a faulting one: the fault-around check was waived",
 ];
 
+/// `NOT_SEEN_FAULTS[4]` where the check passed at the capture's start and failed at its end.
+pub const NOT_SEEN_FAULT_AROUND_CHANGED: &str = "first touches of pages the kernel's fault-around mapped beside a faulting one: the host's fault-around changed during the capture (another capture as root ending, or an administrator), and the fault-around check, taken at its start and at its end, failed at its end";
+
+/// Why a first touch may not have faulted (the trace's line), from the `fault-around` check at
+/// the capture's start (`None` where faults are not traced; `false` only where it was waived)
+/// and at its end (taken where the start passed).
+fn first_touch_why(start: Option<bool>, end: Option<bool>) -> Option<&'static str> {
+    match (start, end) {
+        (Some(false), _) => Some(crate::ebpf_text::FAULT_AROUND_WAIVED),
+        (Some(true), Some(false)) => Some(crate::ebpf_text::FAULT_AROUND_CHANGED),
+        _ => None,
+    }
+}
+
+/// `NOT_SEEN_FAULTS` for a capture whose faults are traced, the last line as `first_touch_why` says.
+fn faults_not_seen(why: Option<&str>) -> Vec<&'static str> {
+    let mut v = NOT_SEEN_FAULTS[..4].to_vec();
+    match why {
+        Some(crate::ebpf_text::FAULT_AROUND_CHANGED) => v.push(NOT_SEEN_FAULT_AROUND_CHANGED),
+        Some(_) => v.push(NOT_SEEN_FAULTS[4]),
+        None => {}
+    }
+    v
+}
+
 /// What a capture under eBPF cannot see of POSIX AIO when its functions are traced (in place of
 /// strace's line on it, `NOT_SEEN_STRACE[3]`; DESIGN_REVIEW.md §3.98 "Phase 4 step 4").
 pub const NOT_SEEN_PAIO: [&str; 2] = [
@@ -1312,6 +1337,13 @@ pub fn run(o: Opts) -> Result<i32> {
         }
     }
     let status = status.expect("the command's status");
+    // the check taken again before fault_around_bytes is put back: the setting is the host's, and
+    // another capture as root ending, or an administrator, may have changed it under this one
+    let first_touch_at_end = (first_touch == Some(true)).then(|| first_touch_faults(&out).unwrap_or(false));
+    let first_touch_why = first_touch_why(first_touch, first_touch_at_end);
+    if first_touch_at_end == Some(false) {
+        say(&format!("WARNING: the host's fault-around changed during the capture: a mapped page touched beside one touched before does not fault now, so the trace may miss first touches of pages; the record and the trace say so ({FAULT_AROUND} {})", if fault_around.is_some() { "was set to one page by this capture" } else { "was one page at the start" }));
+    }
     // fault_around_bytes put back as soon as the command has ended
     let fault_around: Option<String> = fault_around.map(|a| a.before.clone());
     let ebpf_rec = match (probes, reader) {
@@ -1325,7 +1357,7 @@ pub fn run(o: Opts) -> Result<i32> {
             if !tail.is_empty() {
                 std::fs::OpenOptions::new().append(true).open(&bin)?.write_all(&tail)?;
             }
-            let stats = crate::ebpf_text::convert(&bin, &trace)?;
+            let stats = crate::ebpf_text::convert(&bin, &trace, first_touch_why)?;
             let rec = crate::ebpf::losses_record(&losses, &reading, o.buffer, &stats.windows);
             Some((rec, reading, stats, at_end))
         }
@@ -1394,13 +1426,14 @@ pub fn run(o: Opts) -> Result<i32> {
         line.truncate(line.len() - o.command.len());
         line.extend(argv.iter().cloned());
     }
+    let faults_lines = if faults_traced { faults_not_seen(first_touch_why) } else { Vec::new() };
     let not_seen = NOT_SEEN_STRACE
             .iter()
             .filter(|n| !(uring_traced && n.starts_with("io_uring operations")) && !(faults_traced && n.starts_with("loads and stores")) && !(aio_at.is_some() && n.starts_with("when a libaio request")) && !(paio_traced && n.starts_with("which thread issued a POSIX AIO")))
             .chain(if aio_at.as_deref() == Some("aio_complete_rw") { [NOT_SEEN_AIO_RW].iter() } else { [].iter() })
             .chain(if paio_traced { NOT_SEEN_PAIO.iter() } else { [].iter() })
             .chain(if uring_traced { NOT_SEEN_URING.iter() } else { [].iter() })
-            .chain(if faults_traced { NOT_SEEN_FAULTS[..if first_touch == Some(true) { 4 } else { 5 }].iter() } else { [].iter() })
+            .chain(faults_lines.iter())
             .chain(if ebpf { NOT_SEEN_EBPF.iter() } else { [].iter() })
             .map(|n| if library.is_some() && n.starts_with("object-store requests") { crate::requests::NOT_SEEN } else { n }).collect::<Vec<_>>();
     let aio_rec = aio.as_ref().map(|a| json!({"traced": a["traced"], "why": a.get("why"), "completions_at": a["layout"].get("complete")}));
@@ -1440,7 +1473,8 @@ pub fn run(o: Opts) -> Result<i32> {
             "traced": f["traced"],
             "why": f.get("why"),
             "gap_ns": f.get("gap_ns"),
-            "first_touch_observed": f.get("first_touch"),
+            "first_touch_observed": f.get("first_touch").map(|t| json!(t == true && first_touch_at_end != Some(false))),
+            "first_touch_at_end": first_touch_at_end,
             "fault_around": {"set_by_capture": fault_around.is_some(), "before": fault_around},
         })),
         "not_seen": not_seen,
@@ -1510,7 +1544,10 @@ pub fn convert_again(dir: &Path) -> Result<()> {
     let rec_path = dir.join("capture.json");
     let mut rec: Value = serde_json::from_str(&std::fs::read_to_string(&rec_path).with_context(|| rec_path.display().to_string())?).with_context(|| rec_path.display().to_string())?;
     let trace = dir.join("trace.txt");
-    let stats = crate::ebpf_text::convert(&bin, &trace)?;
+    // the check's verdict at the capture's end, which syscalls.bin's header cannot hold (the
+    // start passed where the end was taken: the end is taken only then)
+    let why = first_touch_why(rec["faults"]["first_touch_observed"].as_bool().map(|o| o || rec["faults"]["first_touch_at_end"].is_boolean()), rec["faults"]["first_touch_at_end"].as_bool());
+    let stats = crate::ebpf_text::convert(&bin, &trace, why)?;
     let (bytes, sha) = sha256_file(&trace)?;
     rec["trace"] = json!({"file": "trace.txt", "bytes": bytes, "sha256": sha});
     rec["conversion"] = stats.json();
@@ -1692,6 +1729,24 @@ mod tests {
         let a = FaultAround::set_at(&f).unwrap();
         std::fs::remove_dir_all(&d).unwrap();
         drop(a);
+    }
+
+    /// Why a first touch may not fault, from the check at the capture's start (`None` where
+    /// faults are not traced; `false` only where it was waived) and at its end (taken only where
+    /// the start passed), and the line of `not_seen` that goes with it.
+    #[test]
+    fn a_fault_around_changed_during_the_capture_is_its_own_reason() {
+        use crate::ebpf_text::{FAULT_AROUND_CHANGED, FAULT_AROUND_WAIVED};
+        assert_eq!(first_touch_why(None, None), None);
+        assert_eq!(first_touch_why(Some(true), Some(true)), None);
+        assert_eq!(first_touch_why(Some(false), None), Some(FAULT_AROUND_WAIVED));
+        assert_eq!(first_touch_why(Some(true), Some(false)), Some(FAULT_AROUND_CHANGED));
+        assert_eq!(faults_not_seen(None), &NOT_SEEN_FAULTS[..4]);
+        let waived = faults_not_seen(Some(FAULT_AROUND_WAIVED));
+        assert_eq!((waived.len(), waived[4]), (5, NOT_SEEN_FAULTS[4]));
+        let changed = faults_not_seen(Some(FAULT_AROUND_CHANGED));
+        assert_eq!(&changed[..4], &NOT_SEEN_FAULTS[..4]);
+        assert!(changed[4].starts_with("first touches of pages the kernel's fault-around mapped") && changed[4].contains("changed during the capture") && changed[4].contains("at its start and at its end"), "{}", changed[4]);
     }
 
     #[test]
