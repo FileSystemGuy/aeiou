@@ -7,7 +7,7 @@ issues the application's calls; not a job anyone runs as a benchmark (`DESIGN_RE
 
 Its parameters hold at 1 GPU, the count it was traced at. Captures:
 
-- `captures/2026-10-02/`: `lmcache.log`, `replay.log`, `trace.metrics.json`, `trace.tolerances.json`
+- `captures/2026-11-05/` (the eBPF source) and `captures/2026-11-05-strace/` (strace, the same load): `lmcache.log`, `replay.log`, `trace.capture.json`, `trace.metrics.json`, `trace.tolerances.json`
 
 The mechanism's README (`../../README.md`) has the commands that made them and what was read
 off them.

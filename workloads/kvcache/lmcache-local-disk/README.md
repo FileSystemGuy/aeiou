@@ -1,4 +1,4 @@
-# Trace of the real server behind `lmcache_local_disk` (2026-10-02)
+# Trace of the real server behind `lmcache_local_disk` (2026-10-02; captured again 2026-11-05)
 
 `ABSTRACTS.md` §11, row 8: vLLM with LMCache's local-disk backend on the loopback NFS mount
 of `runner/REFERENCE.md` §7, under a replay of public chat conversations (`replay.py`, ShareGPT).
@@ -10,14 +10,16 @@ Versions: Python 3.12, vLLM 0.30.0, LMCache 0.5.5, torch 2.13.0; one 8 GB GPU. T
 token, so a 256-token chunk is 3,145,728 bytes).
 
 ```
-# lmcache.yaml: local_disk is the directory under test
-KV_BYTES=100663296 strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 \
-    -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy,io_uring_setup,io_uring_enter \
-    -o trace.txt sh kit/serve.sh &                                 # from this directory
-C=cases/sharegpt-chat/captures/2026-10-02
+export PYTHONHASHSEED=0 KV_BYTES=100663296     # from this directory; lmcache.yaml's local_disk, /mnt/aeiou-nfs/kv, is the directory under test
+S=ebpf; C=cases/sharegpt-chat/captures/2026-11-05      # or S=strace; C=cases/sharegpt-chat/captures/2026-11-05-strace
+# --accept fault-around: LMCache maps no file of the store (CAPTURE.md, "The eBPF source")
+mkdir /mnt/aeiou-nfs/kv
+aeiou-trace capture --source $S --accept fault-around --root /mnt/aeiou-nfs/kv -o /local/cap -- sh kit/serve.sh > serve.log 2>&1 &
 python kit/replay.py ShareGPT_V3_unfiltered_cleaned_split.json --requests 300 --active 8 \
     > $C/replay.log                                                # once /health answers
-aeiou-trace metrics trace.txt --root /mnt/nfs -o $C/trace.metrics.json
+kill -TERM %1; wait            # the capture's SIGTERM reaches the server; the record says it was interrupted
+aeiou-trace metrics /local/cap/trace.txt --root /mnt/aeiou-nfs --metrics-block 4096 -o $C/trace.metrics.json
+cp /local/cap/capture.json $C/trace.capture.json
 grep "Inference Engine computed" serve.log > $C/lmcache.log        # the server's output, colors stripped
 python kit/fit.py $C/replay.log $C/lmcache.log --set chunk_bytes=3145728 \
     --set prefill_per_token=40000 --set decode_per_token=12000000 --set prefill_step=8192 \
@@ -25,6 +27,15 @@ python kit/fit.py $C/replay.log $C/lmcache.log --set chunk_bytes=3145728 \
 aeiou dry-run lmcache_local_disk.ast.json --gpus 1 \
     --params-file cases/sharegpt-chat/params.json --metrics-json abstract.metrics.json
 ```
+
+- The capture of 2026-11-05 under each source gives the 2026-10-02 strace capture's counts
+  and bytes exactly (6,753 calls on the store, 2,375,024,640 bytes read, 1,163,919,360
+  written; 755 chunks loaded and 370 stored), the model's replies byte for byte the same,
+  and `fit.py` on either capture's logs gives `params.json`'s values; the two sources differ
+  only in what the threads' timing orders. LMCache 0.5.5's local-disk backend reads and writes
+  with plain calls from a thread pool: no `io_uring` request of the store, the only ring
+  libuv's in the API server (939 `IORING_OP_EPOLL_CTL`; `DESIGN_REVIEW.md` §3.98, note of 2026-11-05). The 2026-10-02 capture's raw trace was
+  not retained; that capture was under `strace -f -yy` directly, its root `/mnt/nfs`.
 
 - `kit/replay.py` sends the users' turns of ShareGPT (the file vLLM's own benchmarks use,
   672,837,942 bytes, SHA-256 `35f0e213…f6479ba4`; its parts joined back into 50,142 whole
@@ -37,7 +48,8 @@ aeiou dry-run lmcache_local_disk.ast.json --gpus 1 \
   engine keeps every conversation of a small load in GPU memory and LMCache is never read.
 - `serve.sh` sets `VLLM_USE_FLASHINFER_SAMPLER=0`: that sampler compiles its kernels at
   first use and needs the CUDA compiler, which a machine with only the driver lacks.
-- `%network` is left out: the server's HTTP and IPC traffic would be most of the trace.
+- ~~`%network` is left out: the server's HTTP and IPC traffic would be most of the trace.~~
+  The capture traces it (2026-11-05; `aeiou-trace capture`'s set has `%network`, for descriptors passed over sockets); `metrics` counts only the calls under `--root`.
 - LMCache's log (`Stored … tokens`, `Retrieved … tokens`, `LMCache hit tokens: …, need to
   load: …`) gives per request what the trace gives per file.
 
@@ -89,7 +101,7 @@ counted hits on another model's chunks. `params.json` and `agentx.reference.json
 refitted; the replays' fits are not changed (the replay serves one model, and its store is the
 server's).
 
-## The AgentX replay on a GPU (2026-10-07)
+## The AgentX replay on a GPU (2026-10-07; captured again 2026-11-05)
 
 `DESIGN_REVIEW.md` §3.63. Qwen2.5-0.5B at 128k context (YaRN), 2 GiB of engine KV, the first
 8 sessions at once, 300 requests (220 sent; the rest over the context are skipped), back to back.
@@ -99,18 +111,29 @@ corpus's ids are local to a session, and the replay seeded a block's tokens by i
 The `O_DIRECT` run (the case `agentx-odirect`) is still the first replay's. Run again the same day
 with both prefixes, the main agent's and the sub-agents', shared by the sessions (219 sent;
 `DESIGN_REVIEW.md` §3.63, "Two prefixes").
+Captured again 2026-11-05, every run under the eBPF source and under strace with the same load
+(`captures/<capture>` and `captures/<capture>-strace`), by the replay as the kit has made it
+since 2026-10-15: each session plays its own share of the 300 requests, so the 2 GiB and the
+6 GiB runs send the same 233 and write the same 5,663 chunks, and a request the server would
+refuse is skipped, not lost. The `O_DIRECT` run is now the buffered run's replay too. The two
+sources give the same calls and bytes in the buffered runs, and in the `O_DIRECT` run the
+engine held other prefixes as the timing fell (39,406 reads under the eBPF source, 38,818
+under strace, the buffered runs' count); the fits differ only in what the engine held
+(`keep` at 6 GiB; `keep`, `sys_held`, and `sub_held` under `O_DIRECT`) and in the replay's
+seconds per token (strace's own cost).
 LMCache's store must not evict (the corpus reference assumes it): 18 GB of chunks, so the
 export is a directory on disk, not the 8 GB tmpfs of `runner/REFERENCE.md` §7.
 
 ```
 export PYTHONHASHSEED=0 KV_BYTES=2147483648 MAX_MODEL_LEN=131072 LMCACHE_CONFIG_FILE=kit/lmcache.agentx.yaml
 export VLLM_ARGS='--hf-overrides {"max_position_embeddings":131072,"rope_parameters":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
-strace -f --seccomp-bpf -ttt -T -yy -v -e 'verbose=!execve,execveat' -s 0 \
-    -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy,io_uring_setup,io_uring_enter \
-    -o trace.txt sh kit/serve.sh > serve.log 2>&1 &
-C=cases/agentx/captures/replay-2gib-pool
+S=ebpf; C=cases/agentx/captures/replay-2gib-pool          # or S=strace; C=cases/agentx/captures/replay-2gib-pool-strace
+mkdir /mnt/aeiou-nfs/kv                                   # empty: kit/lmcache.agentx.yaml's local_disk
+aeiou-trace capture --source $S --accept fault-around --root /mnt/aeiou-nfs/kv -o /local/cap -- sh kit/serve.sh > serve.log 2>&1 &
 python kit/replay_agentx.py traces.jsonl --sessions 8 --requests 300 --max-context 131072 > $C/replay.log   # once /health answers
-aeiou-trace metrics trace.txt --root /mnt/nfs --metrics-block 3145728 -o $C/trace.metrics.json   # a block per chunk
+kill -TERM %1; wait
+aeiou-trace metrics /local/cap/trace.txt --root /mnt/aeiou-nfs --metrics-block 3145728 -o $C/trace.metrics.json   # a block per chunk
+cp /local/cap/capture.json $C/trace.capture.json
 python kit/agentx.py log serve.log -o $C/lmcache.log      # the lines of the server's log the fit reads
 python kit/agentx.py fit traces.jsonl --replay $C/replay.log $C/lmcache.log --context 131072 \
     --set chunk_bytes=3145728 --set prefill_step=2048 --set sys_local=false \
@@ -136,18 +159,25 @@ python kit/agentx.py holds traces.jsonl --replay $C/replay.log serve.log [--pool
   only the top-0.1 % row turns "not judged", as the objects' already was), and the pair's dry
   runs take the trace's block, a fraction of a second against twelve.
 - The capture's pair (`trace.metrics.json`, `fitted.params.json`) is judged in
-  `builder/tests/test_trace.py` and ~~accepted~~ not accepted since the corrected run (one row outside,
-  read-after-read reuse distance, its reason in the capture's `trace.tolerances.json`); the corpus is not committed, so the fit is repeated by
+  `builder/tests/test_trace.py` and ~~accepted~~ not accepted since the corrected run (~~one row outside,
+  read-after-read reuse distance~~ four rows outside since the same day, each with its reason in the capture's
+  `trace.tolerances.json`; under the replay of 2026-11-05 read after read is within, and the extents' read
+  after write, measured since 2026-10-22, outside); the corpus is not committed, so the fit is repeated by
   the command above, not by the tests.
 - The same replay with `KV_BYTES=6442450944` (6 GiB, 524,288 tokens, three times the pool;
-  2026-10-08) is the capture `cases/agentx/captures/replay-6gib-pool`, fitted the same way: 5,112 chunks written and 6,770 read,
-  against 5,454 and 33,804 at 2 GiB. Its pair is accepted with only `keep`, `sys_held`, and
+  2026-10-08) is the capture `cases/agentx/captures/replay-6gib-pool`, fitted the same way: ~~5,112 chunks written and 6,770 read,
+  against 5,454 and 33,804 at 2 GiB~~ 5,663 chunks written and 2,321 read, against 5,663 and 38,818
+  at 2 GiB (2026-11-05, the same requests at both pools). Its pair ~~is accepted~~ was accepted with only `keep`, `sys_held`, and
   `sub_held` refitted; the 2 GiB values give three to five times its reads (`DESIGN_REVIEW.md`
-  §3.64). `agentx.py holds` simulates vLLM's prefix cache under either replay: on the
+  §3.64). Under the replay of 2026-11-05 the fits differ in those three alone, and the pair is
+  not accepted: read after write (blocks and extents) outside, as at 2 GiB. `agentx.py holds` simulates vLLM's prefix cache under either replay: on the
   engine's timeline it gives the measured holds within 14 % at 2 GiB and 2 % at 6 GiB.
 - `kit/lmcache.agentx.odirect.yaml` is the same with LMCache's `use_odirect`, the second run
   (the case `agentx-odirect`, another workload under CLOSED, fitted with `--set direct=true` added; its
   `params.json` is the fit to its replay): its calls are the abstract's
-  `direct` path. That pair is not accepted, one row recorded outside with its reason in
-  its capture's `trace.tolerances.json` (the server's admission order, §3.63).
+  `direct` path. That pair is not accepted, ~~one row recorded outside with its reason in
+  its capture's `trace.tolerances.json` (the server's admission order, §3.63)~~ captured again 2026-11-05
+  under the buffered run's replay (`params.json` refitted to it: it differs from the buffered fit in
+  `keep`, `sys_held`, `sub_held`, and `direct` alone), the buffered pair's four rows outside, each
+  with its reason in the capture's `trace.tolerances.json`.
 

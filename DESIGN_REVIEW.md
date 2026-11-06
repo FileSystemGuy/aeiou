@@ -4090,6 +4090,32 @@ replay's pool, given in the kit's README as 7,800 tokens, is 8,192 (vLLM's log a
 2026-10-08; the 2 GiB run's 174,752 is 2 GiB over Qwen2.5-0.5B's 12,288 bytes a token,
 rounded down to a 16-token block).
 
+**Note of 2026-11-05: the AgentX and ShareGPT replays captured again (the user's choice, after
+the shared-fs pair, §3.98's note of the same day).** Every capture of `lmcache-local-disk`
+taken again under `aeiou-trace capture`, once with the eBPF source and once with strace, the
+same load, on the loopback mount of `runner/REFERENCE.md` §7 (the AgentX store on a directory
+on disk, the export no longer the 8 GB tmpfs for it). The two sources give the same calls and
+bytes in every buffered run; under `O_DIRECT` the engine held other prefixes as the timing
+fell (39,406 chunk reads under eBPF, 38,818 under strace), the fits differing in the holds
+alone. The ShareGPT pair gives the 2026-10-02 capture's counts and bytes exactly
+and `fit.py` gives the case's values. The AgentX replays did not repeat: `replay_agentx.py`
+has played a fixed share per session since 2026-10-09 and skips a request the server would
+refuse since 2026-10-15 (RC1 bug 153), so the committed runs were of a replay the kit no
+longer makes. Now the 2 GiB and 6 GiB runs send the same 233 requests and write the same
+5,663 chunks (219 and 232 requests, 5,454 and 5,112 chunks before), reading 38,818 and 2,321
+(33,804 and 6,770), and their fits differ in `keep`, `sys_held`, and `sub_held` alone, which
+is this section's claim without the replay's own difference between the runs. Verdicts: the
+2 GiB pair stays not accepted with four rows outside (read after read now within; the
+extents' read after write, measured since §3.79, outside); the 6 GiB pair ~~is accepted~~
+is not accepted, read after write (blocks and extents, p50 3 GiB against 5) outside as at
+2 GiB, where at 2,321 reads the reads' share is within. The `O_DIRECT` run (§3.63) is now
+the buffered run's replay, its case's `params.json` refitted (the buffered fit but for `keep`,
+`sys_held`, `sub_held`, and `direct`), and has the buffered pair's four rows outside; its
+earlier reason (the server's admission order, with the buffered row within) no longer holds
+and is struck in its tolerance file. The read-after-write distance being short in the
+abstract at both pools is the next question for the two-prefix model (§3.63's checkpoint).
+The `holds` simulation's agreement (14 % and 2 %) was not run again.
+
 ### 3.65 The access layers: protocol, API, cache, transport, and buffer as separate axes, `s3dlio` as one engine among them (proposed and decided 2026-10-09; the object engine on `object_store` instead, decided the same day)
 
 **The question (the user's).** Polishing the KV abstracts kept running into "backend"
@@ -10222,14 +10248,17 @@ the Rust raw-block plugin (`plugins/rust_raw_block_backend.py`, fixed buffers an
 optional), on an NVMe block device of its own, which no case here uses. So the strace captures
 of both mechanisms missed no request of the store. The shared store's pair captured again under
 each source the same day (user's choice; `workloads/kvcache/lmcache-shared-fs`, captures
-`2026-11-05` and `2026-11-05-strace`, the model's replies byte for byte the same) confirms it,
-box: the counts and bytes of the 2026-10-02 strace capture exactly, the sources differing only
+`2026-11-05` and `2026-11-05-strace`, the model's replies byte for byte the same) confirms it:
+the counts and bytes of the 2026-10-02 strace capture exactly, the sources differing only
 in what the threads' timing orders, and the only rings libuv's in the API server (939
 `IORING_OP_EPOLL_CTL`) and two caio's `linux_uring` makes at import to test the kernel and never
 submits to (with one `io_setup` likewise, the note `aio_contexts_without_io_submit`). The five
 rows the writer put outside for predating S-18 are within tolerance in both. The raw-block
 plugin is the `io_uring` application still to trace, and only with a raw device and that scope
 decided (not queued). `CAPTURE.md` named LMCache as an `io_uring` application, corrected.
+The local-disk backend's captures taken again the same evening (§3.64's note of 2026-11-05),
+ShareGPT, AgentX at both pools, and `O_DIRECT`, each under both sources, likewise show no
+request of the store through a ring (libuv's `IORING_OP_EPOLL_CTL` alone in the eBPF traces).
 
 
 ## 4. Plan changes

@@ -39,7 +39,7 @@ def test_every_capture_pair_is_read_from_its_record():
     assert {v for *_, v in pairs} == {"accepted", "not accepted", "nothing judged"}
     # a capture's own fit when it has one, the case's set otherwise; the case's GPU count
     fitted = [p for _, _, _, p, _, _ in pairs if p.name == "fitted.params.json"]
-    assert len(fitted) == 2
+    assert len(fitted) == 4                   # the AgentX replay at two pools, each under the eBPF source and strace
     assert {g for *_, g, _ in pairs} == {1, 2}
 
 

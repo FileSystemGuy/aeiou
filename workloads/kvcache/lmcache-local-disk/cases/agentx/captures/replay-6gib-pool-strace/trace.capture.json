@@ -1,0 +1,223 @@
+{
+  "aeiou_capture": 1,
+  "aio": null,
+  "anchors": [],
+  "barrier": {
+    "arrived": 1793924260.3434765,
+    "released": 1793924260.3434772
+  },
+  "cache": "not dropped",
+  "cache_drop": null,
+  "capture_id": null,
+  "captures_on_host": 1,
+  "changes_at_end": [],
+  "checks": [
+    {
+      "detail": "strace 6.8 (--source strace)",
+      "name": "source",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "/mnt/aeiou-nfs/kv on nfs4 localhost:/srv/aeiou-export at /mnt/aeiou-nfs",
+      "name": "root",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "synchronized, estimated error 99312 µs, at most 227404 µs",
+      "name": "clock",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "/home/curtis/MLPerfStorage/lmcache-recapture/ld/caps/6gib-strace on ext4",
+      "name": "output-local",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "/home/curtis/MLPerfStorage/lmcache-recapture/ld/caps/6gib-strace is under no --root",
+      "name": "output-outside-roots",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "60.78 GiB free",
+      "name": "space",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "no other capture on this host",
+      "name": "alone",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "not asked: the page cache is as the host left it",
+      "name": "cold",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "not asked: no library preloaded (--requests none)",
+      "name": "requests",
+      "node": null,
+      "ok": true,
+      "waived": false
+    },
+    {
+      "detail": "not needed: strace traces no faults",
+      "name": "fault-around",
+      "node": null,
+      "ok": true,
+      "waived": false
+    }
+  ],
+  "clock": {
+    "end": {
+      "esterror_us": 103026,
+      "maxerror_us": 206253,
+      "state": 0,
+      "synchronized": true
+    },
+    "start": "synchronized, estimated error 99312 µs, at most 227404 µs"
+  },
+  "command": {
+    "argv": [
+      "sh",
+      "/home/curtis/MLPerfStorage/aeiou/workloads/kvcache/lmcache-local-disk/kit/serve.sh"
+    ],
+    "argv_kept": "recorded",
+    "as_root": false,
+    "cwd": "/home/curtis/MLPerfStorage/lmcache-recapture/ld",
+    "gid": 106,
+    "redacted": [],
+    "uid": 1000
+  },
+  "complete": true,
+  "conversion": null,
+  "coordinator": null,
+  "end": {
+    "realtime": 1793926520.9945226,
+    "realtime_minus_monotonic": 1793575994.358421
+  },
+  "endpoints": [],
+  "environment": {},
+  "exit": {
+    "status": 0
+  },
+  "faults": null,
+  "host": {
+    "cgroup_memory_max": null,
+    "cpus": 20,
+    "cpus_online": 20,
+    "distribution": "Ubuntu 24.04.1 LTS",
+    "kernel": "6.18.54.1-microsoft-standard-WSL2",
+    "memory": 33449443328,
+    "name": "DESKTOP-JS4EFLH"
+  },
+  "inherited_descriptors": [
+    {
+      "fd": 0,
+      "target": "/dev/null"
+    },
+    {
+      "fd": 1,
+      "target": "/home/curtis/MLPerfStorage/lmcache-recapture/ld/logs/6gib-strace.serve.log"
+    },
+    {
+      "fd": 2,
+      "target": "/home/curtis/MLPerfStorage/lmcache-recapture/ld/logs/6gib-strace.serve.log"
+    }
+  ],
+  "interrupted": "SIGTERM",
+  "losses": {
+    "events": 0,
+    "note": "strace loses no call: it stops the traced thread instead, and the application is slower"
+  },
+  "mountstats": "not taken: a traced run's wire counts are not the application's (strace -yy adds a GETATTR to each READ); take them from an untraced run",
+  "not_seen": [
+    "loads and stores to mapped memory (mmap): the page faults they cause are not system calls",
+    "io_uring operations: io_uring_enter is traced, the submission queue's entries are not",
+    "when a libaio request completed: io_getevents shows when its result was collected, and a result read from the context's ring in user space, with no call, is not seen at all",
+    "which thread issued a POSIX AIO request (aio_read, lio_listio), when, and when its result was collected: glibc's helper threads make its calls, traced as their own",
+    "object-store requests: the sockets' calls are traced, the HTTP heads are not (the capture's library, --requests shim, or the store's own log)",
+    "which reads the page cache served"
+  ],
+  "paths_not_copied": 0,
+  "posix_aio": null,
+  "processes_traced_at_end": null,
+  "rank": null,
+  "ranks": null,
+  "reader": null,
+  "requests": {
+    "source": "none",
+    "why": "not asked (--requests none, the default without an --endpoint)"
+  },
+  "roots": [
+    {
+      "export": "/srv/aeiou-export",
+      "fs_type": "nfs4",
+      "mount_point": "/mnt/aeiou-nfs",
+      "options": "rw,relatime",
+      "path": "/mnt/aeiou-nfs/kv",
+      "resolved": "/mnt/aeiou-nfs/kv",
+      "server": "localhost",
+      "source": "localhost:/srv/aeiou-export",
+      "super_options": "rw,vers=4.2,rsize=1048576,wsize=1048576,namlen=255,hard,fatal_neterrors=none,proto=tcp,timeo=600,retrans=2,sec=sys,clientaddr=127.0.0.1,local_lock=none,addr=127.0.0.1"
+    }
+  ],
+  "source": {
+    "line": [
+      "strace",
+      "-f",
+      "--seccomp-bpf",
+      "-ttt",
+      "-T",
+      "-yy",
+      "-v",
+      "-e",
+      "verbose=!execve,execveat",
+      "-s",
+      "0",
+      "-e",
+      "trace=%file,%desc,%process,%network,sync,msync,madvise,munmap,mremap,mlock,mlock2,io_setup,io_submit,io_getevents,io_pgetevents,io_cancel,io_destroy",
+      "-o",
+      "/home/curtis/MLPerfStorage/lmcache-recapture/ld/caps/6gib-strace/trace.txt",
+      "--",
+      "sh",
+      "/home/curtis/MLPerfStorage/aeiou/workloads/kvcache/lmcache-local-disk/kit/serve.sh"
+    ],
+    "name": "strace",
+    "privilege": null,
+    "version": "6.8",
+    "why": "--source strace"
+  },
+  "start": {
+    "realtime": 1793924260.343479,
+    "realtime_minus_monotonic": 1793576139.6804688
+  },
+  "tool": {
+    "name": "aeiou-trace",
+    "version": "0.4.0"
+  },
+  "trace": {
+    "bytes": 1193422868,
+    "file": "trace.txt",
+    "sha256": "4735ecf9757d2ce53ab6f159391fa9a6d2ce751b9280befbe6e144a483407a07"
+  },
+  "uring": null,
+  "waivers": [
+    "fault-around"
+  ]
+}

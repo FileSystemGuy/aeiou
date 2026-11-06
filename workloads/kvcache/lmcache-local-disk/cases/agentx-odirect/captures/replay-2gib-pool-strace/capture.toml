@@ -1,0 +1,13 @@
+# The capture (DESIGN_REVIEW.md §3.66): what `aeiou-trace compare --judge` gives on each of its traces against
+# the case's abstract at the capture's parameters, at the case's first GPU count, the abstract at three
+# other seeds as its own spread (builder/tests/test_trace.py walks these files).
+raw_trace = "not retained"   # the metrics and the trace's capture record (trace.capture.json, with the trace's SHA-256) are kept, never the trace
+# traced by strace (aeiou-trace capture --source strace) 2026-11-05, the same replay as replay-2gib-pool; the engine held
+# other prefixes as the timing fell (38,818 reads against 39,406), judged at the case's params.json, the eBPF capture's fit
+# the same replay with LMCache's use_odirect (§3.63), the buffered run's replay since 2026-11-05: its four rows
+# outside, each with its reason in trace.tolerances.json (~~the read-after-write distance outside, the server's admission order~~)
+
+[[pair]]
+trace = "trace"   # trace.metrics.json
+ast = "lmcache_local_disk"
+verdict = "not-accepted"

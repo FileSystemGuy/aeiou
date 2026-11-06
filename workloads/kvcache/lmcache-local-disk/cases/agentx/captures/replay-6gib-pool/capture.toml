@@ -1,12 +1,14 @@
 # The capture (DESIGN_REVIEW.md §3.66): what `aeiou-trace compare --judge` gives on each of its traces against
 # the case's abstract at the capture's parameters, at the case's first GPU count, the abstract at three
 # other seeds as its own spread (builder/tests/test_trace.py walks these files).
-raw_trace = "not retained"   # a scratch capture: the metrics are kept, never the trace
+raw_trace = "not retained"   # the metrics and the trace's capture record (trace.capture.json, with the trace's SHA-256) are kept, never the trace
+# traced by eBPF (aeiou-trace capture --source ebpf, cap_bpf,cap_perfmon; --accept fault-around: LMCache maps no file of the store), 2026-11-05
 # the same replay at 6 GiB of engine KV (§3.64): fewer reads, the writes the same; the abstract follows
-# through keep, sys_held, and sub_held alone, refitted
+# through keep, sys_held, and sub_held alone, refitted; ~~accepted~~ not accepted since the replay of 2026-11-05:
+# read after write outside (blocks and extents), as at 2 GiB, each with its reason in trace.tolerances.json
 
 [[pair]]
 trace = "trace"   # trace.metrics.json
 ast = "lmcache_local_disk"
 params = "fitted.params.json"   # in this directory; else the case's run of this AST
-verdict = "accepted"
+verdict = "not-accepted"

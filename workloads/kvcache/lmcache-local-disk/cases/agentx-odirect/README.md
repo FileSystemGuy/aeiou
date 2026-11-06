@@ -3,11 +3,11 @@
 An **example case**: a configuration small enough to trace, chosen to show that the abstract
 issues the application's calls; not a job anyone runs as a benchmark (`DESIGN_REVIEW.md` §3.66).
 
-`params.json` (lmcache_local_disk): Fitted by agentx.py to traces.jsonl (8 sessions): 223 requests in 45 chains; 1.1% of continuing requests cut their chain (trim) and the chain grows by 101% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the median prefix a sub-agent's first prompt shares with its session; the requests replay_agentx.py sent (8 sessions as 8 slots, 28 requests each, back to back), and keep from the server's log: of 178 continuing requests the engine held the whole kept prefix in 6.
+`params.json` (lmcache_local_disk): Fitted by agentx.py to traces.jsonl (8 sessions): 233 requests in 42 chains; 2.1% of continuing requests cut their chain (trim) and the chain grows by 102% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the main agent's prefix (the prefix its cuts most often keep), sub_tokens the median prefix a sub-agent's first prompt shares with its session, kind the chains' first prompts by the prefix they open with; the requests replay_agentx.py sent (8 sessions as 8 slots, 29 requests each, back to back), and keep from the server's log: of 191 continuing requests the engine held the whole kept prefix in 1.
 
 Its parameters hold at 1 GPU, the count it was traced at. Captures:
 
-- `captures/replay-2gib-pool/`: `lmcache.log`, `replay.log`, `trace.metrics.json`, `trace.tolerances.json`
+- `captures/replay-2gib-pool/` (the eBPF source, 2026-11-05) and `captures/replay-2gib-pool-strace/` (strace, the same load): `lmcache.log`, `replay.log`, `trace.capture.json`, `trace.metrics.json`, `trace.tolerances.json`
 
 The mechanism's README (`../../README.md`) has the commands that made them and what was read
 off them.

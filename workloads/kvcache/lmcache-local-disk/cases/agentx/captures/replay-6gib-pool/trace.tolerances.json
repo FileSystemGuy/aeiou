@@ -1,9 +1,19 @@
 {
- "aeiou_tolerances": 1,
- "unseen": [
-  {
-   "metric": "fan-out",
-   "reason": "the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)"
-  }
- ]
+  "aeiou_tolerances": 1,
+  "unseen": [
+    {
+      "metric": "fan-out",
+      "reason": "the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)"
+    }
+  ],
+  "outside": [
+    {
+      "metric": "reuse distance, read after write",
+      "reason": "the abstract's reads of a written chunk come sooner (p50 3 GiB against 5), as at 2 GiB; within in the replay of 2026-10-08, outside since the replay of 2026-11-05, whose sessions each play a fixed share (232 requests then, 233 now, and 6,770 chunk reads against 2,321) (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+    },
+    {
+      "metric": "extent reuse distance, read after write",
+      "reason": "as the blocks' read after write: every access is one whole chunk (the replay of 2026-11-05; extents are measured since 2026-10-22, DESIGN_REVIEW.md \u00a73.79)"
+    }
+  ]
 }

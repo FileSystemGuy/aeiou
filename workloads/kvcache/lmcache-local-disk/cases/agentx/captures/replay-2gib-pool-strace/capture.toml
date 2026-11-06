@@ -1,0 +1,14 @@
+# The capture (DESIGN_REVIEW.md §3.66): what `aeiou-trace compare --judge` gives on each of its traces against
+# the case's abstract at the capture's parameters, at the case's first GPU count, the abstract at three
+# other seeds as its own spread (builder/tests/test_trace.py walks these files).
+raw_trace = "not retained"   # the metrics and the trace's capture record (trace.capture.json, with the trace's SHA-256) are kept, never the trace
+# traced by strace (aeiou-trace capture --source strace) 2026-11-05, the same replay as replay-2gib-pool (the same calls)
+# the AgentX replay (DESIGN_REVIEW.md §3.63): not accepted since the replay was corrected (2026-10-08); the
+# two-prefix model since the same day, four rows outside, each with its reason in trace.tolerances.json
+# (read after read within, and the extents' read after write outside, since the replay of 2026-11-05)
+
+[[pair]]
+trace = "trace"   # trace.metrics.json
+ast = "lmcache_local_disk"
+params = "fitted.params.json"   # in this directory; else the case's run of this AST
+verdict = "not-accepted"

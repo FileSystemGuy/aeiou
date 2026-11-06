@@ -6,7 +6,7 @@
       "ast": "lmcache_local_disk",
       "ast_sha256": "26a14476bb2ea64a5044a61cfdba8ea81fa5cb1c94064e63215d907f9445153e",
       "params": "case.lock.json",
-      "params_sha256": "46d23810dcb7641ac27678070ced839cc3f7f27ac496487fa1a979c59ee625a5",
+      "params_sha256": "d76b8375fe8816f9ef2b5e006487145c6cab49a5e5fc5673d624858aa2892a73",
       "gpus": 1,
       "seeds": [
         1,
@@ -15,41 +15,43 @@
       ],
       "length": {
         "param": "requests",
-        "case": 28,
-        "check": 28
+        "case": 29,
+        "check": 14
       },
       "stable": false,
       "moving": [
-        "read_share"
+        "read_share",
+        "reread",
+        "skew"
       ],
-      "ops": 137154,
+      "ops": 88942,
       "counts": {
-        "close": 35753,
-        "fstat": 29895,
-        "open": 35753,
-        "read": 29895,
-        "write": 5858
+        "close": 23772,
+        "fstat": 17626,
+        "open": 23772,
+        "read": 17626,
+        "write": 6146
       },
-      "bytes_read": 94041538560,
-      "bytes_written": 18427674624,
+      "bytes_read": 55446601728,
+      "bytes_written": 19333644288,
       "datasets": [
         {
-          "bytes": 988697288,
-          "directories": 50,
-          "files": 338,
+          "bytes": 309854208,
+          "directories": 1,
+          "files": 99,
           "inventory_bytes": 0,
-          "mean_file": 2925139,
+          "mean_file": 3129840,
           "name": "subp",
-          "samples": 50
+          "samples": 1
         },
         {
-          "bytes": 2302672896,
-          "directories": 8,
-          "files": 736,
+          "bytes": 401866752,
+          "directories": 1,
+          "files": 128,
           "inventory_bytes": 0,
-          "mean_file": 3128631,
+          "mean_file": 3139584,
           "name": "sysp",
-          "samples": 8
+          "samples": 1
         }
       ],
       "attributes": {
@@ -74,13 +76,13 @@
           "class": "medium"
         },
         "read_share": {
-          "value": 0.849226,
-          "spread": 0.0207162,
-          "class": "read-mostly"
+          "value": 0.777644,
+          "spread": 0.0789773,
+          "class": "mixed"
         },
         "metadata": {
-          "value": 2.84923,
-          "spread": 0.0207162,
+          "value": 2.77764,
+          "spread": 0.0789773,
           "class": "high"
         },
         "reads_own_writes": {
@@ -89,13 +91,13 @@
           "class": "yes"
         },
         "reread": {
-          "value": 0.858614,
-          "spread": 0.0139666,
+          "value": 0.793875,
+          "spread": 0.10684,
           "class": "repeated"
         },
         "skew": {
-          "value": 0.0443027,
-          "spread": 0.00667025,
+          "value": 0.0475686,
+          "spread": 0.0226776,
           "class": "uniform"
         }
       }

@@ -657,7 +657,8 @@ def test_diskann_build_abstract_matches_the_trace(tmp_path):
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
     """`workloads/kvcache/lmcache-local-disk`: vLLM with LMCache's local-disk backend under a replay
-    of ShareGPT, 300 requests with 8 conversations open, traced 2026-10-02. Every chunk is the
+    of ShareGPT, 300 requests with 8 conversations open, traced 2026-10-02 and again 2026-11-05 under
+    each source (the same counts). Every chunk is the
     same six calls around one `read` or `write`. At the parameters `fit.py` takes from the
     run's two logs the abstract stores 382 chunks where the engine stored 370 (two of them
     the system prompts', a dataset here) and reads 596 where it read 755 (seed 1; over eight
@@ -669,7 +670,9 @@ def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", "1",
                         "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((case / "captures/2026-10-02/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    traced = [json.loads((case / f"captures/{c}/trace.metrics.json").read_text())["total"] for c in ("2026-11-05", "2026-11-05-strace")]
+    assert traced[0]["counts"] == traced[1]["counts"]     # the eBPF source and strace, the same load
+    t, d = traced[0], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
     for c in (tc, dc):                                    # one open, fstat, ioctl, lseek and close per data call
         assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"] == c["read"] + c["write"]
@@ -685,19 +688,21 @@ def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
 def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path):
     """The ShareGPT case's `params.json` is `fit.py` on its capture's two logs: the load's, and
     LMCache's line per request from the server's. `keep` is a product-limit estimate: a
-    conversation the engine held whole is a lower bound on what it would have kept."""
+    conversation the engine held whole is a lower bound on what it would have kept. Each capture
+    of 2026-11-05, under either source, gives the values of 2026-10-02's."""
     case = case_dir("lmcache_local_disk", "sharegpt-chat")
-    kit, cap = ast_path("lmcache_local_disk").parent / "kit", case / "captures" / "2026-10-02"
+    kit = ast_path("lmcache_local_disk").parent / "kit"
     have = json.loads((case / "params.json").read_text())
-    out = tmp_path / "fit.json"
     # the model's on its GPU, which the replay does not measure, and the system prompts' popularity,
     # which two prompts do not fit: the values the abstract's defaults held until 2026-10-23, not fitted
     unfitted = ["prefill_per_token=40000", "decode_per_token=12000000", "prefill_step=8192", 'sys_pop={"zipf": {"s": 1.1}}']
-    r = subprocess.run([sys.executable, str(kit / "fit.py"), str(cap / "replay.log"), str(cap / "lmcache.log"), "--set", "chunk_bytes=3145728",
-                        *[x for s in unfitted for x in ("--set", s)], "--doc", have["doc"], *[x for k, v in have["provenance"]["conditions"].items() if k != "slots_per_engine"
-                                                for x in ("--condition", f"{k}={json.dumps(v)}")], "-o", str(out)], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    assert json.loads(out.read_text()) == have
+    for c in ("2026-11-05", "2026-11-05-strace"):
+        cap, out = case / "captures" / c, tmp_path / f"{c}.json"
+        r = subprocess.run([sys.executable, str(kit / "fit.py"), str(cap / "replay.log"), str(cap / "lmcache.log"), "--set", "chunk_bytes=3145728",
+                            *[x for s in unfitted for x in ("--set", s)], "--doc", have["doc"], *[x for k, v in have["provenance"]["conditions"].items() if k != "slots_per_engine"
+                                                    for x in ("--condition", f"{k}={json.dumps(v)}")], "-o", str(out)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert json.loads(out.read_text()) == have, c
     p = values_of(have)
     assert p["reuse"]["mixture"][1]["dist"] == {"const": 8} and p["requests"] == 300 and p["context"] == 4096
     keep = p["keep"]["empirical"]["values"]
@@ -738,21 +743,23 @@ def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_p
 def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted(monkeypatch):
     """`workloads/kvcache/lmcache-local-disk`: the AgentX replay through vLLM and LMCache (2026-10-07,
     run again 2026-10-08 with each session's own tokens and both prefixes shared, DESIGN_REVIEW.md
-    §3.63): 8 sessions at 128k context, 2 GiB of engine KV. LMCache logs a lookup
+    §3.63, and 2026-11-05 under each source with each session's share fixed): 8 sessions at 128k
+    context, 2 GiB of engine KV. LMCache logs a lookup
     at every step a request waits for KV memory, the held prefix falling as the running requests
     evict it; a request's is its last lookup before its first load or store. The kit's LMCache
     log keeps those two lines per request (and the first lookup, and the lines of the fit's conditions). The capture's `fitted.params.json` is `agentx.py fit
     --replay` on these logs and the corpus (not committed; the kit's README has the command)."""
-    cap = case_dir("lmcache_local_disk", "agentx") / "captures" / "replay-2gib-pool"
     monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
     agentx = importlib.import_module("agentx")
-    sessions, sent = agentx.replayed(cap / "replay.log", cap / "lmcache.log")
-    assert sessions == 8 and len(sent) == 219
-    assert sum(1 for _, held in sent.values() if held == 0) == 46           # the engine held nothing, not even a shared prefix
-    p = values_of(json.loads((cap / "fitted.params.json").read_text()))
-    assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_prompts"], p["sub_prompts"]) == (8, 27, 131072, False, 1, 1)
-    assert p["kind"]["empirical"]["weights"] == [8, 10, 27]                 # chains opening with the main agent's prefix, a sub-agent's, neither
-    assert p["keep"]["empirical"]["values"].count(0) == 7                   # of 20 shares: nothing held past the prefix
+    for c in ("replay-2gib-pool", "replay-2gib-pool-strace"):              # the eBPF source and strace, the same replay
+        cap = case_dir("lmcache_local_disk", "agentx") / "captures" / c
+        sessions, sent = agentx.replayed(cap / "replay.log", cap / "lmcache.log")
+        assert sessions == 8 and len(sent) == 233
+        assert sum(1 for _, held in sent.values() if held == 0) == 48       # the engine held nothing, not even a shared prefix
+        p = values_of(json.loads((cap / "fitted.params.json").read_text()))
+        assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_prompts"], p["sub_prompts"]) == (8, 29, 131072, False, 1, 1)
+        assert p["kind"]["empirical"]["weights"] == [8, 7, 27]              # chains opening with the main agent's prefix, a sub-agent's, neither
+        assert p["keep"]["empirical"]["values"].count(0) == 6               # of 20 shares: nothing held past the prefix
 
 
 def test_agentx_replay_fits_record_the_engine_they_were_fitted_at(monkeypatch):
@@ -760,12 +767,14 @@ def test_agentx_replay_fits_record_the_engine_they_were_fitted_at(monkeypatch):
     `keep`, `sys_held`, and `sub_held` records the pool, the model, the CPU tier (0, LMCache's
     `local_cpu` off), the slots one engine serves, and the replay's seconds per token, as its
     provenance; `agentx.py log` keeps the lines of the server's log they come from. The same
-    replay at 2 GiB and at 6 GiB of engine KV (3x the tokens): the larger pool held more of
-    every conversation, so fewer requests found nothing held."""
+    replay at 2 GiB and at 6 GiB of engine KV (3x the tokens), each under the eBPF source and
+    strace (2026-11-05): the larger pool held more of every conversation, so fewer requests
+    found nothing held."""
     monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
     agentx = importlib.import_module("agentx")
     fit = importlib.import_module("fit")
-    for which, pool, n, nothing in (("replay-2gib-pool", 174752, 219, 46), ("replay-6gib-pool", 524288, 232, 19)):
+    for which, pool, n, nothing in (("replay-2gib-pool", 174752, 233, 48), ("replay-2gib-pool-strace", 174752, 233, 48),
+                                    ("replay-6gib-pool", 524288, 233, 26), ("replay-6gib-pool-strace", 524288, 233, 26)):
         cap = case_dir("lmcache_local_disk", "agentx") / "captures" / which
         sessions, sent = agentx.replayed(cap / "replay.log", cap / "lmcache.log")
         assert sessions == 8 and len(sent) == n and sum(1 for _, held in sent.values() if held == 0) == nothing
@@ -792,7 +801,8 @@ def test_agentx_hold_simulation_evicts_a_freed_tail_first_and_preempts_the_last_
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
-    """LMCache's `use_odirect` (2026-10-07, DESIGN_REVIEW.md §3.63): a chunk is written by
+    """LMCache's `use_odirect` (2026-10-07, DESIGN_REVIEW.md §3.63; captured again 2026-11-05 under the
+    corrected replay, the buffered capture's requests): a chunk is written by
     `openat(O_WRONLY|O_CREAT|O_DIRECT)`, `write`, `close`, and read by
     `openat(O_RDONLY|O_DIRECT|O_CLOEXEC)`, `fstat`, `read`, `close`; the abstract's `direct`
     issues the same, under the backend it declares (`sync`)."""
@@ -805,7 +815,7 @@ def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
     tc, dc = t["counts"], d["counts"]
     for c in (tc, dc):
         assert c["open"] == c["close"] == c["read"] + c["write"] and c["fstat"] == c["read"] and "ioctl" not in c and "lseek" not in c
-    assert (tc["write"], tc["read"]) == (5994, 41004) and (dc["write"], dc["read"]) == (5858, 29895)
+    assert (tc["write"], tc["read"]) == (5663, 39406) and (dc["write"], dc["read"]) == (6146, 17626)
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")

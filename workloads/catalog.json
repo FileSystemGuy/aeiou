@@ -1031,7 +1031,7 @@
             "api": "sync",
             "writes": "yes",
             "inputs": "no",
-            "status": "accepted",
+            "status": "not-accepted",
             "run_length_read": "large",
             "run_length_write": "large",
             "request_size_read": "large",
@@ -1071,7 +1071,7 @@
         {
           "ast": "lmcache_local_disk",
           "does": "One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one.",
-          "is": "Fitted by agentx.py to traces.jsonl (8 sessions): 223 requests in 45 chains; 1.1% of continuing requests cut their chain (trim) and the chain grows by 101% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the median prefix a sub-agent's first prompt shares with its session; the requests replay_agentx.py sent (8 sessions as 8 slots, 28 requests each, back to back), and keep from the server's log: of 178 continuing requests the engine held the whole kept prefix in 6. decode_per_token, prefill_per_token, and sys_pop: the values the abstract's defaults held until 2026-10-23 (DESIGN_REVIEW.md §3.78), not fitted.",
+          "is": "Fitted by agentx.py to traces.jsonl (8 sessions): 233 requests in 42 chains; 2.1% of continuing requests cut their chain (trim) and the chain grows by 102% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the main agent's prefix (the prefix its cuts most often keep), sub_tokens the median prefix a sub-agent's first prompt shares with its session, kind the chains' first prompts by the prefix they open with; the requests replay_agentx.py sent (8 sessions as 8 slots, 29 requests each, back to back), and keep from the server's log: of 191 continuing requests the engine held the whole kept prefix in 1. decode_per_token, prefill_per_token, and sys_pop: the values the abstract's defaults held until 2026-10-23 (DESIGN_REVIEW.md §3.78), not fitted.",
           "attributes": {
             "api": "sync",
             "writes": "yes",
@@ -1081,7 +1081,7 @@
             "run_length_write": "medium",
             "request_size_read": "medium",
             "request_size_write": "medium",
-            "read_share": "read-mostly",
+            "read_share": "mixed",
             "metadata": "high",
             "reads_own_writes": "yes",
             "reread": "repeated",

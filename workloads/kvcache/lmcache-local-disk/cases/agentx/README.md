@@ -11,8 +11,8 @@ each with the parameters fitted to it (`fitted.params.json`): example-case evide
 
 One engine (`--gpus 1`). Captures:
 
-- `captures/replay-2gib-pool/`: `fitted.params.json`, `lmcache.log`, `replay.log`, `trace.metrics.json`, `trace.tolerances.json`
-- `captures/replay-6gib-pool/`: `fitted.params.json`, `lmcache.log`, `replay.log`, `trace.metrics.json`, `trace.tolerances.json`
+- `captures/replay-2gib-pool/` (the eBPF source, 2026-11-05) and `captures/replay-2gib-pool-strace/` (strace, the same load): `fitted.params.json`, `lmcache.log`, `replay.log`, `trace.capture.json`, `trace.metrics.json`, `trace.tolerances.json`
+- `captures/replay-6gib-pool/` (the eBPF source, 2026-11-05) and `captures/replay-6gib-pool-strace/` (strace, the same load): `fitted.params.json`, `lmcache.log`, `replay.log`, `trace.capture.json`, `trace.metrics.json`, `trace.tolerances.json`
 
 The mechanism's README (`../../README.md`) has the commands that made them and what was read
 off them.
