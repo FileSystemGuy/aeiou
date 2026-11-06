@@ -139,7 +139,7 @@ python kit/agentx.py fit traces.jsonl --replay $C/replay.log $C/lmcache.log --co
     --set chunk_bytes=3145728 --set prefill_step=2048 --set sys_local=false \
     --set prefill_per_token=40000 --set decode_per_token=12000000 --set 'sys_pop={"zipf": {"s": 1.1}}' \
     -o $C/fitted.params.json
-python kit/agentx.py holds traces.jsonl --replay $C/replay.log serve.log [--pool TOKENS] [--clockless]
+python kit/agentx.py holds traces.jsonl --replay $C/replay.log $C/lmcache.log [--pool TOKENS] [--timeline engine|paced|serial|rounds]   # and the storage LMCache would see
 ```
 
 - vLLM 0.30 reads `rope_parameters` (Transformers 5) and wants `max_position_embeddings`
@@ -162,16 +162,27 @@ python kit/agentx.py holds traces.jsonl --replay $C/replay.log serve.log [--pool
   `builder/tests/test_trace.py` and ~~accepted~~ not accepted since the corrected run (~~one row outside,
   read-after-read reuse distance~~ four rows outside since the same day, each with its reason in the capture's
   `trace.tolerances.json`; under the replay of 2026-11-05 read after read is within, and the extents' read
-  after write, measured since 2026-10-22, outside); the corpus is not committed, so the fit is repeated by
+  after write, measured since 2026-10-22, outside; since the side runs of 2026-11-06, read after write
+  p50 3 GiB against 4, 2.5 before); the corpus is not committed, so the fit is repeated by
   the command above, not by the tests.
+- A session's requests go in time order, and its main agent's chain waits while its sub-agents and side
+  calls run, served in turn, then goes on; a chain resumed after them is read back after their traffic
+  (at 6 GiB nearly every read is one). The abstract's side runs (`side`, `side_lanes`, `side_turns`,
+  `side_kind`, 2026-11-06) are those runs; `agentx.lanes_of` takes them from the session order
+  (`DESIGN_REVIEW.md` §3.64, note of 2026-11-06).
 - The same replay with `KV_BYTES=6442450944` (6 GiB, 524,288 tokens, three times the pool;
   2026-10-08) is the capture `cases/agentx/captures/replay-6gib-pool`, fitted the same way: ~~5,112 chunks written and 6,770 read,
   against 5,454 and 33,804 at 2 GiB~~ 5,663 chunks written and 2,321 read, against 5,663 and 38,818
   at 2 GiB (2026-11-05, the same requests at both pools). Its pair ~~is accepted~~ was accepted with only `keep`, `sys_held`, and
   `sub_held` refitted; the 2 GiB values give three to five times its reads (`DESIGN_REVIEW.md`
   §3.64). Under the replay of 2026-11-05 the fits differ in those three alone, and the pair is
-  not accepted: read after write (blocks and extents) outside, as at 2 GiB. `agentx.py holds` simulates vLLM's prefix cache under either replay: on the
-  engine's timeline it gives the measured holds within 14 % at 2 GiB and 2 % at 6 GiB.
+  ~~not accepted: read after write (blocks and extents) outside, as at 2 GiB~~ accepted again since the side runs
+  (2026-11-06). `agentx.py holds` simulates vLLM's prefix cache under either replay: on the
+  engine's timeline it gives the measured holds within 14 % at 2 GiB and 2 % at 6 GiB. With
+  `--timeline serial` (one request at a time, the sessions in turn, as an abstract's slots take
+  theirs) and the pool's size alone, the storage LMCache would see is the replay's: 39,881 chunk
+  reads against 38,945 at the measured holds at 2 GiB, 2,865 against 2,455 at 6 GiB, the reuse
+  distances near (`DESIGN_REVIEW.md` §3.64, note of 2026-11-06).
 - `kit/lmcache.agentx.odirect.yaml` is the same with LMCache's `use_odirect`, the second run
   (the case `agentx-odirect`, another workload under CLOSED, fitted with `--set direct=true` added; its
   `params.json` is the fit to its replay): its calls are the abstract's
@@ -179,5 +190,6 @@ python kit/agentx.py holds traces.jsonl --replay $C/replay.log serve.log [--pool
   its capture's `trace.tolerances.json` (the server's admission order, §3.63)~~ captured again 2026-11-05
   under the buffered run's replay (`params.json` refitted to it: it differs from the buffered fit in
   `keep`, `sys_held`, `sub_held`, and `direct` alone), the buffered pair's four rows outside, each
-  with its reason in the capture's `trace.tolerances.json`.
+  with its reason in the capture's `trace.tolerances.json` (and under strace, since the side runs, the
+  top tenth's popularity just outside, the case being the eBPF capture's fit).
 

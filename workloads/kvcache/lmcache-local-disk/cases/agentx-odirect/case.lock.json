@@ -5,7 +5,7 @@
     {
       "name": "lmcache_local_disk",
       "abstract": "kvcache/lmcache-local-disk/lmcache_local_disk.ast.json",
-      "ast_sha256": "31d84beba90ffba19cc19051ca64745e4325f1cfde2b8fe63078194743eafaa1",
+      "ast_sha256": "17a3606031713710c0af01088251892a87efe051e0ef7b018eff91090c21aa05",
       "params": {
         "chunk_bytes": {"default": 3145728},
         "chunk_tokens": {"default": 256},
@@ -14,13 +14,17 @@
         "decode_per_token": {"default": 12000000},
         "direct": {"default": true},
         "first_in": {"default": {"empirical": {"values": [192, 448, 608, 640, 672, 747, 1056, 2944, 2944, 2944, 2944, 2944, 2976, 3424, 7168, 13600, 19776, 28704, 31680, 43840], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
-        "keep": {"default": {"empirical": {"values": [0, 0, 0, 0, 0, 0, 37, 192, 192, 192, 192, 192, 192, 192, 192, 192, 4483, 6784, 12860, 43875], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
-        "kind": {"default": {"empirical": {"values": [0, 1, 2], "weights": [8, 7, 27]}}},
+        "keep": {"default": {"empirical": {"values": [0, 0, 0, 0, 0, 0, 0, 48, 192, 192, 192, 192, 192, 192, 192, 192, 192, 4824, 12870, 39242], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
+        "kind": {"default": {"empirical": {"values": [0, 1, 2], "weights": [8, 0, 8]}}},
         "prefill_per_token": {"default": 40000},
         "prefill_step": {"default": 2048},
         "requests": {"default": 29},
         "retain": {"default": 233},
         "reuse": {"default": {"mixture": [{"weight": 0, "dist": null}, {"weight": 1, "dist": {"const": 1}}]}},
+        "side": {"default": {"mixture": [{"weight": 0.9531, "dist": {"const": 0}}, {"weight": 0.0469, "dist": {"empirical": {"values": [2, 5, 6, 11, 14, 16], "weights": [1, 1, 1, 1, 1, 1]}}}]}},
+        "side_kind": {"default": {"empirical": {"values": [0, 1, 2], "weights": [0, 7, 19]}}},
+        "side_lanes": {"default": {"empirical": {"values": [1, 1, 2, 2, 2, 5], "weights": [1, 1, 1, 1, 1, 1]}}},
+        "side_turns": {"default": {"empirical": {"values": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 3, 6, 8, 15], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
         "sub_held": {"default": {"empirical": {"values": [0, 0, 0, 0, 0, 3800, 6784, 6784, 6784, 6784, 16576, 16597, 16640, 16640, 16640, 16640, 24832, 24832, 24832, 24832], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
         "sub_per_slot": {"default": false},
         "sub_pop": {"default": {"zipf": {"s": 1.1}}},
@@ -40,7 +44,7 @@
         "trim": {"default": {"mixture": [{"weight": 0.9791, "dist": {"const": 0}}, {"weight": 0.0209, "dist": {"empirical": {"values": [264, 282, 300, 26148], "weights": [1, 1, 1, 1]}}}]}},
         "turn_in": {"default": {"empirical": {"values": [0, 0, 5, 54, 144, 284, 435, 610, 835, 1041, 1283, 1569, 2062, 3179, 4906, 6624, 9220, 13254, 20749, 32169], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
         "turn_out": {"default": {"empirical": {"values": [31, 81, 102, 130, 169, 197, 251, 302, 358, 407, 491, 565, 637, 744, 866, 1205, 1674, 2258, 3094, 5840], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
-        "turns": {"default": {"empirical": {"values": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 5, 6, 6, 6, 6, 8, 8, 11, 12, 14, 15, 16, 19, 32, 36], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
+        "turns": {"default": {"empirical": {"values": [1, 1, 1, 1, 1, 1, 1, 1, 1, 6, 6, 8, 12, 19, 32, 36], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
         "warm": {"default": 0}
       },
       "sources": {
@@ -58,6 +62,10 @@
         "requests": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json",
         "retain": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json",
         "reuse": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json",
+        "side": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json",
+        "side_kind": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json",
+        "side_lanes": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json",
+        "side_turns": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json",
         "sub_held": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json",
         "sub_per_slot": "abstract",
         "sub_pop": "abstract",
@@ -85,6 +93,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "kvcache/lmcache-local-disk/cases/agentx-odirect/case.toml",
-    "fragments": [{"path": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json", "sha256": "2fbc6bd7f5ed33181b5d9d9073b73da6220c87735f32da846474fdb8afd2bb89"}]
+    "fragments": [{"path": "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json", "sha256": "55d9b9fdd8518edcf0c0b55f91b93abf6fc380c96d7f9e18d852b8430f9c5df0"}]
   }
 }

@@ -4,9 +4,9 @@
   "runs": [
     {
       "ast": "lmcache_local_disk",
-      "ast_sha256": "26a14476bb2ea64a5044a61cfdba8ea81fa5cb1c94064e63215d907f9445153e",
+      "ast_sha256": "2521fc90925003d950c2dbcd197e2f2e4f6a446213c057a40dd634eafe6681d5",
       "params": "case.lock.json",
-      "params_sha256": "d76b8375fe8816f9ef2b5e006487145c6cab49a5e5fc5673d624858aa2892a73",
+      "params_sha256": "49e72fb4af3aa26f88a3bb6ec796921464e4497a6cdaffb5703a33f89ca4e731",
       "gpus": 1,
       "seeds": [
         1,
@@ -16,24 +16,23 @@
       "length": {
         "param": "requests",
         "case": 29,
-        "check": 14
+        "check": 29
       },
       "stable": false,
       "moving": [
         "read_share",
-        "reread",
-        "skew"
+        "reread"
       ],
-      "ops": 88942,
+      "ops": 103070,
       "counts": {
-        "close": 23772,
-        "fstat": 17626,
-        "open": 23772,
-        "read": 17626,
-        "write": 6146
+        "close": 27287,
+        "fstat": 21209,
+        "open": 27287,
+        "read": 21209,
+        "write": 6078
       },
-      "bytes_read": 55446601728,
-      "bytes_written": 19333644288,
+      "bytes_read": 66717745152,
+      "bytes_written": 19119734784,
       "datasets": [
         {
           "bytes": 309854208,
@@ -76,13 +75,13 @@
           "class": "medium"
         },
         "read_share": {
-          "value": 0.777644,
-          "spread": 0.0789773,
+          "value": 0.788464,
+          "spread": 0.0233855,
           "class": "mixed"
         },
         "metadata": {
-          "value": 2.77764,
-          "spread": 0.0789773,
+          "value": 2.78846,
+          "spread": 0.0233855,
           "class": "high"
         },
         "reads_own_writes": {
@@ -91,13 +90,13 @@
           "class": "yes"
         },
         "reread": {
-          "value": 0.793875,
-          "spread": 0.10684,
+          "value": 0.803472,
+          "spread": 0.0374392,
           "class": "repeated"
         },
         "skew": {
-          "value": 0.0475686,
-          "spread": 0.0226776,
+          "value": 0.0354125,
+          "spread": 0.00951497,
           "class": "uniform"
         }
       }

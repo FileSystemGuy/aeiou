@@ -256,6 +256,7 @@ def test_agentx_walk_builds_chains_by_continuity_and_counts_a_never_evicting_sto
                    (1, 0, 2, True, 2, 0, 1, 0), (1, 1, 3, True, 2, 0, 0, 0),           # a side call: a chain of its own
                    (1, 3, 4, True, 0, 0, 1, 0)]       # fi 2 is over the context; m2's chunks are its own, never m's
     assert shared == [128]
+    assert [r["g"] for r in rows] == [-1, -1, 0, 0, -1, -1, -1, -1]                     # the main agent's lane, or a sub-agent group's
     assert [r["think"] for r in rows] == [0.5] * 5 + [1.0, None, 2.0]
     assert [r["fi"] for r in ax.walk(corpus, 1, 128, 4096)[0]] == [0, 1, 2, 3, 4]       # --traces 1: session 0 only
     assert [(r["ti"], r["fi"]) for r in ax.walk(corpus, 10 ** 9, 128, 4096, {(0, 1), (1, 3)}, 4)[0]] == [(0, 1), (1, 3)]   # a replay's
@@ -288,6 +289,30 @@ def test_agentx_keys_chunks_by_model(monkeypatch, tmp_path):
     assert (ref["chunks_stored"]["total"], ref["chunks_hit"]["total"], ref["subagent_shared_prefix_tokens"]) == (5, 1, {"median": 0, "n": 0})
 
 
+def test_agentx_holds_are_counted_past_a_chain_s_base(monkeypatch):
+    """A chain's own tokens begin past its kind's prefix or what its session had stored when it began,
+    the longer, as `first_in`'s do (DESIGN_REVIEW.md §3.64, note of 2026-11-06): a chain of neither kind
+    that opened with another sub-agent type's stored tools is held from past them, not from 0."""
+    ax = _kit(monkeypatch, "agentx")
+    rows = [dict(chain=0, first=True, kind=0, hit=1), dict(chain=0, first=False, kind=0, hit=3),
+            dict(chain=1, first=True, kind=2, hit=3), dict(chain=2, first=True, kind=1, hit=0)]
+    assert ax.bases(rows, {0: 256, 1: 128, 2: 0}, 128) == {0: 256, 1: 384, 2: 128}
+
+
+def test_agentx_lanes_of_finds_the_side_runs_between_the_main_agent_s_requests(monkeypatch):
+    """`agentx.lanes_of`: after each main-agent request, the requests of the longest chain of the side run
+    before its next (0 none); per side run, the chains it serves in turn (the median distance between two
+    requests of one chain) and the requests of its other chains; per request, the session's other
+    requests since its chain's previous (DESIGN_REVIEW.md §3.64, note of 2026-11-06). A sub-agent's
+    request before the session's first main-agent one follows none."""
+    ax = _kit(monkeypatch, "agentx")
+    seq = [(-1, 0), (0, 1), (1, 2), (0, 1), (1, 2), (0, 1), (-1, 0), (-1, 0)]       # (group, chain): M, A, B, A, B, A, M, M
+    rows = [dict(ti=0, fi=i, g=g, chain=c) for i, (g, c) in enumerate(seq)] + [dict(ti=1, fi=0, g=0, chain=3), dict(ti=1, fi=1, g=-1, chain=4)]
+    side, lanes, rest, gap = ax.lanes_of(rows)
+    assert side == [3, 0, 0, 0] and lanes == [2] and rest == [2]          # A leads the run, B is its other chain
+    assert [gap[(0, i)] for i in range(8)] == [0, 0, 0, 1, 1, 1, 5, 0] and gap[(1, 0)] == gap[(1, 1)] == 0
+
+
 def _agentx(*args):
     return subprocess.run([sys.executable, str(KV / "agentx.py"), *map(str, args)], capture_output=True, text=True)
 
@@ -306,8 +331,15 @@ def test_agentx_fit_of_the_corpus(tmp_path, corpus):
     p = values_of(f)
     assert (p["requests"], p["context"], p["chunk_tokens"], p["sys_prompts"], p["sub_prompts"], p["chunk_bytes"]) == (8, 4096, 128, 2, 2, 1024)
     assert (p["sys_tokens"], p["sub_tokens"], p["concurrency"], p["retain"]) == (256, 128, 1, 8)
-    assert p["kind"]["empirical"]["weights"] == [2, 1, 2]
-    assert p["turns"]["empirical"]["values"] == [1, 1, 2]                 # chain lengths 1, 1, 1, 2, 3 in three shares
+    # the main agent's lane (DESIGN_REVIEW.md §3.64, note of 2026-11-06): its chains' kinds and lengths, and after each of
+    # its requests the sub-agents' requests before its next (fi 1 of session 0 is followed by fi 2 and 3)
+    assert p["kind"]["empirical"]["weights"] == [2, 0, 2]
+    assert p["turns"]["empirical"]["values"] == [1, 1, 3]                 # main-lane chain lengths 1, 1, 1, 3 in three shares
+    # the side run's leading chain is 2 requests long, after one of the six main-agent requests: none, or the runs' lengths
+    assert p["side"]["mixture"] == [{"weight": 0.8333, "dist": {"const": 0}}, {"weight": 0.1667, "dist": {"empirical": {"values": [2], "weights": [1]}}}]
+    assert p["side_lanes"]["empirical"]["values"] == [1]                  # the one side run's chain is served alone
+    assert p["side_kind"]["empirical"]["weights"] == [0, 1, 0]
+    assert p["side_turns"]["empirical"]["values"] == [1]                  # no other chain: the default
     # extends: in - previous in - previous out (110, 75); the rewrite: in - kept (350 - 256)
     assert p["turn_in"]["empirical"]["values"] == [84, 110]
     # past the kind's prefix or what the session had stored, the longer: 300-256, 300-128, 150, 50, max(0, 200-256)
@@ -418,6 +450,7 @@ def test_agentx_fit_of_a_replay_takes_keep_from_the_engine_and_records_its_condi
     p = values_of(f)
     assert (p["concurrency"], p["requests"], p["sys_prompts"], p["sub_prompts"], p["think"]) == (2, 4, 1, 1, {"const": 0})
     # continuing: (64 held past 256, held whole), (256 - 128, not whole), (128 held of 256 kept, under the 256 prefix: 0)
+    # continuing: (64 held past 256, held whole), (256 - 128, not whole), (128 held of 256 kept, under the 256 prefix: 0)
     assert p["keep"]["empirical"]["values"] == [43, 128]
     assert p["sys_held"]["empirical"]["values"] == [64, 192] and p["sub_held"]["empirical"]["values"] == [128]   # [0, 256, 128, 128], [128]
     assert f["doc"].endswith("the requests replay_agentx.py sent (2 sessions as 2 slots, 4 requests each, back to back), and keep "
@@ -435,15 +468,16 @@ def test_agentx_fit_of_a_replay_takes_keep_from_the_engine_and_records_its_condi
 
 def test_agentx_holds_simulates_the_engine_s_prefix_cache_under_the_replay(tmp_path, corpus):
     """`agentx.py holds`: vLLM's prefix cache over the replay's requests, on the engine's timeline or
-    clockless, at the server's pool or `--pool`; per request, the held tokens measured and predicted."""
+    one an abstract could compute (`--timeline`), at the server's pool or `--pool`; per request, the
+    held tokens measured and predicted; and the storage LMCache would see at either holds."""
     log, serve = _replay_logs(tmp_path)
     with corpus.open("a") as f:                                  # a session the replay did not play
         f.write(json.dumps({"requests": [_req(0, [1, 2, 3, 4], 256, 1)]}) + "\n")
     got = {}
-    for name, extra in (("engine", ()), ("clockless", ("--clockless",)), ("service", ("--clockless", "--service", "0.001", "0.01")),
-                        ("small", ("--pool", "256"))):
+    for name, extra in (("engine", ()), ("paced", ("--timeline", "paced")), ("service", ("--timeline", "paced", "--service", "0.001", "0.01")),
+                        ("serial", ("--timeline", "serial")), ("rounds", ("--timeline", "rounds")), ("small", ("--pool", "256"))):
         out = tmp_path / f"{name}.txt"
-        r = _agentx("holds", corpus, "--replay", log, serve, "--chunk-tokens", 128, *extra, "-o", out)
+        r = _agentx("holds", corpus, "--replay", log, serve, "--chunk-tokens", 128, "--chunk-bytes", 1 << 30, *extra, "-o", out)
         assert r.returncode == 0, r.stderr
         got[name] = (r.stdout, [tuple(map(int, l.split())) for l in out.read_text().splitlines()])
     stdout, rows = got["engine"]
@@ -453,13 +487,37 @@ def test_agentx_holds_simulates_the_engine_s_prefix_cache_under_the_replay(tmp_p
     # 16 blocks of 64 tokens hold every session's blocks: each request finds its whole stored prefix;
     # the replay serves one model, so session 1's last request finds the other model's [30, 31, 32]
     assert pred == {(0, 0): 0, (0, 1): 256, (0, 2): 128, (0, 3): 256, (0, 4): 256, (1, 0): 0, (1, 1): 0, (1, 3): 192}
-    assert got["clockless"][0].startswith("pool 1024 tokens, clockless timeline: 8 requests") and got["clockless"][1] == rows
-    assert got["service"][1] == rows
+    for name in ("paced", "service", "serial", "rounds"):            # nothing evicted at this pool, on any timeline
+        assert got[name][0].startswith(f"pool 1024 tokens, the {name if name != 'service' else 'paced'} timeline: 8 requests") and got[name][1] == rows
+    # the storage at either holds: the writes are the store's alone; a chunk is 1 GiB here, so distances are in chunks
+    store = [l for l in stdout.splitlines() if l.startswith("storage, ")]
+    assert len(store) == 2 and store[0].startswith("storage, predicted holds: ") and store[1].startswith("storage, measured holds: ")
+    writes = {re.search(r"(\d+) chunk writes", l)[1] for l in store}
+    assert len(writes) == 1
     # 4 blocks: every admission preempts the running request of the other session (5 times), and only
     # s0i2 and s0i4 find two blocks of their predecessor's freed head still queued
     stdout, small = got["small"]
     assert stdout.startswith("pool 256 tokens, the engine's timeline: 8 requests, 5 preemptions; held tokens measured 960, predicted 256 ")
     assert {(s, i): q for s, i, _, _, q in small if q} == {(0, 2): 128, (0, 4): 128}
+    # at 4 blocks one request at a time preempts nothing, the sessions' requests run together do
+    for timeline, preempts in (("serial", 0), ("rounds", 3)):
+        r = _agentx("holds", corpus, "--replay", log, serve, "--chunk-tokens", 128, "--pool", 256, "--timeline", timeline)
+        assert r.returncode == 0 and r.stdout.startswith(f"pool 256 tokens, the {timeline} timeline: 8 requests, {preempts} preemptions;"), r.stdout
+    r = _agentx("holds", corpus, "--replay", log, serve, "--timeline", "clockless")
+    assert r.returncode == 2 and "invalid choice: 'clockless'" in r.stderr
+
+
+def test_agentx_lmcache_loads_from_the_engine_s_hold_to_the_store_s_hit_and_stores_the_rest(monkeypatch):
+    """`agentx.lmcache_accesses`, LMCache 0.5.5's rule (DESIGN_REVIEW.md §3.63): a request loads one range,
+    from the chunk holding what the engine kept to its store's longest prefix hit, and stores the chunks
+    past the hit; `agentx.stack_distances`, the trace's block reuse distance: per read, the distinct
+    chunks touched since that chunk's last access, itself included, by what that access was."""
+    ax = _kit(monkeypatch, "agentx")
+    chunks = {"a": ["c1", "c2"], "b": ["c1", "c2", "c3"], "c": ["c1", "x"]}
+    acc = ax.lmcache_accesses(["a", "b", "c"], chunks, {"a": 0, "b": 256, "c": 0}, 256)
+    assert acc == [([], ["c1", "c2"]), (["c2"], ["c3"]), (["c1"], ["x"])]
+    raw, rar = ax.stack_distances([([], ["a", "b"]), (["a"], []), (["a"], ["c"])])
+    assert (raw, rar) == ([2], [1])
 
 
 def test_serve_sh_starts_vllm_with_lmcache_s_connector(tmp_path):

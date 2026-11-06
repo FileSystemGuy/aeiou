@@ -178,6 +178,33 @@
       "doc": "[config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens",
       "kind": "int"
     },
+    "side": {
+      "default": {
+        "const": 0
+      },
+      "unit": "count",
+      "doc": "[config: load] after each request of a slot's main lane, the requests of the leading chain of a side run, drawn at that request; 0 none. The run serves `side_lanes` chains in turn for `side_lanes` x `side` requests, its leading chain in its first lane, then the main lane goes on (an agent waiting on its sub-agents and side calls, a run lasting about as long as its longest sub-agent: measured in the AgentX corpus and replay, where a chain resumed after them is read back after their traffic, §3.64 note of 2026-11-06). For a slot of one agent: a request whose `reuse` draw is not 1 is never in a side run"
+    },
+    "side_lanes": {
+      "default": {
+        "const": 1
+      },
+      "unit": "count",
+      "doc": "[config: load] the chains a side run serves in turn, drawn at the main-lane request before it: each goes on `side_lanes` requests later (sub-agents beside one another), a chain that ends is followed in its lane by a new one of `side_turns`, and the run's chains end with it"
+    },
+    "side_kind": {
+      "default": {
+        "const": 1
+      },
+      "doc": "[config: load] the prefix a chain started in a side run opens with, as `kind` (a sub-agent's)"
+    },
+    "side_turns": {
+      "default": {
+        "const": 0
+      },
+      "unit": "count",
+      "doc": "[config: load] the requests a chain of a side run has, as `turns`, but its leading chain's (`side`)"
+    },
     "think": {
       "default": {
         "const": 0
@@ -427,22 +454,94 @@
                         "value": {
                           "and": [
                             {
-                              "ne": [
+                              "and": [
                                 {
-                                  "ref": "d"
+                                  "ne": [
+                                    {
+                                      "ref": "d"
+                                    },
+                                    null
+                                  ]
                                 },
-                                null
+                                {
+                                  "le": [
+                                    {
+                                      "add": [
+                                        {
+                                          "ref": "d"
+                                        },
+                                        {
+                                          "mod": [
+                                            {
+                                              "cond": {
+                                                "if": {
+                                                  "gt": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    0
+                                                  ]
+                                                },
+                                                "then": {
+                                                  "at": {
+                                                    "ref": "nxd",
+                                                    "index": {
+                                                      "sub": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  }
+                                                },
+                                                "else": 0
+                                              }
+                                            },
+                                            {
+                                              "add": [
+                                                {
+                                                  "index": "r"
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "index": "r"
+                                    }
+                                  ]
+                                }
                               ]
                             },
                             {
-                              "le": [
-                                {
-                                  "ref": "d"
+                              "cond": {
+                                "if": {
+                                  "gt": [
+                                    {
+                                      "index": "r"
+                                    },
+                                    0
+                                  ]
                                 },
-                                {
-                                  "index": "r"
-                                }
-                              ]
+                                "then": {
+                                  "at": {
+                                    "ref": "ngo",
+                                    "index": {
+                                      "sub": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        1
+                                      ]
+                                    }
+                                  }
+                                },
+                                "else": true
+                              }
                             }
                           ]
                         }
@@ -469,7 +568,49 @@
                                               "index": "r"
                                             },
                                             {
-                                              "ref": "d"
+                                              "add": [
+                                                {
+                                                  "ref": "d"
+                                                },
+                                                {
+                                                  "mod": [
+                                                    {
+                                                      "cond": {
+                                                        "if": {
+                                                          "gt": [
+                                                            {
+                                                              "index": "r"
+                                                            },
+                                                            0
+                                                          ]
+                                                        },
+                                                        "then": {
+                                                          "at": {
+                                                            "ref": "nxd",
+                                                            "index": {
+                                                              "sub": [
+                                                                {
+                                                                  "index": "r"
+                                                                },
+                                                                1
+                                                              ]
+                                                            }
+                                                          }
+                                                        },
+                                                        "else": 0
+                                                      }
+                                                    },
+                                                    {
+                                                      "add": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
                                             }
                                           ]
                                         }
@@ -491,7 +632,49 @@
                                                   "index": "r"
                                                 },
                                                 {
-                                                  "ref": "d"
+                                                  "add": [
+                                                    {
+                                                      "ref": "d"
+                                                    },
+                                                    {
+                                                      "mod": [
+                                                        {
+                                                          "cond": {
+                                                            "if": {
+                                                              "gt": [
+                                                                {
+                                                                  "index": "r"
+                                                                },
+                                                                0
+                                                              ]
+                                                            },
+                                                            "then": {
+                                                              "at": {
+                                                                "ref": "nxd",
+                                                                "index": {
+                                                                  "sub": [
+                                                                    {
+                                                                      "index": "r"
+                                                                    },
+                                                                    1
+                                                                  ]
+                                                                }
+                                                              }
+                                                            },
+                                                            "else": 0
+                                                          }
+                                                        },
+                                                        {
+                                                          "add": [
+                                                            {
+                                                              "index": "r"
+                                                            },
+                                                            1
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
                                                 }
                                               ]
                                             }
@@ -509,7 +692,49 @@
                                               "index": "r"
                                             },
                                             {
-                                              "ref": "d"
+                                              "add": [
+                                                {
+                                                  "ref": "d"
+                                                },
+                                                {
+                                                  "mod": [
+                                                    {
+                                                      "cond": {
+                                                        "if": {
+                                                          "gt": [
+                                                            {
+                                                              "index": "r"
+                                                            },
+                                                            0
+                                                          ]
+                                                        },
+                                                        "then": {
+                                                          "at": {
+                                                            "ref": "nxd",
+                                                            "index": {
+                                                              "sub": [
+                                                                {
+                                                                  "index": "r"
+                                                                },
+                                                                1
+                                                              ]
+                                                            }
+                                                          }
+                                                        },
+                                                        "else": 0
+                                                      }
+                                                    },
+                                                    {
+                                                      "add": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
                                             }
                                           ]
                                         }
@@ -546,7 +771,49 @@
                                                   "index": "r"
                                                 },
                                                 {
-                                                  "ref": "d"
+                                                  "add": [
+                                                    {
+                                                      "ref": "d"
+                                                    },
+                                                    {
+                                                      "mod": [
+                                                        {
+                                                          "cond": {
+                                                            "if": {
+                                                              "gt": [
+                                                                {
+                                                                  "index": "r"
+                                                                },
+                                                                0
+                                                              ]
+                                                            },
+                                                            "then": {
+                                                              "at": {
+                                                                "ref": "nxd",
+                                                                "index": {
+                                                                  "sub": [
+                                                                    {
+                                                                      "index": "r"
+                                                                    },
+                                                                    1
+                                                                  ]
+                                                                }
+                                                              }
+                                                            },
+                                                            "else": 0
+                                                          }
+                                                        },
+                                                        {
+                                                          "add": [
+                                                            {
+                                                              "index": "r"
+                                                            },
+                                                            1
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
                                                 }
                                               ]
                                             }
@@ -561,7 +828,49 @@
                                                   "index": "r"
                                                 },
                                                 {
-                                                  "ref": "d"
+                                                  "add": [
+                                                    {
+                                                      "ref": "d"
+                                                    },
+                                                    {
+                                                      "mod": [
+                                                        {
+                                                          "cond": {
+                                                            "if": {
+                                                              "gt": [
+                                                                {
+                                                                  "index": "r"
+                                                                },
+                                                                0
+                                                              ]
+                                                            },
+                                                            "then": {
+                                                              "at": {
+                                                                "ref": "nxd",
+                                                                "index": {
+                                                                  "sub": [
+                                                                    {
+                                                                      "index": "r"
+                                                                    },
+                                                                    1
+                                                                  ]
+                                                                }
+                                                              }
+                                                            },
+                                                            "else": 0
+                                                          }
+                                                        },
+                                                        {
+                                                          "add": [
+                                                            {
+                                                              "index": "r"
+                                                            },
+                                                            1
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
                                                 }
                                               ]
                                             }
@@ -614,7 +923,49 @@
                                                               "index": "r"
                                                             },
                                                             {
-                                                              "ref": "d"
+                                                              "add": [
+                                                                {
+                                                                  "ref": "d"
+                                                                },
+                                                                {
+                                                                  "mod": [
+                                                                    {
+                                                                      "cond": {
+                                                                        "if": {
+                                                                          "gt": [
+                                                                            {
+                                                                              "index": "r"
+                                                                            },
+                                                                            0
+                                                                          ]
+                                                                        },
+                                                                        "then": {
+                                                                          "at": {
+                                                                            "ref": "nxd",
+                                                                            "index": {
+                                                                              "sub": [
+                                                                                {
+                                                                                  "index": "r"
+                                                                                },
+                                                                                1
+                                                                              ]
+                                                                            }
+                                                                          }
+                                                                        },
+                                                                        "else": 0
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "add": [
+                                                                        {
+                                                                          "index": "r"
+                                                                        },
+                                                                        1
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
                                                             }
                                                           ]
                                                         }
@@ -669,7 +1020,49 @@
                                       "index": "r"
                                     },
                                     {
-                                      "ref": "d"
+                                      "add": [
+                                        {
+                                          "ref": "d"
+                                        },
+                                        {
+                                          "mod": [
+                                            {
+                                              "cond": {
+                                                "if": {
+                                                  "gt": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    0
+                                                  ]
+                                                },
+                                                "then": {
+                                                  "at": {
+                                                    "ref": "nxd",
+                                                    "index": {
+                                                      "sub": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  }
+                                                },
+                                                "else": 0
+                                              }
+                                            },
+                                            {
+                                              "add": [
+                                                {
+                                                  "index": "r"
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     }
                                   ]
                                 }
@@ -701,14 +1094,158 @@
                                       "index": "r"
                                     },
                                     {
-                                      "ref": "d"
+                                      "add": [
+                                        {
+                                          "ref": "d"
+                                        },
+                                        {
+                                          "mod": [
+                                            {
+                                              "cond": {
+                                                "if": {
+                                                  "gt": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    0
+                                                  ]
+                                                },
+                                                "then": {
+                                                  "at": {
+                                                    "ref": "nxd",
+                                                    "index": {
+                                                      "sub": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  }
+                                                },
+                                                "else": 0
+                                              }
+                                            },
+                                            {
+                                              "add": [
+                                                {
+                                                  "index": "r"
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     }
                                   ]
                                 }
                               }
                             },
                             "else": {
-                              "ref": "tn"
+                              "cond": {
+                                "if": {
+                                  "and": [
+                                    {
+                                      "and": [
+                                        {
+                                          "gt": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            0
+                                          ]
+                                        },
+                                        {
+                                          "eq": [
+                                            {
+                                              "ref": "d"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "at": {
+                                        "ref": "nex",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "then": {
+                                  "cond": {
+                                    "if": {
+                                      "eq": [
+                                        {
+                                          "cond": {
+                                            "if": {
+                                              "gt": [
+                                                {
+                                                  "index": "r"
+                                                },
+                                                0
+                                              ]
+                                            },
+                                            "then": {
+                                              "at": {
+                                                "ref": "npos",
+                                                "index": {
+                                                  "sub": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    1
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            "else": 0
+                                          }
+                                        },
+                                        0
+                                      ]
+                                    },
+                                    "then": {
+                                      "at": {
+                                        "ref": "sd",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "else": {
+                                      "at": {
+                                        "ref": "stn",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "else": {
+                                  "ref": "tn"
+                                }
+                              }
                             }
                           }
                         }
@@ -733,7 +1270,49 @@
                                           "index": "r"
                                         },
                                         {
-                                          "ref": "d"
+                                          "add": [
+                                            {
+                                              "ref": "d"
+                                            },
+                                            {
+                                              "mod": [
+                                                {
+                                                  "cond": {
+                                                    "if": {
+                                                      "gt": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        0
+                                                      ]
+                                                    },
+                                                    "then": {
+                                                      "at": {
+                                                        "ref": "nxd",
+                                                        "index": {
+                                                          "sub": [
+                                                            {
+                                                              "index": "r"
+                                                            },
+                                                            1
+                                                          ]
+                                                        }
+                                                      }
+                                                    },
+                                                    "else": 0
+                                                  }
+                                                },
+                                                {
+                                                  "add": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    1
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
                                         }
                                       ]
                                     }
@@ -764,7 +1343,49 @@
                                       "index": "r"
                                     },
                                     {
-                                      "ref": "d"
+                                      "add": [
+                                        {
+                                          "ref": "d"
+                                        },
+                                        {
+                                          "mod": [
+                                            {
+                                              "cond": {
+                                                "if": {
+                                                  "gt": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    0
+                                                  ]
+                                                },
+                                                "then": {
+                                                  "at": {
+                                                    "ref": "nxd",
+                                                    "index": {
+                                                      "sub": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  }
+                                                },
+                                                "else": 0
+                                              }
+                                            },
+                                            {
+                                              "add": [
+                                                {
+                                                  "index": "r"
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     }
                                   ]
                                 }
@@ -866,14 +1487,110 @@
                                       "index": "r"
                                     },
                                     {
-                                      "ref": "d"
+                                      "add": [
+                                        {
+                                          "ref": "d"
+                                        },
+                                        {
+                                          "mod": [
+                                            {
+                                              "cond": {
+                                                "if": {
+                                                  "gt": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    0
+                                                  ]
+                                                },
+                                                "then": {
+                                                  "at": {
+                                                    "ref": "nxd",
+                                                    "index": {
+                                                      "sub": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  }
+                                                },
+                                                "else": 0
+                                              }
+                                            },
+                                            {
+                                              "add": [
+                                                {
+                                                  "index": "r"
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     }
                                   ]
                                 }
                               }
                             },
                             "else": {
-                              "ref": "kd"
+                              "cond": {
+                                "if": {
+                                  "and": [
+                                    {
+                                      "and": [
+                                        {
+                                          "gt": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            0
+                                          ]
+                                        },
+                                        {
+                                          "eq": [
+                                            {
+                                              "ref": "d"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "at": {
+                                        "ref": "nex",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "then": {
+                                  "at": {
+                                    "ref": "skd",
+                                    "index": {
+                                      "sub": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        1
+                                      ]
+                                    }
+                                  }
+                                },
+                                "else": {
+                                  "ref": "kd"
+                                }
+                              }
                             }
                           }
                         }
@@ -896,7 +1613,49 @@
                                       "index": "r"
                                     },
                                     {
-                                      "ref": "d"
+                                      "add": [
+                                        {
+                                          "ref": "d"
+                                        },
+                                        {
+                                          "mod": [
+                                            {
+                                              "cond": {
+                                                "if": {
+                                                  "gt": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    0
+                                                  ]
+                                                },
+                                                "then": {
+                                                  "at": {
+                                                    "ref": "nxd",
+                                                    "index": {
+                                                      "sub": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  }
+                                                },
+                                                "else": 0
+                                              }
+                                            },
+                                            {
+                                              "add": [
+                                                {
+                                                  "index": "r"
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     }
                                   ]
                                 }
@@ -1142,7 +1901,49 @@
                                 {
                                   "le": [
                                     {
-                                      "ref": "d"
+                                      "add": [
+                                        {
+                                          "ref": "d"
+                                        },
+                                        {
+                                          "mod": [
+                                            {
+                                              "cond": {
+                                                "if": {
+                                                  "gt": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    0
+                                                  ]
+                                                },
+                                                "then": {
+                                                  "at": {
+                                                    "ref": "nxd",
+                                                    "index": {
+                                                      "sub": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  }
+                                                },
+                                                "else": 0
+                                              }
+                                            },
+                                            {
+                                              "add": [
+                                                {
+                                                  "index": "r"
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     },
                                     {
                                       "param": "retain"
@@ -1162,7 +1963,49 @@
                                           "index": "r"
                                         },
                                         {
-                                          "ref": "d"
+                                          "add": [
+                                            {
+                                              "ref": "d"
+                                            },
+                                            {
+                                              "mod": [
+                                                {
+                                                  "cond": {
+                                                    "if": {
+                                                      "gt": [
+                                                        {
+                                                          "index": "r"
+                                                        },
+                                                        0
+                                                      ]
+                                                    },
+                                                    "then": {
+                                                      "at": {
+                                                        "ref": "nxd",
+                                                        "index": {
+                                                          "sub": [
+                                                            {
+                                                              "index": "r"
+                                                            },
+                                                            1
+                                                          ]
+                                                        }
+                                                      }
+                                                    },
+                                                    "else": 0
+                                                  }
+                                                },
+                                                {
+                                                  "add": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    1
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
                                         }
                                       ]
                                     }
@@ -2146,6 +2989,430 @@
                           }
                         ]
                       }
+                    },
+                    {
+                      "let": {
+                        "name": "sd",
+                        "value": {
+                          "draw": {
+                            "param": "side"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "sl",
+                        "value": {
+                          "draw": {
+                            "param": "side_lanes"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "skd",
+                        "value": {
+                          "draw": {
+                            "param": "side_kind"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "stn",
+                        "value": {
+                          "draw": {
+                            "param": "side_turns"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "left",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "and": [
+                                {
+                                  "and": [
+                                    {
+                                      "gt": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        0
+                                      ]
+                                    },
+                                    {
+                                      "eq": [
+                                        {
+                                          "ref": "d"
+                                        },
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "at": {
+                                    "ref": "nex",
+                                    "index": {
+                                      "sub": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        1
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "then": {
+                              "sub": [
+                                {
+                                  "at": {
+                                    "ref": "left",
+                                    "index": {
+                                      "sub": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        1
+                                      ]
+                                    }
+                                  }
+                                },
+                                1
+                              ]
+                            },
+                            "else": {
+                              "mul": [
+                                {
+                                  "ref": "sd"
+                                },
+                                {
+                                  "ref": "sl"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "nex",
+                        "value": {
+                          "gt": [
+                            {
+                              "ref": "left"
+                            },
+                            0
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "npos",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "ref": "nex"
+                            },
+                            "then": {
+                              "cond": {
+                                "if": {
+                                  "and": [
+                                    {
+                                      "and": [
+                                        {
+                                          "gt": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            0
+                                          ]
+                                        },
+                                        {
+                                          "eq": [
+                                            {
+                                              "ref": "d"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "at": {
+                                        "ref": "nex",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "then": {
+                                  "add": [
+                                    {
+                                      "cond": {
+                                        "if": {
+                                          "gt": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            0
+                                          ]
+                                        },
+                                        "then": {
+                                          "at": {
+                                            "ref": "npos",
+                                            "index": {
+                                              "sub": [
+                                                {
+                                                  "index": "r"
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "else": 0
+                                      }
+                                    },
+                                    1
+                                  ]
+                                },
+                                "else": 0
+                              }
+                            },
+                            "else": 0
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "nlanes",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "ref": "nex"
+                            },
+                            "then": {
+                              "cond": {
+                                "if": {
+                                  "and": [
+                                    {
+                                      "and": [
+                                        {
+                                          "gt": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            0
+                                          ]
+                                        },
+                                        {
+                                          "eq": [
+                                            {
+                                              "ref": "d"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "at": {
+                                        "ref": "nex",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "then": {
+                                  "cond": {
+                                    "if": {
+                                      "gt": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        0
+                                      ]
+                                    },
+                                    "then": {
+                                      "at": {
+                                        "ref": "nlanes",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "else": 1
+                                  }
+                                },
+                                "else": {
+                                  "ref": "sl"
+                                }
+                              }
+                            },
+                            "else": 1
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "ngap",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "and": [
+                                {
+                                  "and": [
+                                    {
+                                      "gt": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        0
+                                      ]
+                                    },
+                                    {
+                                      "eq": [
+                                        {
+                                          "ref": "d"
+                                        },
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "at": {
+                                    "ref": "nex",
+                                    "index": {
+                                      "sub": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        1
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "then": {
+                              "add": [
+                                {
+                                  "cond": {
+                                    "if": {
+                                      "gt": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        0
+                                      ]
+                                    },
+                                    "then": {
+                                      "at": {
+                                        "ref": "ngap",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "else": 0
+                                  }
+                                },
+                                1
+                              ]
+                            },
+                            "else": 0
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "nxd",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "ref": "nex"
+                            },
+                            "then": {
+                              "sub": [
+                                {
+                                  "ref": "nlanes"
+                                },
+                                1
+                              ]
+                            },
+                            "else": {
+                              "ref": "ngap"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "ngo",
+                        "value": {
+                          "or": [
+                            {
+                              "eq": [
+                                {
+                                  "ref": "nex"
+                                },
+                                false
+                              ]
+                            },
+                            {
+                              "ge": [
+                                {
+                                  "ref": "npos"
+                                },
+                                {
+                                  "ref": "nlanes"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
                     }
                   ]
                 }
@@ -2159,12 +3426,11 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk.py",
-      "sha256": "8a2e4367b72100cc72b2ad9ef2b171c7ec792ec881b87ef12f0197e000f2fe43",
-      "builder_version": "0.3.0",
-      "git": "678ae7f8293c"
+      "sha256": "cebf2b0b6fde9158c9847c239e821c3674af08ff92d7496569b34aa343d920f8",
+      "builder_version": "0.4.0",
+      "git": "b495e2e69642-dirty"
     },
     "python": "3.12.13",
-    "built_twice_identical": true,
-    "ast_sha256": "31d84beba90ffba19cc19051ca64745e4325f1cfde2b8fe63078194743eafaa1"
+    "ast_sha256": "17a3606031713710c0af01088251892a87efe051e0ef7b018eff91090c21aa05"
   }
 }

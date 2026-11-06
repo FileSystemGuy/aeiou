@@ -7,7 +7,7 @@ InferenceX AgentX sessions (Claude Code through a proxy, published on HuggingFac
     python agentx.py fit traces.jsonl --replay replay.log serve.log [--context TOKENS] [--set name=value]... -o fitted.PARAMS.json
     python agentx.py reference traces.jsonl [--traces N] [--context TOKENS] -o agentx.reference.json
     python agentx.py log serve.log -o agentx.lmcache.log
-    python agentx.py holds traces.jsonl --replay replay.log serve.log [--pool TOKENS] [--clockless [--service C_IN C_OUT]] [-o FILE]
+    python agentx.py holds traces.jsonl --replay replay.log serve.log [--pool TOKENS] [--timeline engine|paced|serial|rounds] [--service C_IN C_OUT] [--chunk-bytes B] [-o FILE]
 
 One line of the file is one session: `requests` in time order, each with `t` (seconds), `in`
 (prompt tokens, a count of 64-token KV blocks), `out` (generated tokens), `hash_ids` (the
@@ -33,10 +33,19 @@ What the corpus gives, and how the abstracts take it:
   one model, and its fit counts one store per session (`walk`).
 
   reuse      1, with no none arm: a slot is one agent and serves its own chain, and a
-             conversation ends by its length. Sub-agents are chains on other slots, and the
-             parent's think time spans their run
-  turns      the requests of a chain, in equal shares: thousands of chains are one side
-             call, and the sessions of hundreds of turns hold nearly all the prefix hits
+             conversation ends by its length. ~~Sub-agents are chains on other slots, and the
+             parent's think time spans their run~~ (2026-11-06: they are the slot's side runs)
+  turns      the requests of a main-agent chain, in equal shares: thousands of chains are one
+             side call, and the sessions of hundreds of turns hold nearly all the prefix hits
+  side       after each main-agent request, the requests of the longest chain of the side
+             run before its next (the sub-agents' requests run while it waits, a run lasting
+             about as long as its leading sub-agent: its longest chain holds two thirds of a
+             run's requests at the median), as a mixture of none and the runs' shares
+             (`lanes_of`, DESIGN_REVIEW.md §3.64 note of 2026-11-06)
+  side_lanes per side run, the chains it serves in turn: the median distance, in the run's
+             requests, between two requests of one chain (sub-agents beside one another)
+  side_turns the requests in its run of each chain of a side run but its longest
+  side_kind  the kinds of the chains that start in a side run, as `kind` of the main agent's
   trim       0 for a request that extends its chain; for one that keeps a shorter prefix,
              the tokens of the chain's last prompt and reply past the kept prefix, as a
              mixture with the rewrites' share
@@ -59,7 +68,7 @@ What the corpus gives, and how the abstracts take it:
              past it~~ (2026-10-08: that measure is the sub-agents' prefix, `sub_tokens`)
   sub_tokens the prefix a sub-agent's first prompt shares with what its session already
              stored of its model (its tools and system prompt, which are not the main agent's), its median
-  kind       the chains' first prompts by the prefix they open with: the session's
+  kind       the main agent's chains' first prompts by the prefix they open with: the session's
              main-agent prefix (0), its sub-agents' (1), or neither (2: a tool set changed
              mid-session, or a session without sub-agents). From Anthropic's documentation:
              a prompt is its tools, then its system prompt, then its messages, and a
@@ -73,8 +82,10 @@ What the corpus gives, and how the abstracts take it:
              of the corpus. `--replay` fits what `replay_agentx.py` sent instead (its log:
              the requests, the first `sessions` of the file as as many slots) and takes
              keep from the server's, as `fit.py` does: per continuing request, the tokens
-             the engine held of the chain's kept prefix past the system prompt's whole
-             chunks, a prefix held whole being a lower bound. The engine can never hold
+             the engine held of the chain's kept prefix past ~~the system prompt's whole
+             chunks~~ its base (`bases`, 2026-11-06: its kind's prefix or what its session had
+             stored when it began, the longer, as `first_in`'s), a prefix held whole being a
+             lower bound. The engine can never hold
              the reply (its blocks are not the next prompt's), so the bound is the kept
              prompt, not the prompt and the reply the abstract's `prior` counts. And
              `sys_held` and `sub_held` the same way: of the requests whose engine held none
@@ -198,7 +209,7 @@ def prefixes(flat, per, blocks, pooled=False):
 
 
 def walk(path, traces, chunk_tokens, context, played=None, main=0):
-    """Per request: its session and its index among the session's requests (`ti`, `fi`), its chain, whether it starts one, in, out, the blocks it keeps of the chain's
+    """Per request: its session and its index among the session's requests (`ti`, `fi`), its sub-agent group (`g`, −1 the main agent's), its chain, whether it starts one, in, out, the blocks it keeps of the chain's
     last prompt, think time, and its chunks stored and hit under a store that never evicts,
     one per session and model (LMCache keys a chunk by its model: another model's tokens are
     other tokens, 2026-10-15; until then one per session, and a request counted hits on
@@ -265,7 +276,7 @@ def walk(path, traces, chunk_tokens, context, played=None, main=0):
                     if kept >= len(prev["hash_ids"]) - 1:
                         kept = len(prev["hash_ids"])
                 key = best
-                rows.append(dict(ti=ti, fi=fi, chain=key[1], first=prev is None, kind=kinds[key], inp=r["in"], out=r["out"], kept=kept * BLOCK,
+                rows.append(dict(ti=ti, fi=fi, g=g, chain=key[1], first=prev is None, kind=kinds[key], inp=r["in"], out=r["out"], kept=kept * BLOCK,
                                  prev_in=prev["in"] if prev else 0, prev_out=prev["out"] if prev else 0,
                                  think=r.get("think_time"), stored=len(ch) - hit, hit=hit))
                 store.update(ch)
@@ -442,10 +453,15 @@ def simulate(events, blocks, replies, cap):
 def holds(a):
     """Whether the engine's pool explains the holds a replay measured (`DESIGN_REVIEW.md`
     §3.64): `simulate` on the replay's requests, with the block keys `replay_agentx.py` made,
-    at `--pool` tokens (the server's own by default), on the engine's timeline (each request
+    at `--pool` tokens (the server's own by default), on a `--timeline`: the engine's (each request
     admitted when LMCache first loaded or stored for it, finished when its session's next
-    arrived) or, `--clockless`, on one an abstract could compute (each session back to back,
-    a request taking c_in × prompt + c_out × reply seconds, `service`'s fit or `--service`)."""
+    arrived), or one an abstract could compute: `paced` (~~`--clockless`~~, each session back to
+    back, a request taking c_in × prompt + c_out × reply seconds, `service`'s fit or `--service`),
+    `serial` (one request at a time, the sessions in turn, as an abstract's slots take theirs), or
+    `rounds` (each session's next request admitted together, then all finished). Then the storage
+    LMCache would see (`lmcache_accesses`, in the replay's order) at the predicted holds and at the
+    measured ones: chunk reads and writes, and the reuse distances of the reads after a write and
+    after a read at `--chunk-bytes` a chunk (`DESIGN_REVIEW.md` §3.64, note of 2026-11-06)."""
     log, server_log = a.replay
     pool = a.pool or conditions(server_log, 0)["engine_pool_tokens"]
     nsess, sent = replayed(log, server_log)
@@ -464,7 +480,7 @@ def holds(a):
     reqs = {(int(m[1]), int(m[2])): (int(m[3]), int(m[4]), float(m[5])) for m in map(SENT.match, open(log)) if m}
     order = {s: sorted(i for ss, i in reqs if ss == s) for s in range(nsess)}
     events = []
-    if a.clockless:
+    if a.timeline == "paced":
         c_in, c_out = a.service or service(log)
         for s, idx in order.items():
             t = 0.0
@@ -472,6 +488,15 @@ def holds(a):
                 p, c, _ = reqs[(s, i)]
                 events += [(t, 1, (s, i)), (t + c_in * p + c_out * c, 0, (s, i))]
                 t += c_in * p + c_out * c
+    elif a.timeline in ("serial", "rounds"):
+        n = max(map(len, order.values()), default=0)
+        for j in range(n):
+            now = [(s, idx[j]) for s, idx in sorted(order.items()) if j < len(idx)]
+            if a.timeline == "serial":                 # one at a time
+                for k in now:
+                    events += [(len(events), 1, k), (len(events) + 1, 0, k)]
+            else:                                      # the round admitted together, then finished
+                events += [(2 * j, 1, k) for k in now] + [(2 * j + 1, 0, k) for k in now]
     else:
         times = engine_times(log, server_log)
         for s, idx in order.items():
@@ -485,12 +510,140 @@ def holds(a):
     meas, pred = sum(r[2] for r in rows), sum(r[3] for r in rows)
     near = sum(1 for r in rows if abs(r[2] - r[3]) <= a.chunk_tokens)
     print("pool %d tokens, %s timeline: %d requests, %d preemptions; held tokens measured %d, predicted %d (%.2f); within a chunk %d (%.0f%%); "
-          "nothing held (measured, predicted) %d, %d" % (pool, "clockless" if a.clockless else "the engine's", len(rows), preempted, meas, pred,
+          "nothing held (measured, predicted) %d, %d" % (pool, "the engine's" if a.timeline == "engine" else "the " + a.timeline, len(rows), preempted, meas, pred,
                                                         pred / max(1, meas), near, 100 * near / len(rows),
                                                         sum(1 for r in rows if r[2] < a.chunk_tokens), sum(1 for r in rows if r[3] < a.chunk_tokens)))
+    chunks = {k: chunk_ids(keys[k], p, per, a.chunk_tokens) for k, (p, _) in sent.items()}
+    sent_order = [(int(m[1]), int(m[2])) for m in map(SENT.match, open(log)) if m]
+    gib = a.chunk_bytes / 2 ** 30
+    q = lambda v, f: sorted(v)[int(f * (len(v) - 1))] * gib if v else 0
+    for name, h in (("predicted", {k: p for k, _, _, p in rows}), ("measured", {k: m for k, _, m, _ in rows})):
+        acc = lmcache_accesses(sent_order, chunks, h, a.chunk_tokens)
+        raw, rar = stack_distances(acc)
+        print("storage, %s holds: %d chunk reads, %d chunk writes; read after write p50 %.2f p90 %.2f GiB (n %d), "
+              "read after read p50 %.2f p90 %.2f GiB (n %d)" % (name, sum(len(r) for r, _ in acc), sum(len(w) for _, w in acc),
+                                                                 q(raw, .5), q(raw, .9), len(raw), q(rar, .5), q(rar, .9), len(rar)))
     if a.out:
         with open(a.out, "w") as f:
             f.writelines("%d %d %d %d %d\n" % (k[0], k[1], p, m, q) for k, p, m, q in rows)
+
+
+def chunk_ids(keys, prompt, per, chunk_tokens):
+    """A prompt's whole chunks as LMCache keys them: each by its whole prefix (a chained hash of
+    the block keys), so two prompts share a chunk exactly when they share everything up to its end."""
+    out, h = [], None
+    for i in range(prompt // chunk_tokens):
+        h = hash((h, tuple(keys[per * i:per * (i + 1)])))
+        out.append(h)
+    return out
+
+
+def lmcache_accesses(order, chunks, held, chunk_tokens):
+    """Per request in `order`: the chunks LMCache 0.5.5 reads and writes (`DESIGN_REVIEW.md` §3.63):
+    one range loaded, from the chunk holding the engine's `held` tokens to the store's longest
+    prefix hit, and the chunks past the hit stored (a chunk already stored is not written again)."""
+    store, out = set(), []
+    for k in order:
+        ch = chunks[k]
+        hit = 0
+        while hit < len(ch) and ch[hit] in store:
+            hit += 1
+        first = held[k] // chunk_tokens
+        out.append((ch[first:hit] if hit > first else [], ch[hit:]))
+        store.update(ch[hit:])
+    return out
+
+
+def stack_distances(accesses):
+    """The block reuse distance of `aeiou dry-run --metrics` over (reads, writes) per request, a
+    request's reads before its writes: per read, the distinct chunks touched since that chunk's last
+    access, itself included (Mattson's stack distance), as (after a write, after a read)."""
+    ops = [(c, k) for rd, wr in accesses for c, k in [(c, "r") for c in rd] + [(c, "w") for c in wr]]
+    tree, last, kind = [0] * (len(ops) + 1), {}, {}
+
+    def add(i, v):
+        i += 1
+        while i < len(tree):
+            tree[i] += v
+            i += i & -i
+
+    def upto(i):                                       # the sum over [0, i)
+        t = 0
+        while i > 0:
+            t += tree[i]
+            i -= i & -i
+        return t
+
+    raw, rar = [], []
+    for t, (c, k) in enumerate(ops):
+        if c in last:
+            if k == "r":
+                (raw if kind[c] == "w" else rar).append(upto(t) - upto(last[c]))
+            add(last[c], -1)
+        add(t, 1)
+        last[c], kind[c] = t, k
+    return raw, rar
+
+def mixture_of(values, n):
+    """A count that is mostly 0 (a side run follows one main-agent request in fifty): none with the
+    zeros' weight, else `n` equal shares of the rest, so the rest is resolved however rare."""
+    some = [v for v in values if v]
+    if not some:
+        return {"const": 0}
+    w = round(len(some) / len(values), 4)
+    return {"mixture": [{"weight": round(1 - w, 4), "dist": {"const": 0}}, {"weight": w, "dist": shares(some, n)}]}
+
+
+def bases(rows, whole, chunk_tokens):
+    """Per chain, where its own tokens begin: past its kind's prefix (`whole`, in tokens, by kind)
+    or what its session had stored when it began, the longer, as `first_in`'s (`DESIGN_REVIEW.md`
+    §3.64, note of 2026-11-06): of a chain of neither kind, the engine holding the other tools'
+    prefix it opened with holds none of the chain's own."""
+    return {r["chain"]: max(whole[r["kind"]], r["hit"] * chunk_tokens) for r in rows if r["first"]}
+
+
+def lanes_of(rows):
+    """The main agent's lane and the side runs between its requests (`DESIGN_REVIEW.md` §3.64,
+    note of 2026-11-06), from `walk`'s rows in each session's order: after each request of the
+    main agent (`g` −1), the requests of the longest chain of the side run before its next (`side`,
+    0 none: a run lasts about as long as its leading sub-agent, the others being shorter); per
+    side run, the chains it serves in turn (`side_lanes`: the median distance, in the run's
+    requests, between two requests of one chain, rounded; 1 when no chain of the run goes on in
+    it) and the requests in it of each of its other chains (`side_turns`); and per request, the
+    session's other requests since its chain's previous one (`gap`, 0 for a chain's first)."""
+    side, lanes, rest, gap = [], [], [], {}
+    sessions = collections.defaultdict(list)
+    for r in rows:
+        sessions[r["ti"]].append(r)
+
+    def close(run):
+        if run is None:
+            return
+        n = collections.Counter(r["chain"] for r in run)
+        lead = max(n, key=lambda c: (n[c], -min(i for i, r in enumerate(run) if r["chain"] == c)), default=None)
+        side.append(n[lead] if run else 0)
+        rest.extend(v for c, v in n.items() if c != lead)
+        if run:
+            seen, d = {}, []
+            for i, r in enumerate(run):
+                if r["chain"] in seen:
+                    d.append(i - seen[r["chain"]])
+                seen[r["chain"]] = i
+            lanes.append(max(1, round(statistics.median(d))) if d else 1)
+
+    for sess in sessions.values():
+        run, last = None, {}
+        for i, r in enumerate(sess):
+            gap[(r["ti"], r["fi"])] = i - last[r["chain"]] - 1 if r["chain"] in last else 0
+            last[r["chain"]] = i
+            if r["g"] < 0:
+                close(run)
+                run = []
+            elif run is not None:                  # a sub-agent's request before the session's first of the main agent follows none
+                run.append(r)
+        close(run)
+    return side, lanes, rest, gap
+
 
 def fit(a):
     sent = None
@@ -504,14 +657,12 @@ def fit(a):
     whole = {k: v // a.chunk_tokens * a.chunk_tokens for k, v in prefix.items()}
     inn, first, out, think, growth, trim = [], [], [], [], [], []
     starts = 0
-    kinds = collections.Counter()
     for r in rows:
         out.append(r["out"])
         if r["think"] is not None:
             think.append(round(r["think"] * 1e9))
         if r["first"]:
             starts += 1
-            kinds[r["kind"]] += 1
             first.append(max(0, r["inp"] - max(prefix[r["kind"]], r["hit"] * a.chunk_tokens)))   # past its prefix, or what its session had stored
         else:
             if r["kept"] >= r["prev_in"]:                                   # extends: grew by the kept reply and the new input
@@ -525,6 +676,10 @@ def fit(a):
     rewrite = len(trim) / max(1, n_cont)
     n = len(rows)
     lengths = collections.Counter(r["chain"] for r in rows)
+    side, lanes, rest, _ = lanes_of(rows)
+    starts_in = {r["chain"]: r["g"] >= 0 for r in rows if r["first"]}   # a chain started in a side run, or on the main agent's lane
+    side_kinds = collections.Counter(r["kind"] for r in rows if r["first"] and r["g"] >= 0)
+    kinds = collections.Counter(r["kind"] for r in rows if r["first"] and r["g"] < 0)
     context = -(-a.context // a.chunk_tokens) * a.chunk_tokens
     sessions = a.traces if a.traces < 10 ** 9 else sum(1 for _ in open(a.corpus))
     params = {"concurrency": 1, "warm": 0, "requests": n, "chunk_tokens": a.chunk_tokens, "context": context,
@@ -533,11 +688,15 @@ def fit(a):
               "sub_prompts": sessions, "sub_tokens": sub_tokens, "sub_tokens_min": sub_tokens, "sub_tokens_max": sub_tokens,
               "kind": {"empirical": {"values": [0, 1, 2], "weights": [kinds[0], kinds[1], kinds[2]]}},
               "reuse": {"mixture": [{"weight": 0, "dist": None}, {"weight": 1, "dist": {"const": 1}}]},
-              "turns": shares(list(lengths.values()), a.turn_bins), "retain": n,
+              "turns": shares([v for c, v in lengths.items() if not starts_in[c]] or [1], a.turn_bins), "retain": n,
+              "side": mixture_of(side, a.turn_bins), "side_lanes": shares(lanes or [1], a.bins),
+              "side_kind": {"empirical": {"values": [0, 1, 2], "weights": [side_kinds[0], side_kinds[1], side_kinds[2]]}},
+              "side_turns": shares(rest or [1], a.turn_bins),
               "turn_in": shares(inn, a.bins), "first_in": shares(first, a.bins), "turn_out": shares(out, a.bins), "think": shares(think, a.bins),
               "trim": {"mixture": [{"weight": round(1 - rewrite, 4), "dist": {"const": 0}}, {"weight": round(rewrite, 4), "dist": shares(trim, a.bins)}]}}
     if sent is not None:                           # the replay's sessions are its slots, served back to back; keep is the engine's
         keep, pheld = [], {0: [], 1: []}
+        base = bases(rows, whole, a.chunk_tokens)
         for r in rows:
             prompt, held = sent[(r["ti"], r["fi"])]
             if r["kind"] < 2 and held < whole[r["kind"]] + a.chunk_tokens:   # no whole chunk of the conversation held: what of its prefix the engine held
@@ -546,7 +705,7 @@ def fit(a):
                 prompt, held = sent[(r["ti"], r["fi"])]
                 avail = min(r["kept"], prompt)         # the engine can hold the kept prefix only: the reply's blocks are not the next prompt's
                 got = min(held, avail)
-                keep.append((max(0, got - whole[r["kind"]]), got + a.block > avail))   # the engine counts whole blocks
+                keep.append((max(0, got - base[r["chain"]]), got + a.block > avail))   # the engine counts whole blocks
         held_of = lambda v: shares(v, a.bins) if v else {"const": 0}
         params.update(concurrency=a.traces, requests=round(n / a.traces), keep=kept(keep, a.bins, context),
                       sys_held=held_of(pheld[0]), sub_held=held_of(pheld[1]),
@@ -617,8 +776,10 @@ def main():
     ap.add_argument("--doc", default="")
     ap.add_argument("--condition", action="append", default=[], metavar="NAME=VALUE", help="fit --replay: a condition the server's log lacks")
     ap.add_argument("--pool", type=int, default=0, help="holds: the engine's KV pool in tokens (default: the server's)")
-    ap.add_argument("--clockless", action="store_true", help="holds: sessions back to back at --service's cost, not the engine's timeline")
-    ap.add_argument("--service", type=float, nargs=2, metavar=("C_IN", "C_OUT"), help="holds --clockless: seconds per prompt and per reply token")
+    ap.add_argument("--timeline", choices=["engine", "paced", "serial", "rounds"], default="engine",
+                    help="holds: the engine's own; or sessions back to back at --service's cost; or one request at a time, the sessions in turn; or each session's next together")
+    ap.add_argument("--service", type=float, nargs=2, metavar=("C_IN", "C_OUT"), help="holds --timeline paced: seconds per prompt and per reply token")
+    ap.add_argument("--chunk-bytes", type=int, default=3145728, help="holds: a chunk's bytes, for the reuse distances (the replays' Qwen2.5-0.5B: 12 KiB a token)")
     ap.add_argument("-o", "--out", help="fit, reference: the file; holds: per request, session index prompt measured predicted")
     a = ap.parse_args()
     if a.what != "holds" and not a.out or a.what == "holds" and not a.replay:

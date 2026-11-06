@@ -9,7 +9,7 @@
   "outside": [
     {
       "metric": "mix: reads / data ops",
-      "reason": "as the buffered replay's (../../agentx/captures/replay-2gib-pool): the abstract reads fewer conversation chunks than the replay (17.6k to 26.5k reads over four seeds against 38.8k under strace, 39.4k under the eBPF source; the replay of 2026-11-05, the buffered one's requests) (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+      "reason": "as the buffered replay's (../../agentx/captures/replay-2gib-pool): the abstract reads fewer conversation chunks than the replay (18.4k to 25.9k reads over four seeds, ~~17.6k to 26.5k~~ before the side runs, DESIGN_REVIEW.md \u00a73.64 note of 2026-11-06, against 38.8k under strace, 39.4k under the eBPF source; the replay of 2026-11-05, the buffered one's requests) (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
     },
     {
       "metric": "mix: read bytes / data bytes",
@@ -17,7 +17,7 @@
     },
     {
       "metric": "reuse distance, read after write",
-      "reason": "as the buffered replay's: the abstract's reads of a written chunk come sooner (p50 2.5 GiB against 4). ~~the server admits a request when KV memory frees (71 of 219 waited over 10 s, up to 72 s, while the other sessions ran), so a chunk is read back after more of their traffic than in the dry run's slots in turn; p99 10 GiB against 6. The buffered run's same row is within (0.274 of 0.392)~~ (the replay of 2026-10-07, one prefix; since 2026-11-05 the buffered run's row is outside as well)"
+      "reason": "as the buffered replay's: the abstract's reads of a written chunk come sooner (p50 3 GiB against 4, ~~2.5~~ before the side runs, DESIGN_REVIEW.md \u00a73.64 note of 2026-11-06). ~~the server admits a request when KV memory frees (71 of 219 waited over 10 s, up to 72 s, while the other sessions ran), so a chunk is read back after more of their traffic than in the dry run's slots in turn; p99 10 GiB against 6. The buffered run's same row is within (0.274 of 0.392)~~ (the replay of 2026-10-07, one prefix; since 2026-11-05 the buffered run's row is outside as well)"
     },
     {
       "metric": "extent reuse distance, read after write",

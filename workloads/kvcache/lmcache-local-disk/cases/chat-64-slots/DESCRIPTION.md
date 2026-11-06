@@ -48,6 +48,10 @@ One engine per actor; `concurrency` request slots; each request continues an ear
 | `prefill_per_token` | 40 µs | none | ns | prefill compute per prompt token: the model's on its accelerator |
 | `decode_per_token` | 12 ms | none | ns | decode compute per generated token: the model's on its accelerator |
 | `prefill_step` | 8,192 tokens | none | tokens | [config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens |
+| `side` | always 0 | same | count | [config: load] after each request of a slot's main lane, the requests of the leading chain of a side run, drawn at that request; 0 none. The run serves `side_lanes` chains in turn for `side_lanes` x `side` requests, its leading chain in its first lane, then the main lane goes on (an agent waiting on its sub-agents and side calls, a run lasting about as long as its longest sub-agent: measured in the AgentX corpus and replay, where a chain resumed after them is read back after their traffic, §3.64 note of 2026-11-06). For a slot of one agent: a request whose `reuse` draw is not 1 is never in a side run |
+| `side_lanes` | always 1 | same | count | [config: load] the chains a side run serves in turn, drawn at the main-lane request before it: each goes on `side_lanes` requests later (sub-agents beside one another), a chain that ends is followed in its lane by a new one of `side_turns`, and the run's chains end with it |
+| `side_kind` | always 1 | same | — | [config: load] the prefix a chain started in a side run opens with, as `kind` (a sub-agent's) |
+| `side_turns` | always 0 | same | count | [config: load] the requests a chain of a side run has, as `turns`, but its leading chain's (`side`) |
 | `think` | always 0 ns | same | ns | [config: load] the client's delay before a request (its user's or its agent's think time); zero sends a slot's requests back to back |
 
 The API the traced application used: `posix` sync (none declared); a run under another backend is another workload.
@@ -70,26 +74,26 @@ The API the traced application used: `posix` sync (none declared); a run under a
     - `kp` is drawn from one of 0 tokens (91%), 1,000,000 tokens (9%) (`keep`).
     - `tr` is drawn from always 0 tokens (`trim`).
     - `tn` is drawn from always 0 (`turns`).
-    - `back` = `d ≠ none and d ≤ r`.
-    - `more` = `back and (turns@(r − d) = 0 or turn@(r − d) + 1 < turns@(r − d))`.
-    - `prior` = `(if back then max(ptoks@(r − d) + out@(r − d) − tr, 0) else 0)`.
-    - `cont` = `more and (if back then sysblk@(r − d) else 0) × chunk_tokens + prior + inn + out ≤ context`.
-    - `conv` = `(if cont then conv@(r − d) else draw(uniform64))`.
-    - `turns` = `(if cont then turns@(r − d) else tn)`.
-    - `turn` = `(if cont then turn@(r − d) + 1 else 0)`.
-    - `sp` = `(if cont then sp@(r − d) else (if sys_per_slot = true then sysp[slot mod sys_prompts] else pick(sysp)))`.
+    - `back` = `d ≠ none and d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)) ≤ r and (if r > 0 then ngo@(r − 1) else true)`.
+    - `more` = `back and (turns@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) = 0 or turn@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) + 1 < turns@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))))`.
+    - `prior` = `(if back then max(ptoks@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) + out@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) − tr, 0) else 0)`.
+    - `cont` = `more and (if back then sysblk@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) else 0) × chunk_tokens + prior + inn + out ≤ context`.
+    - `conv` = `(if cont then conv@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) else draw(uniform64))`.
+    - `turns` = `(if cont then turns@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) else (if r > 0 and d = 1 and nex@(r − 1) then (if (if r > 0 then npos@(r − 1) else 0) = 0 then sd@(r − 1) else stn@(r − 1)) else tn))`.
+    - `turn` = `(if cont then turn@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) + 1 else 0)`.
+    - `sp` = `(if cont then sp@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) else (if sys_per_slot = true then sysp[slot mod sys_prompts] else pick(sysp)))`.
     - `kd` is drawn from always 0 (`kind`).
     - `fi` is drawn from always -1 tokens (`first_in`).
     - `sh` is drawn from always 0 tokens (`sys_held`).
     - `bh` is drawn from always 0 tokens (`sub_held`).
-    - `kind` = `(if cont then kind@(r − d) else kd)`.
-    - `sb` = `(if cont then sb@(r − d) else (if sub_per_slot = true then subp[slot mod sub_prompts] else pick(subp)))`.
+    - `kind` = `(if cont then kind@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) else (if r > 0 and d = 1 and nex@(r − 1) then skd@(r − 1) else kd))`.
+    - `sb` = `(if cont then sb@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))) else (if sub_per_slot = true then subp[slot mod sub_prompts] else pick(subp)))`.
     - `psize` = `(if kind = 0 then size(sp) else (if kind = 1 then size(sb) else 0))`.
     - `sysblk` = `psize div chunk_bytes`.
     - `pheld` = `min((if kind = 0 then sh else (if kind = 1 then bh else 0)) div chunk_tokens, sysblk)`.
     - `ptoks` = `(if cont then prior else (psize mod chunk_bytes) div (chunk_bytes div chunk_tokens)) + (if cont or fi < 0 then inn else fi)`.
     - `stored` = `ptoks div chunk_tokens`.
-    - `had` = `(if cont and d ≤ retain then min(stored@(r − d), prior div chunk_tokens) else 0)`.
+    - `had` = `(if cont and d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)) ≤ retain then min(stored@(r − (d + ((if r > 0 then nxd@(r − 1) else 0) mod (r + 1)))), prior div chunk_tokens) else 0)`.
     - `held` = `(if cont then min(prior, kp@(r − ((r mod d) + 1))) div chunk_tokens else 0)`.
     - `load` = `(if had > held then had − held else 0)`.
     - Phase `warm` while `r < warm`, else `serve`,:
@@ -154,6 +158,17 @@ The API the traced application used: `posix` sync (none declared); a run under a
             - `write` `b`: 32 MiB (`chunk_bytes`) at the file position.
             - `close` `b`.
       - Computes for `decode_per_token × out`, no I/O.
+    - `sd` is drawn from always 0 (`side`).
+    - `sl` is drawn from always 1 (`side_lanes`).
+    - `skd` is drawn from always 1 (`side_kind`).
+    - `stn` is drawn from always 0 (`side_turns`).
+    - `left` = `(if r > 0 and d = 1 and nex@(r − 1) then left@(r − 1) − 1 else sd × sl)`.
+    - `nex` = `left > 0`.
+    - `npos` = `(if nex then (if r > 0 and d = 1 and nex@(r − 1) then (if r > 0 then npos@(r − 1) else 0) + 1 else 0) else 0)`.
+    - `nlanes` = `(if nex then (if r > 0 and d = 1 and nex@(r − 1) then (if r > 0 then nlanes@(r − 1) else 1) else sl) else 1)`.
+    - `ngap` = `(if r > 0 and d = 1 and nex@(r − 1) then (if r > 0 then ngap@(r − 1) else 0) + 1 else 0)`.
+    - `nxd` = `(if nex then nlanes − 1 else ngap)`.
+    - `ngo` = `nex = false or npos ≥ nlanes`.
 
 ### Measured shape
 

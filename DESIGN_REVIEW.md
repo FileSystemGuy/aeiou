@@ -4116,6 +4116,85 @@ and is struck in its tolerance file. The read-after-write distance being short i
 abstract at both pools is the next question for the two-prefix model (§3.63's checkpoint).
 The `holds` simulation's agreement (14 % and 2 %) was not run again.
 
+**Note of 2026-11-06: why the abstract's reads of a written chunk came sooner, the side runs
+(the user's choice of the open question above; built the same day, the pool as a computed cache
+proposed).** *Found.* The replay's chunk accesses rebuilt from the corpus, the replay's log, the
+server's, and LMCache's rule (a request loads from the chunk holding what the engine kept to its
+store's longest hit and stores the rest) give the 2 GiB trace's 5,663 writes exactly, 38,945
+reads against 38,818, its 4,496 reads after a write, and their mean distance within 1 %. In it a
+session plays its requests in time order, and the main agent's chain is suspended while its
+sub-agents and side calls run, then resumed: a sub-agent's chain is interrupted by its session's
+other requests at 59 % of its continuing requests, a side call's at 50 %, the main agent's at 4 %
+(but those after 6 to 31 requests). The abstract's `reuse` is 1, so a slot ran each chain to its
+end. At 6 GiB nearly every read is of a chain resumed after such a run (the main agent's: 75 % of
+its resumptions read, 88 chunks each, against 2 % of its straight continuations), so a chunk is
+read after the run's traffic (made contiguous in the rebuild, read after write falls from p50
+4.8 GiB to 1.25). At 2 GiB nearly every continuing request reads, 97 % of the reads after a write
+at the chain's next request, and the abstract's distance is short for two reasons together: it
+reads too little (the replay's reads thinned to the abstract's count give a mean of 3.3 GiB
+against 4.6) and runs its chains contiguously (another 0.7). The session order of the replay is
+the sessions' order in the corpus: a main agent's chain, then a run of sub-agents served in turn
+(often two to five beside one another, or one among one-request side calls), then the main
+agent again.
+
+*Built: side runs* (`lmcache_local_disk`, five parameters drawn after every other draw, so every
+committed parameter file keeps its fingerprints; the AST's hash changes). After each request of
+a slot's main lane, `side` (0 none) gives the requests of a side run's leading chain; the run
+serves `side_lanes` chains in turn for `side_lanes` × `side` requests, the leading one in its
+first lane and the others of `side_turns`, chains of `side_kind`; then the main lane goes on
+where it was. In the corpus a run's longest chain holds two thirds of its requests at the median
+and 45 % of all side requests, so a run lasts about as long as its leading sub-agent; a run of
+drawn length with chains of drawn turns cut the long sub-agents short and lost a third of the
+corpus fit's loads. What a request does at a run is read from bindings the request before left
+at the end of the loop body (`x @ (r − 1)`); the distance to the request a chain goes on from is
+`d + (x mod (r + 1))`, the form rule V3 proves. The state is read only where `d` is 1: a slot of
+one agent; without that guard `chat-64-slots` (`reuse` 40) overflowed the stack, a miss in the
+VM's `at` cache walking the state back a request at a time. `agentx.py`: `lanes_of` takes the
+runs from each session's order, `kind` and `turns` are now the main agent's chains', `side` a
+mixture of none and the runs' shares, and `keep` is counted past a chain's base (its kind's prefix
+or what its session had stored when it began, as `first_in`), since 19 of the replay's 26 side
+chains open with another sub-agent type's stored tools. *Tried and rejected the same day:*
+`keep_back`, the hold of a chain resumed after others, apart from `keep`: at 6 GiB the engine
+held such a chain whole or nothing past its prefix, by its size (60k to 120k tokens lost, 18k to
+56k held), which a drawn hold independent of size cannot give; the user asked whether the loss is
+better a share of the context (it is: nothing censored, the bytes scale with the chain), and then
+whether to model the pool itself, below.
+
+*Verdicts.* The 6 GiB pairs (eBPF and strace) are **accepted** (40 rows within, fan-out unseen),
+read after write within. The 2 GiB pairs keep four rows outside, read after write now p50 3 GiB
+against 4 (2.5 before) and the reads' share (17.8k to 25.7k reads against 38.8k). The `O_DIRECT`
+pairs keep their four, and strace's adds the top tenth's popularity (27 % against 36 %, 0.084
+against 0.083), the case being the eBPF capture's fit. The corpus fit loads 15 % under the
+corpus's hits at the default `keep` (10 % before), judged now over four seeds: one seed's 10,000
+requests spread by a fifth either way.
+
+*The pool as a memory pool (the user's question; the experiment run, the design to be drafted).*
+The holds are a fixed pool's filter: vLLM's prefix cache evicts freed blocks least recently used
+first, a request's tail first, so what a chain loses while it waits is the interruption's demand
+against the pool, and the shared prefixes stay. `agentx.simulate` over the replay's own requests,
+its holds driving LMCache's loads in the rebuild, on timelines an abstract can compute:
+
+| timeline | 2 GiB reads | after write, p50 | after read, p50 | 6 GiB reads | after write | after read |
+|---|---|---|---|---|---|---|
+| the engine's measured holds | 38,945 | 4.6 GiB | 4.4 | 2,455 | 4.8 | 4.9 |
+| the engine's own timeline | 36,276 | 5.0 | 4.7 | 2,280 | 4.8 | 4.7 |
+| one request at a time, the slots in turn | 39,881 | 5.0 | 4.8 | 2,865 | 3.9 | 3.7 |
+| each slot's next request admitted together | 37,098 | 5.0 | 4.8 | 3,330 | 4.4 | 3.7 |
+| sessions back to back at the replay's speed | 31,623 | 5.0 | 4.7 | 2,343 | 4.8 | 2.7 |
+
+The order the abstract's slots already take, one request at a time in turn, with the pool's size
+alone, gives the reads within 2.4 % at 2 GiB and 17 % at 6 GiB and both distances near; per
+request it agrees within a chunk in only 65 % at 2 GiB, the admission's waits and preemptions
+moving single requests, not the stream. The drawn holds give 15k to 26k reads at 2 GiB. This is
+the replay's demand, not the abstract's drawn one. It reopens "computed holds are deferred"
+above: the pool would replace `keep`, `sys_held`, and `sub_held` with one size from the GPU
+model, and so carry an abstract to another accelerator, which drawn holds cannot. Built the same
+day as a kit tool: `agentx.py holds --timeline engine|paced|serial|rounds` (~~`--clockless`~~,
+now `paced`) prints the storage LMCache would see at the predicted holds and at the measured ones
+(`lmcache_accesses`, `stack_distances`), the table above from the committed logs. Next: the design
+drafted for the user's decision, a contract change. The context tree the side runs expose, as a digest finding, is
+`PROJECT_BRIEF.md` §6 item 69.
+
 ### 3.65 The access layers: protocol, API, cache, transport, and buffer as separate axes, `s3dlio` as one engine among them (proposed and decided 2026-10-09; the object engine on `object_store` instead, decided the same day)
 
 **The question (the user's).** Polishing the KV abstracts kept running into "backend"

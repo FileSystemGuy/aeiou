@@ -9,15 +9,15 @@
   "outside": [
     {
       "metric": "mix: reads / data ops",
-      "reason": "the abstract reads fewer conversation chunks than the replay (17.5k to 26.3k reads over four seeds against 38.8k in the replay of 2026-11-05, ~~13.5k to 24.4k against 33.8k~~ in 2026-10-08's, spread wide over seeds: the long main-agent chains a slot draws carry most of the reads); lifting the context cap brings it within (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+      "reason": "the abstract reads fewer conversation chunks than the replay (17.8k to 25.7k reads over four seeds against 38.8k in the replay of 2026-11-05, ~~17.5k to 26.3k before the side runs,~~ ~~13.5k to 24.4k against 33.8k~~ in 2026-10-08's; the side runs, DESIGN_REVIEW.md \u00a73.64 note of 2026-11-06, did not change it); with the engine's pool computed over the replay's own requests, one at a time and the slots in turn, the rebuilt reads are 39.9k: what the drawn holds lack is the pool (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63)"
     },
     {
       "metric": "mix: read bytes / data bytes",
-      "reason": "the same as the reads' share of data ops: every access is one whole chunk (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+      "reason": "the same as the reads' share of data ops: every access is one whole chunk (DESIGN_REVIEW.md \u00a73.64 note of 2026-11-06)"
     },
     {
       "metric": "reuse distance, read after write",
-      "reason": "the abstract's reads of a written chunk come sooner (p50 2.5 GiB against 4); the conversation reads are short of the replay's (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined); read after read within since the replay of 2026-11-05"
+      "reason": "the abstract's reads of a written chunk come sooner (p50 3 GiB against 4, ~~2.5~~ before the side runs, DESIGN_REVIEW.md \u00a73.64 note of 2026-11-06): a chain's chunks are read back after its session's side runs, which the abstract has since then, and after the traffic of the reads it lacks (its reads thinned to the abstract's count give 3.3 GiB in the rebuilt replay); read after read within since the replay of 2026-11-05"
     },
     {
       "metric": "extent reuse distance, read after write",

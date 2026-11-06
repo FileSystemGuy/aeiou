@@ -57,8 +57,9 @@ fn hashes_match_check_py() {
         // the st_blksize of its namespace (contract 0.12), DESIGN_REVIEW §3.78
         ("dcp_save", "c893be0d7a5a19d077c5292b7180313c9ed00b6f0c7661b3e5e9fb97941b1347"),
         // 2026-10-23: the model's on its GPU, the deployment's, and the load's values required (its unsettled case
-        // chat-64-slots), DESIGN_REVIEW §3.78
-        ("lmcache_local_disk", "31d84beba90ffba19cc19051ca64745e4325f1cfde2b8fe63078194743eafaa1"),
+        // chat-64-slots), DESIGN_REVIEW §3.78; 2026-11-06 for the side runs, `side`, `side_lanes`, `side_kind`, and
+        // `side_turns`, drawn after every other draw and read only where `reuse` is 1, every fingerprint unchanged (§3.64)
+        ("lmcache_local_disk", "17a3606031713710c0af01088251892a87efe051e0ef7b018eff91090c21aa05"),
         // 2026-10-23: the model's shards and tensor table and the deployment's tp required (its unsettled case
         // five-tensors), DESIGN_REVIEW §3.78
         ("safetensors_load", "16bc379d576d23761c807ed22ccdc67bb5a1d572962a02d8fc2c25105b3789e1"),

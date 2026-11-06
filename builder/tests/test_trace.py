@@ -722,22 +722,65 @@ def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_p
     (`agentx.reference.json`: per request, the whole chunks a store that never evicts would
     hit and would store). The abstract stores 8 % more (the reply counted whole where the
     model kept less of it) and, at the default `keep` (91 % of returns hold nothing), loads
-    0.91 of its hits, which are within 10 % of the corpus's; the first 10,000 of the 98,827
-    requests, one slot (`DESIGN_REVIEW.md` §3.59)."""
+    0.91 of its hits, which are 15 % under the corpus's (10 % before the side runs); the first 10,000 of the 98,827
+    requests, one slot (`DESIGN_REVIEW.md` §3.59), the mean of four seeds: the hits are carried by a few
+    chains of hundreds of turns, so one seed's 10,000 spread by a fifth either way (the side runs of
+    §3.64's note of 2026-11-06 take 40 % of a slot's requests from its main lane)."""
     kit, case = ast_path("lmcache_local_disk").parent / "kit", case_dir("lmcache_local_disk", "agentx")
     ref = json.loads((kit / "agentx.reference.json").read_text())
-    n = 10_000
-    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", "1",
-                        "--params-file", str(case / "params.json"), "--param", f"requests={n}"], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    kinds = dict(re.findall(r"(\w+)=(\d+)", re.search(r"by kind: (.*)", r.stdout)[1]))
-    stored, loaded = int(kinds["write"]) / n, int(kinds["read"]) / n
+    n, seeds = 10_000, (1, 2, 3, 4)
+    runs = [subprocess.Popen([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", str(seed),
+                              "--params-file", str(case / "params.json"), "--param", f"requests={n}"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for seed in seeds]
+    stored = loaded = 0
+    for p in runs:
+        out, err = p.communicate()
+        assert p.returncode == 0, err
+        kinds = dict(re.findall(r"(\w+)=(\d+)", re.search(r"by kind: (.*)", out)[1]))
+        stored, loaded = stored + int(kinds["write"]) / n / len(seeds), loaded + int(kinds["read"]) / n / len(seeds)
     assert ref["chunks_stored"]["mean"] == 14.46 and ref["chunks_hit"]["mean"] == 840.08 and ref["requests"] == 98827
     assert 0.95 * ref["chunks_stored"]["mean"] < stored < 1.2 * ref["chunks_stored"]["mean"], stored
     assert 0.8 * ref["chunks_hit"]["mean"] < loaded / 0.91 < 1.2 * ref["chunks_hit"]["mean"], loaded
     p = values_of(json.loads((case / "params.json").read_text()))
     assert p["reuse"]["mixture"][0]["weight"] == 0 and p["turns"]["empirical"]["values"][0] == 1 and len(p["turns"]["empirical"]["values"]) == 100
     assert p["trim"]["mixture"][0]["dist"] == {"const": 0} and 0.03 < p["trim"]["mixture"][1]["weight"] < 0.05
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_kv_cache_side_runs_suspend_the_main_lane(tmp_path):
+    """`lmcache_local_disk`'s side runs (DESIGN_REVIEW.md §3.64, note of 2026-11-06): after each request of a
+    slot's main lane, a side run of `side_lanes` chains served in turn, the first of `side` requests and
+    the others of `side_turns`, for `side_lanes` x `side` requests, then the main lane goes on where it
+    was. Chains of no prefix whose every request adds two chunks, nothing kept by `keep`, so a chain
+    that goes on reads all it stored."""
+    case = case_dir("lmcache_local_disk", "agentx")
+    base = json.loads((case / "params.json").read_text())
+    const = lambda v: {"const": v}
+
+    def counts(**over):
+        f = json.loads(json.dumps(base))
+        vals = dict(concurrency=1, warm=0, requests=7, kind=const(2), first_in=const(512), turn_in=const(512), turn_out=const(0),
+                    trim=const(0), turns=const(0), think=const(0), keep=const(0), context=1 << 20, retain=1000, sys_local=True,
+                    side_turns=const(2), side_kind=const(2))
+        vals.update(over)
+        for k, v in vals.items():
+            f["params"][k] = {"default": v}
+        pf = tmp_path / "p.json"
+        pf.write_text(json.dumps(f))
+        r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--params-file", str(pf)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        kinds = dict(re.findall(r"(\w+)=(\d+)", re.search(r"by kind: (.*)", r.stdout)[1]))
+        return int(kinds["write"]), int(kinds.get("read", 0))
+
+    # no side runs: one chain of 7 requests reads 2 + 4 + ... + 12
+    assert counts() == counts(side=const(0)) == (14, 42)
+    # M, S1, S1, M, S2, S2, M: S1 and S2 go on straight (2 each), M after two side requests (2, then 4)
+    assert counts(side=const(2), side_lanes=const(1)) == (14, 10)
+    # M, A, B, A, B, M, A': two side chains in turn, each going on after the other (reads 2 each), then M
+    assert counts(side=const(2), side_lanes=const(2)) == (14, 6)
+    # the leading chain's turns make the run: M, A, A, A, M, A', A' (A reads 2 then 4; M 2; A' 2)
+    assert counts(side=const(3), side_lanes=const(1), side_turns=const(1)) == (14, 10)
 
 
 def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted(monkeypatch):
@@ -758,8 +801,9 @@ def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted
         assert sum(1 for _, held in sent.values() if held == 0) == 48       # the engine held nothing, not even a shared prefix
         p = values_of(json.loads((cap / "fitted.params.json").read_text()))
         assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_prompts"], p["sub_prompts"]) == (8, 29, 131072, False, 1, 1)
-        assert p["kind"]["empirical"]["weights"] == [8, 7, 27]              # chains opening with the main agent's prefix, a sub-agent's, neither
-        assert p["keep"]["empirical"]["values"].count(0) == 6               # of 20 shares: nothing held past the prefix
+        # the main agent's chains opening with its prefix, a sub-agent's, neither (side runs' chains apart, §3.64 note of 2026-11-06)
+        assert p["kind"]["empirical"]["weights"] == [8, 0, 8] and p["side_kind"]["empirical"]["weights"] == [0, 7, 19]
+        assert p["keep"]["empirical"]["values"].count(0) == 7               # of 20 shares: nothing held past the chain's base
 
 
 def test_agentx_replay_fits_record_the_engine_they_were_fitted_at(monkeypatch):
@@ -815,7 +859,7 @@ def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
     tc, dc = t["counts"], d["counts"]
     for c in (tc, dc):
         assert c["open"] == c["close"] == c["read"] + c["write"] and c["fstat"] == c["read"] and "ioctl" not in c and "lseek" not in c
-    assert (tc["write"], tc["read"]) == (5663, 39406) and (dc["write"], dc["read"]) == (6146, 17626)
+    assert (tc["write"], tc["read"]) == (5663, 39406) and (dc["write"], dc["read"]) == (6078, 21209)
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")

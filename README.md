@@ -396,11 +396,11 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-11-05)
+## Status (2026-11-06)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
-LMCache (item 21: `keep` measured, buffered and `O_DIRECT` both traced; the buffered replay corrected 2026-10-08 and the main agent's and sub-agents' prompts modelled apart, its pair not yet accepted; run again at three times the engine's KV pool, that pair accepted, the engine and CPU tier a fixed reference, item 24). Built and tested: everything described above, the nine backends, the
+LMCache (item 21: `keep` measured, buffered and `O_DIRECT` both traced; the buffered replay corrected 2026-10-08 and the main agent's and sub-agents' prompts modelled apart, its pair not yet accepted; run again at three times the engine's KV pool, that pair accepted (again since 2026-11-06, the sub-agents' side runs modelled), the engine and CPU tier a fixed reference, item 24; the context tree as a digest finding not built, item 69). Built and tested: everything described above, the nine backends, the
 multi-host coordinator (two ranks on `localhost`), the limit checks, the cold-start
 controls, the JSON report, the locality metrics on both sides with tolerances (over extents, byte ranges, since 2026-10-22, `DESIGN_REVIEW.md` §3.79), the `trace`
 node under every backend, the option layers, the usage-error frame, and `datagen` across

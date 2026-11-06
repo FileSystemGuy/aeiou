@@ -1475,6 +1475,18 @@ numbers; the order is this note's.
     To build: a patch of aya under `[patch.crates-io]` (load with the attach type, create the
     link with every offset of a library at once), or the same upstream; root's `perf_event_open`
     kept below 6.6.
+69. **The context tree of a KV trace, a digest finding (queued by the user 2026-11-06 with the
+    AgentX side runs, `DESIGN_REVIEW.md` §3.64 note of 2026-11-06; not started).** An agentic
+    session is a main agent's context with sub-agent and side-call contexts run beside it while
+    it waits (two to five served in turn in the replay, the main one resumed after 6 to 31 of
+    their requests), and that tree, with each context's tokens, turns, and compute, is what a
+    person should read of the workload. A storage trace shows it only in part: LMCache names a
+    chunk by its prefix's hash, so requests link into contexts only where a chunk one wrote is
+    read by a later one, and siblings by the prefix chunks they share; at a large pool almost
+    nothing is read. An engine's request log (vLLM's and LMCache's lookups) or a request corpus
+    gives it whole. To design: a site kind of the digest for it, what the trace decides and what
+    it leaves to an engine log or the owner's answers, and the factoids (per context its
+    requests, tokens, prefill and decode compute; per side run its lanes and length).
 
 ## 7. Environment
 

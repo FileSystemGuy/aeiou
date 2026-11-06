@@ -13,7 +13,12 @@ the chunks past the part it kept.
 
 The lengths are those of a public chat replay (ShareGPT through the same server, 2026-10-02,
 workloads/kvcache/lmcache-local-disk/kit/replay.py). A slot serves its open conversations in turn:
-`reuse` has one distance, so a request has at most one continuation.
+`reuse` has one distance, so a request has at most one continuation. A slot that is one agent
+(`reuse` 1) may run side runs: after a request of its main lane, `side_lanes` chains in turn, the
+first of `side` requests, then the main lane goes on (an agent waiting on its sub-agents, the
+AgentX replay, DESIGN_REVIEW.md §3.64 note of 2026-11-06); what a request does at a side run is
+decided by the bindings of the request before it (`x @ (r − 1)`), all of them after the draws of
+the main lane, so a file without side runs keeps its fingerprints.
 
 Exercises: `at` chains (§9.5), an `at` offset that is an expression (`kp @ (r − (r mod d + 1))`,
 rule V3 as widened in contract 0.5), a mixture with a none arm, expression-selected phase names, a
@@ -79,6 +84,18 @@ w.param("decode_per_token", kind=int, unit="ns", doc="decode compute per generat
 w.param("prefill_step", kind=int, unit="tokens",
         doc="[config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 "
             "otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens")
+w.param("side", const(0), unit="count",
+        doc="[config: load] after each request of a slot's main lane, the requests of the leading chain of a side run, drawn at that "
+            "request; 0 none. The run serves `side_lanes` chains in turn for `side_lanes` x `side` requests, its leading chain in its "
+            "first lane, then the main lane goes on (an agent waiting on its sub-agents and side calls, a run lasting about as long as "
+            "its longest sub-agent: measured in the AgentX corpus and replay, where a chain resumed after them is read back after "
+            "their traffic, §3.64 note of 2026-11-06). For a slot of one agent: a request whose `reuse` draw is not 1 is never in a side run")
+w.param("side_lanes", const(1), unit="count",
+        doc="[config: load] the chains a side run serves in turn, drawn at the main-lane request before it: each goes on `side_lanes` "
+            "requests later (sub-agents beside one another), a chain that ends is followed in its lane by a new one of `side_turns`, "
+            "and the run's chains end with it")
+w.param("side_kind", const(1), doc="[config: load] the prefix a chain started in a side run opens with, as `kind` (a sub-agent's)")
+w.param("side_turns", const(0), unit="count", doc="[config: load] the requests a chain of a side run has, as `turns`, but its leading chain's (`side`)")
 w.param("think", const(0), unit="ns",
         doc="[config: load] the client's delay before a request (its user's or its agent's think time); zero sends a slot's requests back to back")
 
@@ -140,24 +157,34 @@ with w.actor("gpu") as gpu:
             kp = slot.draw("kp", P.keep)
             tr = slot.draw("tr", P.trim)
             tn = slot.draw("tn", P.turns)
-            back = slot.let("back", (d != None) & (d <= r))            # noqa: E711
-            # the conversation at r − d goes on when it has turns left (or no limit) and the context holds this request
-            more = slot.let("more", back & ((slot.ref("turns").at(r - d) == 0) | (slot.ref("turn").at(r - d) + 1 < slot.ref("turns").at(r - d))))
+            # side runs, as the request before left them for this one (its bindings at the loop's end): whether this request
+            # is in one, the distance past d to the request it goes on from (`side_lanes` − 1 in a side run, else the side
+            # requests since the main lane's last), and whether its lane has a chain to go on yet
+            # only where d is 1, a slot of one agent: elsewhere nothing reads the state, and a miss in the VM's cache of
+            # `x @ i` would walk it back a request at a time to the slot's start (chat-64-slots at reuse 40 overflowed the stack)
+            ex = (r > 0) & (d == 1) & slot.ref("nex").at(r - 1)
+            # `x mod (r + 1)` is x for 0 <= x <= r: the form rule V3 proves
+            dd = d + (when(r > 0, slot.ref("nxd").at(r - 1), 0) % (r + 1))
+            back = slot.let("back", (d != None) & (dd <= r) & when(r > 0, slot.ref("ngo").at(r - 1), True))   # noqa: E711
+            # the conversation at r − dd goes on when it has turns left (or no limit) and the context holds this request
+            more = slot.let("more", back & ((slot.ref("turns").at(r - dd) == 0) | (slot.ref("turn").at(r - dd) + 1 < slot.ref("turns").at(r - dd))))
             # the conversation's own tokens when its last request ended: that prompt and its reply
-            prior = slot.let("prior", when(back, max_(slot.ref("ptoks").at(r - d) + slot.ref("out").at(r - d) - tr, 0), 0))
-            cont = slot.let("cont", more & (when(back, slot.ref("sysblk").at(r - d), 0) * P.chunk_tokens + prior + inn + out <= P.context))
-            # the chain: conv @ r = conv @ (r − d) or fresh
-            conv = slot.let("conv", when(cont, slot.ref("conv").at(r - d), draw(uniform64())))
-            turns = slot.let("turns", when(cont, slot.ref("turns").at(r - d), tn))
-            turn = slot.let("turn", when(cont, slot.ref("turn").at(r - d) + 1, 0))
-            sp = slot.let("sp", when(cont, slot.ref("sp").at(r - d),
+            prior = slot.let("prior", when(back, max_(slot.ref("ptoks").at(r - dd) + slot.ref("out").at(r - dd) - tr, 0), 0))
+            cont = slot.let("cont", more & (when(back, slot.ref("sysblk").at(r - dd), 0) * P.chunk_tokens + prior + inn + out <= P.context))
+            # the chain: conv @ r = conv @ (r − dd) or fresh
+            conv = slot.let("conv", when(cont, slot.ref("conv").at(r - dd), draw(uniform64())))
+            lead = when(r > 0, slot.ref("npos").at(r - 1), 0) == 0          # the side run's first request starts its leading chain
+            turns = slot.let("turns", when(cont, slot.ref("turns").at(r - dd),
+                                           when(ex, when(lead, slot.ref("sd").at(r - 1), slot.ref("stn").at(r - 1)), tn)))
+            turn = slot.let("turn", when(cont, slot.ref("turn").at(r - dd) + 1, 0))
+            sp = slot.let("sp", when(cont, slot.ref("sp").at(r - dd),
                                      when(P.sys_per_slot == True, sysp.file(slot.index % P.sys_prompts), sysp.pick(P.sys_pop))))   # noqa: E712
             kd = slot.draw("kd", P.kind)                       # last of the draws: their sites (JSON pointers) stay put
             fi = slot.draw("fi", P.first_in)
             sh = slot.draw("sh", P.sys_held)
             bh = slot.draw("bh", P.sub_held)
-            kind = slot.let("kind", when(cont, slot.ref("kind").at(r - d), kd))
-            sb = slot.let("sb", when(cont, slot.ref("sb").at(r - d),
+            kind = slot.let("kind", when(cont, slot.ref("kind").at(r - dd), when(ex, slot.ref("skd").at(r - 1), kd)))
+            sb = slot.let("sb", when(cont, slot.ref("sb").at(r - dd),
                                      when(P.sub_per_slot == True, subp.file(slot.index % P.sub_prompts), subp.pick(P.sub_pop))))   # noqa: E712
             psize = slot.let("psize", when(kind == 0, sp.size, when(kind == 1, sb.size, 0)))   # the prefix the conversation opens with
             sysblk = slot.let("sysblk", psize // P.chunk_bytes)    # whole chunks inside its prefix, shared by the conversations that open with it
@@ -165,7 +192,7 @@ with w.actor("gpu") as gpu:
             # the conversation's own tokens in this request's prompt; a new conversation starts with its prefix's tokens past its last whole chunk
             ptoks = slot.let("ptoks", when(cont, prior, (psize % P.chunk_bytes) // token_bytes) + when(cont | (fi < 0), inn, fi))
             stored = slot.let("stored", ptoks // P.chunk_tokens)       # whole chunks only
-            had = slot.let("had", when(cont & (d <= P.retain), min_(slot.ref("stored").at(r - d), prior // P.chunk_tokens), 0))   # the store's chunks of the kept prefix
+            had = slot.let("had", when(cont & (dd <= P.retain), min_(slot.ref("stored").at(r - dd), prior // P.chunk_tokens), 0))   # the store's chunks of the kept prefix
             # whole chunks the engine kept, from the start: one `keep` draw per round of the d open conversations, the one
             # made at the last request of the previous round, so a round's loads come together (§3.57)
             held = slot.let("held", when(cont, min_(prior, slot.ref("kp").at(r - (r % d + 1))) // P.chunk_tokens, 0))
@@ -187,6 +214,20 @@ with w.actor("gpu") as gpu:
                     with slot.loop("k", min_(stored, had + (s + 1) * cps), start=had + s * cps) as k:   # the step's new whole chunks
                         chunk_write(slot, slot.let("b", kv.object(conv=conv, k=k)))
                 slot.compute(P.decode_per_token * out)
+            # the side runs' draws and the next request's state, after everything above so its sites stay put
+            sd = slot.draw("sd", P.side)
+            sl = slot.draw("sl", P.side_lanes)
+            slot.draw("skd", P.side_kind)
+            slot.draw("stn", P.side_turns)
+            pos = when(r > 0, slot.ref("npos").at(r - 1), 0)               # this request's place in its side run
+            lanes = when(r > 0, slot.ref("nlanes").at(r - 1), 1)
+            left = slot.let("left", when(ex, slot.ref("left").at(r - 1) - 1, sd * sl))   # side requests still to come after this one
+            nex = slot.let("nex", left > 0)
+            npos = slot.let("npos", when(nex, when(ex, pos + 1, 0), 0))
+            nlanes = slot.let("nlanes", when(nex, when(ex, lanes, sl), 1))
+            ngap = slot.let("ngap", when(ex, when(r > 0, slot.ref("ngap").at(r - 1), 0) + 1, 0))   # side requests since the main lane's last
+            slot.let("nxd", when(nex, nlanes - 1, ngap))
+            slot.let("ngo", (nex == False) | (npos >= nlanes))             # noqa: E712
 
 if __name__ == "__main__":
     w.write()
