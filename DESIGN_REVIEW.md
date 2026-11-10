@@ -11485,8 +11485,9 @@ the messaging measurement being that evidence. A launcher written in something o
 stay alive after starting the ranks and take the coordinator's role (the user's note).
 (6) *State bounded by capacity.* The rule against per-file structures means state that scales with the
 dataset; a cache's state scales with its WG-fixed capacity, holding only what the cache holds, and is
-allowed. A host replicating a domain's plan holds the domain's tier, about 100,000 files an engine at
-an hour's retention, so the domain's size bounds it.
+allowed. A host replicating a domain's plan holds the domain's tier, about ~~100,000~~ 40,000 to 58,000
+files an engine at an hour's retention (corrected the same day, the note "LMCache's multi-process
+storage read, and the pre-fill's datagen time"), so the domain's size bounds it.
 (7) *The runner is the only reproducer.* No one needs the op set without the runner; who wants it
 exports the run's trace and analyses that. The cache's rules (LRU ties, the order within a planned
 instant) are definitions the runner fixes in `runner/REFERENCE.md`, a change to one changing every KV
@@ -11611,6 +11612,65 @@ fingerprint, and CLOSED are unchanged; the compression ratio too. Cost: a pre-fi
 stored again would really match its earlier copy and here does not, a small understatement of dedupe.
 A change to the runner's payload definition for namespaces, a recorded decision: brief item 77,
 general, not KV's.
+
+**LMCache's multi-process storage read, and the pre-fill's datagen time (item 72's first steps,
+2026-11-10, at the user's word; nothing decided).** LMCache 0.5.5 as installed (`venvllm`), read
+without running it; paths under `lmcache/v1/`.
+*Adapters.* Each L2 tier is one `--l2-adapter` JSON naming its `type`; none is a default (the list is
+empty by default). For a directory: `fs` (Python, aiofiles; `distributed/l2_adapters/fs_l2_adapter.py`)
+and `fs_native` (a C++ extension, the same naming, which must match, and the same temporary file and
+rename, read from its imported symbols and strings, the C++ source not installed); `raw_block` takes
+one device or pre-sized file, `O_DIRECT` by default; `nixl_store` (POSIX or GDS) preallocates
+`num_files` files and writes fixed pages at offsets in them. `"shared": true` labels events and
+capacity reports and changes no I/O.
+*The calls of `fs`.* One flat directory, one `.data` file a chunk and object group, raw tensor bytes,
+no header, named `<model>@0x<kv_rank>@<group>@<chunk hash>[@salt].data`. A store: `stat` of the final
+name, skipped if it exists (written by this or another server); open `<name>.tmp` (or under
+`relative_tmp_dir`), one `write` of the whole buffer (`O_DIRECT` optional, buffered when the size is
+not a multiple of `f_bsize`), `rename` onto the final name; no `fsync` anywhere. A lookup: one `stat`
+a key, deliberately, for shared filesystems. A read: open, `readinto` until full (an optional
+read-ahead first read). A delete: `stat` for the size, then `unlink`, 64 at once. `fs_native` makes the
+same calls in batches on `num_workers` threads (4 by default), with `open`, `read`, `write`,
+`rename`, `remove`, `status`, and no `pread`, `pwrite`, `fsync`, or `io_uring`. Against the in-process
+local-disk backend the committed abstracts were captured from (`<key>.pt`, written in place, lookups
+from an in-memory dict, evicted inline): a `stat` before every store and every lookup, a temporary
+file and `rename`, and one file a chunk *and object group*, so the metadata load per request is larger.
+*Eviction (issue 2).* A controller exists only if the adapter's JSON has `"eviction"`: `LRU` or `noop`
+need a declared capacity, so `fs`, which declares none, is never evicted by usage, and without
+eviction its files are never deleted; `fs_native` is evicted when `max_capacity_gb > 0`. Every second,
+at usage ≥ the watermark (0.8), 20 % of the tracked keys are deleted. `IsolatedLRU` evicts by cache
+salt against quotas set over HTTP (a salt without a quota losing all its keys each cycle), and an
+optional fleet coordinator sends deletes over HTTP (watermark 1.0, every 5 s). So the combination
+modelled since 2026-11-09 (the `fs` calls under capacity eviction) does not exist; the configuration
+that has both is `fs_native` with `max_capacity_gb`, the same calls but deletes on 4 worker threads,
+not 64 at once.
+*Several servers on one directory (issue 4).* Accounting is per process: a server's bytes and LRU
+hold only the keys it stored, an access reordering only keys already its own; a store finding the
+file written by another server is skipped and not counted. No lock, no shared index, no listing at
+start; a server finds others' chunks by `stat` at lookup; deletes are not coordinated ("a delete
+racing a load turns that load into a miss"). So capacity is per engine even on a shared directory,
+and the chunk's writer unlinks it (the first option of issue 4), by an LRU that only the writer's own
+accesses order: a chunk another engine reads often can be evicted by its writer. Global accounting
+exists only through the optional coordinator.
+*Staging (issue 6).* Stores are staged in L1, pinned memory in the LMCache server, `--l1-size-gb`
+required, with its own eviction (watermark 0.8, 20 %). Full, a store is dropped, never blocked
+(`reserve_write` returns the keys it could place; no option like `force_store_wait`), which matches
+item 13's rule (4), a would-be drop a gate failure. One store-loop thread copies L1 to L2, every key
+to every adapter, no cap on tasks in flight.
+*What follows, to decide:* ~~the mechanism is `fs_native` with a capacity (or `fs` without eviction, a
+tier that only grows);~~ (decided by the user, 2026-11-10: `fs_native` with a capacity); local and shared paths make the same calls, differing in whether other
+engines' chunks are found and skipped, so whether they stay two mechanisms or become one with the
+sharing a parameter; the stats per lookup and per store, and the object groups a chunk, added to
+the abstract; the capture of item 74 to confirm `fs_native`'s calls, which were inferred.
+*Datagen time.* Rust datagen generates about 22 GB/s at 16 writers (§3.70's measurements, to tmpfs), so the
+system's write bandwidth sets the pre-fill's time, not the generator. Item 7's tier of an hour was
+stated as 100,000 files an engine; at 11 to 16 chunk writes a second an engine (the simulations, 16
+slots) it is 40,000 to 58,000 files of 3 MiB, 116 to 170 GiB. At 10 engines, 1.2 to 1.7 TB: two to
+three minutes at 10 GB/s, 20 to 28 at 1 GB/s; 400,000 to 580,000 creates in one directory, seconds to
+a minute at the 0.5 to 0.7 million small files a second of §3.33's estimate. The reset of a full run (90 minutes, more than an
+hour of writes) recreates most of the pre-fill, LRU taking the oldest first, about the pre-fill's own
+time, plus the unlinks of what the run made; after the tuning form (30 minutes) about half. The
+pre-filled chunks a run's arrivals resume are read, so they are not the ones evicted.
 
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
@@ -11761,7 +11821,9 @@ first version (reversing the deferral first proposed), the keys and their place 
 computed before the run from its access order, as the reads are, so the op set stays fixed; (4) the
 pre-written dataset fills the tier to its steady level, just under the watermark, so evictions run
 during the plateau (the dataset's size then follows the capacity, and with it datagen time). Scale
-at 16 slots: writes about 11 chunk files a second an engine, a tier of an hour about 100,000 files
+at 16 slots: writes about 11 chunk files a second an engine, a tier of an hour about ~~100,000~~ 40,000
+(corrected 2026-11-10: 11 a second is 40,000 an hour, 58,000 at the 16 a second the simulations reach)
+files
 of 3 MiB, so a trigger unlinks about 20,000 files, 64 at a time, every half hour or so an engine,
 interleaved across engines with the steady creates, renames, and reads. The user's assessment: 64
 concurrent deletes in one very large directory is near the worst case for a POSIX filesystem, and
