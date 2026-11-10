@@ -10340,6 +10340,1624 @@ ShareGPT, AgentX at both pools, and `O_DIRECT`, each under both sources, likewis
 request of the store through a ring (libuv's `IORING_OP_EPOLL_CTL` alone in the eBPF traces).
 
 
+### 3.99 The engine's KV pool as a computed cache: the proposal, what tested it, and the debate of 2026-11-06 (raised by the user, debated and measured the same morning; **proposed, not decided, nothing built**)
+
+*Status.* The user prefers the pool to the drawn holds ("much more representative"), and has
+decided nothing else here. This reopens `PROJECT_BRIEF.md` §6 item 24. The numbers are from scratch
+experiments, not committed tools: a copy of `lmcache_local_disk.py` with a probe namespace that
+writes each request's fields, so a dry run prints the abstract's real demand (its drawn holds
+reproduce the dry run's reads exactly at every seed), and `agentx.simulate` over that demand.
+
+**The proposal.** One pool per engine over its slots, replacing `keep`, `sys_held`, and `sub_held`.
+The demand stays the application's (chains, side runs, lanes, growth, prefixes); what the engine
+holds of a request becomes the pool's answer. `pool_tokens` tokens in `pool_block`-token blocks; a
+prompt is its prefix's blocks, then its conversation's, then its reply's, keyed so two requests
+share a block exactly when they share everything up to it, as vLLM's block hashes chain. A block
+held is a hit and leaves the free queue; a new one evicts from its head; a finished request frees
+its blocks tail first. Held is the run of hits from the prompt's start. Order: request r of each
+slot in turn, then r + 1, each admitted and finished before the next, so no preemption and no
+admission queue. Holds feed the existing rules, the ops unchanged. In the contract: a `pool`
+declaration on an actor, a `held` expression naming the pool and the request's segments, one site
+per pool. In the runner: a pass before the gate, one `u32` per request (the chat case 5.6 MB), so
+the op multiset is fixed before the run and timing never enters. `pool_tokens` 0 keeps the drawn
+holds and every fingerprint. `GRAMMAR_OPTIONS.md` §5.3 would allow a simulated cache within one
+actor in canonical order. The size comes from the accelerator (HBM less weights and activations,
+at the engine's memory fraction), its fragment's value (§3.81); the WG fixes it, a submitter never
+chooses it.
+
+*The draft's five questions, unanswered and on hold* (recommendation first): the order (one
+request at a time, or each slot's next admitted together); when holds are computed (a pass before
+the run, or lazily); the block (vLLM's 16 tokens, untested, the experiments ran at the corpus's
+64; or LMCache's 256); the default (`pool_tokens` 0, or the pool everywhere); which cases move (all
+four traced).
+
+**The draft's evidence was the wrong cell (the user's doubt).** The user read "only if the
+abstract's chains match the replay" as low confidence and asked whether trace and abstract differ.
+They do, and the pool over the abstract's own demand had never been run. Chunk reads:
+
+| source | 2 GiB pool | 6 GiB pool |
+|---|---|---|
+| the trace | 38,818 | 2,321 |
+| the replay's demand, simulated pool | 39,881 | 2,865 |
+| the abstract, drawn holds (median of 8 seeds) | 21,155 | 2,437 |
+| the abstract's demand, simulated pool (median of 12) | 23,785 (16.2k to 33.9k) | 915 (352 to 4,895) |
+
+The pool alone does not close the gap. "What the drawn holds lack is the pool"
+(`replay-2gib-pool/trace.tolerances.json`) overclaims and the §3.64 note of 2026-11-06 leans the
+same way; neither is corrected yet (the user's call). Split: the share of loadable chunks the
+engine lost is 67.4 % in the replay and 69.2 % with the pool on the abstract at 2 GiB, 4.3 % and
+2.4 % at 6 GiB; but the loadable chunks are 57,759 against 33,892 and the mean prompt 69.8k against
+44.3k. On ShareGPT, whose demand is accepted, the pool gives a median of 788 reads against the
+trace's 755 (drawn holds 721). So the pool's rate is good where the demand is, and the fault is mostly
+the demand. **The drawn holds' 6 GiB fit is cancelling errors:** they lose 7.2 % where the replay
+loses 4.3 %, on 59 % of its loadable chunks, and `keep` was read from that engine at that pool.
+
+**How can an abstract generated from a trace be 2× off? (the user's question).** It is not a
+compressed trace: independent distributions fitted to the request and engine logs, the storage
+trace only judging the result. Each marginal matches (growth per turn 5.8k against 5.5k, first
+prompt 21k both) while the joint does not (longest chain 19 turns against 36). Tested on a Python
+form of the abstract's request rule over the replay's rows (2 GiB 39.6k, close; 6 GiB 4,413 against
+2,865, since chains of a session sharing prefixes are not in it, so its 6 GiB column is a trend
+only): the replay's own growth 39,555 / 4,413; growth shuffled 32,280 / 1,707; shuffled only within
+long and short chains 30,182 / 2,296, so a two-class fix does not restore it; chain kind and first
+prompt shuffled too 31,002 / 1,544; the abstract 23,785 / 915. Ten times the requests moves the mean
+prompt only to 47k, so run length is not the cause. The last step, chains redrawn and laid on
+slots, is the largest, by elimination, untested. Long sessions growing more slowly and being
+compacted was already recorded (§3.59's corpus accounting: "a growth that depends on the chain's
+length is not drawn here").
+
+**Read count as a quality check (the user's point: it should be one).** `compare --judge` judges
+shares, not counts (`mix: reads / data ops`), `--self` widens a row by the seeds' spread (about 17 %
+to 44 % at 6 GiB, so the 6 GiB accept had little force), and nothing checks the steps between.
+Proposed: at the fit, the abstract over many seeds against the replay on requests, mean prompt,
+longest chain, loadable chunks, reads, and writes, failing loudly.
+
+**The context limit (the user's questions).** 131,072 is `replay_agentx.py --max-context` and the
+server's `MAX_MODEL_LEN`: the 8 GB GPU, not the workload. 990,016 is the corpus publisher's filter
+on overcounted rows (no real prompt exceeds 1M; `in` overcounts by up to about 260k in the tail).
+Both are one request's prompt tokens, and they are comparable. Corpus prompts: p50 142k; 53 % of
+requests and 86.7 % of prompt tokens over 131k; 308 of 393 sessions peak over it, median peak 225k.
+The replay is the first 300 of the 8 sessions' 1,892 requests (each session's share): 233 played,
+67 skipped, 1,592 never reached. Every AgentX storage capture is under 131k, the low-context start
+of sessions.
+
+**Nothing real drops a request (the user).** The skip is the replay's artifact. vLLM refuses a
+prompt and reply over its context; chunked prefill splits the compute below the limit, not the
+requirement that a request's KV be in the pool. The client manages it: main-agent prompts that fall
+under 60 % and stay there keep 34k of prefix and go on at 47k from 131k to 262k (65 cases), and
+48k and 83k from 800k to 1M (32); drops below 131k keep nothing and are probably something else.
+The abstract restarts from nothing: it has no compaction.
+
+**The user's paraphrase, corrected.** Right: the corpus reaches about 1M, the replay ran it on an
+8 GB GPU, those requests cannot run there, and HBM must enter the model. Corrected: the corpus was
+recorded at a client-side proxy and holds no hardware, pool, or storage; prompts depend on the
+conversation and the model's window, not the GPU; a small GPU refuses, it does not restructure (in
+the vLLM traced; offload schemes exist); and the storage I/O is ours (vLLM and LMCache were chosen
+here), nobody recorded the original's.
+
+**Is pool > largest context enough? (the user's question).** Necessary, not sufficient. The pool
+swept over the replay's requests, serial order, largest context 131k:
+
+| pool (tokens) | 131,072 | 174,752 | 262,144 | 349,504 | 437,000 | 524,288 | 699,008 | 1,048,576 | 2,000,000 |
+|---|---|---|---|---|---|---|---|---|---|
+| chunk reads | 42,202 | 39,881 | 29,883 | 20,519 | 7,315 | 2,865 | 1,351 | 193 | 129 |
+
+The sum of the sessions' current prompts is 425k at the median and 691k at peak. Three regimes:
+below the largest context the request cannot run; between it and the sum of live contexts the
+engine evicts and re-reads; above the sum almost nothing is read. The 6 GiB pool sits just past the
+drop, which is why small demand errors move its reads so much. The ratio of pool to the sum of live
+contexts is the quantity to report, and the slots matter as much as the HBM.
+
+**How much larger was the real hardware? (the user's question).** No basis: the corpus names none,
+the service is shared, and the only firm bound is the floor, one largest context. But the corpus's
+`ttft` (56,432 requests, unused until now) shows behavior. Continuing requests with little new
+input, median seconds, prompts of 20k to 100k and 500k to 1M: idle under 60 s, 2.05 and 3.18; 60 to
+240 s, 1.95 and 3.22; 290 to 310 s, 4.55 and 11.35; over an hour, 2.69 and 13.36. Flat in prompt
+size for about five minutes, then scaling with it: the 5-minute default of the provider's documented
+prompt cache. 96 % of continuations arrive inside it, and at most about 9 % of warm requests at 500k
+to 1M look lost. So these sessions' survival looks set by time, not capacity pressure, unlike the
+LRU pool modelled here. It says nothing of the tier: a warm hit may come from HBM or a slower one.
+The replay ran `--time-scale 0`, so idle time is in none of our captures. For scale only, and no
+claim about this corpus: a 70B-class model at 320 KiB per token is about 305 GiB per 1M tokens, so
+eight H200s leave room for about 2.7 such contexts, about 12 conversations at the corpus's mean of
+219k; a busy engine is likely evicting.
+
+**Where it stands (recommendations, none decided).** Fix the demand before the five questions. Pool
+size and concurrency are stated parameters of a case, never inferred from a corpus; a case whose
+pool is under its context limit is refused; a case reports its regime and runs more than one point
+on the curve. An idle expiry beside the pool would model a provider's cache (an open vLLM and LMCache
+deployment has no such timer). Real evidence above 131k needs a larger GPU, or sessions scaled
+down by one factor, which assumes the storage behavior scales. The publisher's billed `cache_read`
+and `cache_write` columns, not published, would replace the timing inference (the user may ask).
+
+**What the limit's behavior adds: almost nothing (run at the user's request the same day).** Scratch
+copies of the abstract, differing only at the limit, the pool simulated over each one's demand, the
+median of 16 seeds; each copy's drawn holds reproduce its dry run's reads:
+
+| at the limit | requests | mean prompt | live sum p50 | 2 GiB reads | 6 GiB reads |
+|---|---|---|---|---|---|
+| restart (today) | 232 | 44.6k | 355k | 23,785 | 880 |
+| skip (the replay), 29 a slot | 224 | 43.0k | 338k | 22,080 | 867 |
+| skip, 37 a slot (the replay's share) | 281 | 42.7k | 345k | 28,001 | 1,257 |
+| compact, summary 14k | 232 | 43.9k | 349k | 22,688 | 738 |
+| compact, summary 35k | 232 | 44.8k | 352k | 23,226 | 826 |
+| no limit (diagnostic) | 232 | 48.7k | 388k | 29,205 | 2,154 |
+| the replay, simulated pool | 233 | 69.8k | 425k | 39,881 | 2,865 |
+
+So what the abstract does at the limit is not why its demand is short. Skip at 37 reads more only
+because it serves 21 % more requests. Even with no limit the mean prompt reaches only 48.7k and the
+longest chain 23 turns, so few chains reach 131k at all: the chain count rises by about two under
+compaction, so it fires about twice a run, and this test says little of compaction at full session
+length, where 308 of 393 sessions cross 131k. The no-limit run's 6 GiB median is no match: its seeds
+range from 225 to 27,337, and its prompts exceed what the replay could send. Still open: `requests`
+is 29 for every slot where the replay's sessions ran 19 to 37, so no chain of 32 or 36 turns can
+exist; long chains open high in the replay (45k to 64k) where `first_in` is drawn apart from the
+chain's length; and chains redrawn and laid on slots, the largest step above.
+
+**Whole chains dealt to slots (run at the user's request the same day).** The replay's real requests,
+each with its own blocks, only their order changed, the pool simulated, 24 draws. The first row
+reproduces `holds --timeline serial` exactly, so the 6 GiB column here is sound, unlike the
+ablation's.
+
+| layout | mean prompt | live p50 | writes | 2 GiB reads | 6 GiB reads |
+|---|---|---|---|---|---|
+| the replay's order | 69.8k | 425k | 5,663 | 39,881 | 2,865 |
+| sessions as slots, in rounds | 69.8k | 425k | 5,663 | 39,754 | 2,738 |
+| sessions as slots, chains unbroken | 69.8k | 446k | 5,663 | 39,310 | 2 |
+| all 42 chains dealt at random | 69.8k | 411k | 5,663 | 34,375 (18.6k to 37.9k) | 111 |
+| the same, cut at 29 a slot | 64.4k | 484k | 5,524 | 31,050 (18.6k to 35.5k) | 110 |
+| chains drawn with replacement, 233 requests | 67.8k | 340k | 6,355 | 29,934 (18.3k to 46.5k) | 66 |
+| the same, cut at 29 a slot | 60.5k | 508k | 7,037 | 33,200 (24.1k to 40.5k) | 199 |
+| whole sessions drawn with replacement | 64.2k | 412k | 5,529 | 32,031 (20.6k to 48.0k) | 2,585 (707 to 13,617) |
+
+Keeping a chain whole is what restores the prompt: at the abstract's own budget (232 requests, 29 a
+slot) the mean is 60.5k against 44.6k and the reads 33,200 against 23,785, so the 29-request cap is
+not the cause, and the chain's joint values are. That recovers one to two thirds of the 2 GiB gap.
+At 6 GiB nearly every read comes from a chain's suspension: unbroken, the same requests read 2
+chunks. So the unit that gives both pools is the session, a main chain with its side runs. Two
+limits. Drawn chains lose the prefixes a session's chains share, so writes rise 12 % to 24 %. And
+the sample is small: resampling these same 8 sessions gives 20.6k to 48.0k and 707 to 13,617, so
+the trace's 38,818 and 2,321 are one draw from a wide spread, and a tight match to them is not a
+meaningful target at 233 requests. A table of sessions would be close to a listing of the replay
+(against the abstracts being compact), and at the corpus's scale too large: how to keep the joint
+structure compactly is open.
+
+**Where the compared reads come from (asked by the user the same day).** "The trace" in this section
+is a trace of our own lab replay, not of AgentX. The corpus holds what Claude Code sent through a
+proxy and no storage I/O, so no real read count exists for the original sessions. The 38,818 and
+2,321 are real measurements, the eBPF and strace captures of 2026-11-05 on this machine (at 2 GiB
+122,110,869,504 bytes read, exactly 38,818 chunks of 3 MiB), of a system we chose: Qwen2.5-0.5B,
+synthetic tokens from the hash ids, replies that are not what the next prompts contain, the first 37
+or 38 requests of 8 sessions, all under 131k, `--time-scale 0`, 8 sessions at once, and pools of 2
+and 6 GiB. The 39,881 and 2,865 are `agentx.simulate` over the replay's requests; every row with a
+pool is computed.
+
+So the comparison is fair for one question, whether the abstract reproduces the system we ran: both
+sides have the same requests, pool, and concurrency, and the gap is real. It says nothing of the real
+service's storage, where the same requests give 42,202 to 129 reads by the pool size alone. Even the
+fair question has two limits: the abstract is fitted to that replay's logs and judged against the
+same run's trace, a consistency check rather than a held-out test, and the target is one draw.
+Proposed, not decided: call these numbers the lab replay from here on; aim at the shape of the pool
+curve rather than two exact counts, since pool and concurrency would be stated parameters of a real
+deployment; and fit on some sessions and judge on others.
+
+**The replay at a 500k limit (2026-11-06 and 07, at the user's request; scratch, nothing in the
+repository changed).** With no GPU but the laptop's, the user chose to raise the replay's limit.
+The 131,072 was a setting matching the model's 128k configuration, not the GPU's memory: at 12,288
+bytes a token the 6 GiB pool holds 524,288 tokens. `MAX_MODEL_LEN=500000`, YaRN factor 16,
+`KV_BYTES` 6 GiB (vLLM needs a pool at least the limit, so 2 GiB cannot run), `replay_agentx.py
+--requests 1000 --max-context 500000`: the first 125 requests of each of the 8 sessions, 700 in all
+since three sessions are shorter, none over the limit (largest 445k). Under strace (the eBPF
+binary's grant had lapsed); scratch in `~/MLPerfStorage/limit500k/`.
+
+What it took. A cold 480k prompt prefills in 1,211 s, a cold 250k in about 7 minutes. The first run
+hung after 431 requests: LMCache stages every load from disk through its CPU buffer
+(`max_local_cpu_size`, 2 GB in the kit's `lmcache.agentx.yaml`, about 175k tokens here), and a load
+of 191,040 tokens could never be allocated, so it retried forever. No replay under 131k could meet
+this. Raised to 12 GB for the rerun, which played all 700 with no failed allocation. An FP8 KV cache
+(half the bytes, so the same pool holds about 1M tokens) was tried at an 800k limit: it serves, on
+the Triton backend at about a quarter of FlashAttention's speed, and past about 485k tokens its
+prefill fell from 40 s to over 1,200 s per 2,048 tokens with the GPU nearly idle, cause unknown; a
+790k prompt would have taken over 50 hours, so it was stopped, and its reload from LMCache never
+tested. The spill into Windows' shared GPU memory was not tried.
+
+| 6 GiB pool | requests | mean prompt | largest | chunk reads | chunk writes |
+|---|---|---|---|---|---|
+| lab replay at 131k (2026-11-05) | 233 | 69.8k | 131k | 2,321 | 5,663 |
+| lab replay at 500k, first run, hung (partial) | 431 | 87k | 224k | about 63,800 | about 8,900 |
+| lab replay at 500k | 700 | 134k | 445k | 184,972 | 11,910 |
+| the pool, `holds --timeline serial` | 700 | | | 180,308 | 11,881 |
+| the pool, `holds --timeline engine` | 700 | | | 99,405 | 11,881 |
+
+Two findings. The 6 GiB count of the 131k replay was an artefact of its cut: three times the
+requests at twice the prompt read 80 times as much, 264 chunks a request against 10, with the same
+pool, so the 6 GiB target the abstract was judged against said little of the corpus. And the pool,
+given its size alone and the requests one at a time as an abstract's slots take them, predicts the
+measured reads within 2.5 % and the writes within 0.3 % at prompts near the corpus's median (142k),
+the first test of it at realistic lengths; on the engine's own timeline (199 preemptions) it is 46 %
+low. Still not ground truth for any real service: Qwen2.5-0.5B, a pool we chose, synthetic tokens,
+125 requests a session, strace only.
+
+**The abstract refitted to the 500k replay (2026-11-07, at the user's request).** `agentx.py log` and
+`fit --replay ... --context 500000` with the kit README's `--set` values: 700 requests in 56 chains,
+88 a slot, `context` 500,224. The committed abstract (`6fc276c`) at those parameters, seeds 1 to 8,
+its drawn holds as it runs, and the same demand through the pool (the probe abstract and
+`agentx.simulate` of the morning, pool 524,288 tokens):
+
+| 6 GiB pool, 500k limit | mean prompt | chunk reads | chunk writes |
+|---|---|---|---|
+| lab replay (the trace) | 134k | 184,972 | 11,910 |
+| abstract, drawn holds, median of 8 | 85.8k | 138,618 (91,708 to 155,788) | 13,371 |
+| abstract's demand and the pool, median of 8 | 85.8k | 150,615 (62,854 to 187,170) | 13,371 |
+
+Closer than at 131k (the drawn holds 25 % low against 45 %, the pool 19 % against 39 %), and the
+same cause: the abstract's prompts are short, 64 % of the replay's, as its chains' joint values are
+lost in independent draws (the whole-chain test above), while writes run 12 % high. The pool on the
+replay's own requests is within 2.5 %, so what remains is the demand, not the pool. Seeds spread the
+reads three to one, so one draw of 700 requests is still a loose target.
+
+**Whole conversations in a scratch abstract (2026-11-07, at the user's request).** A copy of the
+abstract (with the probe namespace) in which a new chain draws a row of a table of the 500k replay's
+56 chains (21 main, 35 started in side runs), uniformly among its own lane's, and plays the row:
+the first prompt, then each request's added tokens, reply, and trim, in order; the row's kind and
+length with it. The draws of `turn_in`, `turn_out`, `trim`, `turns`, `kind`, `first_in` are gone;
+the slots, side runs, and `keep` are the fit's. The table rebuilds all 700 of the replay's prompts
+exactly (an entry is a balanced tree of comparisons on the row's index; the AST is 3 MB, against the
+committed one's 150 KB: a listing, as expected, not the compact form). Seeds 1 to 8:
+
+| 6 GiB pool, 500k limit | mean prompt | chunk reads | chunk writes |
+|---|---|---|---|
+| lab replay (the trace) | 134k | 184,972 | 11,910 |
+| refitted abstract, drawn holds | 85.8k | 138,618 (91,708 to 155,788) | 13,371 |
+| refitted abstract and the pool | 85.8k | 150,615 (62,854 to 187,170) | 13,371 |
+| whole chains, drawn holds | 107.0k | 147,386 (73,579 to 215,154) | 15,161 |
+| whole chains and the pool | 107.0k | 167,681 (38,593 to 285,632) | 15,161 |
+| the same at 125 requests a slot (prompt only) | 114.3k | | |
+
+Whole chains recover about half the prompt gap (86k to 107k of 134k) and with the pool bring the
+reads to 9 % under the trace, against 19 %, but the spread doubles (38.6k to 285.6k), and writes
+rise 27 %: chains drawn with replacement lose the prefixes a session's chains share, as `deal.py`
+found. The prompt still falls short because a slot plays chains in a random order and is cut at 88
+requests: a long chain that starts late loses its longest turns, where the replay's sessions open
+with theirs, and the cut at 125 requests a slot recovers only 7k more. So the order of a session's
+chains matters as well as each chain, and the session, its main chain with its side runs, remains
+the unit, as the whole-session resample of the day before found. Scratch: `~/MLPerfStorage/limit500k/whole/`.
+
+**Whole sessions in a scratch abstract (2026-11-07, at the user's request).** The table moves into
+array parameters (`P.r_in[gi]`, an `elem`): per request of each of the replay's 8 sessions in its
+order, the distance back to its chain's previous request (0 a new chain), its added tokens (a new
+chain's first prompt), reply, trim, and kind. A slot plays a session from its start and draws
+another, uniformly, when it ends; the distance is written `1 + (x − 1) mod (r + 1)` so rule V3 holds.
+The side-run machinery and the per-request draws are gone: the AST is 103 KB, smaller than the
+committed one's 150 KB, and the listing lives in the parameter file (700 entries in each of five
+arrays). A check mode (slot i plays session i, then idles) replays the replay itself:
+
+| 6 GiB pool, 500k limit | requests | mean prompt | chunk reads | chunk writes |
+|---|---|---|---|---|
+| lab replay (the trace) | 700 | 134k | 184,972 | 11,910 |
+| the pool on the replay's own requests | 700 | | 180,308 | 11,881 |
+| session table, slot i plays session i, and the pool | 700 | 131k | 174,976 (168,725 to 174,976) | 12,254 |
+| session table, sessions drawn, 88 a slot, and the pool | 704 | 105.8k | 171,626 (133,935 to 244,944) | 13,389 |
+| the same, drawn holds | 704 | 105.8k | 151,200 (127,863 to 195,550) | 13,389 |
+| whole chains (above), and the pool | 704 | 107.0k | 167,681 (38,593 to 285,632) | 15,161 |
+
+The check comes within 5 % of the trace and 3 % of writes: the representation holds a session's
+storage (what is left is its prefixes, one size for every session, and a chain's base past them).
+Drawn, the reads come within 7 % and the writes 12 % (a session drawn twice is two users, its
+chunks written twice), the spread narrows to a factor of two against chains' seven, and the trace
+lies inside it; the prompt is no longer than with whole chains, since every slot is cut at 88 where
+four of the replay's sessions run 125 and three end by 35. That cut is the replay's shape, not the
+workload's: a replay giving each session its own share ends unevenly, an abstract's slots are equal
+and go on, so the drawn rows are compared with one transient. A fair target would be a replay that
+deals sessions to slots as the abstract does. Scratch: `~/MLPerfStorage/limit500k/sess/`.
+
+**The whole corpus as a session table, judged by the pool (2026-11-07, at the user's request; no
+GPU).** All 393 sessions, 98,827 requests, as one engine sees them (one store, no limit past the
+corpus's 990,016), in the session table's arrays (98,822 prompts rebuilt exactly, 5 off where a prompt
+is shorter than its chain's base; `retain` unbounded, since a chain goes back up to 2,804 requests).
+The reference is the corpus's real requests and blocks (`replay_agentx.py`'s keys) through
+`agentx.simulate` and `lmcache_accesses`, in an arrangement both sides can make: 8 slots, slot i
+playing sessions i, i + 8, ... for 2,000 requests (16,000 requests of 81 sessions, mean prompt 252.5k),
+in rounds. The abstract's `keep` holds everything, so the pool alone decides the reads; the drawn
+rows sample all 393 sessions with replacement, 8 seeds. Chunk reads by pool, in tokens:
+
+| pool | reference | abstract, the same arrangement | abstract, drawn (median, range) |
+|---|---|---|---|
+| 1M | 12,971,964 | 12,242,918 (−6 %) | 9,010,264 (6,063,812 to 11,855,766) |
+| 2M | 4,036,273 | 3,369,637 (−17 %) | 1,514,277 (198,229 to 3,370,399) |
+| 4M | 45,622 | 37,405 (−18 %) | 19,281 (7,098 to 45,635) |
+| 8M | 1,028 | 2,784 | 2,094 (402 to 12,457) |
+| 16M | 196 | 243 | 243 (243 to 5,189) |
+| writes | 229,129 | 230,880 (+1 %) | 242,585 |
+| mean prompt | 252.5k | 243.8k | 207.0k (174.5k to 237.8k) |
+
+Three things. The table holds at the corpus's scale: writes within 1 %, reads within 6 % where the
+pool is far too small and 17 % to 18 % near the cliff, where 3 % shorter prompts (a chain's base past
+its prefix is not in the table) move the reads most. The cliff is steep, as the 500k sweep showed: at
+8 slots it falls from 4 million reads to 46 thousand between a pool of 2M and 4M tokens, where the
+slots' live contexts add up. And near it the drawn runs spread seventeen to one (198k to 3.37M at 2M):
+which sessions happen to be live together decides the reads, so a benchmark set near the cliff
+would need far longer runs to be stable, or the WG's pool and slots (brief item 70) set away from it;
+the drawn medians sit below the fixed arrangement's because its 81 sessions are the corpus's first,
+longer than the mean (207k drawn against the corpus's 219k, the cut at 2,000 a slot shortening the
+longest). The runner overflowed its stack at 2,000 requests a slot (`x @ (r − dd)` reaching back
+thousands of requests); `RUST_MIN_STACK` of 1 GiB got past it, for the scratch only. Scratch:
+`~/MLPerfStorage/limit500k/corpus/`.
+
+**Where the benchmark should sit on the curve, and who turns which knob (2026-11-07, the user's
+questions; proposed, nothing decided).** The cliff is not at a token count: it is where the pool
+holds the slots' live contexts, so its axis is the ratio of pool tokens to users times live context
+per user, and the 1M row at 8 slots is the same operating point as 8M at 64 users. Below the cliff
+is where real agentic serving sits (an 8×H100 node serving a 70B GQA model has about 500 GB of HBM
+past its weights, about 1.5M tokens at 327,680 bytes a token, 3M with FP8 KV, room for 6 to 12 live
+contexts of AgentX's 250k mean; 64 users on it is a ratio near 0.1), and it is the stable side: the
+engine holds little, reads follow the prompts, the fixed arrangement came within 6 % and the drawn
+spread was two to one, against seventeen to one at the cliff. Above it storage sees writes. The
+model matters through the ratio (its bytes a token), not little; what moved reads little was the
+detail of the fitted session structure. Proposed: the WG fixes the ratio well below the cliff, and
+the arrangement of sessions on slots (the fixed one), and the researcher keeps the draws.
+
+The user's view: the submitter's knob is the number of users a system under test supports; GPU
+count, DP, TP, and PP are the WG's (brief item 70), since a buyer compares vendors by users, not by
+deployment tuning. Agreed, with one refinement: users added to one engine with a fixed pool change
+the ratio and so every user's I/O, so results at different user counts would not be one workload;
+proposed instead, the WG fixes one engine (model, deployment, pool, users per engine) and the
+submitter scales engines, users being engines times users per engine, as training scales
+accelerators at a fixed per-accelerator load; the pass criterion a latency budget for a KV load (as
+AU), not yet defined.
+
+The user's next question: users have queries of a similar structure and different data, and the data
+does not matter to storage, so could a few session definitions, perturbed, stand for the corpus
+(how much session information the abstract must carry)? Agreed in principle, if three things hold:
+every user's blocks are its own (only the system prompt shared; the abstract already keys a
+conversation's blocks by its instance), users are out of phase (not every slot at the same point of
+the same session), and the archetypes span the corpus's lengths (mean 219k, a tail to 990k). The
+user asked for the test: k = 1, 4, 16 archetypes from the 393 sessions, with and without perturbed
+token counts, judged by the pool against the whole table at ratios below the cliff.
+
+**Archetypes in place of the table (2026-11-07, the user's test; scratch, no GPU).** k sessions of
+the 393 stand for all: sorted by mean prompt into k bins of equal count, from each the session
+nearest the bin's medians of mean prompt, peak, and length, drawn uniformly (equal bins); `a1w` is
+the one session nearest the request-weighted mean prompt (187k) and length; `jitter` scales every
+request's new input and reply by a draw within ±20 %. The pool on the abstract's demand, 8 slots,
+2,000 requests each; the whole table 16 seeds, the rest 8. Median reads (range), in thousands:
+
+| set | mean prompt | writes | 0.5M | 1M | 2M | 4M | 8M |
+|---|---|---|---|---|---|---|---|
+| all 393 | 198k | 237.8k | 10,645 (9,241–13,359) | 7,992 (6,064–11,856) | 1,053 (198–4,088) | 23 (7–83) | 2 (0–12) |
+| 64 | 255k | 234.7k | 13,964 | 12,863 | 2,916 | 8 | 1 |
+| 16 | 256k | 254.0k | 13,887 | 12,662 | 3,585 | 5 | 2 |
+| 4 | 187k | 184.6k | 9,968 (9,574–10,820) | 7,305 | 227 | 0 | 0 |
+| 1 (`a1w`) | 254k | 232.3k | 13,113 | 11,586 | 10,129 | 3,679 | 175 |
+| 1 (median) | 125k | 402.9k | 5,340 | 4,252 | 1,028 | 69 | 0 |
+
+(jitter changed no row by more than a few percent; the rows without it shown.) What it says. Below
+the cliff the reads are close to proportional to the mean prompt, about 54 reads a request per
+thousand tokens in every set (0.5M: 53.8 all, 53.3 four, 54.2 sixteen, 51.6 one), so there the
+number of archetypes does not matter and the request-weighted prompt does: 16 and 64 archetypes are
+29 % long and 31 % high, four happen to match and are within 6 %; picking by session count misweights
+long sessions, which hold a slot longer. One session repeated has no cliff at all (10.1M reads at 2M
+against 1.05M, 3.7M at 4M against 23k): its eight copies peak together, and ±20 % of tokens does not
+move them out of phase, since the length is the session's. So the abstract's session information is
+small if the archetypes are chosen to match the request-weighted prompt distribution and the users
+are put out of phase; jitter of tokens is not the lever. Scratch: `~/MLPerfStorage/limit500k/arch/`.
+
+**Archetypes picked by time, users out of phase (2026-11-08, the user's go; scratch, no GPU).** The
+picking corrected: sessions sorted by mean prompt into k bins of equal request count (the time a
+slot spends), from each the session nearest the bin's request-weighted mean prompt (weighted 3),
+chunks written a request, and length (0.5), drawn with weight bin requests over its own length, so
+each holds slots for its bin's share of the time (`s_pick`, a distribution of session indices).
+Users out of phase: slot i idles its first i × 1,000 / 8 requests (`stagger`; an idle request has no
+I/O), and the first 1,000 rounds are warm, not counted. Every set under the same stagger and warm,
+against the whole table drawn the same way (16 seeds; the rest 8). Median reads, change from the
+whole table, and seed range, in thousands:
+
+| set (table rows) | mean prompt | writes | 0.5M | 1M | 2M | 4M |
+|---|---|---|---|---|---|---|
+| all 393 (98,827) | 195k | 225.0k | 10,690 (7,148–14,195) | 8,207 (4,066–12,882) | 831 (110–3,557) | 29 (13–47) |
+| 16 (13,197) | 206k | +3 % | +7 % (10,771–14,836) | +15 % | +118 % | +54 % |
+| 8 (4,276) | 192k | −3 % | −2 % (9,371–11,365) | +1 % | +110 % | +34 % |
+| 4 (2,626) | 205k | +4 % | +5 % (10,160–13,471) | +10 % | +84 % | +111 % |
+| 2 (1,010) | 211k | −8 % | +6 % | +11 % | +8 % | −45 % |
+| 1 (795) | 232k | −5 % | +17 % | +29 % | −12 % | −100 % |
+| 1, no stagger | 240k | −2 % | +14 % | +27 % | +1,029 % | +12,588 % |
+| all 393, no stagger | 191k | +0 % | −4 % | −6 % | +24 % | −6 % |
+
+What it says. Below the cliff, 2 to 16 archetypes picked by time come within 2 % to 11 % of the
+whole table's reads and 3 % to 8 % of its writes, eight within 3 % of both at 0.5M and 1M; that is
+inside the whole table's own spread from seed to seed (7.1M to 14.2M at 0.5M), and the archetypes'
+spread is narrower. At the cliff nothing matches, the whole table included (110k to 3.56M at 2M, a
+factor of 32 between seeds), so there the medians compare nothing. The stagger matters only when
+the sessions are few: one session without it has no cliff (9.4M reads at 2M), with it a cliff
+again; with four or more drawn by weight the draws put the users out of phase themselves. So the
+session information an abstract needs is a few thousand rows (eight sessions, 4,276 requests),
+about 4 % of the table, if they are picked by the time they hold a slot. In-sample: the archetypes
+were picked from the sessions they are judged against; the table itself was 6 % from the corpus's
+real blocks at 1M. Scratch: `~/MLPerfStorage/limit500k/arch2/`.
+
+**Archetypes held out (2026-11-08, the user's go; scratch, no GPU).** The sessions split in two,
+by even and odd index and by a seeded random split; archetypes picked by time from one half are
+judged against the other half's whole table (12 seeds), each way, beside eight picked from the judged
+half itself (in-sample). Change from the judged half, reads at 0.5M and 1M:
+
+| split, picked from | judged half's prompt | 4 | 8 | 16 | 8 in-sample |
+|---|---|---|---|---|---|
+| even, judged on odd | 191k | −3 %, −10 % | +8 %, +12 % | −4 %, −6 % | +4 %, +5 % |
+| odd, judged on even | 214k | −4 %, −11 % | −7 %, −15 % | −5 %, −12 % | −4 %, −9 % |
+| random A, judged on B | 180k | +50 %, +99 % | +35 %, +67 % | +47 %, +85 % | −9 %, −15 % |
+| random B, judged on A | 225k | −21 %, −31 % | −29 %, −46 % | −26 %, −38 % | +5 %, +6 % |
+
+Writes within 6 % in every row but one (+13 %). What it says. The error held out is the difference
+between the halves, not the archetypes': the random halves' request-weighted prompts are 158k and
+226k, and the reads follow the prompt error almost one for one (eight from A: prompt +29 %, reads
++35 %), as below the cliff they did in every test; the even and odd halves are alike and there four
+to sixteen archetypes hold within 15 %. In-sample eight stay within 9 % at 0.5M. So the picking is
+sound, and what limits fidelity is the corpus: half of it fixes its mean prompt only to within about
+±20 %, all 393 sessions to perhaps half that, one publisher's agents of one period. The archetypes
+should be picked from the whole corpus, and the mean prompt, which sets the reads below the cliff
+nearly in proportion, is the number a reviewer should see stated beside them, a property of the
+workload the WG chooses, not a claim about agentic serving in general. Scratch:
+`~/MLPerfStorage/limit500k/arch3/`.
+
+**Below ρ 0.34, and more users per engine (2026-11-08, the user's go; scratch, no GPU).** ρ = pool
+tokens / (users × mean live context, about 200k). The whole table against eight and four archetypes
+(the whole corpus's, picked by time), stagger and warm as before; 8 users 8 seeds, 32 and 64 users 6
+(archetypes of four, 4). Median reads, millions, seed range as a share of the median:
+
+| users | ρ | whole table | 8 archetypes | 4 archetypes | reads a write (whole) |
+|---|---|---|---|---|---|
+| 8 | 0.08 | 11.03 (58 %) | −1 % (18 %) | +5 % (27 %) | 48.4 |
+| 8 | 0.17 | 10.89 (59 %) | −1 % | +5 % | 47.9 |
+| 8 | 0.33 | 10.67 (66 %) | −2 % | +5 % | 46.4 |
+| 32 | 0.12 | 33.14 (5 %) | +9 % (16 %) | 0 % (20 %) | 48.3 |
+| 32 | 0.25 | 32.91 (5 %) | +10 % | 0 % | 48.0 |
+| 32 | 0.49 | 32.62 (5 %) | +10 % | −1 % | 47.8 |
+| 32 | 0.98 | 10.94 (35 %) | +65 % | +2 % | 15.7 |
+| 64 | 0.12 | 44.66 (12 %) | +6 % (8 %) | +6 % (7 %) | 52.3 |
+| 64 | 0.24 | 44.42 (12 %) | +6 % | +6 % | 52.1 |
+| 64 | 0.48 | 44.35 (12 %) | +6 % | +6 % | 52.0 |
+| 64 | 0.96 | 11.09 (176 %) | +107 % | +106 % | 12.8 |
+
+What it says. Below ρ about 0.5 the pool's size does not matter: from 0.08 to 0.49 the reads move
+4 % at most, at every user count, and nearly every stored chunk of a returning conversation is read
+back (about 50 reads a write). The cliff sits near ρ 1 at 32 and at 64 users alike, so ρ is the
+right axis. More users per engine narrow the spread between seeds (the whole table's range from 66 %
+of the median at 8 users to 5 % and 12 % at 32 and 64), and archetypes of four or eight stay within
+10 % below the cliff at every user count, writes within 8 %. A caution on what "the pool does not
+matter" rests on: the timeline serves the users in strict rounds, which for an LRU pool smaller than
+the live contexts is the worst case (each conversation is evicted just before it returns); arrivals
+out of order, or idle time between a user's requests (the corpus's, never replayed), would give some
+hits below the cliff, and that is the next thing to test before the operating point is decided.
+Scratch: `~/MLPerfStorage/limit500k/rho/`.
+
+**The order users arrive in (2026-11-08, the user's go; scratch, no GPU).** Every test above serves
+the users in strict rounds, the worst case for an LRU pool smaller than the live contexts. The same
+demand (one dry-run) through the pool in other orders: `exp`, each user's requests a draw of Exp(1)
+apart, out of order with no idle; and the corpus's own times, each request at its session's `t`,
+sessions back to back, users starting within the median session's span (2.8 h), with every gap
+capped at 300 s (the provider's cache lifetime the corpus's `ttft` shows) or at 1,800 s, counted over
+a time window in which every user is live. Uncapped the order cannot be run with a fixed count of
+requests a user: 79 % of a session's time is gaps over 30 minutes (the user away; gaps p50 9.2 s,
+p90 69 s, p99 1,413 s), so users' timelines end hours to days apart. Reads a request, the whole
+table; users active at once counted as those without a gap over 300 s:
+
+| users | order | ρ 0.12 | ρ 0.49 | ρ 0.98 | active |
+|---|---|---|---|---|---|
+| 32 | rounds | 718 | 710 | 278 | 32 |
+| 32 | `exp` | 645 | 386 | 100 | 32 |
+| 32 | corpus, gaps ≤ 300 s | 649 | 311 | 101 | 32 |
+| 32 | corpus, gaps ≤ 1,800 s | 549 | 146 | 32 | 18.7 |
+| 64 | rounds | 705 | 700 | 198 | 64 |
+| 64 | `exp` | 611 | 357 | 76 | 64 |
+| 64 | corpus, gaps ≤ 300 s | 546 | 226 | 68 | 64 |
+| 64 | corpus, gaps ≤ 1,800 s | 480 | 102 | 20 | 39.5 |
+
+Eight archetypes against the whole table, 32 users: rounds +1 %, +1 %, +20 %; `exp` 0 %, +3 %, +22 %;
+corpus ≤ 300 s +13 %, +39 %, +37 %; corpus ≤ 1,800 s +26 %, +65 %, +127 % (writes within 4 % in all).
+
+What it says. The flat region below ρ 0.5 of the note above is the rounds' artefact: in any other
+order the reads fall steadily with ρ (at 0.49, a half to a fifth of the rounds'), so ρ sets the load
+again, and there is no band where seeds spread thirty to one. Random arrival without idle comes near
+the corpus's timing with gaps capped at five minutes (within 1 % at 0.12, 24 % at 0.49 at 32 users),
+and how long users may stay away moves the reads as much as ρ does, through the users active at
+once. The archetypes, picked on prompt, writes, and length, hold under random arrival and not under
+the corpus's times, whose gaps they were not picked for. So the think time is a parameter of its own
+the WG must set (and with it, what "users per engine" counts), and an abstract that draws it from a
+distribution apart from the sessions keeps the archetypes valid. A user away for hours returns to an
+engine that holds nothing of the conversation, so whether it is read back depends on how long the
+storage tier keeps it: a dimension, the tier's capacity and retention, that no test here models.
+Scratch: `~/MLPerfStorage/limit500k/arrive/` (two bugs found and fixed in the scratch's timing,
+results above after the fix).
+
+**A think time drawn apart from the sessions (2026-11-08, the user's go; scratch, no GPU).** The
+test the note above proposes: each gap inside a session drawn from the corpus's gaps instead of
+taken from its own row, capped as before, in two forms: pooled, every gap from all 98,434 (p50 9 s,
+p90 69 s, 2.5 % over 300 s, 0.8 % over 1,800 s); and by kind, from the gaps before requests of the
+same kind as the next one, since the corpus's gaps depend on it (main lane, kind 0: p50 17 s, 3.9 %
+over 300 s, 90 % of its time in those; sub-agent, kind 1: p50 4 s, 0.1 %; kind 2: p50 4 s, 1.4 %).
+Reads a request, medians of four seeds at 32 users and three at 64:
+
+| users | think time | whole table, ρ 0.12 / 0.49 / 0.98 | eight archetypes against it |
+|---|---|---|---|
+| 32 | corpus, ≤ 300 s | 649 / 311 / 101 | +13 %, +39 %, +37 % |
+| 32 | pooled, ≤ 300 s | 525 / 165 / 54 | −4 %, +4 %, +15 % |
+| 32 | by kind, ≤ 300 s | 603 / 250 / 82 | +5 %, +20 %, +32 % |
+| 32 | corpus, ≤ 1,800 s | 549 / 146 / 32 | +26 %, +65 %, +127 % |
+| 32 | pooled, ≤ 1,800 s | 416 / 78 / 22 | +3 %, +15 %, +18 % |
+| 32 | by kind, ≤ 1,800 s | 514 / 118 / 29 | +11 %, +34 %, +45 % |
+| 64 | corpus, ≤ 300 s | 546 / 226 / 68 | |
+| 64 | pooled, ≤ 300 s | 489 / 140 / 50 | +11 %, +30 %, +42 % |
+| 64 | by kind, ≤ 300 s | 568 / 225 / 72 | +22 %, +45 %, +68 % |
+| 64 | corpus, ≤ 1,800 s | 480 / 102 / 20 | |
+| 64 | pooled, ≤ 1,800 s | 393 / 72 / 22 | +12 %, +28 %, +23 % |
+| 64 | by kind, ≤ 1,800 s | 470 / 98 / 25 | +30 %, +68 %, +68 % |
+
+Writes a request agree within 7 % everywhere. Users active at once are the same in every form
+(18.7 to 19.0 of 32, 37.7 to 39.5 of 64 at 1,800 s).
+
+What it says. A pooled think time is too gentle: it puts the long gaps before any request, most of
+them sub-agent calls whose context is short-lived anyway, and halves the reads at ρ 0.49 against the
+corpus's own times. Drawn by kind it comes back near them: within 7 %, 20 %, 19 % at 32 users, 4 %,
+0 %, 6 % at 64 (at 1,800 s, −6 %, −19 %, −9 % and −2 %, −4 %, +25 %, the last on 20 reads). So a
+think time a kind, three distributions, carries the timing that matters; a gap's dependence on
+anything finer was not tested. The eight archetypes do not survive it: they overstate by 20 % to
+68 % above ρ 0.12, more as the timing grows more realistic and more at 64 users than at 32. Their
+draw holds more main-lane requests (54 % against 50 %) and fewer sub-agent calls (10 % against
+15 %), and main-lane requests are the ones that wait long and come back to a context gone from the
+pool. They were picked on prompt, writes, and length, under rounds, where none of that showed. Open:
+archetypes picked also on the kind mix (or on the reads under timed arrival), or the sessions as
+distributions; and the 64-user pass is three seeds. Scratch: `arrive/abt.py` (orders `drawN`,
+`kindN`), `grid4.sh`, `grid5.sh`, `summ.py`, `summ5.txt`.
+
+**Utilization, not users, as what a provider fixes (2026-11-09, the user's question; debate, nothing
+decided).** The user's challenge: a provider keeps its GPUs busy, so a long think time adds users to
+an engine instead of idling it, and a model with a fixed count of users an engine, a quarter of them
+idle, is not how inference farms run; the provider balances utilization against the user's wait. The
+corpus's gaps also measure start to start, the previous reply's generation included, so every timed
+order above treated service time as idle. Proposed in the debate, for the user's decision:
+
+- *The busy hour.* The engine is always fed: the WG fixes the requests in flight an engine (as vLLM
+  admits to a full pool) and the think time a request kind; users an engine follow (Little's law)
+  and are not a knob. A storage system sized for the average fails at the peak, so the peak is what
+  the benchmark models. The pool is full of running requests by construction, so a returning main
+  lane after a human gap reads from storage: the low-ρ plateau, the most stable region measured.
+- *One axis.* Storage changing users an engine would make the op multiset depend on the system under
+  test (the invariant: no work distributed by timing), so it stays fixed; the schedule is computed
+  before the run, positional, and storage's speed shows only in latencies. The run passes on the
+  stall storage causes (as training's AU) or a KV-load latency budget; the score is engines, or in-
+  flight slots if engines are too coarse (the user's concern, from training rounds), with a load
+  curve beside it (engines against p99 load latency, SPECstorage's way) and capacity for the idle
+  contexts as a requirement.
+- *The engine is one TP × PP replica* (GPUs multiply, DP × TP × PP; data-parallel replicas of a dense
+  model share no pool and are separate engines; wide expert parallelism couples them).
+
+Primary sources, searched at the user's request (Gemini's answer the user pasted cited vendor blogs
+and journalism, none primary; no source gives a frontier lab's GPU utilization):
+Mooncake (Moonshot AI, Kimi, arXiv 2407.00079; FAST '25 release) "consistently faces overload" and
+rejects early; Splitwise (Azure, arXiv 2311.18677) sizes to a peak under a power cap, SLOs as slowdown
+multiples (TTFT 2/3/6×); ServeGen (Alibaba Bailian, NSDI '26, arXiv 2505.09999) bursty arrivals (CV >
+1), diurnal, multi-turn reasoning gaps "around 100 seconds, with an extremely long tail", 3.5 turns;
+DistServe (arXiv 2401.09670) goodput under SLO; KVCache Cache in the Wild (Alibaba, ATC '25, arXiv
+2506.02634) reuse within 10 minutes for 80 % in chat and 10 s in API traffic, reuse time exponential
+within a request category (type and turn), a cache of 2 to 4 times HBM enough for its short contexts
+(mean 973 tokens single turn, 5,953 multi-turn); Continuum (arXiv 2511.02230) pins a tool call's KV
+in HBM for a TTL. Retention, from the providers' own documents: Anthropic's prompt cache lives 5
+minutes, or 1 hour at a price, refreshed on each hit; OpenAI's 5 to 10 minutes idle, at most an hour
+in memory, or up to 24 hours extended (the default for several newer models), which a provider can
+only hold below HBM. No source characterizes agent traffic at production scale: both Alibaba papers
+leave it to future work. What it says for the draft: the busy hour is how operators size; a think
+time a request kind is supported, possibly an exponential a kind; retention can be set at published
+product tiers (5 minutes, 1 hour, 24 hours) rather than invented, the capacity to hold following from
+it; and a utilization figure is not needed, since the pass criterion is the stall storage causes.
+
+Public traces fetched (the user's go; Apache 2.0, kept outside the repository in
+`~/MLPerfStorage/public-traces/`): Mooncake's FAST '25 release, conversation (12,031 requests, 1 h,
+mean input 12,035) and tool-and-agent (23,608, 1 h, mean input 8,596; the arXiv trace again, its
+rows the same within a few tokens), and synthetic, 512-token block hashes, no session ids; and
+Alibaba's Qwen-Bailian sample (`alibaba-edu/qwen-bailian-usagetraces-anon`, hashes checked against
+the LFS pointers), 2 h each, 16-token block hashes with chat and parent ids and turn: to-C (43,058,
+6/s), to-B (172,800, 24/s, single turn), thinking (10,812), coder (43,011, 39 % past turn 1, up to 54
+turns, mean input 5,748). Their contexts are a tenth to a fortieth of AgentX's.
+
+**Think time measured where a trace links a request to its parent (2026-11-09, the user's go;
+scratch).** In the Qwen-Bailian traces a request names its parent, so the user's own time is the
+child's arrival less the parent's arrival and the parent's generation; the generation is not in the
+trace, so it is estimated, at a TPOT of 20 ms and prefill at 10,000 tokens/s (a fast engine), and at
+50 ms and 5,000 (a slow one; it leaves 18 % of the coder's and 69 % of the thinking trace's gaps
+negative, so the service was faster than that). Seconds, the fast setting:
+
+| trace | returns | p10 | p50 | p90 | p99 | mean | CV |
+|---|---|---|---|---|---|---|---|
+| coder | 16,605 | 2.8 | 98 | 924 | 3,470 | 341 | 1.9 |
+| to-C chat | 19,957 | 21 | 100 | 710 | 2,194 | 266 | 1.6 |
+| thinking | 1,200 | 1.3 | 8.8 | 213 | 1,518 | 92 | 3.9 |
+
+Turn changes it little (chat p50 90 to 120 s across turns 2 to 5+; coder 120 s at turn 2, 58 s past
+turn 4). The share back within each published cache lifetime: 5 minutes, 74 % (coder), 76 % (chat),
+94 % (thinking); 1 hour, 99 %, 100 %, 100 %. The traces span 2 hours, so a return after their end is
+not seen and every share is an upper bound.
+
+What it says. Human think time between turns is about a hundred seconds at the median, a mean of
+four to six minutes, and a tail to an hour; generation is a small part of the gap for chat and code
+and most of it for reasoning (long outputs, p50 1,665 tokens), so a start-to-start gap, the AgentX
+corpus's only measure, must have the service taken out before it is a think time. The distribution is
+not exponential: CV 1.6 to 3.9 against 1, a median below and a p90 above the exponential's of the
+same mean, so the per-category exponential of the ATC '25 paper (which models a block's reuse
+probability, not the gap between turns) is not a fit for think time; a fitted empirical or
+heavy-tailed distribution a kind is. For the busy-hour engine: at a mean of about 300 s against
+seconds to tens of seconds of service, a user holds a slot a few percent of the time, so tens of users
+stand behind each in-flight request. For retention: a 5-minute tier misses a quarter of human returns
+and a 1-hour tier nearly none in these traces; the AgentX corpus, whose gaps run to hours (79 % of its
+time in gaps over 30 minutes), is where a longer tier would matter, and it is the agentic one.
+Scratch: `~/MLPerfStorage/limit500k/think/` (`think.py`, `think.txt`, `ttl.py`, `ttl.txt`).
+
+**The busy-hour engine, closed loop (2026-11-09, the user's go; scratch, no GPU).** C requests in
+flight, N users behind them, a free slot taking the user ready longest; service the abstract's compute
+model (40 µs a new prompt token, 12 ms an output token); think time the corpus's start-to-start gap
+less that service, floored at 0 (56 % floored: the corpus's agent loops fire faster than the model
+serves), uncapped; users start mid-stream; 1 h warm, 2 h counted; the whole table, two seeds.
+Medians, reads and writes in 256-token chunks (3 MiB each at the scratch's model):
+
+| C | pool | N | busy | wait mean s | reads/req | reads/s | reads ≤ 5 min / ≤ 1 h | tokens held 5 min / 1 h / 24 h |
+|---|---|---|---|---|---|---|---|---|
+| 8 | 1.5M | 32 | 0.88 | 4.2 | 329 | 163 | 0.92 / 0.99 | 4.0M / 10.7M / 16.4M |
+| 8 | 3M | 16 | 0.45 | 0 | 6.9 | 1.9 | 0.01 / 0.72 | 1.8M / 5.7M / 10.9M |
+| 8 | 3M | 24 | 0.80 | 0.5 | 25 | 11 | 0.46 / 0.96 | 3.3M / 9.4M / 14.9M |
+| 8 | 3M | 32 | 0.88 | 4.2 | 114 | 58 | 0.68 / 0.96 | |
+| 8 | 3M | 48 | 1.00 | 36 | 581 | 272 | 0.94 / 1.00 | 7.5M / 16.5M / 22.8M |
+| 8 | 3M | 128 | 1.00 | 226 | 720 | 294 | 0.83 / 0.99 | 20.4M / 33.9M / 40.0M |
+| 8 | 6M | 32 | 0.88 | 4.2 | 8.1 | 3.9 | 0.00 / 0.80 | |
+| 8 | 6M | 64 | 1.00 | 70 | 394 | 184 | 0.82 / 0.98 | 9.6M / 19.8M / 26.7M |
+| 8 | 6M | 128 | 1.00 | 226 | 716 | 293 | 0.83 / 0.99 | |
+| 16 | 3M | 64 | 0.98 | 5.2 | 434 | 426 | 0.96 / 1.00 | 9.7M / 25.7M / 38.6M |
+| 16 | 6M | 64 | 0.98 | 5.2 | 164 | 159 | 0.88 / 0.99 | |
+| 16 | 12M | 64 | 0.98 | 5.2 | 14 | 14 | 0.00 / 0.87 | |
+| 16 | 6M | 128 | 1.00 | 77 | 669 | 586 | 0.93 / 0.99 | 21.2M / 39.6M / 52.8M |
+
+Writes 12 to 14 chunks a request everywhere; preemption only where the pool is under about twice the
+in-flight contexts (1.5M at 8 slots, 3M at 16). Full table: `~/MLPerfStorage/limit500k/closed/summ.txt`.
+
+What it says. The engine fills at about four users a slot (88 % busy at 32 users on 8 slots, 98 % at
+64 on 16, the queue a few seconds); past that the closed loop only lengthens the queue (minutes at
+eight users a slot), which a provider would refuse (Mooncake's early rejection). Two regimes:
+
+- *Overload* (queue of a minute or more): reads converge to 600 to 720 a request whatever the pool,
+  from 1.5M to 12M tokens, the queue itself stretching every reuse past the pool: the stable plateau,
+  and Mooncake's operating point, but with waits no interactive service keeps.
+- *The busy hour* (busy 0.9 or more, queue of seconds): the reads still depend strongly on the pool a
+  slot (at 8 slots and 32 users, 329, 114, 8 a request at 1.5M, 3M, 6M; at 16 and 64, 434, 164, 14
+  at 3M, 6M, 12M), so the accelerator's memory past the weights, a WG parameter (item 3), sets the
+  load at the point the benchmark would model; the cliff of the earlier notes is still there, now in
+  pool a slot rather than pool a user.
+
+Retention at the busy hour, the user's point borne out: 68 % to 96 % of the reads are of contexts
+touched within 5 minutes and 96 % to 100 % within an hour, so the long-idle users who hold most of
+the idle time contribute almost no busy-hour reads; a 1-hour tier serves the busy hour, and the
+capacity it holds is 10.7M tokens an 8-slot engine and 25.7M a 16-slot one (about 125 and 300 GiB at
+12 KiB a token), against 1.5 to 2.5 times that for 24 hours. Reads outweigh writes 10 to 30 to one.
+Open: the think time here is the corpus's gap less a modelled service; the corpus records each
+request's own `api_time`, from which the session's idle time is measured directly (77 % of returns
+within 10 s, 96.6 % within 5 minutes, 99.3 % within an hour; 30 % of requests overlap another of their
+session, sub-agents in parallel: `think/idle.py`), to be used in a rerun; and the users a slot at the
+knee depend on it.
+
+**The value of an old context, surges, and the morning ramp (2026-11-09, debate with the user;
+nothing decided).** The user's points, and where the debate went:
+
+- *Every context read, however old, takes compute off the busy hour.* The engine has no spare
+  capacity then, so a recompute delays someone else: the value is the user's wait as well as the
+  GPU's cost. Measured, a tier of 24 hours over one of 1 hour adds 1 % to 4 % of the busy hour's
+  reads (in chunks, so bytes) for 1.5 to 2.5 times the capacity, a trade a buyer prices with their
+  own costs. Proposed: the benchmark does no economics (MLPerf publishes no prices) but reports per
+  tier the capacity held, the reads served, and the prefill compute they avoided; the tier is the
+  WG's, a parameter of the workload, since a submitter choosing it would change the op set.
+- *Coordinated demand* (the user's example: water and sewer at a football game's half-time).
+  Candidates in agentic traffic: the start of a working day in each time zone (yesterday's sessions
+  resumed within the same half hour, each a long-gap return reading its whole context), the end of
+  lunch, a provider's recovery from an outage (stalled agents retrying at once), agents scheduled
+  on the hour. These are where a long tier pays, the steady busy hour needing only an hour.
+- *A resumed request is not read-only* (the user's correction of "little is generated"): it reads
+  its whole context, about 780 chunks at 200k tokens, and writes its new input and reply, 12 to 14
+  chunks on average (2 %); the agent loop it starts then runs from the pool for seconds at a time,
+  reading little and writing 12 to 14 chunks a request, so over a loop of 20 the writes are about a
+  quarter of the traffic. The steady busy hour measured 3 % to 11 % writes. Reads are on the
+  latency path (the first token waits for them); writes are appends that may leave it (LMCache's
+  asynchronous store, to be checked in its source).
+- *The morning ramp* (the user's proposal, offered as an example to think through, not an answer): a
+  run that models the busy hour from its start, users arriving on an S-curve over two hours, each
+  arrival a burst of whole-context reads, then the steady mix. Read bursts follow the arrival rate,
+  steepest at the curve's midpoint, while the steady load follows the count arrived, so storage's
+  hardest moment is mid-ramp and the GPU's is the plateau, which a steady-state benchmark cannot
+  show. It stays CLOSED (arrival times positional, the schedule computed before the run); the
+  resumed contexts are a dataset written before the run (an `input` namespace, about 2.4 GB a
+  200k-token context at 12 KiB a token, 150 GB an engine of 64 users, so datagen time enters the
+  tuning cycle); it needs a long tier for the first reads; its result is a latency curve over time,
+  the pass rule the KV-load p99 within budget in every window, the worst window (likely mid-ramp)
+  deciding; and its length is real time, two hours a run. The WG would choose, without data (no
+  source has time of day), the curve's shape (ServeGen's diurnal rates can inform it), the share of
+  arrivals that resume rather than start, and the users at the plateau (the knee).
+
+**The morning ramp, simulated (2026-11-09, the user's go; scratch, no GPU).** The closed loop with
+the session's measured idle time as think time (each table row's start less the latest end, by the
+corpus's own `api_time`, of every earlier request of its session: p50 2.1 s, p90 37 s, 31 % zero
+where sub-agents overlap; `arrive/r_idle.json`). The knee did not move: steady, the engine is 86 %
+busy at four users a slot on 8 slots (queue 3.5 s), 95 % on 16 (3.2 s), 100 % at six (36 s); reads
+a request at the knee 113 and 9.8 at 3M and 6M on 8 slots, 175 and 13 at 6M and 12M on 16. Below
+the knee, with the pool large enough, writes are most of the traffic (50 % to 89 %).
+
+The ramp: users arriving on a logistic curve (centre 50 minutes, 5 % to 95 % in 79), each resuming
+mid-session and reading its whole stored context, counted in 5-minute windows over 2 hours, engines
+summed as one storage would see them. On 64 slots and a 24M pool (`closed/rsumm.txt`):
+
+| users | window | busy | queue mean | reads, MiB/s | arrivals' first reads | writes |
+|---|---|---|---|---|---|---|
+| 192 (3 a slot) | 20 min | 0.15 | 0 | 197 | 85 % | 22 % |
+| | 45 min (peak arrivals) | 0.65 | 0 | 455 | 61 % | 32 % |
+| | 80 min | 0.93 | 0.4 s | 1,931 | 4 % | 10 % |
+| | 110 min | 0.84 | 0 | 1,900 | 2 % | 11 % |
+| 256 (4 a slot) | 45 min (peak arrivals) | 0.86 | 0.1 s | 650 | 36 % | 30 % |
+| | 70 min | 1.00 | 11 s | 6,212 | 3 % | 5 % |
+| | 95 min | 1.00 | 14 s | 9,257 | 0 % | 3 % |
+
+The 8- and 16-slot ramps agree (16 slots, 64 users: 346 MiB/s at peak arrivals, 2,000 to 3,100 on
+the plateau, writes 22 % then 4 % to 6 %).
+
+What it says, against what the debate expected. Storage's hardest moment is not mid-ramp: the
+arrivals' whole-context reads, at the arrival peak, are a fraction of what follows once the engine
+nears saturation, when the pool can no longer hold even the contexts of users back within seconds
+and every return is read again: four to five times the mid-ramp's reads at three users a slot,
+fourteen times at four. The ramp's start is write-heavy, not read-heavy (20 % to 45 % writes, the
+arrivals' loops appending while the pool still holds them); the user's 90/10 appears at the plateau
+(3 % to 15 %). Arrivals' first reads, the ones a long tier serves, are 6 % to 18 % of the run's reads.
+And the read rate near the knee is steep in the users a slot (1.9 against 6 to 9 GB/s for 192
+against 256 users on 64 slots), as steep as the pool's cliff was, so the operating point, users a
+slot and pool a slot, decides the load more than the shape of the morning; it is better fixed by a
+queue-wait target (the latency a provider keeps, and Mooncake's rejection at overload) than by a count
+of users. Caveats: the closed loop lets the queue grow where a provider would shed load, and the
+queue's wait lengthens every gap, which feeds the churn; one think-time model, one corpus.
+
+**Sessions as trees of concurrent contexts (2026-11-09, the user's go; scratch, no GPU).** The busy-
+hour engine on the corpus's own sessions rather than the scratch abstract (which serializes
+sub-agents): each request ready by its real trigger, the end of the latest earlier request of its
+session that had ended, plus the real idle, or, where it ran beside every earlier one, the start of
+the latest started plus the real offset; 16 slots, the service model of the closed loop, the pool
+model and LMCache's accesses over the schedule, 1 h warm and 2 h counted, two seeds, the same
+sessions in every order (`closed/tree.py`, `tsumm.txt`). Orders: `serial` (a session one request at a
+time), `tree` (the corpus's own concurrency, depth 1), `tree2` (a what-if: each sub-agent with
+probability 0.37 spawns, at its middle request, 1 to 8 children copied from the corpus's sub-agents,
+and waits for them). At a 6M pool (375k tokens a slot):
+
+| sessions | order | busy | queue mean s | reads/req | reads/s | writes % | contexts a session, p99 |
+|---|---|---|---|---|---|---|---|
+| 64 | serial | 0.77 | 0.2 | 55 | 54 | 19 | 6 |
+| 64 | tree | 0.79 | 1.2 | 45 | 46 | 23 | 4 |
+| 64 | tree2 | 0.94 | 8.5 | 116 | 154 | 13 | 8 |
+| 96 | serial | 1.00 | 12 | 283 | 355 | 5 | 6 |
+| 96 | tree | 1.00 | 22 | 425 | 539 | 3 | 5 |
+| 96 | tree2 | 1.00 | 58 | 393 | 590 | 4 | 12 |
+
+At 12M the same shape lower (64 sessions: 9.1, 8.2, 9.2 reads a request). What it says: at the depth
+the corpus has, its concurrency changes little below the knee (the reads within 20 %; the queue
+burstier, 1.2 s against 0.2); the knee in sessions is between 64 and 96 on 16 slots, four to six a
+slot, agreeing with the abstract's four users a slot. One level more, the what-if, moves it a
+quarter lower (busy 0.94 at 64) and triples the reads a second at 64 sessions, so the depth and
+fan-out of item 10's tree are high-leverage parameters for the WG, and the measured depth 1 is the
+default only because nothing deeper is measured. The contexts a session holds were sampled once a
+minute, which misses short peaks.
+
+**The morning ramp with people reviving several sessions (2026-11-09, the user's go; scratch).** Item
+6's revision tested: the tree of the note above, people arriving on a logistic curve (5 % to 95 % in
+30 minutes, centre 25), each reviving K sessions spread over 5 minutes, each session resuming
+mid-way and reading its stored context; the same sessions in every K, only their grouping changed;
+16 slots, 6M; 0 to 90 minutes in 5-minute windows, three engines summed (`closed/clustered.py`,
+`csumm.txt`). Reads in thousands of chunks a window:
+
+| sessions | K | saturated from | most reads before 35 min | worst window | its reads |
+|---|---|---|---|---|---|
+| 64 | 1 | 30 min | 78 | 40 min | 250 |
+| 64 | 3 | 30 min | 81 | 45 min | 200 |
+| 64 | 8 | 25 min | 96 | 45 min | 322 |
+| 80 | 1 | 30 min | 116 | 45 min | 468 |
+| 80 | 3 | 25 min | 183 | 55 min | 467 |
+| 80 | 8 | 25 min | 174 | 45 min | 507 |
+
+What it says. The user's expectation holds in direction: grouping steepens the ramp, the engines
+saturating about 5 minutes sooner and the reads before saturation 20 % to 58 % higher. The worst
+window is still past saturation (40 to 55 minutes), the churn of a full pool, and rises less, 8 % to
+29 % at K = 8 (with K = 3 at 64 sessions lower than K = 1, within the noise of three engines). The
+arrivals' own first reads stay small (at most 27 thousand a window); the clustered returns matter by
+filling the pool sooner. So K belongs in the workload, and its default (the user's 3 to 8) moves the
+ramp more than the plateau.
+
+*Corrections made during the debate:* "the replay skips over-limit requests" was first presented as
+the main cut, when the share cut far more; "long chains grow slowly" was then called a side effect
+of the cut, too strongly, since the corpus accounting already records it. That a long chain reaches
+the limit near turn 17 to 19 and restarts, offered as the cause of the short chains, is refuted by
+the table above.
+
+*Kept outside the repository:* the draft, the scripts, and the dataset card, in
+`~/MLPerfStorage/pool-experiments-2026-11-06/`.
+
+**The structure proposed for the KV-cache workloads (draft for the user's review, 2026-11-08;
+nothing decided, nothing built).** (Superseded by the consolidated draft of 2026-11-09 below; kept for
+the reasoning it records.) What the notes above add up to, as proposals the user decides one
+by one; the numbers are the scratch tests' (AgentX, LMCache local disk, the pool model), and what WG
+process means here is §8's.
+
+*1. What a KV workload is judged against.* No measurement of a real service's storage exists; the
+corpus has no storage I/O, and a GPU large enough to replay it is not to hand. The reference is the
+pool model (`agentx.simulate` with `lmcache_accesses`) on the corpus's requests and blocks: on the one
+capture with no length cut (500k, 700 requests) its serial timeline came within 2.5 % of the traced
+reads, and the engine timeline 46 % under, so the serial one. A GPU capture is a check of the calls
+and of the pool model at a point, not the target. Consequence: the committed AgentX target (2,321
+reads at 6 GiB) is an artefact of the 131k cut (184,972 without it), so the case's tolerances and
+the §3.64 note of 2026-11-06 ("the 6 GiB pairs accepted again", `6fc276c`) are corrected by this
+section, and the case is retargeted against the pool model once the rest is decided.
+
+*2. One abstract per storage mechanism, the model a parameter.* As brief item 70 proposes:
+`lmcache-local-disk` and `lmcache-shared-fs` stay one abstract each, the attention family a parameter
+(GQA's chunk split across tensor-parallel ranks, a file each; MLA's whole chunk from the first rank),
+not an abstract per family. Open there: a TP 2 capture, to see whether the ranks' calls need a
+structure values cannot express.
+
+*3. The deployment is the WG's, as parameter files.* KV bytes a token (the model and its KV dtype),
+pool tokens per engine (the accelerator's memory past the weights), tensor and pipeline parallelism,
+users per engine, the CPU tier (0), all fixed by a case derived from a model, an accelerator, and a
+parallelism; a submitter chooses none of them (the user's view, agreed: a buyer compares systems by
+the users they serve, not by deployment tuning).
+
+*4. The operating point, a ratio set well below the cliff.* The reads are set by ρ = pool tokens /
+(users per engine × mean live context). Measured at 8 users and a mean prompt near 195k: ρ ≈ 0.34
+(0.5M) stable, the whole table's seeds within two to one, eight archetypes within 3 %; ρ ≈ 0.67 (1M)
+already three to one between seeds; ρ ≈ 1.3 (2M) the cliff, 32 to one; ρ ≈ 2.7 (4M) and above,
+almost no reads. A real engine sits lower: 64 users on 1.5M tokens is about 0.12. Proposed: the WG
+fixes ρ at or below about 0.3, users per engine large enough to be realistic. (Revised after the check
+below 0.34, the note above: from ρ 0.08 to 0.49 the reads move 4 % at most, so ρ need only be set
+well under the cliff near 1, about 0.25 for margin, and the accelerator's exact memory does not
+change the I/O; 32 users or more per engine, where the seeds spread 5 % to 12 % against 66 % at 8;
+open, whether the rounds' worst case for LRU holds under out-of-order arrivals and idle time.) (Revised again after the arrival test, the note above: the flat region was
+the rounds' artefact; under random or the corpus's arrival the reads fall steadily with ρ, so the WG's
+ρ sets the load and must be chosen for it, and is counted on the users active at once, which the
+think time decides. Proposed: a think-time distribution fitted to the corpus's gaps, capped where the
+WG decides a user has left (five minutes, the provider's cache lifetime, is one choice), drawn apart
+from the sessions; the storage tier's retention of the contexts of users who left, a separate
+question, recorded under *Not settled*.) (Tested, the note on a drawn think time: drawn from all
+gaps pooled it halves the reads at ρ 0.49; drawn from the gaps of the next request's kind it comes
+within 20 % of the corpus's times at 32 users and 6 % at 64. Proposed: three think-time
+distributions, one a request kind.)
+
+*5. The submitter's knob: engines.* Users added to a fixed engine move ρ and with it every user's
+I/O, so the WG fixes users per engine and the submitter scales the number of engines; the result is
+the users served, engines times users per engine, as training scales accelerators at a fixed load
+each. What decides that a run passed is a latency budget for a KV load (as training's accelerator
+utilization), not yet defined. The request stream's draws are keyed by engine (item 70).
+
+*6. Sessions as archetypes.* Eight sessions of the corpus, picked by the time they hold a slot (bins
+of equal request count by mean prompt, from each the session nearest the bin's request-weighted
+mean prompt, writes a request, and length) and drawn with weights, a slot playing one session after
+another, users out of phase by a stagger: 4,276 rows of five integers, about 4 % of the corpus, came
+within 3 % of the whole table's reads and writes below the cliff, and held out within 15 % where the
+halves agree. Picked from the whole corpus, with the mean prompt stated beside them, since it sets
+the reads nearly in proportion and the corpus itself fixes it only to perhaps ±10 %. Perturbing
+tokens added nothing. Open: whether a table of rows (array parameters, built and run in the scratch
+abstract) is compact enough for the rule that an abstract is never a trace listing, or the eight
+sessions should be fitted as distributions (untested). (Revised after the drawn think time, the
+note above: with a think time drawn a kind, which the corpus's timing needs, the eight overstate the
+reads by 20 % to 68 % above ρ 0.12, their draw rich in main-lane requests; the 3 % holds only
+under rounds and random arrival. The pick has to match the kind mix as well, or be tested against
+timed arrival, before this item stands.)
+
+*7. Reproducibility of the stream.* Every draw is positional, so a seed gives the same ops; between
+seeds the reads of eight archetypes at ρ ≈ 0.34 spread about ±10 %. Proposed: the WG fixes the seed
+of the request stream, as it fixes the dataset seed, so that every submission runs one op set;
+larger runs (many engines) narrow the spread for anyone who varies it.
+
+*8. Tolerances.* Writes held tightly (they matched within 1 % to 6 % in every test); reads judged at
+the WG's operating point only, against the pool model, with a tolerance from the spread between
+seeds there; no target set at the cliff.
+
+*9. The runner.* An `x @ (r − dd)` reaching back thousands of requests overflowed the runner's stack
+at 2,000 requests a slot (worked around with `RUST_MIN_STACK`); a valid abstract must not need that,
+so a brief item to make that evaluation iterative or its depth bounded.
+
+*Not settled by any of this:* the think time and what a user away for long means for the storage
+tier's capacity and retention (the arrival note); the pool model's eviction is checked at one point, one model, one
+GPU; requests over 485k tokens (FP8 at 800k slowed past use); idle time between requests (the
+corpus's `ttft` shows a provider's five-minute cache; the replays ran without pauses); compaction of
+long sessions; the publisher's cache columns (the user's call); one corpus, one publisher's agents.
+
+*Order proposed:* the user decides 1 to 9; then the check below 0.34; then brief items for 6 (the
+session table in the shipped abstract, or distributions), 9 (the runner), and the retargeted case
+with its tolerances (8), item 70 carrying 2, 3, and 5; then commit and push together.
+
+**The session forms tested against the whole table (run at the user's word, 2026-11-09, for item 10
+of the draft below; nothing decided).** Three forms through the closed-loop tree of the notes above
+(16 slots, measured idle, seeds 1 to 6; steady at 32, 64, 96 sessions, pools 6M and 12M tokens; the
+ramp with people reviving 3 sessions each at 64 and 80, pool 6M): the whole table, eight archetypes
+picked again to match the main-agent share (0.576 against 0.575, 6,214 rows), and a generator of two
+levels, a session class of 8 by mean prompt and, within it, turns, chain steps, fan-out, and timing
+from quantile tables. The generator took about 4,250 numbers, not the few dozen estimated, and three
+additions before its prompts matched: a side query's return to the large context, a session's own
+share of deep cuts, and a factor per class on growth (1.0 to 2.2, and 4.1 for the largest-prompt
+class), fitted in-sample. Against the line proposed beforehand (reads within about 20 %, writes
+within about 7 %) neither form passes. The archetypes fail by far: their load is higher (busy 0.64
+against 0.32 at 32 sessions, the cause not looked into), the knee comes at about half the sessions,
+and reads are +62 % to +1,673 % wherever that matters. The generator's reads are within 20 % in 3 of
+the 8 cases (−55 % to +84 % in all) but inside the whole table's own range over seeds in 7 of 8; its
+load is 10 % to 15 % light (busy 0.65 against 0.77 at 64); its writes are +56 % to +93 % in all 8. The
+cause of the writes is measured (`sess10/wr.py`, chunks a session stores for the first time, a
+request): 14.4 in the corpus, 20.9 in the generator uncalibrated, 29.5 calibrated. The calibration
+doubles the extending steps' writes (main agent 9 a step, 22 calibrated), so growth is the wrong lever
+for prompt size, and what makes long sessions large is something else, not yet identified; uncalibrated,
+the excess is sub-agents' cuts (218 a step against 30) and first prompts (61 against 31). The whole
+table's own reads spread widely between seeds at one engine (13 to 46 reads a second at 64 sessions,
+112 to 569 at 96, pool 6M), which bears on item 12: a band of two standard deviations at the knee, for
+one engine, is wide. Scratch: `~/MLPerfStorage/limit500k/sess10/` (`summ.txt`).
+
+**The slot limit, and a second generator (run at the user's word, 2026-11-09; nothing decided).** The
+whole table with no slot limit against 16 slots (item 13's question), seeds 1 to 6 (5 at 96 sessions,
+one killed for memory): at 64 sessions steady nothing moves (reads +1 % at pool 6M, −2 % at 12M, writes
+−3 %); once queues form it does (96 sessions, reads −57 % and −29 %, writes +13 %; the ramp at 64, reads
+−26 %, peak window −37 %, writes +12 %; at 80, reads −46 %, peak −31 %, writes +36 %). The ramp's worst
+windows come after saturation, so the slot queue stays in the plan, in the same pass over the merged
+timeline as the pool (proposed). A second generator (`sess10/gen2.py`, about 5,000 numbers, in-sample)
+with no factor per class: the first's errors were structural. A cut re-sends content already stored
+(a sub-agent's deep cut, 104k of 117k tokens), and is fitted now by what it stores; the session's real
+start is its second prompt, a table per class; growth is front-loaded (the first tenth of a chain 1.56
+times the mean) and drawn by the steps a context took; a compaction comes at a size (per class, a table
+of sizes and the share of tall sessions that never compact), and the largest effect, a side prompt
+leaves a context's main chain where it was. Static fit: mean prompt 209k against 219k, each class −19 %
+to +2 %; chunks a session stores for the first time, a request, 17.2 against 14.4. Through the same grid,
+against the whole table: reads within 20 % in 4 of the 8 cases (−3, +3, −8, −10; the others −28, −29,
+−39, and +70 at a rate of about one read a second), inside the whole table's range over seeds in all 8;
+writes +13 % to +28 %, still outside 7 %, inside the table's range over seeds in 5 of 8; load near
+(busy 0.70 against 0.77 at 64 sessions). The seeds' spread (the generator's standard deviation 13 % to
+53 % of its mean at one engine) means 6 seeds cannot resolve a 20 % difference in reads. The remaining
+writes are measured (`wr2.py`): fresh prompts (the main agent's 117 chunks a step against 68, a sub-
+agent's 34 against 21) and a sub-agent's first prompt (55 against 31), written as new where the corpus
+re-sends stored content, the error cuts had. Scratch: `summ2.txt`, `ssumm.txt`.
+
+**The third generator, twelve seeds, and held out (run at the user's word, 2026-11-09; nothing
+decided).** `sess10/gen3.py`, a fresh prompt and a sub-agent's first prompt without the shared prefix
+now fitted by what they store, about 5,070 numbers. Against the whole table, 12 seeds each, the
+standard errors of the difference given: writes within 7 % in 6 of the 8 cases (+3, +3, −2, −2, +2, +2;
++18 ± 3 at 96 sessions in both pools). Reads within 20 % in 3 of 8 (−8 ± 19, −13 ± 25, +1 ± 12), and
+low where they matter: −36 ± 22 at 64 sessions and pool 6M, −55 ± 8 and −29 ± 10 at 96, −30 ± 18 and −51 ±
+8 on the ramp at 64 and 80, its peak window −22 ± 24 and −35 ± 8. Twelve seeds resolve what six did not:
+the low reads are a bias. Load does not explain it alone: busy 0.64 against 0.77 at 64 sessions, but
+0.73 against 0.75 and 0.78 against 0.78 on the ramp, where reads are as low. The prompts in the
+simulated window are 9 % to 16 % smaller than the table's though the static mean is within 5 %. The
+cause is not established. Held out (fit on the even or the odd sessions, 64 sessions at 6M and 12M and
+the ramp at 64, 8 seeds, against each half's whole table): the reads held out (−25 ± 25, −81 ± 5, +8 ± 17,
+−41 ± 9, −36 ± 10, −77 ± 5) are no worse than in sample against the fitted half (−57, −67, −19, −22, −66,
+−56, each ± 7 to 15), so the error is bias, not overfitting, and the halves differ among themselves;
+writes held out −2 ± 10, −19 ± 6, −2 ± 10, −19 ± 6, −3 ± 6, −9 ± 5. The shrinking of the tables was not
+done, the form having not yet earned it. Scratch: `summ3.txt`.
+
+**The low reads traced to the idle gaps, and a fourth generator (run at the user's word, 2026-11-10;
+nothing decided).** The whole table was played with its own trigger gaps disturbed and nothing else
+(`sim4.py`, 6 seeds, pool 6M). Permuted within each session, main and sub-agent gaps apart, reads fall
+30 % at 64 sessions, 39 % at 96, 28 % on the ramp at 80. Drawn independently from the whole corpus's
+gaps, as `gen3` draws them, they fall 46 %, 58 %, 57 %, and on the ramp the table so played reads what
+`gen3` reads (92 against 92 a second) at the same busy fraction (0.78). So the bias was the gaps: which
+requests carry them, not their distribution. The corpus's main lines cluster them: a gap of a minute or
+more is 14.9 % of gaps but 38.1 % after such a gap, and a session's own share of them runs from 4.8 % at
+the 10th percentile to 32.4 % at the 90th. Prompt size barely moves them. `sess10/gen4.py` draws a
+session's share of long gaps (by quartile of its main-line length, weighted by gaps), a persistence
+(0.185 main, 0.198 sub-agents), and separate tables for the short and the long; about 5,340 numbers. Its
+gaps: long 16.6 % and 38.7 % after a long one; the mean main-line gap 497 s against 395 s. Against the
+whole table, 12 seeds, the difference and its standard error: reads within 20 % in 7 of 8 cases and
+within two standard errors in all 8 (−6 ± 21, +15 ± 33, +2 ± 22, +12 ± 14, +18 ± 18, +23 ± 26, ramp +17 ±
+33, +8 ± 17; the ramp's peak window +35 ± 36, +22 ± 12). The read bias is gone. Writes are not: +36 ± 13
+at 32 sessions, +34 ± 9 at 64, +24 ± 3 at 96, +6 ± 5 and +1 ± 4 on the ramp, 2 of 8 within 7 %. Requests a
+second against writes per request show why, and correct the previous note: `gen3`'s writes matched by
+cancellation, its rate 14 to 19 % low at 32 and 64 sessions and its writes per request 20 % to 21 % high
+(15.8 against 13.2); `gen4` has the rate back (+10 %, +5 %, 0) and keeps the excess per request (16.2 to
+17.0 against 13.1 to 13.8; on the ramp +12 % and +8 %). The excess per request is the open fault, in the
+prompt structure and not the gaps; not diagnosed. Held out not repeated for `gen4`, nor the tables shrunk.
+Seven of the first 72 jobs failed on a request of no new tokens and no output, its end sorted before its
+start, exposed only by permuted gaps; `sim4.py` gives it a nanosecond and they were run again. Scratch:
+`summ4.txt`, `summ5.txt`, `idle1.txt`, `wr5.py`.
+
+**The writes per request, a fifth generator (run at the user's word, 2026-11-10; nothing decided).**
+New chunks per request by the fit's own step kinds, no simulation (`sess10/wr7.py`), and each generated
+step against the kind the classifier sees (`xt.py`), located the excess of `gen4` (16.5 against 14.4). A
+deep cut was drawn at any size, where the corpus's are of tips small against the session's largest (of a
+large one it is a compaction); trims and deep cuts shared one table of new tokens though they write 4 and
+159 chunks; a fresh prompt, a sub-agent's first without the shared prefix, and the session's second
+prompt took a stored share independent of their size, which is biased when the share and the size go
+together. `sess10/gen5.py`, about 5,840 numbers: a deep cut only of a small tip, its own table for trims,
+and those three prompts fitted by the tokens they write. Static writes per request +7 % (15.4 against
+14.4; main lines 16.4 against 14.9, sub-agents 13.8 against 13.8). Busy now agrees (0.36, 0.77, 1.00,
+0.75, 0.78 against 0.33, 0.77, 0.99, 0.75, 0.78). Against the whole table, 12 seeds: writes +20 ± 10 at 32
+sessions, +16 ± 8 at 64, +12 ± 3 at 96, −5 ± 4 and −6 ± 3 on the ramp at 64 and 80, so 2 of 8 within 7 % (the
+pools share a run's writes, so 5 distinct cases). Reads −15 ± 18, −14 ± 15, −25 ± 20, −10 ± 14, −2 ± 21, +2 ± 27,
+ramp −33 ± 16, +1 ± 16, its peak window −19 ± 25, +11 ± 11; 6 of 8 within 20 %, 7 of 8 within two standard
+errors. Half of `gen4`'s write excess is gone and the ramp holds; the steady cases do not. The steady
+window's writes per request are 15.4 to 16.0 for `gen5` and 13.1 to 13.8 for the table, whose own static
+figure is 14.4: the table's window runs below its static mean and the generator's does not. Why is not
+diagnosed. Held out not repeated, nor the tables shrunk. The round was to stop here, the steady writes not
+closing. Scratch: `summ6.txt`, `wr7.txt`, `wr8.txt`.
+
+**The fifth generator held out (run at the user's word, 2026-11-10; the user chose the generator over the
+whole table as a data file, this test being its condition).** Fit on the even or the odd sessions, 8
+seeds, 64 sessions at 6M and 12M and the ramp at 64, each against each half's whole table. Writes held
+out: +24 ± 7 and +4 ± 7 steady, −1 ± 4 and +1 ± 7 on the ramp; in sample +35 ± 8, −4 ± 6, 0 ± 5, 0 ± 7. The ramp's
+writes hold for sessions the fit never saw; the steady ones depend on the half. Reads held out: +33 ± 36,
+−82 ± 4 (6M); +18 ± 17, −52 ± 8 (12M); +41 ± 46, −75 ± 5 (ramp). In sample −23 ± 22, −69 ± 7; −11 ± 14, −36 ± 10; −25 ±
+26, −52 ± 7. Reads do not generalize, and the two fits differ in themselves: fit on the even half,
+reads 43.4 a second and busy 0.90; on the odd, 10.2 and 0.68, a factor of four in reads for the same
+sessions' structure at half the data. The fit on all the sessions is within 20 % of its table in 6 of 8
+cases; a fit on half can miss its own half by 69 %. The halves' own whole tables differ too: 56.7
+against 32.7 reads a second at 64 sessions and 6M (1.7 times), 94.1 against 50.1 on the ramp (1.9 times), 7.4
+against 5.6 at 12M (1.3 times). So near the knee the corpus's own sampling error in the reads is far
+larger than the ±20 % item 12 carries for it, at least at 196 sessions a half. What the generator can claim
+is therefore narrow: it reproduces the pool model on this corpus's fit, not reads for sessions outside it.
+Scratch: `summ7.txt`.
+
+**The closed loop with load shed (run at the user's word, 2026-11-10; ~~nothing decided~~ decided below).** The whole
+table (`sess10/sim6.py`, 6 seeds, the same seeds as the queueing loop) with a stand-in provider: a request
+found past a queue-wait limit when a slot comes free is refused, retried after 30 s, 60 s and 120 s, and
+on a fourth refusal its session is abandoned, the stream going on to its next session. Limits 10 s, 30
+s and 120 s, the queue-wait target being the WG's. The served plateau hardly moves: at 96 sessions 1.219
+requests a second queueing, 1.194 at 30 s, 1.177 at 10 s (−3 %), busy 0.98 to 0.97; the ramp at 80 the same
+(0.940 to 0.950). Refused requests come back, so the GPU stays as full; the closed loop's plateau is not
+overstated in what is served. Writes do not move (within 2 % steady, +9 ± 5 on the ramp at 10 s). Reads do,
+past the knee: at 96 sessions −26 ± 25 at 30 s and −74 ± 7 at 10 s (6M), −23 ± 21 and −55 ± 11 (12M); on the ramp
+−18 ± 21 and −59 ± 9, its peak window −14 ± 19 and −62 ± 8. Why is not diagnosed. At 120 s nothing changes, no
+wait reaching it (the p99 is 55 s to 58 s). At 64 sessions, below the knee, nothing changes at 30 s or 120
+s and reads move −1 % to −3 % at 10 s. What the user sees: at 96 sessions and 10 s the mean delay falls from
+23.3 s to 13.4 s and the p99 rises from 58 s to 141 s with the backoffs, 718 refusals and 12.5 abandoned
+sessions an hour; at 30 s, 232 and 2.2. So the provider's queue policy is a parameter of the op set past
+the knee, as the pool size is: the WG fixes it, or the operating point sits below the knee, where it does
+not matter. The retry and abandonment rules are a stand-in, no trace giving them. Scratch: `summ8.txt`.
+(Decided by the user, 2026-11-10: the operating point sits below the knee, where the queue policy does
+not move the op set and the reads are best behaved; no queue policy is fixed in the workload, since one
+would need retry and abandonment rules no trace gives. Item 4's queue-wait target is set with this as
+its bound.)
+
+**The generator in the abstract, a shared tier, and events between runners (the user's questions,
+2026-11-10; decided by the user the same day).** Two things were called "the generator" loosely. The
+*session generator* (`gen5` in the scratch) draws a session: its tree of contexts, each request's time
+and what it sends (which earlier prompt it extends or cuts, the new blocks). The *plan pass* takes an
+engine's sessions in planned order and runs the slot queue, the pool, and eviction over them, which
+decides each request's reads, writes, and unlinks: the op set. Training has only the first kind of
+step (the Feistel shuffle and the position formula); the second is new, a request's ops depending on
+what the other sessions sharing its pool did before it. Both are deterministic and computed from the
+plan, never from the run: the pool is filled by planned requests, not by the I/O a runner issued
+(item 13's rule (1)), so a host plans alone for what it owns. The cost differs from the shuffle's: LRU
+contents have no closed form, so position *i* needs the planned history before it. A runner streams
+the plan: each session's generator yields its next request on demand, a heap merges the sessions in
+planned order, and the pass consumes them, so a host holds each session's state and the pool, never
+the whole timeline. Sessions an engine are about four a slot at item 4's point, not one.
+
+Decided:
+(1) *Approach (a).* The session generator and the plan pass are expressed in the abstract language,
+the runner kept agnostic to the workload, rather than (b), a plan node with `gen5`'s logic in Rust.
+First, a port test: `gen5` written as an abstract with today's language and the fewest additions,
+held to the Python program's output (as the `aeiou-trace` port was held to its goldens); what the
+port cannot do without is the list of constructs the language needs. Expected: a prompt as parent,
+kept length, and new blocks; a choice among earlier prompts; `x @ i` without the stack (brief item
+73's); and for the engine a timeline merging its lanes in planned order, a queue with a fixed number
+of servers (the GPU slots), the pool, and watermark eviction. The timeline is the largest change: the
+language's actors are independent today, and a timeline couples an engine's lanes, before the run.
+New constructs are marked provisional in the contract until a second workload uses them; the user
+expects the language to grow quickly while workloads are explored and slowly after.
+(2) *The cache construct designed from two systems.* LMCache writes every new chunk to its store when
+made (writes follow new tokens); Dynamo's block manager writes a block to the tier below when it is
+evicted from the one above (writes follow evictions, cascading). The construct is a stack of tiers,
+each with a capacity, an eviction policy, and a write policy, the stack with a rule for what a hit
+promotes, named for the mechanism; LMCache's settings built first, Dynamo's source read before the
+shape is fixed. Where a tier puts a block (a file a chunk, or a slot on a device) is a parameter. A VDB
+caching hierarchy is expected to need it too; if a later system does not fit, a new construct.
+(3) *Toward `lmcache-shared-fs`, in phases.* Phase 1: each session's contexts on its own engine, the
+storage tier one shared namespace, the plan pass per engine. Phase 2: contexts routed across engines
+by a WG-fixed rule (prefix hash and planned load, as llm-d, Dynamo, and OpenAI's routing document; no
+trace shows a router in use, an assumption stated). Measured in the scratch before phase 2 is built:
+the reads that would cross engines under prefix routing on the corpus, and the plan pass's cost at
+the domain sizes proposed. Placement is a pure function every host evaluates; session ids are global
+and positional, keyed by (seed, session), never generated by a runner, so no runner is told a session
+moved: each issues what the plan assigns its engines.
+(4) *Domains.* A domain is a sharing group: the engines sharing one storage tier (in practice the
+replicas serving one model, whose KV no other model can use). Sessions route only within their
+domain and no state crosses domains, so a host replays only its domains' plans, the state it holds
+bounded by the domain, and adding a domain leaves the others' ops unchanged (item 9's property, at
+domain granularity). A domain may span hosts (the user's preference over one host a domain), and is a
+barrier and event scope within the run's one coordinator, which keeps one identity check, one `t0`,
+and one merged report.
+(5) *Events between lanes.* The user's design: an op at the head of a causal or validity edge signals
+an event; the op at its tail waits for it, consuming it if it came early. Refined: the abstract names
+engines and lanes, never runners or ranks (which engine a rank runs is the GPU-range formula, so any
+host computes where engine *e* is, and the coordinator, which every host connects to, knows each
+rank's address); event ids are computed from the edge's keys, never counted; a causal event carries
+its sender's lag L, a validity event only completion; one event a request's stores, not one a chunk.
+Delivered in-process when both ends are on one host, by the coordinator otherwise, two messages
+through it an event (in, then out), so 1,000 events a second are 2,000 messages. The time an event
+spends between hosts is the benchmark's, never charged to the system under test: the coordinator's
+one-way latency is measured and reported with the edge waits, and a run whose messaging p99 is a
+meaningful share of the latency budget is invalid. TCP behind the `Coordinator` trait, so an event is
+lost only with a host, which fails the run; a wait has a timeout, a failed run rather than a hang.
+Edges point forward in planned time, so no deadlock. The same primitives serve any cross-actor
+dependency (a checkpoint's manifest after its shards), point-to-point beside the collective barriers.
+They change when ops issue, never which, so the fingerprint and CLOSED are untouched. The coordinator
+stays in rank 0's process; a standalone one comes on evidence that rank 0's own load delays events,
+the messaging measurement being that evidence. A launcher written in something other than shell could
+stay alive after starting the ranks and take the coordinator's role (the user's note).
+(6) *State bounded by capacity.* The rule against per-file structures means state that scales with the
+dataset; a cache's state scales with its WG-fixed capacity, holding only what the cache holds, and is
+allowed. A host replicating a domain's plan holds the domain's tier, about 100,000 files an engine at
+an hour's retention, so the domain's size bounds it.
+(7) *The runner is the only reproducer.* No one needs the op set without the runner; who wants it
+exports the run's trace and analyses that. The cache's rules (LRU ties, the order within a planned
+instant) are definitions the runner fixes in `runner/REFERENCE.md`, a change to one changing every KV
+fingerprint. The Python pool model stays the reference for item 12's tolerances.
+(8) *A rule: never learn from the run.* Which ops a run issues, and their names, sizes, and offsets,
+are a function of the abstract, its parameters, the seeds, and the host and engine counts; nothing
+observed during the run changes them, and only when an op issues may follow the run. It names what
+the fixed op multiset, "no work distributed based on timing", and item 13's "track the slowness,
+neither control it nor respond to it" already enforce. It forbids modelling adaptive behaviour (a
+router balancing on real queue depth, a store dropped when staging fills, client timeouts); those
+become gate failures or reported numbers. Added to `CLAUDE.md`'s invariants with the commit.
+(9) *Dynamo's G3.5, deferred.* The user's understanding, not yet checked against the source: G1 HBM, G2
+host DRAM, G3 node-local NVMe, G3.5 an NVMe-oF block layer reached from user space, G4 an archive by an
+object API. If so, supporting it needs block-device ops in the language, since a shim cannot turn file
+or object calls into block calls, and the extent index it keeps must be computed (an allocator's state,
+in the plan) and, if persisted, its writes modelled. A kernel NVMe-oF device would instead be POSIX at
+offsets. Queued; the call path and the index read from the source first.
+
+**Demand, the application's caches, layout: one model for every family (the user's question,
+2026-11-10; accepted by the user the same day).** The user's concern: the tool's definitions began
+myopic toward training, KV has pulled them toward generality, and the KV work, without a high-level
+model like training's (pick a file, read it whole, repeat), was arduous and may have overcorrected
+toward KV. Reviewed against brief items 70 to 76 as drafted: none harms training or checkpointing as
+written, but three could if built the obvious way, so each carries a guardrail. Item 70's keys are
+the abstract's choice (GPU id for every abstract outside `kvcache/`), the invariant's wording changed
+for the KV abstracts only; item 72's timeline is opt-in, an abstract without one running as today
+with no per-op cost, and D and the lag are a case's results through `result.` constraints, never
+runner-wide; item 73 changes evaluation, never values. Each is accepted only when every committed
+abstract outside `kvcache/` keeps its fingerprint and measured shape (the catalog check) and a
+training run is no slower. `until_eof` was checked against the rule "never learn from the run": it
+stops at the computed size, so training already obeys it. For vector search the items help more than
+they hurt: the cache construct fits DiskANN's node cache (a static tier, modelled by hand today) and
+tiered segment caches over an object store; the timeline and the latency gate fit query serving. The
+graph walk, a read depending on the neighbours just read, none of them addresses. A trap named: KV's
+chained prefix keys belong to the KV generator, the cache's keys opaque.
+
+The cause of the wilderness, as read here: training's demand was trivial, so its architecture was
+almost all layout; KV's difficulty was almost all demand and caching, discovered from a corpus before
+any file op existed. One model covers every family, three layers, each abstract placing its
+structure in one:
+
+| Family | Demand | The application's caches | Layout |
+|---|---|---|---|
+| Training | a steady step loop, reads a Feistel draw | none, or an epoch cache; every read reaches storage | formats and framing |
+| Checkpointing | writes on a schedule, then barriers | none | shards and a manifest |
+| KV cache | arrivals, sessions, think times | the pool and the storage tiers | a file a chunk, or slots on a device |
+| Vector search | query arrivals and the graph walk | node and segment caches | sectors and segments |
+
+Training is the simple case, steady demand and no cache. Items 70 to 76 sit as demand (71, 72),
+caches (75), and layout (76); a construct that fits no single layer is a sign it is in the wrong
+place. The joint review of the KV structure checks it against this frame.
+
+**The joint review of the KV structure (started by the user 2026-11-10; decided as below the same
+day).** The structure laid out on the frame above: demand (the ramp and returns, the sessions of item
+71, the engine's service model and the operating point below the knee, the keys); the application's
+caches (the GPU pool, the staging of stores, LMCache's L2 tier and its eviction, the construct of
+item 75); layout (a file a chunk named from its key, one flat directory, `rename` and `unlink`; the
+two mechanisms; the block tier later); and across them the plan, events, D, the score, and the
+tolerances. Issues found and decided:
+1. *The pre-filled tier is not an `input` namespace* (read-only, V14): the run's evictions unlink its
+   files and its stores add files beside them, so it is brief item 59's state, made before the run
+   and modified by it. Item 59's reset already recreates what the run removed. Agreed.
+2. *The eviction model mixed two LMCache adapters*: the calls modelled (flat directory, `rename`, 64
+   unlinks at once) are the filesystem adapter's, which declares no capacity and is skipped by the
+   capacity-triggered controller (its deletes come by a per-user quota path); capacity eviction is
+   `fs_native`'s. Agreed: read which adapter the multi-process connector uses for a local and a
+   shared path, and model that one whole, its trigger included.
+3. *The mechanisms predate the connector choice*: both committed abstracts are captures under the
+   in-process connector. Agreed: the two mechanisms are redefined as the multi-process connector's
+   adapters on a local and on a shared path, confirmed by item 74's capture.
+4. *Capacity in a domain.* No host learns which engine holds the oldest chunk: every host of a domain
+   replays the domain's plan, so each computes the same LRU order and the same victims at the same
+   planned instants. An unlink is an op of the plan like any write, issued at its planned time on its
+   lane; the capacity is the application's WG-fixed setting (what LMCache is told), never asked of the
+   storage, which needs only the free space the runner's limit checks confirm before the gate. An
+   unlink that must follow another engine's read of the chunk is a validity edge. Settled in
+   principle (the user, 2026-11-10); which lane issues an unlink (the engine that wrote the chunk, or
+   one eviction lane a domain) follows LMCache: a capacity a server evicting what it wrote, or one
+   controller over the shared usage, read with issue 2.
+5. *The ramp's results came from past the knee.* Terms, the user's question: the plateau is the
+   arrival curve's flat part, sessions no longer growing, not a flat spot in storage performance;
+   saturation in the simulations was the emulated GPUs' (every slot busy, a queue forming, the
+   knee), never storage's, whose slowness shows only as lag and D since the op set is fixed. With the
+   session plateau below the knee, the steady state may never fill the slots, and the heaviest window
+   may be clumped returns during the ramp. Agreed: the ramp rerun at the chosen point with clustered
+   returns (k 1, 3, 8, queued in item 6) before item 74.
+6. *Staging under the multi-process connector is unread*: its size, its drop policy, and where it
+   lives. Agreed: read with issue 2.
+7. *Reset and datagen time.* The user's refinement of §3.94's reset: a path of the computed write set
+   that exists at the right size is left alone (one `stat`, never a walk), on the condition that the
+   run never wrote into it while it existed, since a size check cannot see an in-place overwrite of
+   the same length (a vector index); the computed write set says which paths were only created or
+   unlinked. Regenerating what was written stays the rule, since datagen's bytes carry the controlled
+   dedupe and compression ratios. LMCache's chunks never change in place, so the KV reset is the diff:
+   unlink the chunks the run made, recreate the pre-filled ones it evicted. The diff is large: the tier
+   holds about an hour of writes and a 90-minute run writes more, so most pre-filled chunks are evicted
+   by its end. Agreed: the datagen time estimated at Rust datagen's measured speed before item 72 fixes
+   the pre-fill.
+8. *The frame refined*: the slot queue and the service model are neither cache nor layout but the
+   application's compute pacing, as training's step time is, and sit in demand. Agreed.
+
+*Chunk content* (the user's question; agreed). The dedupe and compression ratios meant are the
+system under test's, done transparently to the application. A chunk's bytes are a function of its
+key, so the same key gives the same bytes and the duplication a real deployment has (a system
+prompt's chunks on every engine's disk) appears without a ratio invented for it. The compression
+ratio is a case parameter measured from real chunk files in the GPU session (model, KV dtype, and
+LMCache's encoding decide it); until then the default is close to incompressible.
+
+*A per-run nonce in written content* (the user's question; agreed). Namespace content is a function
+of (namespace seed, path, offset), all known from the published case, so anyone can compute every
+byte a run will write and stash a copy outside the benchmark's directories for the system's dedupe to
+find; a system that keeps dedupe fingerprints of deleted data gains the same from a prior run. Every
+run draws a nonce from the operating system's randomness, never from anything published; rank 0
+draws it and sends it with `t0`, so that the same chunk key gives the same bytes on every host and
+duplication within the run stays real. It is mixed into the seed of every written namespace's
+content, never a dataset's: content written before the run (datagen's, a pre-filled tier) is
+unscored and must come back exactly at reset, so it keeps the dataset seed alone. The nonce is
+recorded in item 59's dirty marker while the state is dirty (reset unlinks the run's files and
+regenerates what it wrote or removed with datagen's content, so after reset no file carries it), in
+the namespace manifest of an output namespace, and in the run report. Ops, paths, sizes, the
+fingerprint, and CLOSED are unchanged; the compression ratio too. Cost: a pre-filled chunk evicted and
+stored again would really match its earlier copy and here does not, a small understatement of dedupe.
+A change to the runner's payload definition for namespaces, a recorded decision: brief item 77,
+general, not KV's.
+
+**The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
+2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
+arrival orders, the drawn and measured think times, the user's challenge that a provider fixes
+utilization rather than users, the primary sources, the closed loop, and the morning ramp. Each item
+is a proposal the user decides; numbers are the scratch tests' (AgentX corpus, LMCache local disk,
+the pool model), WG process is §8's, and what the earlier draft held that no longer stands is listed
+at the end.
+
+*1. The reference is the pool model* (unchanged). `agentx.simulate` with `lmcache_accesses` on the
+corpus's requests and blocks, within 2.5 % of the traced reads on the one uncut capture; a GPU capture
+checks the calls and the model at a point. The committed AgentX target (2,321 reads at 6 GiB) is the
+131k cut's artefact, so the case and its tolerances, and the §3.64 note of 2026-11-06 (`6fc276c`),
+are retargeted against the model once the rest is decided. (Accepted by the user, 2026-11-09, with
+the GPU checks named: the model already runs on the whole corpus, so what more GPU data would buy is
+confidence in the model, first with requests in flight together, several slots at a pool near the
+knee, the behaviour every busy-hour result rests on and the one the 2.5 % match (serial) did not test
+(the engine timeline came 46 % under); then contexts past 485k tokens, where most reads are.)
+
+*2. One abstract per storage mechanism* (unchanged). `lmcache-local-disk` and `lmcache-shared-fs`,
+the attention family a parameter (brief item 70); open, a TP 2 capture. (Accepted by the user,
+2026-11-09, the TP 2 capture its condition: a call structure across ranks that values cannot express
+reopens it; the capture can share a GPU session with item 1's checks. The user's note: a person runs
+a use case (`--case`, `aeiou cases`), which brings in its abstract by the lock's path, so whether one
+abstract or several sit under the cases is the authors' choice and is hidden from whoever runs them;
+the choice here is made for maintenance and comparability, not for the user interface.)
+
+*3. The engine is the WG's.* A case fixes: the model and its KV bytes a token; the accelerator and
+its service model (prefill and decode time a token); the engine as one tensor × pipeline parallel
+replica (GPUs multiply, DP × TP × PP; data-parallel replicas of a dense model share no pool and are
+separate engines; wide expert parallelism couples them); the requests in flight an engine (slots);
+the pool a slot (the accelerator's memory past the weights); the CPU tier (0). The submitter chooses
+none. Cases multiply by accelerator, as training's do. The pool a slot sets the busy-hour load
+steeply (at four users a slot, 113 and 10 reads a request at 3M and 6M on 8 slots), which is why the
+WG must fix it rather than leave it to a deployment. (Accepted by the user, 2026-11-09, with the slots
+derived from the pool and the mean live context, as vLLM bounds them, not chosen beside the pool, so
+pool and slots are one setting; the service model's numbers measured once on the accelerator and
+published with the case, as training's step time is; a wide expert-parallel engine declared by its
+case when one is proposed.)
+
+*4. The operating point is the busy hour, fixed by a queue-wait target.* The engine is modelled when
+it is full, since storage sized for the average fails at the peak and a load from storage is worth
+most when the GPUs have no spare capacity (the user's framing). Operators size for peak under a
+latency target and shed load past it (Mooncake, Splitwise, ServeGen, DistServe; no source gives a
+frontier lab's utilization). Users an engine follow from the think time (Little's law) and are not a
+knob: the WG sets a queue-wait target (a few seconds at p99, say), and the users a slot that meet it
+at the WG's service model become a constant of the case (about four a slot in the corpus: 86 % to
+95 % busy, queue about 3 s). Not a count of users chosen freely: near the knee the reads are as steep
+in users a slot as they were in pool (1.9 against 6 to 9 GB/s at three against four a slot on 64
+slots). Replaces the ρ target of the earlier item 4. (Accepted by the user, 2026-11-09: the target's
+value is the WG's, made knowingly since it moves the load; the queue wait is computed at the WG's
+service model, so slow storage shows only in the measured latencies, never in the users; the
+load-shedding variant of the closed loop stays a pending check of the knee.) (Bounded by the user,
+2026-11-10, after the load-shed test: the target puts the operating point below the knee, where a
+provider's queue policy does not move the reads; the note "The closed loop with load shed".)
+
+*The connector the workload models (decided by the user, 2026-11-09, from a reading of the source
+the same day).* vLLM's connector contract lets a load run asynchronously
+(`get_num_new_matched_tokens` returns `load_async`; the request waits in `WAITING_FOR_REMOTE_KVS`
+while the scheduler serves others). `LMCacheConnectorV1`, the in-process connector every capture so
+far used (`kit/serve.sh`), returns `False` and loads in `start_load_kv` before the step's forward, so
+a slow load holds the whole batch (its layerwise mode overlaps a request's load with its own layers
+only). LMCache's multi-process connector (`LMCacheMPConnector`, `lmcache_mp_connector.py`) returns
+`need_to_load > 0` as `load_async`: the load runs in the LMCache server process while vLLM computes
+other users' work. The user's choice: the benchmark models the overlapped connector, which has time to
+mature before the benchmark is released. Consequences: item 8's budget becomes the user-facing
+latency, not the recompute time (with overlap a load slower than recompute still pays, the GPU
+serving others meanwhile; its costs are the waiting user's first token and the pool blocks held while
+it waits); and the abstract must be captured again under the multi-process connector, whose I/O a
+separate server process issues, before it can claim to represent it, in the GPU session with items
+1 and 2's checks.
+
+*5. Think time, measured from the corpus.* A session's idle time before a request, its start less
+the latest end of every earlier request of the session by the corpus's own `api_time` (p50 2.1 s,
+p90 37 s, 31 % zero where sub-agents overlap; 77 % of returns within 10 s, 99.3 % within an hour).
+Human turns elsewhere (Qwen-Bailian, parent-linked): p50 about 100 s, mean 4 to 6 minutes, CV 1.6
+to 3.9, so not exponential. If the sessions stay a table (item 10), each row carries its own idle
+time; if they become distributions, a fitted heavy-tailed distribution a request kind (pooled gaps
+halved the reads; drawn a kind they came within 20 %). Time of day appears in no source, so the
+busy hour's think time is the all-day one with the busy hour's users, an assumption stated.
+(Accepted by the user, 2026-11-09, revised: think time is a context's, not a session's. The user's
+question, whether sub-agents spawn sub-agents and whether we model the parallel contexts a user
+holds, measured (`think/width.py`, `think/lane.py`): the corpus has no tree (1,697 sub-agents, all one
+level under the main agent), but sessions are wide: contexts live at once p50 1, p90 5, p99 11;
+requests in flight at once p50 2, p90 6, p99 16, max 23, 95 % of sessions above one; sub-agents a
+session p90 8, p99 75, max 153. Within one context the think time is the main agent's p50 5.1 s, p90
+140 s, 72 % within 10 s, and a sub-agent's p50 1.6 s, p90 6.3 s, 93 % within 10 s: drawn per context,
+the main agent's and the sub-agents' apart. The corpus's own `think_time` field agrees with the
+session idle measured (p50 2.3 s, p90 37.5 s against 2.1 and 37) and may be used directly. The
+committed abstract (side lanes run in turn, the main lane suspended, `6fc276c`) and the scratch closed
+loop (a user's requests one at a time) both serialize what runs in parallel, so the knee of about four
+users a slot is an upper bound and the busy hour's reads likely understated; the test of the tree,
+2026-11-09, below, measures by how much.)
+
+*6. The run's shape: a ramp into a plateau.* Users arrive on an S-curve (the user's morning ramp),
+each resuming a session and reading its stored context, then the steady mix; the schedule computed
+before the run from positional draws, so the op set is fixed and slow storage shows only as latency.
+Simulated, the ramp's start is write-heavy (20 % to 45 %), the plateau 3 % to 15 % writes, and the
+heaviest reads come at saturation, not at the arrival peak (four to fourteen times its reads), so a
+short ramp and a longer plateau. The WG chooses, without data: the curve (ServeGen's diurnal rates can
+inform it), the share of arrivals that resume rather than start, the run's length (real time; a
+shorter form for tuning, the full one for submission). (Accepted by the user, 2026-11-09, revised.
+Defaults proposed: a ramp of 30 minutes from 5 % to 95 % of arrivals, a plateau of 60 minutes at item
+4's operating point, a tuning form a third as long from the same generator, every 5-minute window
+scored, the ramp's included. The user's revision: arrivals are people, not sessions. A person back
+from lunch checks every agent that stopped while they were away and answers what each asked, so a
+return revives k sessions (the user's estimate 3 to 8, the default; no trace measures it), spread
+over the minutes it takes to read and answer each (1 to 5, a default), each revived session's first
+request reading its whole stored context and its loops then running concurrently as item 10's tree
+generates them. With the plateau fixed in sessions the total of resumes is unchanged; what the
+grouping adds is clumping, higher peaks in short windows and a brief surge of a person's requests in
+flight, which may make the arrival peak, not saturation, the worst window; a ramp test with clustered
+arrivals, k 1, 3, and 8, is queued behind the test of the tree to measure it.)
+
+*7. Retention, fixed by the WG.* Two parts. The contexts the arrivals resume are written before the
+run, a dataset (~~an `input` namespace~~ brief item 59's state, made before the run and modified by
+it, the joint review's issue 1 of 2026-11-10; about 2.4 GB a 200k-token context at 12 KiB a token, 150 GB
+an engine of 64 users, so datagen time is part of the tuning cycle); their first reads are 6 % to 18 %
+of a run's reads. Within the run, a tier of 1 hour serves 94 % to 100 % of the busy hour's reads (5
+minutes, 68 % to 96 %), against 1.5 to 2.5 times the capacity for 24 hours that adds 1 % to 4 %. The
+tier is the workload's, not the submitter's (a submitter's choice would change the op set); published
+product tiers (Anthropic 5 minutes or 1 hour; OpenAI 5 to 10 minutes in memory, up to 24 hours
+extended) are the reference points. An unlimited tier, if wanted, is a second workload. (Added
+2026-11-09, the user's point: a person holds several sessions at once, a window each, attending to
+one at a time, so each window's human gaps lengthen while its agent loops run; the windows add idle
+sessions, raising the capacity held and the long-gap returns, more than the load in flight.)
+(Added 2026-11-09, from item 6's revision: a lunch of 60 to 90 minutes sits at the edge of a 1-hour
+tier, and a person's return revives several sessions at once, so a tier that expires before the
+return makes every one of them a recompute together, the costliest miss. Inside the benchmark the
+pre-written dataset covers the away time; the report says that a deployment's own tier must cover its
+surges' away times (lunch, overnight), so that no one sizes one from the in-run tier alone.)
+(Accepted by the user, 2026-11-09, revised after a reading of LMCache's source the same day, `dev`,
+the multi-process architecture item 4 chose. LMCache has no time-based expiry (the one "ttl" in its
+tree is a lock's): eviction is by capacity. An L2 adapter declares a capacity; a background thread
+checks usage every second and, above a watermark (default 0.8), its policy (LRU, ARC, or LRU per
+cache salt) picks keys making 20 % of the used capacity (`eviction_ratio`) and the adapter deletes
+them (`docs/design/v1/distributed/l2_adapters/l2_eviction.md`, `storage_controllers/
+eviction_controller.py`). The filesystem adapter (`l2_adapters/fs_l2_adapter.py`) keeps one file a
+chunk, named from its key, flat in one base directory; stores through a temporary file and `rename`;
+deletes by `unlink`, 64 at once (`_DELETE_CONCURRENCY`). It declares no capacity itself, so the
+capacity-triggered controller skips it (its deletes come by the per-user quota path); `fs_native`
+takes `max_capacity_gb` and is evicted by capacity. Deleting a user's data is the application's, never
+the storage system's (the user's principle), so the workload emulates LMCache's policy: (1) the
+retention tier is a WG-fixed L2 capacity an engine, sized for the retention wanted (about an hour of
+the busy hour's writes), not a time; (2) eviction as LMCache's, LRU, watermark 0.8, 20 % of the used
+capacity a trigger, checked every second; (3) the deletes are the application's unlinks, in the
+first version (reversing the deferral first proposed), the keys and their place in the schedule
+computed before the run from its access order, as the reads are, so the op set stays fixed; (4) the
+pre-written dataset fills the tier to its steady level, just under the watermark, so evictions run
+during the plateau (the dataset's size then follows the capacity, and with it datagen time). Scale
+at 16 slots: writes about 11 chunk files a second an engine, a tier of an hour about 100,000 files
+of 3 MiB, so a trigger unlinks about 20,000 files, 64 at a time, every half hour or so an engine,
+interleaved across engines with the steady creates, renames, and reads. The user's assessment: 64
+concurrent deletes in one very large directory is near the worst case for a POSIX filesystem, and
+the renames load the same directory's locks, which is the metadata stress the benchmark should
+carry. The rule that truncate and punch-hole are a deferred space-reclaim workload is unaffected;
+these unlinks are the application's own. To check before the abstract claims it: a capture under the
+multi-process connector's filesystem adapter (item 4's), its calls (temporary file, `rename`, flat
+directory, 64 unlinks at once) against what the abstract emits.)
+
+*8. Pass and report.* A run passes when the KV-load p99 is within budget in every window, the worst
+window deciding; the budget proposed is the time the engine would take to recompute the same prefix
+at its service model (a load slower than recompute saves nothing), or a WG number. Reported beside
+the result: the load curve (engines against p99 load latency), read and write bandwidth over the
+run, capacity held, and per retention tier the reads served and the prefill compute they avoided, so
+a buyer can price the trade; no economics in the benchmark (MLPerf publishes no prices), and power
+left out. (Accepted by the user, 2026-11-09, revised by item 4's choice of the overlapped connector,
+under which a load slower than recompute still pays (the user's example: 111 ms to load against 110
+to recompute, the GPU serving others meanwhile), so recompute time is not the failure line. The load
+latency is measured from the moment the schedule makes a request ready to the moment its context is
+in the pool, so queueing in the storage client counts. The budget is the case's time-to-first-token
+target, set by the WG, less the prefill of the tokens not loaded at the case's service model
+(references: Splitwise's 2, 3, and 6 times the unloaded TTFT at p50, p90, p99; Mooncake's 30 s
+ceiling on real traffic; a 200k-token context recomputes in about 8 s at the scratch's model). Judged
+at p99 in every 5-minute window, the ramp's included; p50 reported beside it. Reported as well:
+creates, renames, and unlinks a second and the eviction bursts' size and timing (item 7), and the
+margin of the p99 under the recompute time, as information. How the runner emulates the engine
+without a GPU (compute a request, slots, loads overlapped) is item 13's.) (Revised by item 13's
+debate, the user's agreement of 2026-11-09: what the budget judges is D, a request's own storage wait,
+its load time and any edge wait, the time a user experiences between submitting a query and the
+response, and no longer the time from the scheduled-ready moment, under which a lane once behind would
+charge every later request its inherited lag. p99 of D per 5-minute window stands, windows assigned by
+planned time so that each window's request count, and so the violations it can tolerate, are known
+before the run; a run stops at the violation that makes failure certain. A single-response ceiling is
+added (30 s, Mooncake's, as the example; the WG's to set), since one maximum over tens of thousands of
+requests is decided by a hiccup and does not repeat, which is why a single response over the budget is
+not itself a failure. Reported beside it: each main-line session's accumulated lag L, as the sign of
+a system nearing saturation, and the sum of D over all requests, as `top` reports 1600 % on a saturated
+16-core system: the total delay the system under test caused, so three sub-agents' delays all counting
+is not triple counting.)
+
+*9. The submitter's knob: engines, one axis.* The score is the engines (or, if engines are too coarse
+for small systems, the slots, the last engine partly filled) served at a pass, users served being
+engines times the case's users an engine. Storage's speed never changes the users an engine (that
+would make the op set depend on the system under test); faster storage shows as margin on the load
+curve. (Revised 2026-11-09, the user's point that a user fans out to sessions: the unit counted is the
+concurrent session, not the user. No trace measures sessions a user (the corpus's records are
+sessions, with no user identity), and the number will drift as agents spread, so a score in users
+would hide an unmeasured multiplier; users may be reported beside it as sessions divided by a stated
+sessions-a-user assumption.) (Accepted by the user, 2026-11-09, with whole engines the headline: an
+operator builds out identical replicas (a data-parallel replica is one configuration copied; racks
+and nodes come in fixed units, often several engines each), so 5.3 engines guides a build-out less
+than 5, and the run's precision (reads spread about ±10 % between seeds, a p99 over 5-minute windows
+noisy) does not carry a decimal. The headline is the largest whole number of engines that passes,
+as concurrent sessions served; the count by slots (the last engine partly filled) is reported beside
+it, labelled supplementary and never ranked on, and is the useful resolution only for systems of one
+or two engines. Every draw keyed by engine id, so adding an engine leaves the others' ops unchanged;
+engines ramp together by default (one time zone), staggering a WG what-if; the submitter finds the
+count by raising engines until a run fails (by hand or the WG's driver), one run at the count
+submitted, the load curve optional.) (Amended by the user's decisions of 2026-11-10, the note "The
+generator in the abstract, a shared tier, and events between runners": with a storage tier shared by
+engines, adding an engine changes the others' hits; the property holds by domain, every draw keyed by
+the seed, and sessions by (seed, session), placed on engines by the domain's routing rule.)
+
+*10. Sessions: table, archetypes, or distributions* (~~open~~ settled 2026-11-10, below). Eight archetypes held within 3 % under
+rounds and random arrival but overstate by 20 % to 68 % under timed arrival, their draw rich in
+main-lane requests; picked again to match the kind mix and checked under the measured think time and
+the ramp, or replaced by distributions (untested). Whether a table of rows is compact enough for the
+rule that an abstract is never a trace listing is the user's call. (Requirement added 2026-11-09,
+the user's: whatever form the sessions take, a session is generated as a tree of concurrent
+contexts, the main agent and its sub-agents running in parallel, with fan-out (sub-agents a context
+spawns), concurrency (how many run at once), and each context's turns and think time fitted at depth
+1, where the corpus measures them. The user's example of depth: an orchestrator spawning an agent a
+project, which may spawn its own; a child that starts a fresh context is the same thing to storage
+whether called a sub-agent or a new session, so one generator covers both. Depth and the
+orchestrator's fan-out are WG what-if parameters, 1 by default, documented as supported by no
+trace.) (The user chose, 2026-11-10, the fitted generator `gen5` over the whole table as a data file,
+on condition of a held-out test, which ran the same day: the note "The fifth generator held out".
+~~Not yet accepted: what that result means for the read claim, and, by item 12's rule, the steady
+writes outside ±7 %, are back with the user.~~ Accepted by the user, 2026-11-10, with a narrow claim
+for reads: the generator reproduces the pool model on this corpus and says nothing of reads for
+other sessions, its reads not generalizing between halves of the corpus; writes as item 12 now has
+them.)
+
+*11. The stream's seed* (unchanged). Fixed by the WG as the dataset seed is; many engines narrow the
+spread for anyone who varies it. (Accepted by the user, 2026-11-09: every draw keyed by the seed and
+the engine id, item 9's keying; a CLOSED run needs the same op set for every system under test, so a
+submitter never chooses it, and a researcher who varies it reports the spread between seeds beside
+the result.)
+
+*12. Tolerances.* Writes tight (1 % to 7 % in every test); reads judged at the WG's operating point
+against the pool model, with a tolerance from the spread between seeds there. (Accepted by the user,
+2026-11-09, with three things fixed: (1) what is compared is the abstract's dry-run counts against
+the pool model at the operating point on the whole session table, the lab replay (233 requests, its
+own resampling 20.6k to 48.0k reads) remaining a consistency check at its own point with the band of
+that range; (2) the read band is measured, about two standard deviations of the pool model's reads
+over at least 8 seeds at the WG's operating point, and never carried over from a neighbouring point,
+reads being steep in load near the knee (the 5 % to 12 % seen at 32 and 64 users came from another
+arrival order); (3) the tolerance file says that the band claims the abstract reproduces the pool
+model and nothing about how near the pool model is to a real service, the corpus's sampling limit
+~~of about ±20 %~~ being separate. ~~Writes stay ±7 %, pending item 10's result; if the chosen form cannot
+hold it, that comes back to the user rather than the band widening.~~ Revised and accepted by the
+user, 2026-11-10, on the held-out result (the note "The fifth generator held out"): the corpus's
+sampling limit is the measured difference between halves of the sessions, 1.3 to 1.9 times in reads
+near the knee, at 196 sessions a half; the write bar of ±7 % is held on the ramp, whose writes
+generalize (−1 ± 4 and +1 ± 7 held out), and a steady-state run is for exploration, not scored on
+writes.)
+
+*13. The runner.* The stack overflow on a deep `x @ (r − dd)` (a brief item); and two new needs: an
+abstract whose requests carry a schedule (arrival times and think times, computed before the run,
+issued at them; the scratch abstract's `think` is const 0 today), and the resumed contexts as a
+dataset the abstract reads (a namespace written by a datagen run). Both are contract work for brief
+item 70's successor. (Added 2026-11-09: lanes that spawn concurrent lanes, nested, for item 10's
+tree of contexts; today's side lanes run in turn, one level deep.) (Accepted by the user, 2026-11-09,
+after a debate that replaced the proposal first made here, a contract construct of lanes served by C
+servers. The user's design: a lane is a context (the main line or one sub-agent), a session a group of
+lanes, and a global timeline per engine on which each op launches at its time. The rules:
+(1) The op set is absolutely fixed: every pool hit and miss computed before the run from the plan's
+global order, absolute times, and pool size, a pass over the merged timeline, one ~~engine~~ domain
+at a time since ~~engines~~ domains share no pool (amended 2026-11-10, the note "The generator in the
+abstract, a shared tier, and events between runners"; a domain of one engine is the case first built). The status of another op never changes this op; "the pool's contents
+would have shifted" is timing changing the ops, excluded by definition. The principle, the user's:
+track the slowness, neither control it nor respond to it.
+(2) A new main line starts on absolute time, without lag: the user arrives when they arrive. Every
+other op launches at its planned time plus the lag it inherits, `launch = plan + L`, the user's form:
+pure absolute times would compress the gaps to zero (think time gone, a burst of catch-up load), and
+this way a gap is never shorter than planned and nothing runs early. L grows by each load's time
+(the plan's allowance for a load is zero, so no parameter) and never shrinks. An oversaturated system
+accumulates lag, as it should; offered load falls a little as storage slows, small while a system
+passes (a session requests about once a minute), so the gate judges D and never op latency alone.
+(3) Edges of two kinds, all pointing forward in planned time, so no deadlock. A causal edge (the next
+turn after a response, a sub-agent's start after its parent's request, a main line waiting for its
+sub-agents) carries the planned gap and the lag, the maximum over the ops that cause this one. A
+validity edge only forces order, and exists only if reversing the two ops would change an op's result:
+write then read, read then unlink, create after unlink of a name, never read against read. That rule
+is the middle between ignoring the other ops and a global order that would benchmark our own
+synchronization. An edge names its op by lane and index, with a completed-ops counter per lane, not a
+table of ops in flight (a lagging lane may not have issued the op yet), so no per-file state. Edges
+never fire for a system that keeps up. When one does, the wait is real delay the system under test
+caused and goes into the waiter's D, and the count and total of edge waits are reported; a forced
+wait stands in for what the application would have done (miss and recompute), so it is a bias, not
+part of the error bars, which stay the spread between seeds.
+(4) Stores (LMCache 0.5.5's local-disk path, read 2026-11-09; the multi-process connector's L2 store
+path not traced, item 4's capture to confirm): the forward step waits only for the copy to host staging
+memory; the write is queued (4 threads by default), the chunk pinned in staging until it finishes and
+visible to a lookup only then, so a turn arriving early misses and loses every later chunk of its
+chained keys. Staging full, a store is dropped by default (`force_store_wait` off), silently, and a
+load, drawing on the same pool, spins until memory frees. Stores run on their own lanes, a fixed
+worker count draining a queue, with no causal edge to the response. A write is too slow if it has not
+finished when its first planned reader launches (the validity edge, the wait in the reader's D) or
+if the bytes issued and unfinished, loads' included, exceed the WG-fixed staging size, a would-be drop.
+The second is a gate failure, the user's: the plan assumes every store lands, so a drop ends its
+validity, and the true cost (recomputing the block and its children) could be charged only by letting
+timing change the ops. The pool integrates over minutes (12 GiB about 6 minutes at 33 MiB/s), so a
+hiccup cannot trip it; the staging size is then a sensitive WG parameter (2 GiB in the kit, 12 in the
+scratch, neither chosen), the case states the default store policy, and allocator fragmentation, which
+would fill it sooner, is a known optimism. Write latency, backlog peak, and would-be drops are reported.
+(5) Unlinks are their own lanes, no user waiting on them, their lag reported and not charged to users;
+each eviction batch has a window ending at the next planned trigger, inside it slow but fast enough
+and its duration reported, past it a failure. A create waiting for an unlink goes into D.
+(6) Gate failures leave the run valid but not passed, like any constraint after a run. A tuning run goes
+to completion, under a lag ceiling, and reports when and how much; a submittable run stops at certain
+failure, under an option named for the mechanism. An op issued after its time with nothing
+outstanding is the benchmark host's lateness, not the system's: detected and reported as a validity
+check. GPU idle time, unlike D, needs the slot model and is reported as modelled, computed after the
+run from the measured loads; it is first-order, holding the op stream fixed. The GPU slot queue stays
+in the plan, in the same pass over the merged timeline as the pool (the slot-limit test's result,
+accepted by the user 2026-11-09): dropping it changes nothing at 64 sessions, but reads by −26 % to
+−57 % once queues form, and the ramp's worst windows come after saturation.)
+
+*No longer held from the 2026-11-08 draft:* ρ as the operating point and a target near 0.25 (the
+flat region was the rounds' artefact, and the busy hour fixes the point by queue wait); users per
+engine as a free WG count (they follow from the think time and the target); think time capped at a
+provider's cache lifetime (it is measured, and retention is its own item); eight archetypes as
+settled (item 10); mid-ramp as storage's hardest moment (the debate's expectation; saturation is).
+
+*Not settled:* time of day in any source; one corpus and one publisher's agents; the closed loop
+lets queues grow where a provider sheds load~~, so its plateau overstates~~ (tested 2026-11-10, the
+note "The closed loop with load shed": the served plateau moves 3 % at most, but past the knee the
+reads depend on the queue policy, which ~~the WG fixes or~~ the operating point avoids, the user's
+decision of 2026-11-10; why the reads fall under shedding, not diagnosed); ~~whether LMCache's store is
+off the latency path (its source, to check)~~ (off it, 0.5.5's local-disk path read, item 13's rule 4); the pool model checked at one point, one model, one
+GPU; requests over 485k tokens; compaction of long sessions; a TP 2 capture; the publisher's cache
+columns (the user's call); a GPU check of the pool model with several slots in flight at a pool near
+the knee, first, and past 485k tokens, second (item 1); a capture under LMCache's multi-process
+connector, the overlapped one the workload models (item 4's note); the queue-wait target, the latency budget, the ramp's shape and resumed
+share, and the retention tier, all the WG's to set.
+
+*Order proposed:* the user decides 1 to 13; then the tests the decisions need (archetypes matched on
+kind mix under the measured think time and the ramp, or distributions; a load-shedding variant of the
+closed loop); then brief items: the sessions (10), the schedule and resumed-context dataset in the
+contract (13), the runner's stack (13), the retargeted case and tolerances (1, 12), item 70 carrying
+2, 3, and 9; then commit and push together. (Extended 2026-11-10 by the note "The generator in the
+abstract, a shared tier, and events between runners": the brief items also carry the cache
+construct, domains and events, and Dynamo's G3.5; the first work, once the brief items are accepted,
+is the port test of `gen5` as an abstract and the scratch measurement of cross-engine reads.)
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

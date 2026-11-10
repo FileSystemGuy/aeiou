@@ -582,7 +582,9 @@ numbers; the order is this note's.
     `GRAMMAR_OPTIONS.md` §5.3 amended) with a `pool_tokens` input, plus the admission's
     dynamics under pressure; deferred because the WG fixes the engine and the CPU tier (§8),
     so drawn holds at the reference configuration serve CLOSED. Kept for it: the fits'
-    conditions, the simulation, and the 2 GiB and 6 GiB pairs.
+    conditions, the simulation, and the 2 GiB and 6 GiB pairs. *Reopened 2026-11-06 by the user: the
+    pool as a computed cache, proposed and undecided, with the morning's debate and measurements
+    (`DESIGN_REVIEW.md` §3.99); the demand is to be fixed first.*
 
 25. **The access layers (proposed and decided 2026-10-09, `DESIGN_REVIEW.md` §3.65).**
     Format classes are already above the access APIs (the builder emits POSIX-shaped ops);
@@ -1388,7 +1390,12 @@ numbers; the order is this note's.
     the **computed write set** (from the abstract, parameters, seed, GPU count; never a tree
     walk), bounded for an interrupted run by a durable per-actor high-water mark of ops
     completed; a dirty marker written at a modifying run's start, refused by the next run,
-    cleared by reset. The content check is `aeiou-verify`'s, sampled (§3.94 item 5).
+    cleared by reset. The content check is `aeiou-verify`'s, sampled (§3.94 item 5). *Refined by
+    the user 2026-11-10 (`DESIGN_REVIEW.md` §3.99, the joint review's issue 7):* a path of the
+    write set that exists at the right size is left alone (one `stat`, never a walk) when the
+    run never wrote into it while it existed, which the computed write set says; a path written
+    in place is regenerated, a size check not seeing an overwrite of the same length. The dirty
+    marker carries the run's nonce (item 77).
 
 60. **The `trace` node's preconditions, recorded and prepared (decided by the user 2026-11-02,
     §3.94 item 6; not started).** Whether each path existed before the trace, from all the
@@ -1487,6 +1494,210 @@ numbers; the order is this note's.
     gives it whole. To design: a site kind of the digest for it, what the trace decides and what
     it leaves to an engine log or the owner's answers, and the factoids (per context its
     requests, tokens, prefill and decode compute; per side run its lanes and length).
+
+70. **KV engines larger than one GPU, and the deployment as parameters (queued by the user
+    2026-11-07 with the pool debate, `DESIGN_REVIEW.md` §3.99; not started).** The KV abstracts
+    take one actor as one engine at TP 1, the only shape traced. LMCache 0.5.5 names a chunk by
+    model, `world_size`, `worker_id`, hash, and dtype (`CacheEngineKey`, read in its source): under
+    tensor parallelism every rank's worker stores and loads its own file of each chunk, its share
+    of the KV heads, at about `chunk_bytes / TP`, the ranks in step; for MLA models
+    (`save_only_first_rank`, on by default with MLA) the first rank alone, the whole chunk; for
+    pipeline stages, by the same key, presumably per stage (not read); data-parallel attention
+    is an engine per replica. Proposed, ~~not decided~~ decided below: one abstract per storage mechanism, the
+    model's family a parameter (sharded per rank or first rank only), not an abstract per family;
+    one process per GPU as in training, GPU g of engine g div TP at rank g mod TP~~, the request
+    stream's draws keyed by the engine (a change to positional keying by GPU id, a recorded
+    decision)~~ (the draws keyed by session and domain, below); the deployment stated as KV bytes per token, pool tokens and slots per engine,
+    and the CPU tier, with a model, an accelerator, and a parallelism as a case that derives
+    them (the WG's reference choices, §8). To do: a TP 2 capture (this laptop cannot) to see
+    whether the ranks' calls interleave in a way values cannot express, which would split the
+    abstract; LMCache's layer-wise mode (its key adds a layer id), likely a call structure of
+    its own.
+
+    *Decided by the user 2026-11-09 and 2026-11-10 (`DESIGN_REVIEW.md` §3.99 items 2, 3, 9, 11, and
+    the note "The generator in the abstract, a shared tier, and events between runners"):* one
+    abstract per storage mechanism, the attention family a parameter, on condition of the TP 2
+    capture (a call structure across ranks that values cannot express reopens it). The case fixes
+    the engine, the submitter none of it: the model and its KV bytes a token; the accelerator and its
+    service model (prefill and decode time a token, measured once on the accelerator and published
+    with the case, as training's step time is); the engine as one TP × PP replica; the slots derived
+    from the pool and the mean live context, as vLLM bounds them, so pool and slots are one setting;
+    the CPU tier 0. The submitter's one knob is engines: the headline is the largest whole number of
+    engines that passes, as concurrent sessions served; the count by slots, the last engine partly
+    filled, is reported beside it, supplementary and never ranked on. Engines are grouped in domains,
+    the engines sharing one storage tier (item 72); every draw is keyed by the stream's seed (the
+    WG's, as the dataset seed is), sessions by (seed, session), placed on a domain's engines by its
+    routing rule, so adding a domain leaves the others' ops unchanged. The keys are the abstract's
+    choice, not the runner's: the KV abstracts key by session and domain, and every other abstract
+    keeps its GPU-id keys; the positional-randomness invariant's wording changes for the KV
+    abstracts only, a recorded decision. Engines ramp together by default; staggering is a WG
+    what-if. Accepted when every committed abstract outside `kvcache/` keeps its fingerprint and
+    measured shape (the catalog check). *The joint review, 2026-11-10 (§3.99):* the two
+    mechanisms are redefined as LMCache's multi-process connector adapters on a local and on a
+    shared path (the committed abstracts being captures under the in-process connector), read
+    from the source first (item 72) and confirmed by item 74's capture. Open: how the score
+    counts a domain of more than one engine (item 72, phase 2).
+
+71. **The KV request stream from a session generator written in the abstract (decided by the user
+    2026-11-10, `DESIGN_REVIEW.md` §3.99 item 10 and the notes "The fifth generator held out" and
+    "The generator in the abstract, a shared tier, and events between runners"; not started).**
+    Sessions come from a generator fitted to the AgentX corpus (393 sessions, 98,827 requests), not
+    the corpus as a table of rows and not archetypes; the scratch's `gen5` carries 5,839 fitted
+    numbers, quantile tables, not requests. A session is a tree of concurrent contexts, the main
+    agent and its sub-agents in parallel, with their fan-out and concurrency, each context's turns,
+    think times (the main agent's and a sub-agent's apart), and step kinds (extend, extend an older
+    tip, fresh, trim, deep cut, cut to the main prefix, compaction) fitted at depth 1, and idle gaps
+    with the corpus's clustering of long gaps and its spread between sessions. Depth and an
+    orchestrator's fan-out are WG what-if parameters, 1 by default, documented as supported by no
+    trace. The generator is expressed in the abstract language, the runner agnostic to the workload;
+    the runner streams it, each session yielding its next request on demand, merged in planned order,
+    never the whole timeline held. First step: `gen5` ported to an abstract with today's language and
+    the fewest additions, held to the Python program's output; what the port cannot do without is
+    the list of constructs to add (expected: a prompt as parent, kept length, and new blocks; a choice
+    among earlier prompts; item 73), marked provisional in the contract until a second workload uses
+    them. What it claims, and the tolerance file says so: writes within ±7 % of the pool model on the
+    ramp (held out, −1 % and +1 %); reads reproduce the pool model on this corpus only, since they do
+    not carry between halves of it. Known and not diagnosed: in steady runs its writes come to 15.4 to
+    16.0 a second against the table's 13.1 to 13.8.
+
+72. **The plan, domains, and events in the contract (decided by the user 2026-11-09 and 2026-11-10,
+    `DESIGN_REVIEW.md` §3.99 items 4 to 9 and 13, and the note "The generator in the abstract, a
+    shared tier, and events between runners"; not started).** The KV abstracts need what the
+    contract cannot yet say.
+    (1) *The plan*, computed before the run from positional draws and never from the run: people
+    arrive on the WG's ramp (30 minutes from 5 % to 95 % by default, then 60 minutes of plateau, a
+    tuning form a third as long), a return reviving k sessions (3 to 8) over 1 to 5 minutes; each
+    context's requests at planned times. A pass over a domain's merged timeline fixes the op set: a
+    timeline construct merging its lanes in planned order, a queue with a fixed number of servers
+    (the GPU slots), and the cache construct of item 75 (the pool, and LMCache's eviction: LRU,
+    watermark 0.8, 20 % of the used capacity a trigger, checked every second, over a WG-fixed L2
+    capacity an engine). (2) *Lanes* as contexts, spawning concurrent lanes, nested; causal edges
+    carrying the planned gap and the lag, validity edges only where reversing two ops changes a
+    result. (3) *Store lanes*, a fixed worker count draining a queue, bounded by a WG-fixed staging
+    size; *unlink lanes*, each unlink an op of the plan at its planned time, its victims computed
+    from the WG-fixed capacity (the application's setting, never asked of the storage), which
+    lane issues it (the chunk's writer, or one eviction lane a domain) following LMCache, read
+    first. (4) *The resumed contexts* written by `aeiou datagen`, filling the tier to just under
+    its watermark: item 59's state, made before the run and modified by it (not an `input`
+    namespace, read-only by V14), its reset the diff (unlink the chunks the run made, recreate the
+    pre-filled ones it evicted). A chunk's bytes are a function of its key, so the same key gives
+    the same bytes; its compression ratio a case parameter, near incompressible until measured.
+    First, without a GPU: which LMCache multi-process connector adapter serves a local and a
+    shared path, its eviction trigger, and its staging (size, drop policy, process), read from the
+    source, the two mechanisms redefined as those adapters (item 70); the datagen time of the
+    pre-fill and of its reset estimated at Rust datagen's measured speed; the ramp rerun at the
+    chosen operating point with clustered returns (k 1, 3, 8), the heaviest window possibly the
+    returns, not the plateau.
+    (5) *Domains*: the engines sharing one storage tier, the unit of scale-out; sessions route only
+    within their domain, no state crosses domains, and a host replays only its domains' plans. A
+    domain may span hosts and is a barrier and event scope in the run's one coordinator. Phase 1: a
+    domain of one engine, the storage tier one shared namespace (`lmcache-local-disk` and
+    `lmcache-shared-fs`). Phase 2: contexts routed across a domain's engines by a WG-fixed rule
+    (prefix hash and planned load, an assumption no trace supports); before it is built, the reads
+    crossing engines under prefix routing on the corpus and the pass's cost at the domain sizes
+    proposed, measured in the scratch.
+    (6) *Events*: an op at an edge's head signals, the op at its tail waits, consuming an event that
+    came early. The abstract names engines and lanes, never ranks; event ids are computed from the
+    edge's keys; a causal event carries its sender's lag; one event a request's stores. Delivered
+    in-process on one host, by the coordinator between hosts (engine to rank by the GPU-range
+    formula, the coordinator holding every rank's connection), two messages through it an event.
+    The coordinator's one-way latency is measured and reported with the edge waits and never charged
+    to the system under test; a run whose messaging p99 is a meaningful share of the latency budget
+    is invalid. A wait times out into a failed run, never a hang. General primitives (a checkpoint's
+    manifest after its shards). The coordinator stays in rank 0's process; a standalone one, or a
+    launcher that stays alive to host it, on evidence from that measurement.
+    (7) *The runner*: `launch = plan + L`, L a lane's inherited lag, never shrinking; D, a request's
+    own storage wait, judged at p99 per 5-minute window assigned by planned time, the ramp's
+    included, with a single-response ceiling (30 s as the example); a store unfinished at its
+    reader's launch waits in the reader's D, staging overflow a gate failure; an eviction batch past
+    the next trigger a failure; a submittable run stops at certain failure, a tuning run under a lag
+    ceiling; the benchmark host's own lateness a validity check. Reported: the load curve, read and
+    write bandwidth, capacity held, creates, renames, and unlinks a second, eviction bursts, each
+    session's L, the sum of D, edge waits and messaging latency, write latency, backlog peak,
+    would-be drops, and GPU idle time as modelled.
+    The WG's values, none chosen: the queue-wait target that places the operating point below the
+    knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
+    target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the
+    domain size, the routing rule. A contract version and every KV fingerprint change.
+    (8) *Opt-in.* An abstract without a timeline runs exactly as today, independent actors, no
+    per-op cost of the plan; D and the lag are the case's results, judged through the `result.`
+    constraints, never runner-wide (training's pass stays accelerator utilization). Accepted when
+    every committed abstract outside `kvcache/` keeps its fingerprint and measured shape and a
+    training run is no slower.
+
+73. **`x @ i` evaluated without recursion (found 2026-11-07, `DESIGN_REVIEW.md` §3.99 items 9 and
+    13; not started).** An `x @ (r − dd)` reaching back thousands of requests overflowed the
+    runner's stack at 2,000 requests a slot; `RUST_MIN_STACK` of 1 GiB got the scratch past it. A
+    valid abstract must not need that: the evaluation made iterative, or its depth bounded and
+    refused by `check` with the bound named, with a test at the depth that failed. The `gen5` port
+    (item 71) leans on it. Accepted when every committed abstract keeps its fingerprint: the
+    evaluation changes, never the value.
+
+74. **The AgentX case retargeted, with its tolerances (decided by the user 2026-11-09 and
+    2026-11-10, `DESIGN_REVIEW.md` §3.99 items 1 and 12; not started, after items 71 and 72).** The
+    committed target (2,321 reads at 6 GiB) is the 131k cut's artefact; the case is retargeted against
+    the pool model (`agentx.simulate` with `lmcache_accesses`) on the whole corpus at the WG's
+    operating point, and the §3.64 note of 2026-11-06 amended. Compared: the abstract's dry-run
+    counts against the pool model. Reads: a band of about two standard deviations of the pool
+    model's reads over at least 8 seeds, measured at the operating point, never carried over from a
+    neighbouring one. Writes: ±7 %, scored on the ramp; steady-state runs are for exploration and
+    not scored on writes. The tolerance file says the band claims that the abstract reproduces the
+    pool model and nothing about how near the pool model is to a real service; the corpus's sampling
+    limit, 1.3 to 1.9 times in reads between its halves, is stated beside it. The lab replay (233
+    requests) stays a consistency check at its own point, with its own band (20.6k to 48.0k reads).
+    The GPU session's checks, in order: the pool model with several slots in flight near the knee;
+    contexts past 485k tokens; a capture under LMCache's multi-process connector and its filesystem
+    L2 adapter (temporary file, `rename`, one flat directory, 64 unlinks at once) against what the
+    abstract emits; the TP 2 capture of item 70; the compressibility of real chunk files for the
+    case's model, KV dtype, and LMCache encoding, which sets the case's compression ratio.
+
+75. **A cache construct, a stack of tiers (decided by the user 2026-11-10, `DESIGN_REVIEW.md`
+    §3.99 note "The generator in the abstract, a shared tier, and events between runners"; not
+    started).** The pool and the storage tiers behind it as one construct of the language, named for
+    the mechanism: a stack of tiers, each with a capacity, an eviction policy, and a write policy
+    (written when made, as LMCache stores every new chunk, or when evicted from the tier above, as
+    Dynamo's block manager cascades), the stack with a rule for what a hit promotes, and where a tier
+    puts a block (a file a chunk, or a slot on a device) a parameter. Policies include a static,
+    pinned tier filled at load (DiskANN's node cache, modelled by hand in `diskann_search` today).
+    Keys are opaque to the construct: LMCache's chained prefix keys, under which an early turn loses
+    every later chunk, belong to the KV generator, not the cache. Only the application's own caches
+    are modelled, never the operating system's page cache, which is solution by the interposition
+    test. LMCache's settings built first; Dynamo's source read before the shape is fixed; expected
+    users beyond KV: a VDB's tiers (DiskANN's node cache, a local disk cache over an object store as
+    Milvus keeps), and training's epoch cache (`tf.data`'s `cache()`); a system that does not fit
+    gets a construct of its own. Its state scales with the WG-fixed
+    capacities, never the dataset (the rule against per-file structures concerns the dataset). Its
+    exact rules (LRU ties, the order within a planned instant) are definitions the runner fixes in
+    `runner/REFERENCE.md`, a change to one changing every KV fingerprint; the runner is the only
+    reproducer of the op set, a run's exported trace the way to analyse it elsewhere. Provisional in
+    the contract until a second workload uses it.
+
+76. **Dynamo's block tier (queued by the user 2026-11-10, `DESIGN_REVIEW.md` §3.99 note "The
+    generator in the abstract, a shared tier, and events between runners"; not started, not
+    near-term).** The user's understanding, to check against the source: Dynamo's tiers are G1 HBM,
+    G2 host DRAM, G3 node-local NVMe, G3.5 an NVMe-oF block layer reached from user space, G4 an
+    archive by an object API. If G3.5 issues block commands from user space, supporting it needs
+    block-device ops in the language (a shim cannot turn file or object calls into block calls, so
+    it is another API and another workload), a backend for them, and the extent index Dynamo keeps
+    computed in the plan as an allocator's state, its writes modelled if it is persisted. A kernel
+    NVMe-oF device would instead be POSIX at offsets on a block device. First: the call path and the
+    index read from the source.
+
+77. **A per-run nonce in every written namespace's content (decided by the user 2026-11-10,
+    `DESIGN_REVIEW.md` §3.99, the joint review; not started).** Namespace content is a function
+    of (namespace seed, path, offset), all known from the published case, so anyone can compute
+    every byte a run will write and stash a copy outside the benchmark's directories for the
+    system's dedupe to find, and a system keeping dedupe fingerprints of deleted data gains the
+    same from a prior run; checkpoints today as much as KV. Every run draws a nonce from the
+    operating system's randomness; rank 0 draws it and sends it with `t0`, so the same path and
+    offset give the same bytes on every host and duplication within the run stays real. Mixed
+    into the seed of every written namespace's content, never a dataset's: content written
+    before the run (datagen's, a pre-filled tier) is unscored and comes back exactly at reset, so
+    it keeps the dataset seed alone. Recorded in item 59's dirty marker while a state is dirty
+    (after reset no file carries it), in an output namespace's manifest, and in the run report.
+    Ops, paths, sizes, the fingerprint, CLOSED, and the compression ratio unchanged. A change to
+    the runner's payload definition for namespaces (`runner/REFERENCE.md` §5), a recorded
+    decision; `aeiou-verify` takes the nonce from the manifest or the marker.
 
 ## 7. Environment
 
