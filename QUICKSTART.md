@@ -35,25 +35,35 @@ export PATH=$PWD/bin:$PATH
 # 1. the runner validates every shipped abstract and prints its hash and op counts
 aeiou check $(find workloads -name '*.ast.json')
 
-# 2. walk the small-file training workload without I/O: op counts, bytes, the fingerprint
+# 2. write the small-file training workload's dataset (4000 files, ~470 MiB) under the storage to test
 W=workloads/input-pipeline/map/file-per-sample
-aeiou dry-run $W/file_per_sample.ast.json --gpus 2 --seed 1 \
-    --params-file $W/params/smoke.params.json
-
-# 3. write its dataset (4000 files, ~470 MiB) under the storage to test
 aeiou datagen $W/file_per_sample.ast.json --root /mnt/sut/aeiou \
     --params-file $W/params/smoke.params.json
 
-# 4. run it: 2 emulated GPUs, 50 steps, the JSON report in run.json
+# 3. run it: 2 emulated GPUs, 50 steps, the JSON report in run.json
 aeiou run $W/file_per_sample.ast.json --root /mnt/sut/aeiou --gpus 2 --seed 1 \
     --params-file $W/params/smoke.params.json --report-json run.json
+
+# 4. the same run scaled out over two client hosts, one emulated GPU on each
+aeiou-launch node1 node2 -- $PWD/bin/aeiou run $PWD/$W/file_per_sample.ast.json \
+    --root /mnt/sut/aeiou --gpus 2 --seed 1 \
+    --params-file $PWD/$W/params/smoke.params.json --report-json /tmp/run-2hosts.json
 ```
 
 `--root` is the storage under test: a directory on the mount you want to measure. The
 dataset lands under it as `train/`; `aeiou run` refuses a dataset whose manifest does not
-match the abstract's definition, so regenerate after changing a dataset parameter. The
-fingerprint printed by `dry-run` must equal the one `run` prints: the same workload was
-executed. `--time-scale 0` drops the emulated GPU compute and runs the I/O back to back.
+match the abstract's definition, so regenerate after changing a dataset parameter.
+`--time-scale 0` drops the emulated GPU compute and runs the I/O back to back.
+
+Step 4 reads the dataset step 2 wrote. `aeiou-launch` starts one rank per host over ssh, so
+each host needs passwordless ssh from here, the storage mounted at the same path, and the
+unpacked tarball at the same path as here. The paths are absolute because the remote shell
+starts in the home directory, without this shell's `PATH`. The first host is the
+coordinator, and the others must reach it under the name given. Rank 0 prints the fingerprint
+of all the hosts under `--- all 2 hosts`, and it must equal the one step 3 printed: the same
+workload was executed, each host issuing its share. The first host writes the merged report
+and every other host its own, each to the `--report-json` path on its own disk, so give a
+local path, never one on the shared mount. See **aeiou-launch**(1) for longer host lists.
 
 Each command prints the options it resolved and where each came from (command line,
 `AEIOU_*` environment, `--config` file, default) before it does anything, so the report
