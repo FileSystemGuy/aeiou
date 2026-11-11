@@ -11704,8 +11704,13 @@ yet. The gaps, each with the port's workaround:
    main's frames at index *b*, which works only because `at` on an enclosing body is free and an index
    past the loop's end is still evaluated.
 5. *`x @ i` recursion* (item 73, confirmed): the VM's evaluation recurses down an `@` chain, and
-   sub-agent lanes read main's bindings at arbitrary indexes, so the stack overflowed at 100 sessions
-   even at a 1 GiB `RUST_MIN_STACK`; the port runs under `ulimit -s unlimited`.
+   sub-agent lanes read main's bindings at arbitrary indexes, ~~so the stack overflowed at 100 sessions
+   even at a 1 GiB `RUST_MIN_STACK`; the port runs under `ulimit -s unlimited`~~ (measured 2026-11-11:
+   a sub-agent's lane starts with an empty cache of `x @ i` values, so reading main's prompt *i*
+   evaluates main's chain down to its start, one level a request; at 400 sessions, whose longest main
+   chain is 1,524 requests, it needs 48 to 64 MiB of `RUST_MIN_STACK`, about 40 KiB a level, and
+   overflows the 8 MiB thread stack at 30 sessions; the 1 GiB of the first record was wrong, the
+   stack set being the shell's and not the thread's).
 6. *No float-to-integer conversion*: the fitted tables are integers in fixed point (×10⁶).
 7. *An empirical's weights are literals*: a class's step-kind mix is one `Dist` parameter a (context
    kind, class), chosen by a chain of `when` over the class drawn.
