@@ -1535,8 +1535,13 @@ numbers; the order is this note's.
     measured shape (the catalog check). *The joint review, 2026-11-10 (§3.99):* the two
     mechanisms are redefined as LMCache's multi-process connector adapters on a local and on a
     shared path (the committed abstracts being captures under the in-process connector), read
-    from the source first (item 72) and confirmed by item 74's capture. Open: how the score
-    counts a domain of more than one engine (item 72, phase 2).
+    from the source first (item 72) and confirmed by item 74's capture. ~~Open: how the score
+    counts a domain of more than one engine (item 72, phase 2).~~ *Decided by the user,
+    2026-11-10 (§3.99, the note on LMCache's multi-process storage):* the adapter is `fs_native`
+    with a capacity; local and shared paths are one mechanism, the sharing a parameter (other
+    engines' chunks found by `stat` and skipped, or never present); its `stat` per lookup and per
+    store and its file per object group are in the abstract, real metadata accesses. How the score
+    counts a domain of more than one engine is answered in phase 2 (item 72 (5)).
 
 71. **The KV request stream from a session generator written in the abstract (decided by the user
     2026-11-10, `DESIGN_REVIEW.md` §3.99 item 10 and the notes "The fifth generator held out" and
@@ -1558,7 +1563,13 @@ numbers; the order is this note's.
     them. What it claims, and the tolerance file says so: writes within ±7 % of the pool model on the
     ramp (held out, −1 % and +1 %); reads reproduce the pool model on this corpus only, since they do
     not carry between halves of it. Known and not diagnosed: in steady runs its writes come to 15.4 to
-    16.0 a second against the table's 13.1 to 13.8.
+    16.0 a second against the table's 13.1 to 13.8. *The port, run 2026-11-10 (`DESIGN_REVIEW.md`
+    §3.99, the note "The generator ported to an abstract"):* request structure held to `gen5`
+    within +4 % at 400 sessions, no chunk ops yet; eight gaps: chunk names from lineage (item
+    75), a binding of another lane, lanes never joined and arrays drawn once a session (item 72),
+    `x @ i` recursion (item 73), float to integer, empirical weights as expressions, and lazy
+    bindings. The second exposed a fault in `gen5`: a sub-agent may reuse main prompts sent after
+    it; its pool to hold only prompts sent before the request's planned time.
 
 72. **The plan, domains, and events in the contract (decided by the user 2026-11-09 and 2026-11-10,
     `DESIGN_REVIEW.md` §3.99 items 4 to 9 and 13, and the note "The generator in the abstract, a

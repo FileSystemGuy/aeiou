@@ -11658,10 +11658,15 @@ required, with its own eviction (watermark 0.8, 20 %). Full, a store is dropped,
 item 13's rule (4), a would-be drop a gate failure. One store-loop thread copies L1 to L2, every key
 to every adapter, no cap on tasks in flight.
 *What follows, to decide:* ~~the mechanism is `fs_native` with a capacity (or `fs` without eviction, a
-tier that only grows);~~ (decided by the user, 2026-11-10: `fs_native` with a capacity); local and shared paths make the same calls, differing in whether other
+tier that only grows);~~ (decided by the user, 2026-11-10: `fs_native` with a capacity); ~~local and shared paths make the same calls, differing in whether other
 engines' chunks are found and skipped, so whether they stay two mechanisms or become one with the
 sharing a parameter; the stats per lookup and per store, and the object groups a chunk, added to
-the abstract; the capture of item 74 to confirm `fs_native`'s calls, which were inferred.
+the abstract;~~ (decided by the user, 2026-11-10: one mechanism, the sharing a parameter, since
+local and shared paths make the same calls and differ only in whether other engines' chunks are
+found and skipped; the stats per lookup and per store and the files per object group in the
+abstract, the stats being real metadata accesses the storage serves; how the score counts a domain
+of more than one engine left to phase 2, answered there); the capture of item 74 to confirm
+`fs_native`'s calls, which were inferred.
 *Datagen time.* Rust datagen generates about 22 GB/s at 16 writers (§3.70's measurements, to tmpfs), so the
 system's write bandwidth sets the pre-fill's time, not the generator. Item 7's tier of an hour was
 stated as 100,000 files an engine; at 11 to 16 chunk writes a second an engine (the simulations, 16
@@ -11671,6 +11676,46 @@ a minute at the 0.5 to 0.7 million small files a second of §3.33's estimate. Th
 hour of writes) recreates most of the pre-fill, LRU taking the oldest first, about the pre-fill's own
 time, plus the unlinks of what the run made; after the tuning form (30 minutes) about half. The
 pre-filled chunks a run's arrivals resume are read, so they are not the ones evicted.
+
+**The generator ported to an abstract: what today's language could not say (brief item 71's first
+step, run 2026-11-10; the gaps recorded at the user's word 2026-11-11, nothing decided).** `gen5` was
+written as an abstract with today's builder and no additions (scratch `limit500k/port/gen5_port.py`,
+919 KB of AST, `aeiou check` clean): a session a lane, its main chain a loop, each batch of sub-agents
+a `parallel` spawned after main's request, each request one marker object whose name carries what
+`gen5` emits (the prompt as parent, its kept length and new blocks; output tokens; API time; the idle
+gap). A harness rebuilds the requests from `dry-run --emit-trace` and holds them to `gen5`'s own
+(`compare.py`). At 400 sessions, three seed pairs: medians match; pooled requests +4 %, chunk writes
++2 %, hits +3 %; per-session means move ±20 % with the seed, noise at this N. No chunk op is emitted
+yet. The gaps, each with the port's workaround:
+1. *Chunk names from a prompt's lineage* (expected): a request names its parent, kept length, and new
+   blocks, but the chunks it reads and writes are names derived from that lineage, and the hits and
+   misses need the cache of item 75. Not attempted.
+2. *A binding of another lane.* `gen5` draws a fresh prompt's reused start from a pool of the
+   session's earlier prompts, siblings' included, and a sub-agent's first prompt from main's and its
+   siblings'; no lane can read another lane's bindings, so the port's pool is main's prompts and the
+   lane's own. Reading `gen5` for it found a fault in the generator, not only in the language: `gen5`
+   generates the whole main chain before any sub-agent, so a sub-agent spawned after main's request
+   *i* can reuse main's prompts *i*+1 onward, which do not exist yet when it runs. Generation order
+   is not time order; the pool must hold only what was sent before the request's planned time.
+3. *Lanes never joined.* An asynchronous batch (`p_sync` false, 23 % of batches) runs beside main's
+   next requests; `parallel` always joins, so the port joins every batch, which moves only times.
+4. *Arrays drawn once a session.* A batch's spawn point, size, and sync flag are drawn once a session
+   per batch and read from inside the batch; they have no home but a loop's frame, so the port borrows
+   main's frames at index *b*, which works only because `at` on an enclosing body is free and an index
+   past the loop's end is still evaluated.
+5. *`x @ i` recursion* (item 73, confirmed): the VM's evaluation recurses down an `@` chain, and
+   sub-agent lanes read main's bindings at arbitrary indexes, so the stack overflowed at 100 sessions
+   even at a 1 GiB `RUST_MIN_STACK`; the port runs under `ulimit -s unlimited`.
+6. *No float-to-integer conversion*: the fitted tables are integers in fixed point (×10⁶).
+7. *An empirical's weights are literals*: a class's step-kind mix is one `Dist` parameter a (context
+   kind, class), chosen by a chain of `when` over the class drawn.
+8. *Bindings evaluate strictly*: a `let` holding `x @ (i − k)` is evaluated even where a `when`
+   would not use it, so each needs its own guard against an index below zero.
+*What follows, proposed:* fix gap 2's ordering in `gen5` before the port goes further (the pool by
+planned time, its effect on reads and writes measured against `gen5` as it stands and the table),
+since it changes what the generator claims; gaps 1 and 2 are the constructs item 71 expected and
+item 75 carries; 3 and 4 belong to item 72's lanes; 5 is item 73; 6 to 8 are small additions to the
+language, provisional until a second workload uses them.
 
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
@@ -12019,6 +12064,16 @@ contract (13), the runner's stack (13), the retargeted case and tolerances (1, 1
 abstract, a shared tier, and events between runners": the brief items also carry the cache
 construct, domains and events, and Dynamo's G3.5; the first work, once the brief items are accepted,
 is the port test of `gen5` as an abstract and the scratch measurement of cross-engine reads.)
+(Changed by the user, 2026-11-11, after the note "The generator ported to an abstract": the port
+pauses; first a sixth generator, `gen6`, `gen5`'s fitted tables unchanged but each session generated
+in planned-time order, main requests and sub-agent batches, asynchronous ones included, together, so
+the pool a prompt's reused start is drawn from holds only prompts already sent, siblings' included;
+then `gen6` measured against `gen5` and the whole table, static marginals, the twelve-seed grid at the
+same cases, and the held-out halves, item 10's acceptance (writes within ±7 % on the ramp, reads on
+this corpus only) checked again; then the port resumes on `gen6`, its gap 2 the reading of what
+other lanes sent before a request's planned time, the timeline construct of brief item 72, and the
+chunk ops (gap 1) after it. Item 73's fix waits until the grid is done, since a runner build beside
+the simulations slows both.)
 
 ## 4. Plan changes
 
