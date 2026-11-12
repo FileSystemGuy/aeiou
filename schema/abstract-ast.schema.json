@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.14",
+      "const": "0.15",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -517,11 +517,11 @@
                   "$ref": "#/$defs/expr"
                 }
               },
-              "description": "Element of a parameter array."
+              "description": "Element of a parameter array, or of an `array` in scope (contract 0.15)."
             },
             "len": {
               "$ref": "#/$defs/ident",
-              "description": "Length of a parameter array."
+              "description": "Length of a parameter array, or of an `array` in scope (contract 0.15)."
             },
             "sum": {
               "$ref": "#/$defs/ident",
@@ -629,6 +629,48 @@
                 }
               },
               "description": "Expression-level conditional; arms may be expressions, distributions, or handles."
+            },
+            "published": {
+              "$ref": "#/$defs/ident",
+              "description": "The number of entries the named timeline holds before this step, in planned order (contract 0.15, rule V30). Not positional: `@` may not reach it."
+            },
+            "entry": {
+              "type": "object",
+              "required": [
+                "timeline",
+                "index",
+                "key"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "timeline": {
+                  "$ref": "#/$defs/ident"
+                },
+                "index": {
+                  "$ref": "#/$defs/expr"
+                },
+                "key": {
+                  "$ref": "#/$defs/ident"
+                }
+              },
+              "description": "Value `key` of entry `index` of the named timeline, in planned order; `index` below `published` (contract 0.15, rule V30). Not positional: `@` may not reach it."
+            },
+            "prev": {
+              "type": "object",
+              "required": [
+                "ref",
+                "init"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "ref": {
+                  "$ref": "#/$defs/ident"
+                },
+                "init": {
+                  "$ref": "#/$defs/expr"
+                }
+              },
+              "description": "The value the `let` `ref`, bound directly in a loop's body, took in the previous iteration of that loop under the same outer indices; `init` in the loop's first iteration. The same as `ref @ (i - step)` for a positional binding, read rather than recomputed, so it carries a value that depends on a timeline (contract 0.15, rule V31). `@` may not reach it."
             }
           }
         }
@@ -1298,9 +1340,14 @@
             },
             "body": {
               "$ref": "#/$defs/body"
+            },
+            "join": {
+              "type": "boolean",
+              "default": true,
+              "description": "False: the parent goes on at once and the sub-actors end with the enclosing timeline at the latest; only inside a `timeline` (contract 0.15, rule V30)."
             }
           },
-          "description": "`width` concurrent sub-actors, index 0..width, joined at the end."
+          "description": "`width` concurrent sub-actors, index 0..width, joined at the end (unless `join` is false, inside a timeline)."
         },
         "channel": {
           "type": "object",
@@ -1873,6 +1920,71 @@
             }
           },
           "description": "getdents64 until exhausted, on a handle opened with DIRECTORY."
+        },
+        "timeline": {
+          "type": "object",
+          "required": [
+            "name",
+            "body"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/ident"
+            },
+            "body": {
+              "$ref": "#/$defs/body"
+            }
+          },
+          "description": "Lanes planned together (contract 0.15, DESIGN_REVIEW.md §3.99, rule V30): the body's main line and every sub-actor of a `parallel` in it is a lane with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. Never a `timeline`, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside. `aeiou run` does not run one yet."
+        },
+        "publish": {
+          "type": "object",
+          "required": [
+            "timeline",
+            "values"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "timeline": {
+              "$ref": "#/$defs/ident"
+            },
+            "values": {
+              "type": "object",
+              "propertyNames": {
+                "$ref": "#/$defs/ident"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/expr"
+              }
+            }
+          },
+          "description": "An entry of the enclosing timeline: these values at this lane's planned time, which the other lanes read with `published` and `entry` (contract 0.15, rule V30)."
+        },
+        "array": {
+          "type": "object",
+          "required": [
+            "name",
+            "count",
+            "index",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/ident"
+            },
+            "count": {
+              "$ref": "#/$defs/expr"
+            },
+            "index": {
+              "$ref": "#/$defs/ident"
+            },
+            "value": {
+              "$ref": "#/$defs/expr"
+            }
+          },
+          "description": "`count` values computed once, where the node stands, each with `index` bound as a loop index (so its draws are positional), read with `elem` and `len` as a parameter array is; never inside a loop, never the name of a parameter (contract 0.15, rule V32)."
         }
       }
     },

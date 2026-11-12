@@ -302,7 +302,44 @@ class Ref(Expr, Handle):
         """The value this binding takes at another index of its enclosing loop (`x @ i`)."""
         return At(self.name, index)
 
+    def prev(self, init) -> Expr:
+        """The value this binding, a `let` directly in a loop's body, took in the previous
+        iteration of that loop; `init` in its first (contract 0.15, rule V31)."""
+        return Prev(self.name, init)
+
     __hash__ = object.__hash__
+
+
+class Prev(Expr):
+    __slots__ = ("name", "init")
+
+    def __init__(self, name: str, init):
+        self.name, self.init = check_ident(name, "binding"), lift(init, "prev init")
+
+    def ast(self):
+        return {"prev": {"ref": self.name, "init": ast_of(self.init)}}
+
+
+class Published(Expr):
+    """The entries a timeline holds before this step (contract 0.15, rule V30)."""
+    __slots__ = ("timeline",)
+
+    def __init__(self, timeline: str):
+        self.timeline = check_ident(timeline, "timeline")
+
+    def ast(self):
+        return {"published": self.timeline}
+
+
+class Entry(Expr):
+    """Value `key` of a timeline's entry `index`, in planned order (rule V30)."""
+    __slots__ = ("timeline", "index", "key")
+
+    def __init__(self, timeline: str, index, key: str):
+        self.timeline, self.index, self.key = check_ident(timeline, "timeline"), lift(index, "entry index"), check_ident(key, "entry key")
+
+    def ast(self):
+        return {"entry": {"timeline": self.timeline, "index": ast_of(self.index), "key": self.key}}
 
 
 class At(Expr):

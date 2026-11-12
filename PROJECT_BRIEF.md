@@ -1545,7 +1545,7 @@ numbers; the order is this note's.
 
 71. **The KV request stream from a session generator written in the abstract (decided by the user
     2026-11-10, `DESIGN_REVIEW.md` §3.99 item 10 and the notes "The fifth generator held out" and
-    "The generator in the abstract, a shared tier, and events between runners"; not started).**
+    "The generator in the abstract, a shared tier, and events between runners"; started 2026-11-10).**
     Sessions come from a generator fitted to the AgentX corpus (393 sessions, 98,827 requests), not
     the corpus as a table of rows and not archetypes; the scratch's `gen5` carries 5,839 fitted
     numbers, quantile tables, not requests. A session is a tree of concurrent contexts, the main
@@ -1569,11 +1569,19 @@ numbers; the order is this note's.
     75), a binding of another lane, lanes never joined and arrays drawn once a session (item 72),
     `x @ i` recursion (item 73), float to integer, empirical weights as expressions, and lazy
     bindings. The second exposed a fault in `gen5`: a sub-agent may reuse main prompts sent after
-    it; its pool to hold only prompts sent before the request's planned time.
+    it; its pool to hold only prompts sent before the request's planned time. *`gen6`, 2026-11-12
+    (`DESIGN_REVIEW.md` §3.99, the note "The sixth generator, in planned-time order"):* `gen5`'s
+    tables generated in planned-time order, the generator the port follows; against the table,
+    ramp writes −7 % and −4 %, reads 8 of 8 cases within two standard errors; held out, ramp writes
+    −9 ± 4 and −3 ± 6, the first 2 points outside the ±7 % this item claims.
+    *Contract 0.15, 2026-11-12 (`DESIGN_REVIEW.md` §3.99, the note "The timeline built"):* the
+    timeline (gap 2), a `parallel` not joined (gap 3), the `array` (gap 4), and `prev`, the
+    value of a binding in its loop's previous iteration, for lane state that depends on the
+    pool, which `@` cannot recompute; the port resumes on them.
 
 72. **The plan, domains, and events in the contract (decided by the user 2026-11-09 and 2026-11-10,
     `DESIGN_REVIEW.md` §3.99 items 4 to 9 and 13, and the note "The generator in the abstract, a
-    shared tier, and events between runners"; not started).** The KV abstracts need what the
+    shared tier, and events between runners"; the plan side of (1) and (2) built 2026-11-12).** The KV abstracts need what the
     contract cannot yet say.
     (1) *The plan*, computed before the run from positional draws and never from the run: people
     arrive on the WG's ramp (30 minutes from 5 % to 95 % by default, then 60 minutes of plateau, a
@@ -1630,6 +1638,10 @@ numbers; the order is this note's.
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the
     domain size, the routing rule. A contract version and every KV fingerprint change.
+    *Built 2026-11-12, contract 0.15, plan side only (`DESIGN_REVIEW.md` §3.99, the note "The
+    timeline built"):* (1)'s timeline construct as `timeline`, `publish`, `published`, `entry`,
+    and `parallel`'s `join: false`, walked in planned order by `check` and `dry-run`; `run`
+    refuses a timeline until (7) is built; the planned clock not yet in `--emit-trace`.
     (8) *Opt-in.* An abstract without a timeline runs exactly as today, independent actors, no
     per-op cost of the plan; D and the lag are the case's results, judged through the `result.`
     constraints, never runner-wide (training's pass stays accelerator utilization). Accepted when

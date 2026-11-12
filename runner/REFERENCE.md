@@ -183,6 +183,32 @@ each is a recorded decision and the golden tests pin them.
   that lowers a distribution's minimum under an `at` (§3.57; it was a stack overflow). A
   required parameter there passes on the document and is judged only on its value (contract
   0.13: the LMCache abstracts' `reuse`).
+- **A timeline's order** (contract 0.15, 2026-11-12, `DESIGN_REVIEW.md` §3.99). `vm.rs` walks a
+  `timeline`'s lanes as one stream, so every driver (`dry-run`, its metrics and `--emit-trace`,
+  the limits) sees one sequence: each lane is a VM resumed from its parent's position, as a
+  forked sub-actor is; a heap holds the lanes ready, by (planned clock, lane key, order put
+  back), and the first takes steps until its next `compute`, which adds `ns` to its clock (a
+  negative one is refused) and puts it back, or until it forks, ends, or issues ops (handed out
+  one by one, its clock unchanged). The lane key is the main line's empty list, a sub-actor's
+  its parent's key, then the parent's fork ordinal (the forks it took before, counted in its
+  own walk), then its index; so a parent goes on before its sub-actors at the same time, and the
+  order put back decides only between steps of one lane. A joined fork takes its parent off
+  the heap until the last sub-actor ends, and the parent's clock becomes the latest end. A
+  `publish` appends `(clock, values)` to the timeline's entries, which `published` counts and
+  `entry` reads; both are refused under an `x @ i` evaluation (V30). The ops' keys and the
+  fingerprint are as anywhere: a lane's indices are its frames', a sub-actor's with its
+  `parallel` index. The planned clock is not yet in `--emit-trace`'s `t`, which stays the walk's
+  order; `aeiou run` refuses a timeline until its run side is built (brief item 72 (7)).
+- **`prev {ref, init}`** (contract 0.15). A `let` that some `prev` names (the names are
+  collected by `sites::annotate`) keeps its value in the iteration last evaluated and in the
+  one before, by its loop's index, under the outer indices; `prev` returns the value at the
+  index one step before the current one, `init` at the loop's `from`, and is refused when the
+  value is not there (a sub-actor's lane reading its parent's loop, which it has not walked)
+  or under an `x @ i` evaluation (V31). Two values a `let` a lane, whatever the loop's length.
+- **`array {name, count, index, value}`** (contract 0.15). Evaluated when walked: `value` once
+  for each `index` in `0..count`, with a frame for `index` pushed, so its draws are keyed as a
+  loop's; the values are held by the body's scope, and `elem` and `len` read them before a
+  parameter of that name (V32 refuses the clash).
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which

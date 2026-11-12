@@ -40,11 +40,15 @@ pub fn annotate(ast: &Ast) {
             p.with(&["body"], |p| body(&actor.body, p));
         });
     }
+    // the `let`s a `prev` reads keep their last two values as they are evaluated (`vm.rs`)
+    let _ = ast.prev_names.set(std::mem::take(&mut p.prev));
 }
 
 #[derive(Default)]
 struct Path {
     parts: Vec<String>,
+    /// The names `prev` reads, anywhere in the document (contract 0.15).
+    prev: std::collections::HashSet<String>,
 }
 
 impl Path {
@@ -143,7 +147,12 @@ fn expr(e: &Expr, p: &mut Path) {
         Expr::Node(n) => n.as_ref(),
     };
     match node {
-        ExprNode::Param(_) | ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => {}
+        ExprNode::Param(_) | ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Published(_) => {}
+        ExprNode::Entry { index, .. } => p.with(&["entry", "index"], |p| expr(index, p)),
+        ExprNode::Prev { name, init } => {
+            p.prev.insert(name.clone());
+            p.with(&["prev", "init"], |p| expr(init, p));
+        }
         ExprNode::At { index, .. } => p.with(&["at", "index"], |p| expr(index, p)),
         ExprNode::Draw(d) => {
             d.site.set(site_hash(&p.pointer()));
@@ -260,6 +269,16 @@ fn node(n: &Node, p: &mut Path) {
             p.with(&[k, "body"], |p| body(b, p));
         }
         Node::Compute { ns } => p.with(&[k, "ns"], |p| expr(ns, p)),
+        Node::Timeline { body: b, .. } => p.with(&[k, "body"], |p| body(b, p)),
+        Node::Publish { values, .. } => {
+            for (name, e) in values {
+                p.with(&[k, "values", name], |p| expr(e, p));
+            }
+        }
+        Node::Array { count, value, .. } => {
+            p.with(&[k, "count"], |p| expr(count, p));
+            p.with(&[k, "value"], |p| expr(value, p));
+        }
         Node::Cond { test, then, otherwise } => {
             p.with(&[k, "if"], |p| expr(test, p));
             p.with(&[k, "then"], |p| body(then, p));

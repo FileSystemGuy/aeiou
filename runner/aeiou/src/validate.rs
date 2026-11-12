@@ -187,6 +187,14 @@ struct Scope<'a> {
     reads: Vec<HashMap<&'a str, ReadOnly<'a>>>,
     /// the innermost enclosing frame whose count varies with an enclosing one (V6)
     count_varies: Option<P>,
+    /// per level of `bindings`, whether it is the body of a `loop` (V31: a `prev` reads a
+    /// `let` of one)
+    loop_body: Vec<bool>,
+    /// the `array`s in scope (V32)
+    arrays: HashSet<&'a str>,
+    /// the bindings whose definition reads `published`, `entry` (V30), or `prev` (V31), by the
+    /// rule: `@` cannot recompute them
+    unpositional: HashMap<&'a str, &'static str>,
 }
 
 /// A dataset and an `input` namespace a binding may name, the first found of each (V12, V14).
@@ -205,11 +213,17 @@ struct ActorState<'a> {
     /// V26: the actor's channel declarations (`channel` and `loader`), by name: the path of the
     /// body each is in, and whether a loop encloses it.
     sites: HashMap<&'a str, Vec<(P, bool)>>,
+    /// V30: the enclosing timeline's name and the keys its `publish`es give.
+    timeline: Option<(&'a str, BTreeSet<&'a str>)>,
+    /// V32: the loops enclosing the node being checked.
+    loops: usize,
+    /// V31: the next `body` is a `loop`'s.
+    loop_next: bool,
 }
 
 impl<'a> Scope<'a> {
     fn new(fields: HashSet<&'a str>) -> Self {
-        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new(), varying: vec![HashSet::new()], kinds: vec![HashMap::new()], reads: vec![HashMap::new()], count_varies: None }
+        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new(), varying: vec![HashSet::new()], kinds: vec![HashMap::new()], reads: vec![HashMap::new()], count_varies: None, loop_body: vec![false], arrays: HashSet::new(), unpositional: HashMap::new() }
     }
 
     fn child(&self) -> Self {
@@ -218,6 +232,7 @@ impl<'a> Scope<'a> {
         s.varying.push(HashSet::new());
         s.kinds.push(HashMap::new());
         s.reads.push(HashMap::new());
+        s.loop_body.push(false);
         s.forward = HashSet::new();
         s.twice = HashSet::new();
         s
@@ -314,8 +329,9 @@ fn expr_refs<'a>(e: &'a Expr, out: &mut BTreeSet<&'a str>) {
         ExprNode::Param(name) => {
             out.insert(name.as_str());
         }
-        ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => {}
-        ExprNode::At { index, .. } | ExprNode::Elem { index, .. } => expr_refs(index, out),
+        ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Published(_) => {}
+        ExprNode::At { index, .. } | ExprNode::Elem { index, .. } | ExprNode::Entry { index, .. } => expr_refs(index, out),
+        ExprNode::Prev { init, .. } => expr_refs(init, out),
         ExprNode::Draw(d) => distref_refs(&d.dist, out),
         ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => handle_refs(h, out),
         ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
@@ -362,6 +378,50 @@ fn handle_refs<'a>(h: &'a Handle, out: &mut BTreeSet<&'a str>) {
         Handle::Column(c) => {
             handle_refs(&c.of, out);
             expr_refs(&c.index, out);
+        }
+    }
+}
+
+/// V30, V31: the rule a definition falls under when it reads the timeline (`published`,
+/// `entry`) or a `prev` directly.
+fn unpositional(v: &ExprLike) -> Option<&'static str> {
+    fn walk(e: &Expr) -> Option<&'static str> {
+        let Expr::Node(n) = e else { return None };
+        match n.as_ref() {
+            ExprNode::Published(_) | ExprNode::Entry { .. } => Some("V30"),
+            ExprNode::Prev { .. } => Some("V31"),
+            ExprNode::At { index, .. } | ExprNode::Elem { index, .. } => walk(index),
+            ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
+            | ExprNode::Max(a) | ExprNode::Eq(a) | ExprNode::Ne(a) | ExprNode::Lt(a) | ExprNode::Le(a) | ExprNode::Gt(a) | ExprNode::Ge(a) => a.iter().find_map(walk),
+            ExprNode::And(a) | ExprNode::Or(a) => a.iter().find_map(walk),
+            ExprNode::Neg(e) | ExprNode::Not(e) => walk(e),
+            ExprNode::Cond(c) => walk(&c.test).or_else(|| [&c.then, &c.otherwise].into_iter().find_map(|v| match v {
+                ExprLike::Expr(e) => walk(e),
+                _ => None,
+            })),
+            _ => None,
+        }
+    }
+    match v {
+        ExprLike::Expr(e) => walk(e),
+        _ => None,
+    }
+}
+
+/// V30: the keys the `publish`es of timeline `name` give, anywhere in its body.
+fn publishes<'a>(nodes: &'a [Node], name: &str, out: &mut BTreeSet<&'a str>) {
+    for n in nodes {
+        match n {
+            Node::Publish { timeline, values } if timeline == name => out.extend(values.keys().map(String::as_str)),
+            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. } => publishes(body, name, out),
+            Node::Cond { then, otherwise, .. } => {
+                publishes(then, name, out);
+                if let Some(b) = otherwise {
+                    publishes(b, name, out);
+                }
+            }
+            Node::Choose { arms, .. } => arms.iter().for_each(|a| publishes(&a.body, name, out)),
+            _ => {}
         }
     }
 }
@@ -800,7 +860,7 @@ impl<'a> Checker<'a> {
             Expr::Node(n) => n,
         };
         match &**n {
-            ExprNode::Index(_) | ExprNode::At { .. } => true,
+            ExprNode::Index(_) | ExprNode::At { .. } | ExprNode::Published(_) | ExprNode::Entry { .. } | ExprNode::Prev { .. } => true,
             ExprNode::Ref(name) => scope.is_varying(name),
             ExprNode::Draw(_) => !scope.indices.is_empty(),
             ExprNode::Param(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => false,
@@ -908,11 +968,15 @@ impl<'a> Checker<'a> {
 
     fn body(&mut self, nodes: &'a [Node], path: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) {
         let mut scope = scope.child();
+        *scope.loop_body.last_mut().unwrap() = std::mem::take(&mut st.loop_next);
         scope.forward = HashSet::new();
         for n in nodes {
-            if let Node::Let { name, .. } = n {
+            if let Node::Let { name, value } = n {
                 if !scope.forward.insert(name.as_str()) {
                     scope.twice.insert(name.as_str());
+                }
+                if let Some(rule) = unpositional(value) {
+                    scope.unpositional.insert(name.as_str(), rule);
                 }
             }
         }
@@ -973,6 +1037,10 @@ impl<'a> Checker<'a> {
                 };
                 let reads = self.may_name(value, scope);
                 scope.bind(name, bound, varies, kind, reads);
+                match unpositional(value) {
+                    Some(rule) => scope.unpositional.insert(name.as_str(), rule),
+                    None => scope.unpositional.remove(name.as_str()),
+                };
             }
             Node::Loop { index, from, to, step, body } => {
                 if !is_ident(index) {
@@ -987,11 +1055,17 @@ impl<'a> Checker<'a> {
                 let nonneg = from.as_ref().map_or(true, |e| self.at_least(e, 0, scope));
                 let varies = [from.as_ref(), Some(to), step.as_ref()].into_iter().flatten().any(|e| self.varies(e, scope));
                 let inner = scope.with_index(index, nonneg, varies.then(|| pp.clone()));
+                st.loop_next = true;
+                st.loops += 1;
                 self.body(body, &p(pp, &["body"]), &inner, st);
+                st.loops -= 1;
             }
-            Node::Parallel { index, width, body } => {
+            Node::Parallel { index, width, join, body } => {
                 if !is_ident(index) {
                     self.err(&p(pp, &["index"]), "not an identifier");
+                }
+                if *join == Some(false) && st.timeline.is_none() {
+                    self.err(&p(pp, &["join"]), "a `parallel` not joined outside a timeline: only a timeline's lanes may run on without their parent waiting (V30)");
                 }
                 self.expr(width, &p(pp, &["width"]), scope, st, None);
                 self.int(width, &p(pp, &["width"]), scope);
@@ -999,6 +1073,9 @@ impl<'a> Checker<'a> {
                 let outer = st.fork_opens.replace(Vec::new());
                 self.body(body, &p(pp, &["body"]), &inner, st);
                 st.fork_opens = outer;
+            }
+            Node::Loader { .. } | Node::Channel { .. } | Node::Put { .. } | Node::Take { .. } | Node::Barrier { .. } | Node::Trace { .. } if st.timeline.is_some() => {
+                self.err(pp, format!("a `{}` inside a timeline: its lanes are planned, never waiting on one another but by a joined `parallel` (V30)", node.kind()));
             }
             Node::Loader { name, index, workers, prefetch, batches, body, .. } => {
                 if !is_ident(name) {
@@ -1081,7 +1158,61 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["sha256"]), "not a lowercase hex sha256");
                 }
             }
+            Node::Timeline { name, body } => {
+                if !is_ident(name) {
+                    self.err(&p(pp, &["name"]), "not an identifier");
+                }
+                if let Some((outer, _)) = &st.timeline {
+                    self.err(pp, format!("a timeline inside timeline `{outer}`: lanes are planned in one timeline at a time (V30)"));
+                    return;
+                }
+                let mut keys = BTreeSet::new();
+                publishes(body, name, &mut keys);
+                st.timeline = Some((name.as_str(), keys));
+                self.body(body, &p(pp, &["body"]), scope, st);
+                st.timeline = None;
+            }
+            Node::Publish { timeline, values } => {
+                self.in_timeline(timeline, "publish", pp, st);
+                for (k, e) in values {
+                    let vp = p(pp, &["values", k]);
+                    if !is_ident(k) {
+                        self.err(&vp, "not an identifier");
+                    }
+                    self.expr(e, &vp, scope, st, None);
+                }
+            }
+            Node::Array { name, count, index, value } => {
+                if !is_ident(name) {
+                    self.err(&p(pp, &["name"]), "not an identifier");
+                }
+                if !is_ident(index) {
+                    self.err(&p(pp, &["index"]), "not an identifier");
+                }
+                if st.loops > 0 {
+                    self.err(pp, format!("array `{name}` inside a loop: its values are computed once, where it stands, and a loop would compute them again each iteration (V32)"));
+                }
+                if self.ast.params.contains_key(name) {
+                    self.err(&p(pp, &["name"]), format!("array `{name}` has the name of a parameter, which `elem` and `len` also read (V32)"));
+                }
+                self.expr(count, &p(pp, &["count"]), scope, st, None);
+                self.int(count, &p(pp, &["count"]), scope);
+                let inner = scope.with_index(index, true, None);
+                self.expr(value, &p(pp, &["value"]), &inner, st, None);
+                scope.arrays.insert(name.as_str());
+            }
             _ => self.op(node, pp, scope, st),
+        }
+    }
+
+    /// V30: a `publish`, `published`, or `entry` names the timeline it is in.
+    fn in_timeline(&mut self, name: &str, what: &str, path: &P, st: &ActorState<'a>) -> bool {
+        match &st.timeline {
+            Some((t, _)) if *t == name => true,
+            _ => {
+                self.err(path, format!("{what}: no timeline `{name}` encloses it (V30)"));
+                false
+            }
         }
     }
 
@@ -1472,7 +1603,7 @@ impl<'a> Checker<'a> {
                 None => self.ast.params.get(array).and_then(|p| p.items).map(Kind::name),
                 _ => None,
             },
-            ExprNode::Index(_) | ExprNode::Actor(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Len(_) | ExprNode::Size(_)
+            ExprNode::Index(_) | ExprNode::Actor(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Len(_) | ExprNode::Published(_) | ExprNode::Size(_)
             | ExprNode::Offset(_) | ExprNode::UnitIndex(_) | ExprNode::Units(_) | ExprNode::Chunks(_) => Some("int"),
             ExprNode::Eq(_) | ExprNode::Ne(_) | ExprNode::Lt(_) | ExprNode::Le(_) | ExprNode::Gt(_) | ExprNode::Ge(_) | ExprNode::And(_)
             | ExprNode::Or(_) | ExprNode::Not(_) => Some("bool"),
@@ -1732,11 +1863,40 @@ impl<'a> Checker<'a> {
             ExprNode::At { name, index } => self.at(name, index, path, scope, st, binding),
             ExprNode::Draw(d) => self.distref(&d.dist, path, scope, st),
             ExprNode::Elem { array, index } => {
-                self.array(array, "elem", path, false);
+                if !scope.arrays.contains(array.as_str()) {
+                    self.array(array, "elem", path, false);
+                }
                 self.expr(index, &p(path, &["index"]), scope, st, None);
                 self.int(index, &p(path, &["index"]), scope);
             }
-            ExprNode::Len(name) => self.array(name, "len", path, false),
+            ExprNode::Len(name) => {
+                if !scope.arrays.contains(name.as_str()) {
+                    self.array(name, "len", path, false);
+                }
+            }
+            ExprNode::Published(name) => {
+                self.in_timeline(name, "published", path, st);
+            }
+            ExprNode::Entry { timeline, index, key } => {
+                if self.in_timeline(timeline, "entry", path, st) && !st.timeline.as_ref().is_some_and(|(_, k)| k.contains(key.as_str())) {
+                    self.err(path, format!("entry: timeline `{timeline}` publishes no `{key}` (V30)"));
+                }
+                self.expr(index, &p(path, &["index"]), scope, st, None);
+                self.int(index, &p(path, &["index"]), scope);
+            }
+            ExprNode::Prev { name, init } => {
+                let level = if scope.forward.contains(name.as_str()) {
+                    Some(scope.bindings.len() - 1)
+                } else {
+                    scope.bindings.iter().rposition(|b| b.contains_key(name.as_str()))
+                };
+                match level {
+                    None => self.err(path, format!("prev: no `let` of `{name}` in scope (V31)")),
+                    Some(l) if !scope.loop_body[l] => self.err(path, format!("prev: `{name}` is not bound directly in a loop's body, so it has no previous iteration (V31)")),
+                    Some(_) => {}
+                }
+                self.expr(init, &p(path, &["init"]), scope, st, None);
+            }
             ExprNode::Sum(name) => self.array(name, "sum", path, true),
             ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => self.handle(h, path, scope, st),
             ExprNode::Count(name) => {
@@ -1819,6 +1979,9 @@ impl<'a> Checker<'a> {
         // a binding of the same loop body: the one being defined, or any `let` of this body
         if (binding == Some(name) || scope.forward.contains(name)) && !ok {
             self.err(path, format!("`{name} @` names a binding of this loop body, so its index must be {{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1"));
+        }
+        if let Some(rule) = scope.unpositional.get(name) {
+            self.err(path, format!("`{name} @`: its definition reads `published`, `entry`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})"));
         }
         // of two `let`s of one name in this body, which one an `at` reads is not defined
         if scope.twice.contains(name) {

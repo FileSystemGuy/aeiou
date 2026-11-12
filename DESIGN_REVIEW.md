@@ -11722,6 +11722,76 @@ since it changes what the generator claims; gaps 1 and 2 are the constructs item
 item 75 carries; 3 and 4 belong to item 72's lanes; 5 is item 73; 6 to 8 are small additions to the
 language, provisional until a second workload uses them.
 
+**The sixth generator, in planned-time order (run at the user's word, 2026-11-12; the user chose it as
+the generator the port follows the same day).** `sess10/gen6.py` is `gen5`'s fitted tables, file and
+numbers unchanged, with only the order of generation changed: the session's lanes, main and each
+sub-agent, are advanced from a heap of planned times, a lane's next prompt drawn when its time comes,
+so a fresh prompt's reused start comes from the prompts already sent, siblings' and sub-agents'
+included (main may now reuse a sub-agent's prompt, which `gen5` never let it). An asynchronous batch
+runs beside main's next requests; a synchronous one holds main until its last member ends, at the
+same time `gen5` gave it. A context's first prompt stays out of the pool, as in `gen5`, so causality
+is the only change. Counted: 3,012 reused starts in 300 sessions, none from a prompt planned after
+the draw. Static, 1,200 sessions (`wr9.py`): writes per request 15.35 against `gen5`'s 15.40 and the
+table's 14.43; the step kinds' shares, writes, and sizes move within noise; the main share (58.0 %
+against 61.6 % in the first block) moves 58 to 62 % across four seed blocks for either generator, so
+seed noise. Twelve seeds, `grid6`'s cases (`summ9.txt`): busy 0.38, 0.78, 1.00, 0.75, 0.79; writes +26 ±
+10 at 32 sessions, +11 ± 8 at 64, +13 ± 4 at 96, −7 ± 4 and −4 ± 3 on the ramp at 64 and 80 (`gen5` +20, +16,
++12, −5, −6), so the ramp holds within 7 % and the steady excess remains, still undiagnosed; reads −14
+± 19, −9 ± 17, −24 ± 19, −10 ± 15, −4 ± 19, −9 ± 18, ramp −14 ± 22 and −9 ± 14, its peak window +11 ± 34 and −1 ± 10;
+7 of 8 within 20 %, 8 of 8 within two standard errors (`gen5` 6 and 7). Held out, `grid7`'s cases
+(`summ10.txt`): writes held out +5 ± 8 and +13 ± 8 steady, −9 ± 4 and −3 ± 6 on the ramp (`gen5` +24, +4, −1,
++1); in sample +14 ± 9, +4 ± 7, −9 ± 5, −4 ± 5. The ramp's held-out writes, fit on the even half and judged
+on the odd, are 2 points outside item 71's ±7 %, within one standard error of it. Reads held out −6 ±
+23 and −77 ± 5 (6M), −7 ± 16 and −50 ± 9 (12M), −1 ± 21 and −70 ± 6 (ramp); in sample −46 ± 14, −60 ± 9; −30 ± 12, −34
+± 11; −47 ± 13, −44 ± 10. The fit on the even half now lands on the odd half's reads and writes where
+`gen5`'s overshot them, and the fit on the odd half misses as before, in sample too: the halves
+differ, as the note "The fifth generator held out" found, and reads still do not carry outside the
+corpus. Causality costs nothing the grid can see and is required for the port (gap 2), so the port
+resumes on `gen6`. Scratch: `gen6.py`, `wr9.txt`, `grid9.sh`, `summ9.txt`, `summ10.txt`.
+
+**The timeline built, contract 0.15 (decided by the user 2026-11-12, built the same day).** For the
+port to resume on `gen6`, the language gains brief item 72's timeline, plan side only. The user
+chose from the proposal (scratch `limit500k/port/timeline-proposal.md`): (A) a lane shows the others
+only what it publishes, never its bindings; (B) the first build walks the plan in `aeiou check` and
+`aeiou dry-run` only, enough to hold the port to `gen6`, and `aeiou run` refuses a timeline until its
+run side (item 72 (7)) is built; (C) the `array` now, for the batch draws the port borrowed main's
+loop frames for (gap 4). Built: `timeline {name, body}`, whose main line and every sub-actor of a
+`parallel` in it are lanes with planned clocks that `compute` moves, walked by `vm.rs` as one
+stream so no driver changed (the lane planned soonest steps until its next `compute`; ties by lane
+key, never by the order put back; a joined fork holds its parent until its last sub-actor ends);
+`publish`, `published`, `entry`; `parallel`'s `join: false`, inside a timeline only (gap 3); the
+`array` (gap 4). Building it found a gap in the proposal, put to the user the same day: `x @ (i − 1)`
+recomputes a definition at another index, which is right only for positional values, and
+`published` is not one (recomputed later it counts entries published since), so a lane's state that
+depends on the pool (a fresh prompt's length, from the prompt it reuses) could not be carried by `@`
+at all. Three ways were offered: `prev(x, init)`, the value the binding took in the loop's previous
+iteration, kept rather than recomputed; a lane reading its own entries; the clock kept per position
+so `published` could be recomputed. The user chose `prev` (it equals `x @ (i − step)` for a
+positional `x`, costs two values a binding a lane, and spares the common one-step chain the
+recursion of item 73). Rules: V30 (timeline reads name the enclosing timeline, an `entry`'s key is
+published, no timeline in a timeline, no channel, put, take, loader, barrier, or trace in one, no
+`join: false` outside one, no `@` naming a definition that reads the timeline), V31 (`prev` names a
+`let` of a loop's body; no `@` naming a definition that reads `prev`), V32 (an `array` never in a
+loop, never named as a parameter); `@` reaching any of them through another binding is refused when
+walked. Both checkers, the shared refusal cases (16 new), `tests/timeline.rs` (scheduling, joins,
+ties, positional draws, publish and read, `prev` against `@`, arrays), and the builder's API. Every
+committed AST regenerated at 0.15, every case re-locked; no fingerprint and no dataset id changed.
+Not built: the planned clock in `--emit-trace`'s `t` (still the walk's order) and everything of
+item 72 past the plan (issuing at the planned times, lag, D, domains, events).
+*The port on `gen6`, the same day* (scratch `limit500k/port/gen6_port.py`, 1.35 MB of AST, `aeiou
+check` clean; `compare6.py` rebuilds each request in the dry run's walk, which is planned order, every
+reused start naming an entry already published): a session a timeline; the pool the entries of
+every prompt but a context's first, any lane's; a lane's state carried by `prev`; a batch's spawn
+point, size, and sync flag `array`s; an asynchronous batch a `parallel` not joined. Against
+`gen6`, 2,000 sessions each: requests +3 %, main +3 %, sub-agents +1 %, sub-agent requests +4 %,
+tokens sent +2 %, chunk writes +1 %, hits +2 %, planned hours +6 %, medians alike; the sub-agent
+counts by a two-sample KS, D 0.012 against 0.043 at 5 %. At 400 sessions three seed pairs moved
+sub-agents −6 %, −37 %, −29 %, which was `gen6`'s own tail (its blocks of 400 run 3.0 to 4.6
+sub-agents a session, a few sessions of about a hundred), not the port. The port needs no deep
+stack (a 64 MiB thread stack; the `gen5` port's `@` chains needed 48 to 64 MiB at 400 sessions):
+its state is `prev`, its pool entries. Gaps 2 to 5 are closed for this generator; 1 (chunk names
+from lineage, with item 75's cache) is next, then 6 to 8.
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes
@@ -12078,7 +12148,8 @@ same cases, and the held-out halves, item 10's acceptance (writes within ±7 % o
 this corpus only) checked again; then the port resumes on `gen6`, its gap 2 the reading of what
 other lanes sent before a request's planned time, the timeline construct of brief item 72, and the
 chunk ops (gap 1) after it. Item 73's fix waits until the grid is done, since a runner build beside
-the simulations slows both.)
+the simulations slows both. `gen6` built and measured 2026-11-12, the note "The sixth generator, in
+planned-time order"; the port resumes on it.)
 
 ## 4. Plan changes
 

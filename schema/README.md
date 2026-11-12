@@ -1,6 +1,6 @@
 # The AST contract
 
-Version `0.14`, 2026-11-02 (~~`0.13`, 2026-10-23~~; ~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
+Version `0.15`, 2026-11-12 (~~`0.14`, 2026-11-02~~; ~~`0.13`, 2026-10-23~~; ~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -105,13 +105,13 @@ builder/.venv/bin/python schema/check.py path/to/x.ast.json   # one file
 **Top level:** `ast` (version), `name`, `doc`, `posix`, `cache`, `s3` (§1, *Declared
 backend*), `params`, `datasets`, `namespaces`, `actors`, `provenance`.
 
-**Statements** (a `body` is an array of these). Thirteen control forms, eighteen ops.
+**Statements** (a `body` is an array of these). Sixteen control forms (~~thirteen~~ until contract 0.15), eighteen ops.
 
 | Kind | Semantics |
 |---|---|
 | `let {name, value}` | Bind a name to a positional value or a handle. Visible for the rest of the enclosing body and in child bodies; not in sibling bodies. |
 | `loop {index, from, to, step, body}` | `for index in [from, to) step step`. The index joins every RNG key inside. |
-| `parallel {index, width, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end. |
+| `parallel {index, width, join, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end; with `join: false`, only inside a `timeline` (contract 0.15, V30), the parent goes on at once and the sub-actors end with the timeline at the latest. |
 | `channel {name, capacity, ordered}` | Declare a bounded channel in the enclosing actor, shared by its sub-actors (never in a `parallel` or `loader` body, V26). |
 | `put {channel, seq}` / `take {channel}` | Deliver item `seq`, its position on the channel: 0, 1, 2, … each put once while the channel is declared (one below 0 or put before is a run-time error); blocks until `seq` is below the items taken plus `capacity` (2026-10-15; it had blocked while `capacity` items were held, which several producers could fill out of order), or the lowest seq not yet put plus `capacity` if lower (2026-10-15: an unordered channel took past a seq never put and its record grew without bound) / wait for the next item (in `seq` order if ordered). A channel has one taker at a time (2026-10-15): two sub-actors of one `parallel` taking on it is a run-time error (which took which item was timing); the main line and the sub-actors of successive forks take in turn; never in a `loader` body (V26). |
 | `loader {name, index, workers, prefetch, batches, ordered, body}` | PyTorch sugar the runner keeps: `workers` sub-actors, worker `w` builds batches `w, w+W, …`; an ordered channel `name` of `workers × prefetch` slots; exactly `batches` batches. |
@@ -121,6 +121,9 @@ backend*), `params`, `datasets`, `namespaces`, `actors`, `provenance`.
 | `choose {arms: [{weight, body}]}` | Run one arm, chosen positionally by weight (the original *selection*). |
 | `phase {name, body}` | Statistics label; no effect on execution or the fingerprint. `name` may be an expression. |
 | `trace {file, sha256}` | A captured trace of a real application, executed literally, for calibration; never CLOSED. `file` is relative to the document, JSON Lines as `aeiou-trace export` writes it and `runner/REFERENCE.md` §13 defines it (`DESIGN_REVIEW.md` §3.58; the node was `replay` until 2026-10-02). |
+| `timeline {name, body}` | Lanes planned together (contract 0.15, `DESIGN_REVIEW.md` §3.99, brief item 72; V30): the body's main line and every sub-actor of a `parallel` in it is a **lane** with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller **lane key** (the main line's is empty; a sub-actor's is its parent's, then the parent's fork ordinal, then its index); a lane runs until its next `compute`; a joined `parallel` holds its parent until its last sub-actor ends and the parent goes on at that end. The plan is a function of the abstract, its parameters, and the seeds, never of the run; draws keep their positional keys. Never a timeline, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside one. `aeiou check` and `aeiou dry-run` walk it; `aeiou run` refuses it until its run side is built (item 72 (7)). |
+| `publish {timeline, values}` | An **entry** of the enclosing timeline: `values` (name to expression) at this lane's planned time, which the lanes read with `published` and `entry` (V30). |
+| `array {name, count, index, value}` | `count` values computed once, where the node stands, each with `index` bound as a loop index so its draws are positional; read with `elem` and `len` as a parameter array is (contract 0.15, V32). |
 | `open {file, flags, mode, expect}` | Flags from the enum in the schema. `DIRECTORY` for `readdir` handles. |
 | `close`, `fstat`, `stat`, `fsync`, `fdatasync`, `unlink` `{file, expect}` | |
 | `read {file, len, offset, repeat, expect}` | With `offset`: positioned (`pread`), file position unchanged. Without: sequential from the current position. `repeat: until_eof` issues reads of `len` until the known size is exhausted, including the terminating short or zero-length read; each returned count is checked against the computed size. |
@@ -140,6 +143,15 @@ literals (`null` is `none`); `param`, `index`, `ref`, `at {ref, index}`, `actor:
 that extent's length and start, framing included), `count` and `dirs` of a dataset; `add sub mul div mod ceil_div min max
 neg`; `eq ne lt le gt ge and or not`; `cond {if, then, else}` whose arms may be expressions,
 distributions, or handles (this is how a distribution or a phase name is selected by index).
+Since contract 0.15: `elem` and `len` also of an `array` in scope; `published timeline`, the
+entries the timeline holds before the step being walked, and `entry {timeline, index, key}`,
+value `key` of entry `index` in planned order (`index` below `published`, a run-time error
+otherwise), V30; `prev {ref, init}`, the value the `let` `ref`, bound directly in a loop's
+body, took in the previous iteration of that loop under the same outer indices, `init` in the
+loop's first iteration, V31: the same as `ref @ (i − step)` for a positional binding, read
+rather than recomputed, so it can carry a value that depends on the timeline. `published`,
+`entry`, and `prev` are not positional (what they give is what the step being walked sees), so
+`@`, which recomputes a definition at another index, may not reach them.
 
 **Handles:** `ref` (a binding); `file {dataset, id}` (a dataset file by id; an `array` dataset's single file is `id: 0`) or
 `file {of, chunk}` (the container file, or chunk object `k`, of a sample handle); `dir {dataset,
@@ -243,7 +255,7 @@ The schema cannot express these; `check.py` does, and so does the Rust validator
 (`runner/aeiou/src/validate.rs`, `aeiou check`), whose messages CI diffs with `check.py`'s over
 every committed AST; most messages name their rule. V5 holds by
 construction (the schema has no clock or counter to read), V9 is the builder's, V10 is the
-runner's evaluation, and V16 the runner's at `aeiou run`; every other rule, V1 to V27, both
+runner's evaluation, and V16 the runner's at `aeiou run`; every other rule, V1 to V32 (~~V1 to V27~~), both
 checkers enforce.
 
 - **V1 Names resolve.** Every `param`, dataset, namespace, channel, index, and `ref` is
@@ -512,6 +524,21 @@ which needs a distribution's minimum, cannot prove anything of one until a value
 given again, as for any other parameter~~ (until contract 0.13) a required parameter in an
 `at` offset passes on the document and its value is judged when given (V3).
 
+- **V30 a timeline's lanes are planned** (added 2026-11-12, contract 0.15, no committed AST
+  has a timeline). A `publish`, `published`, or `entry` names the timeline it is in; an
+  `entry`'s `key` is one some `publish` of that timeline gives; no timeline inside a timeline;
+  no `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside one (its lanes never wait
+  on one another but by a joined `parallel`); a `parallel` with `join: false` only inside one;
+  and no `@` naming a binding whose definition reads `published` or `entry` (judged on the
+  definition named; the runner refuses one reached through another binding when walked).
+- **V31 `prev` reads a `let` of a loop's body** (added 2026-11-12, contract 0.15): its `ref`
+  is a `let` in scope bound directly in the body of a `loop` (not in a `cond`, `choose`, or
+  `phase` inside it), so each iteration binds it; and no `@` names a binding whose definition
+  reads `prev` (the runner refuses one reached through another binding when walked).
+- **V32 an `array` is computed once** (added 2026-11-12, contract 0.15): never inside a loop,
+  which would compute it again each iteration where `@` could not reach it; never the name of
+  a parameter, which `elem` and `len` also read.
+
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
 
@@ -778,3 +805,10 @@ results are compared by.
   document with the version changed (its `fallocate`s mode 0). Every committed AST was
   regenerated; no fingerprint and no dataset id changed (a new op kind is numbered after the
   others, and mode 0 hashes as before). Reasoning in `DESIGN_REVIEW.md` §3.92.
+- **0.15** (2026-11-12): the `timeline` with `publish`, `published`, `entry`, and a
+  `parallel` not joined (V30); `prev` (V31); the `array` (V32); §2, §4. Provisional until a
+  second workload uses them: the first is the KV-cache session generator written as an
+  abstract (brief items 71 and 72), whose pool of earlier prompts a timeline's entries hold and
+  whose per-lane state `prev` carries. A 0.14 document is a 0.15 document with the version
+  changed. Every committed AST was regenerated; no fingerprint and no dataset id changed.
+  Reasoning in `DESIGN_REVIEW.md` §3.99, the note "The timeline built".

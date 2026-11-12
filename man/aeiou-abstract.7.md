@@ -74,13 +74,13 @@ is the only format on the contract; nobody hand-writes an abstract.
 
 ## STATEMENTS
 
-A body is an array of statements: thirteen control forms and eighteen operations.
+A body is an array of statements: sixteen control forms and eighteen operations.
 
 | Kind | Semantics |
 |---|---|
 | `let {name, value}` | Bind a name to a positional value or a handle, visible to later siblings and child bodies, not to sibling bodies. A `let` is the way to use one draw twice. |
 | `loop {index, from, to, step, body}` | `for index in [from, to) step step`. The index joins every random key inside. |
-| `parallel {index, width, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end. |
+| `parallel {index, width, join, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end; with `join: false`, only inside a `timeline`, the parent goes on at once (V30). |
 | `channel {name, capacity, ordered}` | A bounded channel in the enclosing actor, shared by its sub-actors; never inside a `parallel` or `loader` body (V26). |
 | `put {channel, seq}`, `take {channel}` | Deliver item `seq`, its position on the channel: 0, 1, 2, ... each put once while the channel is declared (one below 0 or put before is an error); blocks until `seq` is below the items taken plus `capacity`, or the lowest seq not yet put plus `capacity` if lower. Wait for the next item (in `seq` order if ordered). A channel has one taker at a time: two sub-actors of one `parallel` taking on it is an error; never in a `loader` body (V26). |
 | `loader {name, index, workers, prefetch, batches, ordered, body}` | PyTorch's DataLoader: `workers` sub-actors, worker `w` builds batches `w, w+W, ...`, an ordered channel of `workers x prefetch` slots bounding batches started, exactly `batches` batches. |
@@ -90,6 +90,9 @@ A body is an array of statements: thirteen control forms and eighteen operations
 | `choose {arms: [{weight, body}]}` | Run one arm, chosen positionally by weight. |
 | `phase {name, body}` | A statistics label; no effect on execution or the fingerprint. |
 | `trace {file, sha256}` | A captured trace of a real application, executed literally, one lane per traced task; for calibration, never comparable across systems as a scored workload. The file is **aeiou-trace**(1) `export`'s. |
+| `timeline {name, body}` | Lanes planned together (contract 0.15): the body's main line and every sub-actor of a `parallel` in it, each with a planned clock that `compute` moves. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. **aeiou check** and **aeiou dry-run** walk it; **aeiou run** refuses it until its run side is built. |
+| `publish {timeline, values}` | An entry of the enclosing timeline: these values at this lane's planned time (V30). |
+| `array {name, count, index, value}` | `count` values computed once, each with `index` bound as a loop index, read with `elem` and `len` (V32). |
 | `open {file, flags, mode, expect}` | Flags from the schema's enum (`RDONLY`, `WRONLY`, `RDWR`, `CREAT`, `TRUNC`, `APPEND`, `CLOEXEC`, `DIRECTORY`, ...). |
 | `close`, `fstat`, `stat`, `fsync`, `fdatasync`, `unlink` `{file, expect}` | |
 | `read {file, len, offset, repeat, expect}` | With `offset`: positioned, the file position unchanged. Without: sequential from the current position. `repeat: until_eof` issues reads of `len` until the known size is exhausted, then the terminating short or zero-length read. |
@@ -109,7 +112,8 @@ that probes for a file); any other failure aborts the run.
 
 **Expressions** are scalar integer arithmetic with floor division: literals; `param`,
 `index`, `ref`, `at {ref, index}` (the binding as it was at another index of its loop),
-`actor: id|count`, `draw dist`; `elem {array, index}`, `len`, `sum` over parameter arrays;
+`actor: id|count`, `draw dist`; `elem {array, index}`, `len`, `sum` over parameter arrays (`elem` and `len` also over an `array`);
+`published timeline` and `entry {timeline, index, key}`, what the timeline's lanes published before this step (V30); `prev {ref, init}`, the value a `let` of a loop's body took in the previous iteration (V31);
 `size`, `offset`, `unit_index`, `units`, `chunks` of a handle, `count` and `dirs` of a
 dataset; `add sub mul div mod ceil_div min max neg`; `eq ne lt le gt ge and or not`; and
 `cond {if, then, else}` whose arms may be expressions, distributions, or handles.
@@ -227,6 +231,13 @@ these, and the builder enforces most of them at construction:
 - **V29** A `fallocate` mode is one the kernel takes: at most one operation besides
   `KEEP_SIZE`, `PUNCH_HOLE` only with `KEEP_SIZE`, no `KEEP_SIZE` with `COLLAPSE_RANGE`,
   `INSERT_RANGE`, or `WRITE_ZEROES`.
+- **V30** A `publish`, `published`, or `entry` names the timeline it is in, an `entry`'s key
+  one that timeline publishes; no timeline inside a timeline, and no `channel`, `put`, `take`,
+  `loader`, `barrier`, or `trace` inside one; `join: false` only inside one; no `@` naming a
+  binding whose definition reads `published` or `entry`.
+- **V31** A `prev` names a `let` bound directly in a loop's body; no `@` naming a binding
+  whose definition reads `prev`.
+- **V32** An `array` is never inside a loop and never named as a parameter.
 
 ## PARAMETER FILES
 

@@ -396,7 +396,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-11-06)
+## Status (2026-11-12)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -502,6 +502,13 @@ capture of this runner's own `--posix posix-aio` engine reads as its `--posix sy
 filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows
 one with the commands that run it; it reads `workloads/catalog.json`, which `aeiou-catalog
 write` generates beside `CATALOG.md`, and its `--help` gives the whole vocabulary.
+
+Contract 0.15 (2026-11-12, brief items 71 and 72, `DESIGN_REVIEW.md` §3.99, provisional until a
+second workload uses it): the `timeline`, lanes planned together and walked in planned order
+(`publish`, `published`, `entry`, a `parallel` not joined), `prev`, the value a binding took
+in its loop's previous iteration, and the `array`, values drawn once by position; rules V30 to
+V32 in both checkers. `aeiou check` and `aeiou dry-run` walk a timeline; `aeiou run` refuses
+one until its run side, issuing each lane's ops at their planned times, is built (item 72 (7)).
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

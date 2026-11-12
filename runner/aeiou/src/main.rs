@@ -1547,6 +1547,9 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     let mut cfg = parse_config(&a.run.shape, a.gpus, a.run.seed.unwrap_or(0))?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
+    if loaded.ast.has_timeline() {
+        bail!("{}: a `timeline` is not run yet: issuing its lanes' ops at their planned times comes with brief item 72 (7); `aeiou check` and `aeiou dry-run` walk it", a.abstract_path.display());
+    }
     warn_incomplete(loaded);
     if let Some(c) = &a.case {
         case_layer(c, &mut cfg, loaded)?;

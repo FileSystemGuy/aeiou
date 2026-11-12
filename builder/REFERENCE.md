@@ -112,7 +112,7 @@ ops (a `let` is the way to use one positional draw twice).
 
 **Statements** on a cursor: `let`, `draw(name, dist)`, `ref(name)` (a binding defined later in
 the loop, for `x @ i` chains), `loop(index, to, start=, step=)` yielding the index,
-`parallel(index, width)` and `loader(name, workers=, prefetch=, batches=, ordered=)` yielding a
+`parallel(index, width, join=)` and `loader(name, workers=, prefetch=, batches=, ordered=)` yielding a
 sub-cursor with `.index`, `channel`/`put`/`take`, `barrier(scope)`, `compute(ns)`, `when(test)`
 / `otherwise()`, `every(n)`, `choose()` with `.arm(weight)`, `phase(name)`, `trace(file, sha256)`, and the
 ~~eighteen~~ nineteen ops (contract 0.14): `open(f, "RDONLY|CLOEXEC", mode=, expect=)`, `close fstat stat fsync fdatasync
@@ -120,6 +120,14 @@ unlink`, `read(f, len, offset=, repeat=, expect=)`, `write`, `lseek(f, off, "SET
 `ioctl(f, "TCGETS")`, `fadvise(f, "WILLNEED", offset=, len=)`, `truncate(f, len)` (by path,
 2026-11-02), `ftruncate`, `fallocate(f, len, offset=, mode=("KEEP_SIZE", "PUNCH_HOLE"))` (the
 mode 2026-11-02, refused by V29 as the kernel refuses it), `mkdir`, `rmdir`, `rename`, `readdir`.
+Since contract 0.15 (2026-11-12, `DESIGN_REVIEW.md` §3.99, provisional until a second workload
+uses them): `with c.timeline(name) as tl:` (lanes planned together, V30) with `c.publish(tl,
+key=value, ...)`, the expressions `tl.published` and `tl.entry(n, key)`, and `parallel(...,
+join=False)` inside it; `c.array(name, count, index, value)`, `value` an expression or a
+function of the index, returning an array read by `arr[k]` and `arr.len` (V32); and
+`c.ref(x).prev(init)`, the value `x` took in the previous iteration of its loop (V31). The
+builder refuses at construction what it can see (a timeline in a timeline, `join=False`
+outside one, an array in a loop or named as a parameter); `check.py` the rest.
 
 **Expressions**: node arithmetic (`+ - * // %`, `ceil_div`, `min_`, `max_`, `-x`), comparisons
 (`== != < <= > >=`), `&`, `|`, `~`, `when(test, a, b)` (arms may be expressions, distributions,

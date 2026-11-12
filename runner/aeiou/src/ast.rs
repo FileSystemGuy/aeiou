@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.14";
+pub const AST_VERSION: &str = "0.15";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,6 +44,26 @@ pub struct Ast {
     pub actors: BTreeMap<String, Actor>,
     #[serde(default)]
     pub provenance: Option<serde_json::Value>,
+    /// The names a `prev` reads (contract 0.15), filled by `sites::annotate` after loading;
+    /// empty before, and then no `let` keeps its values for `prev`.
+    #[serde(skip)]
+    pub prev_names: std::sync::OnceLock<std::collections::HashSet<String>>,
+}
+
+impl Ast {
+    /// Whether a `timeline` is anywhere in the document: `aeiou run` does not run one yet.
+    pub fn has_timeline(&self) -> bool {
+        fn any(nodes: &[Node]) -> bool {
+            nodes.iter().any(|n| match n {
+                Node::Timeline { .. } => true,
+                Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } => any(body),
+                Node::Cond { then, otherwise, .. } => any(then) || otherwise.as_deref().is_some_and(any),
+                Node::Choose { arms, .. } => arms.iter().any(|a| any(&a.body)),
+                _ => false,
+            })
+        }
+        self.actors.values().any(|a| any(&a.body))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -305,6 +325,14 @@ pub enum ExprNode {
     Or(Vec<Expr>),
     Not(Expr),
     Cond(CondExpr),
+    /// The entries of the named timeline published before this step, in planned order
+    /// (contract 0.15, rule V30).
+    Published(String),
+    /// Value `key` of entry `index` of the named timeline, in planned order (rule V30).
+    Entry { timeline: String, index: Expr, key: String },
+    /// The value the `let` `ref` took in the previous iteration of its loop, `init` in the
+    /// first (contract 0.15, rule V31).
+    Prev { #[serde(rename = "ref")] name: String, init: Expr },
 }
 
 /// A positional draw. `site` is the hash of the node's JSON pointer, filled after loading.
@@ -831,7 +859,7 @@ pub struct ChooseArm {
 pub enum Node {
     Let { name: String, value: ExprLike },
     Loop { index: String, #[serde(default)] from: Option<Expr>, to: Expr, #[serde(default)] step: Option<Expr>, body: Body },
-    Parallel { index: String, width: Expr, body: Body },
+    Parallel { index: String, width: Expr, #[serde(default)] join: Option<bool>, body: Body },
     Channel { name: String, capacity: Expr, #[serde(default)] ordered: Option<bool> },
     Put { channel: String, seq: Expr },
     Take { channel: String },
@@ -842,6 +870,12 @@ pub enum Node {
     Choose { arms: Vec<ChooseArm>, #[serde(skip)] site: Site },
     Phase { name: Expr, body: Body },
     Trace { file: String, sha256: String },
+    /// Lanes planned together, taken in planned order (contract 0.15, rule V30).
+    Timeline { name: String, body: Body },
+    /// An entry of the named timeline: these values at this lane's planned time (rule V30).
+    Publish { timeline: String, values: std::collections::BTreeMap<String, Expr> },
+    /// `count` values computed once, each with `index` bound as a loop's (rule V32).
+    Array { name: String, count: Expr, index: String, value: Expr },
 
     Open { file: Handle, flags: Vec<OpenFlag>, #[serde(default)] mode: Option<u32>, #[serde(default)] expect: Expect },
     Close(FileOp),
@@ -881,6 +915,9 @@ impl Node {
             Node::Choose { .. } => "choose",
             Node::Phase { .. } => "phase",
             Node::Trace { .. } => "trace",
+            Node::Timeline { .. } => "timeline",
+            Node::Publish { .. } => "publish",
+            Node::Array { .. } => "array",
             Node::Open { .. } => "open",
             Node::Close(_) => "close",
             Node::Read { .. } => "read",
@@ -909,6 +946,7 @@ impl Node {
             Node::Let { .. } | Node::Loop { .. } | Node::Parallel { .. } | Node::Channel { .. } | Node::Put { .. }
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
                 | Node::Cond { .. } | Node::Choose { .. } | Node::Phase { .. } | Node::Trace { .. }
+                | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. }
         )
     }
 }

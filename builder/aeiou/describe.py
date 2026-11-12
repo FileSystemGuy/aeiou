@@ -32,11 +32,11 @@ from .pattern import Pattern
 OPS = ("open", "close", "read", "write", "lseek", "ioctl", "fadvise", "fstat", "stat", "fsync", "fdatasync",
        "unlink", "truncate", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
 STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond", "choose",
-              "phase", "trace") + OPS
+              "phase", "trace", "timeline", "publish", "array") + OPS
 DISTS = ("const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture")
 EXPRS = ("param", "index", "ref", "at", "actor", "draw", "elem", "len", "sum", "size", "offset", "unit_index", "units",
          "chunks", "count", "dirs", "add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "neg", "eq", "ne", "lt",
-         "le", "gt", "ge", "and", "or", "not", "cond")
+         "le", "gt", "ge", "and", "or", "not", "cond", "published", "entry", "prev")
 HANDLES = ("ref", "file", "dir", "object", "inventory", "consume", "pick", "unit", "column")
 
 # The measured attributes in a few words each (the dictionary has their meanings in full).
@@ -235,7 +235,7 @@ class Describer:
             return self.unit_of_param(a["array"] if k == "elem" else a)
         if k == "ref":
             return self.units.get(a)
-        if k == "at":
+        if k in ("at", "prev"):
             return self.units.get(a["ref"])
         if k in ("size", "offset"):
             return "bytes"
@@ -302,6 +302,12 @@ class Describer:
             return a
         if k == "at":
             return f"{a['ref']}@({self.sym(a['index'])})"
+        if k == "prev":
+            return f"prev({a['ref']}, {self.sym(a['init'])})"
+        if k == "published":
+            return f"published({a})"
+        if k == "entry":
+            return f"{a['timeline']}[{self.sym(a['index'])}].{a['key']}"
         if k == "actor":
             return "actor id" if a == "id" else "actors"
         if k == "draw":
@@ -614,7 +620,17 @@ class Describer:
             return [pad + self.loop_head(a) + ":"] + self.body(a["body"], depth + 1)
         if k == "parallel":
             w = self.value(a["width"], "count")
-            return [pad + f"{w} in parallel, `{a['index']}` = 0 onward, joined at the end:"] + self.body(a["body"], depth + 1)
+            end = "joined at the end" if a.get("join", True) else "not joined: the lane goes on at once"
+            return [pad + f"{w} in parallel, `{a['index']}` = 0 onward, {end}:"] + self.body(a["body"], depth + 1)
+        if k == "timeline":
+            return [pad + f"A timeline `{a['name']}`: its lanes, this one and every parallel sub-actor in it, "
+                    "planned together and taken in planned order:"] + self.body(a["body"], depth + 1)
+        if k == "publish":
+            vals = ", ".join(f"{n} = `{self.sym(v)}`" for n, v in a["values"].items())
+            return [pad + f"Publishes to `{a['timeline']}`: {vals}."]
+        if k == "array":
+            return [pad + f"An array `{a['name']}` of {self.value(a['count'], 'count')} values, "
+                    f"each `{self.sym(a['value'])}` at its `{a['index']}`."]
         if k == "channel":
             return [pad + f"A channel `{a['name']}` of {self.value(a['capacity'], 'count')} slots"
                     + (", delivering in sequence order" if a.get("ordered", True) else ", delivering as items arrive") + "."]
@@ -814,7 +830,10 @@ class Describer:
             return {"global": "a barrier with every GPU", "host": "a barrier with its host's GPUs"}.get(a["scope"], f"barrier `{a['scope']}`")
         if k == "trace":
             return "replay a captured trace"
-        return ""                                       # a channel's declaration
+        if k == "timeline":
+            inner = self.gist(a["body"])
+            return f"lanes planned together: {inner}" if inner else ""
+        return ""                                       # a channel's declaration, a publish, an array
 
     def handle_gist(self, h, pending: str | None = None) -> str:
         """A handle in a few words; `pending` is the one the last binding named, no op between."""

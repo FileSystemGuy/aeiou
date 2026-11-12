@@ -20,7 +20,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-8"))
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
-           "compute", "cond", "choose", "phase", "trace"}
+           "compute", "cond", "choose", "phase", "trace", "timeline", "publish", "array"}
+# V30: what a timeline's lanes may not hold: they are planned, never waiting on one another
+NOT_IN_TIMELINE = {"loader", "channel", "put", "take", "barrier", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
 FALLOC_SIZED = ("COLLAPSE_RANGE", "INSERT_RANGE", "WRITE_ZEROES")   # take no KEEP_SIZE (V29)
 
@@ -250,6 +252,44 @@ def canonical(ast: dict) -> bytes:
                       allow_nan=False).encode()
 
 
+def unpositional(v):
+    """V30, V31: the rule a definition falls under when it reads the timeline (`published`,
+    `entry`) or a `prev` directly. As the runner's `unpositional`."""
+    if isinstance(v, list):
+        return next((r for r in map(unpositional, v) if r), None)
+    if not isinstance(v, dict) or len(v) != 1:
+        return None
+    k, a = next(iter(v.items()))
+    if k in ("published", "entry"):
+        return "V30"
+    if k == "prev":
+        return "V31"
+    if k in ("at", "elem"):
+        return unpositional(a["index"])
+    if k == "cond":
+        return unpositional(a["if"]) or unpositional(a["then"]) or unpositional(a["else"])
+    if k in ("add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "eq", "ne", "lt", "le",
+             "gt", "ge", "and", "or", "neg", "not"):
+        return unpositional(a)
+    return None
+
+
+def publishes(nodes, name, out):
+    """V30: the keys the `publish`es of timeline `name` give, anywhere in its body."""
+    for node in nodes:
+        kind, a = next(iter(node.items()))
+        if kind == "publish" and a["timeline"] == name:
+            out.update(a["values"])
+        elif kind in ("loop", "parallel", "loader", "phase", "timeline"):
+            publishes(a["body"], name, out)
+        elif kind == "cond":
+            publishes(a["then"], name, out)
+            publishes(a.get("else", []), name, out)
+        elif kind == "choose":
+            for arm in a["arms"]:
+                publishes(arm["body"], name, out)
+
+
 def param_refs(x, out: set):
     """V1: the parameters a value names with `param`, anywhere in it (a distribution's
     arguments, a mixture's arms, an expression's operands, a handle's expressions; not a
@@ -290,6 +330,12 @@ class Check:
         self.consume_varying = {}
         # V27: the parameters whose distributions `drawkind` is following
         self.drawing = set()
+        # V30: the enclosing timeline's name and the keys its `publish`es give
+        self.timeline = None
+        # V32: the loops enclosing the node being checked
+        self.loops = 0
+        # V31: the next `body` is a `loop`'s
+        self.loop_next = False
 
     def param_value(self, name):
         """The value in effect of parameter `name` (None when it is not declared): its default
@@ -611,7 +657,7 @@ class Check:
                 return self.ast["params"][a["array"]].get("items")
             kinds = {self.pkind(x) for x in v} if isinstance(v, list) else set()
             return kinds.pop() if len(kinds) == 1 else None
-        if k in ("index", "actor", "count", "dirs", "len", "size", "offset", "unit_index", "units", "chunks"):
+        if k in ("index", "actor", "count", "dirs", "len", "published", "size", "offset", "unit_index", "units", "chunks"):
             return "int"
         if k in ("eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not"):
             return "bool"
@@ -691,10 +737,14 @@ class Check:
     # ---- statements ----
     def body(self, nodes, path, scope):
         scope = scope.child()
+        scope.loop_body, self.loop_next = self.loop_next, False
         # `at` may forward-reference a binding defined later in the same loop body
         lets = [n["let"]["name"] for n in nodes if "let" in n]
         scope.forward = set(lets)
         scope.twice = {x for x in lets if lets.count(x) > 1}
+        for n in nodes:
+            if "let" in n and unpositional(n["let"]["value"]):
+                scope.unpositional[n["let"]["name"]] = unpositional(n["let"]["value"])
         for i, node in enumerate(nodes):
             kind, args = next(iter(node.items()))
             p = path + [i, kind]
@@ -702,6 +752,9 @@ class Check:
                 self.ops[kind] += 1
             if kind == "open":
                 self.closed_later(args, nodes[i + 1:], p, scope)
+            if kind in NOT_IN_TIMELINE and self.timeline is not None:
+                self.err(p, f"a `{kind}` inside a timeline: its lanes are planned, never waiting on one another but by a joined `parallel` (V30)")
+                continue
             getattr(self, "n_" + kind, self.n_op)(args, p, scope)
 
     # V18: an object is made by the `close` that sends its upload, so an s3 name opened for
@@ -732,6 +785,11 @@ class Check:
         if isinstance(v, dict) and set(v) == {"ref"} and scope.lookup(v["ref"]) is not None:
             v = scope.lookup(v["ref"])
         scope.bind(a["name"], v, self.varies(a["value"], scope), self.kind(a["value"], scope), self.may_name(a["value"], scope))
+        rule = unpositional(a["value"])
+        if rule:
+            scope.unpositional[a["name"]] = rule
+        else:
+            scope.unpositional.pop(a["name"], None)
 
     def n_loop(self, a, p, scope):
         for k in ("from", "to", "step"):
@@ -740,9 +798,14 @@ class Check:
                 self.typed(a[k], p + [k], scope, optional=k != "to")
         nonneg = "from" not in a or self.at_least(a["from"], 0, scope)
         varies = any(self.varies(a[k], scope) for k in ("from", "to", "step") if k in a)
+        self.loop_next = True
+        self.loops += 1
         self.body(a["body"], p + ["body"], scope.with_index(a["index"], nonneg, p if varies else None))
+        self.loops -= 1
 
     def n_parallel(self, a, p, scope):
+        if a.get("join") is False and self.timeline is None:
+            self.err(p + ["join"], "a `parallel` not joined outside a timeline: only a timeline's lanes may run on without their parent waiting (V30)")
         self.expr(a["width"], p + ["width"], scope)
         self.typed(a["width"], p + ["width"], scope)
         varies = self.varies(a["width"], scope)
@@ -812,7 +875,7 @@ class Check:
         if not isinstance(e, dict):
             return False
         k, a = next(iter(e.items()))
-        if k in ("index", "at"):
+        if k in ("index", "at", "published", "entry", "prev"):
             return True
         if k == "ref":
             return scope.is_varying(a)
@@ -875,6 +938,39 @@ class Check:
 
     def n_trace(self, a, p, scope):
         self.traces = True
+
+    def n_timeline(self, a, p, scope):
+        if self.timeline is not None:
+            self.err(p, f"a timeline inside timeline `{self.timeline[0]}`: lanes are planned in one timeline at a time (V30)")
+            return
+        keys = set()
+        publishes(a["body"], a["name"], keys)
+        self.timeline = (a["name"], keys)
+        self.body(a["body"], p + ["body"], scope)
+        self.timeline = None
+
+    def in_timeline(self, name, what, p):
+        """V30: a `publish`, `published`, or `entry` names the timeline it is in."""
+        if self.timeline is not None and self.timeline[0] == name:
+            return True
+        self.err(p, f"{what}: no timeline `{name}` encloses it (V30)")
+        return False
+
+    def n_publish(self, a, p, scope):
+        self.in_timeline(a["timeline"], "publish", p)
+        for k, e in a["values"].items():
+            self.expr(e, p + ["values", k], scope)
+
+    def n_array(self, a, p, scope):
+        name = a["name"]
+        if self.loops:
+            self.err(p, f"array `{name}` inside a loop: its values are computed once, where it stands, and a loop would compute them again each iteration (V32)")
+        if name in self.params:
+            self.err(p + ["name"], f"array `{name}` has the name of a parameter, which `elem` and `len` also read (V32)")
+        self.expr(a["count"], p + ["count"], scope)
+        self.typed(a["count"], p + ["count"], scope)
+        self.expr(a["value"], p + ["value"], scope.with_index(a["index"], True, None))
+        scope.arrays.add(name)
 
     def n_op(self, a, p, scope):
         kind = p[-1]
@@ -1076,12 +1172,33 @@ class Check:
         elif k == "draw":
             self.distref(a, p, scope)
         elif k in ("elem",):
-            if a["array"] not in self.params:
+            if a["array"] in scope.arrays:
+                pass
+            elif a["array"] not in self.params:
                 self.err(p, f"unknown parameter array `{a['array']}`")
             else:
                 self.array(a["array"], "elem", p)
             self.expr(a["index"], p + ["index"], scope)
             self.typed(a["index"], p + ["index"], scope)
+        elif k == "published":
+            self.in_timeline(a, "published", p)
+        elif k == "entry":
+            if self.in_timeline(a["timeline"], "entry", p) and a["key"] not in self.timeline[1]:
+                self.err(p, f"entry: timeline `{a['timeline']}` publishes no `{a['key']}` (V30)")
+            self.expr(a["index"], p + ["index"], scope)
+            self.typed(a["index"], p + ["index"], scope)
+        elif k == "prev":
+            name, s = a["ref"], scope
+            if name not in scope.forward:
+                while s is not None and name not in s.bindings:
+                    s = s.parent
+            if s is None:
+                self.err(p, f"prev: no `let` of `{name}` in scope (V31)")
+            elif not s.loop_body:
+                self.err(p, f"prev: `{name}` is not bound directly in a loop's body, so it has no previous iteration (V31)")
+            self.expr(a["init"], p + ["init"], scope)
+        elif k == "len" and a in scope.arrays:
+            pass
         elif k in ("len", "sum"):
             if a not in self.params:
                 self.err(p, f"unknown parameter array `{a}`")
@@ -1168,6 +1285,9 @@ class Check:
             if not ok:
                 self.err(p, f"`{name} @` names a binding of this loop body, so its index must be "
                             f"{{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1")
+        rule = scope.lookup_unpositional(name)
+        if rule:
+            self.err(p, f"`{name} @`: its definition reads `published`, `entry`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})")
         # of two `let`s of one name in this body, which one an `at` reads is not defined
         if name in scope.twice:
             self.err(p, f"`{name} @` names a binding this body defines more than once, "
@@ -1415,6 +1535,10 @@ class Scope:
         self.forward = set()
         self.twice = set()
         self.fields = set(fields) | (parent.fields if parent else set())
+        self.loop_body = False   # the body of a `loop` (V31)
+        self.arrays = set(parent.arrays) if parent else set()   # the `array`s in scope (V32)
+        # V30, V31: the bindings whose definition reads the timeline or `prev`, by the rule
+        self.unpositional = dict(parent.unpositional) if parent else {}
 
     def child(self):
         return Scope(self.check, self)
@@ -1463,6 +1587,9 @@ class Scope:
                 return s.reads[name]
             s = s.parent
         return (None, None)
+
+    def lookup_unpositional(self, name):
+        return self.unpositional.get(name)
 
     def lookup(self, name):
         s = self

@@ -15,10 +15,16 @@
 //!   `let`s of the same body re-evaluated at that index and memoized; below the loop's `from`
 //!   the enclosing `cond` takes its other arm;
 //! - `until_eof` issues reads of `len` from the position until the computed size is exhausted,
-//!   then one more; `readdir` is one op.
+//!   then one more; `readdir` is one op;
+//! - a `timeline` (contract 0.15) walks its lanes, its body's main line and every sub-actor of a
+//!   `parallel` in it, as one stream: the lane planned soonest goes next, a lane runs until its
+//!   next `compute` (which moves its planned clock by `ns`), and a tie goes to the smaller lane
+//!   key (the main line's is empty, a sub-actor's its parent's, the parent's fork ordinal, and
+//!   its index); `published` and `entry` read what the lanes published before the reading step.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -249,6 +255,8 @@ struct Binding<'a> {
 #[derive(Clone)]
 struct ScopeLevel<'a> {
     bindings: HashMap<&'a str, Binding<'a>>,
+    /// The `array`s this body computed (contract 0.15), by name.
+    arrays: HashMap<&'a str, Arc<[Value<'a>]>>,
     body: &'a [Node],
     depth: usize,
 }
@@ -380,6 +388,8 @@ pub enum Event<'e, 'a> {
 
 /// `Event` before the borrows are taken: what `step` found.
 enum Next<'a> {
+    /// A `timeline` was entered: `next` walks its lanes.
+    Timeline,
     Op,
     Control(Control<'a>),
     Fork(ForkKind<'a>),
@@ -448,7 +458,60 @@ struct PendingFork<'a> {
     index: &'a str,
     width: i64,
     loader: bool,
+    /// A `parallel` whose parent waits for its sub-actors (all but `join: false`, contract 0.15).
+    join: bool,
     body: &'a [Node],
+}
+
+/// What a timeline's lanes have published, in planned order: each entry's planned time and
+/// values. Shared by the lanes of one timeline, which run one at a time.
+struct TlShared<'a> {
+    name: &'a str,
+    entries: Vec<(i64, Vec<(&'a str, Value<'a>)>)>,
+}
+
+/// One lane of a timeline: its walk (`None` once it has ended), its key, the lane that waits
+/// for it (a joined `parallel`'s parent), and, while it waits, the sub-actors still running
+/// and the latest planned end among those that have ended.
+struct Lane<'m, 'a> {
+    vm: Option<Vm<'m, 'a>>,
+    key: Vec<i64>,
+    parent: Option<usize>,
+    forks: i64,
+    wait: i64,
+    until: i64,
+}
+
+/// A timeline being walked: its lanes, a heap of (planned time, lane key, order put, lane)
+/// for those ready, and the lane running now.
+struct TlRun<'m, 'a> {
+    shared: Arc<Mutex<TlShared<'a>>>,
+    lanes: Vec<Lane<'m, 'a>>,
+    heap: BinaryHeap<Reverse<(i64, Vec<i64>, u64, usize)>>,
+    seq: u64,
+    cur: Option<usize>,
+}
+
+impl TlRun<'_, '_> {
+    fn ready(&mut self, l: usize) {
+        let t = self.lanes[l].vm.as_ref().map_or(0, |v| v.clock);
+        self.seq += 1;
+        self.heap.push(Reverse((t, self.lanes[l].key.clone(), self.seq, l)));
+    }
+}
+
+/// What a lane's step gave the timeline's driver.
+enum TlOut<'a> {
+    Op,
+    Control(Control<'a>),
+}
+
+/// A `let` that a `prev` reads: its value in the latest iteration evaluated and in the one
+/// before, by loop index, under the outer indices they were evaluated at.
+struct PrevSlot<'a> {
+    outer: Vec<i64>,
+    cur: (i64, Value<'a>),
+    prev: Option<(i64, Value<'a>)>,
 }
 
 pub struct Vm<'m, 'a> {
@@ -485,6 +548,14 @@ pub struct Vm<'m, 'a> {
     stack: Vec<Cont<'a>>,
     pending: Pending<'a>,
     pending_fork: Option<PendingFork<'a>>,
+    /// In a lane of a timeline: what the timeline's lanes have published, and this lane's
+    /// planned clock in nanoseconds.
+    tl: Option<Arc<Mutex<TlShared<'a>>>>,
+    clock: i64,
+    /// A timeline this walk has entered and not finished.
+    tlrun: Option<Box<TlRun<'m, 'a>>>,
+    /// The values of the `let`s a `prev` reads, by definition.
+    prev_slots: HashMap<usize, PrevSlot<'a>>,
 }
 
 /// The bounds of a VM's file geometry cache (`Vm::geom`): the files an actor interleaves
@@ -507,7 +578,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             actor,
             actor_count,
             frames: Vec::new(),
-            scopes: vec![ScopeLevel { bindings: HashMap::new(), body: &[], depth: 0 }],
+            scopes: vec![ScopeLevel { bindings: HashMap::new(), arrays: HashMap::new(), body: &[], depth: 0 }],
             shifts: Vec::new(),
             at_cache: AtCache::default(),
             depth: 0,
@@ -522,6 +593,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             stack: Vec::new(),
             pending: Pending::empty(),
             pending_fork: None,
+            tl: None,
+            clock: 0,
+            tlrun: None,
+            prev_slots: HashMap::new(),
         }
     }
 
@@ -549,6 +624,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             stack: Vec::new(),
             pending: Pending::empty(),
             pending_fork: None,
+            tl: None,
+            clock: 0,
+            tlrun: None,
+            prev_slots: HashMap::new(),
         }
     }
 
@@ -565,6 +644,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             match self.scopes.get_mut(i) {
                 Some(mine) => {
                     mine.bindings.clone_from(&s.bindings);
+                    mine.arrays.clone_from(&s.arrays);
                     mine.body = s.body;
                     mine.depth = s.depth;
                 }
@@ -584,6 +664,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         self.stack.clear();
         self.pending = Pending::empty();
         self.pending_fork = None;
+        self.tl = None;
+        self.clock = 0;
+        self.tlrun = None;
+        self.prev_slots.clear();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -621,20 +705,144 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     /// Between two calls the VM holds no borrowed state, so a driver may hold the walk at any
     /// event for as long as it likes (an outstanding I/O, a channel, a barrier, a timer).
     pub fn next(&mut self) -> Result<Option<Event<'_, 'a>>> {
-        let n = match self.step() {
-            Ok(n) => n,
-            Err(e) => return Err(self.wrap(e)),
-        };
-        Ok(match n {
-            None => None,
-            Some(Next::Op) => {
-                let (op, ctx) = self.current();
-                Some(Event::Op(op, ctx))
+        loop {
+            if self.tlrun.is_some() {
+                match self.tl_step()? {
+                    Some((l, out)) => {
+                        let lane = self.tlrun.as_ref().unwrap().lanes[l].vm.as_ref().unwrap();
+                        return Ok(Some(match out {
+                            TlOut::Op => {
+                                let (op, ctx) = lane.current();
+                                Event::Op(op, ctx)
+                            }
+                            TlOut::Control(c) => Event::Control(c, lane.ctx()),
+                        }));
+                    }
+                    None => self.tlrun = None,
+                }
             }
-            Some(Next::Control(c)) => Some(Event::Control(c, self.ctx())),
-            Some(Next::Fork(k)) => Some(Event::Fork(k)),
-            Some(Next::Trace(t)) => Some(Event::Trace(t, self.ctx())),
-        })
+            let n = match self.step() {
+                Ok(n) => n,
+                Err(e) => return Err(self.wrap(e)),
+            };
+            return Ok(match n {
+                None => None,
+                Some(Next::Timeline) => continue,
+                Some(Next::Op) => {
+                    let (op, ctx) = self.current();
+                    Some(Event::Op(op, ctx))
+                }
+                Some(Next::Control(c)) => Some(Event::Control(c, self.ctx())),
+                Some(Next::Fork(k)) => Some(Event::Fork(k)),
+                Some(Next::Trace(t)) => Some(Event::Trace(t, self.ctx())),
+            });
+        }
+    }
+
+    /// A timeline's next event: the lane planned soonest steps until it issues an op or a
+    /// `compute` (which moves its clock and puts it back), forks (its sub-actors become lanes
+    /// at its clock; a joined fork holds it until they end), or ends. `None` when every lane
+    /// has ended.
+    fn tl_step(&mut self) -> Result<Option<(usize, TlOut<'a>)>> {
+        enum S<'a> {
+            Op,
+            Ctl(Control<'a>),
+            Fork(ForkKind<'a>),
+            Trace,
+            End,
+        }
+        let run = self.tlrun.as_mut().unwrap();
+        loop {
+            let cur = match run.cur {
+                Some(c) => c,
+                None => match run.heap.pop() {
+                    Some(Reverse((_, _, _, l))) => {
+                        run.cur = Some(l);
+                        l
+                    }
+                    None => return Ok(None),
+                },
+            };
+            let vm = run.lanes[cur].vm.as_mut().unwrap();
+            let s = match vm.next()? {
+                None => S::End,
+                Some(Event::Op(..)) => S::Op,
+                Some(Event::Control(c, _)) => S::Ctl(c),
+                Some(Event::Fork(k)) => S::Fork(k),
+                Some(Event::Trace(..)) => S::Trace,
+            };
+            match s {
+                S::Op => return Ok(Some((cur, TlOut::Op))),
+                S::Ctl(Control::Compute { ns }) => {
+                    let vm = run.lanes[cur].vm.as_mut().unwrap();
+                    if ns < 0 {
+                        return Err(vm.wrap(EvalError::Other(anyhow!("compute {ns}: a negative time in a timeline"))));
+                    }
+                    vm.clock = vm.clock.checked_add(ns).ok_or_else(|| anyhow!("a planned time past 2^63-1 ns"))?;
+                    run.cur = None;
+                    run.ready(cur);
+                    return Ok(Some((cur, TlOut::Control(Control::Compute { ns }))));
+                }
+                S::Ctl(c) => {
+                    let what = match c {
+                        Control::Barrier { .. } => "barrier",
+                        Control::Put { .. } => "put",
+                        Control::Take { .. } => "take",
+                        Control::Channel { .. } => "channel",
+                        Control::Compute { .. } => unreachable!(),
+                    };
+                    let vm = run.lanes[cur].vm.as_ref().unwrap();
+                    return Err(vm.wrap(EvalError::Other(anyhow!("a `{what}` inside a timeline: its lanes are planned, never waiting on one another but by a joined `parallel` (V30)"))));
+                }
+                S::Trace | S::Fork(ForkKind::Loader { .. }) => {
+                    let what = if matches!(s, S::Trace) { "trace" } else { "loader" };
+                    let vm = run.lanes[cur].vm.as_ref().unwrap();
+                    return Err(vm.wrap(EvalError::Other(anyhow!("a `{what}` inside a timeline: its lanes are planned, never waiting on one another but by a joined `parallel` (V30)"))));
+                }
+                S::Fork(ForkKind::Parallel { width, .. }) => {
+                    let lane = &mut run.lanes[cur];
+                    let vm = lane.vm.as_mut().unwrap();
+                    let join = vm.pending_fork.as_ref().map_or(true, |f| f.join);
+                    let snap = vm.snapshot();
+                    vm.accept_fork();
+                    let clock = vm.clock;
+                    let mut key = lane.key.clone();
+                    key.push(lane.forks);
+                    lane.forks += 1;
+                    for k in 0..width {
+                        let mut kid = Vm::resume(snap.clone());
+                        kid.tl = Some(run.shared.clone());
+                        kid.clock = clock;
+                        kid.start_sub(k);
+                        let mut kkey = key.clone();
+                        kkey.push(k);
+                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0 });
+                        let l = run.lanes.len() - 1;
+                        run.ready(l);
+                    }
+                    // a parent goes on before its sub-actors, which have its clock and longer keys
+                    if join && width > 0 {
+                        run.lanes[cur].wait = width;
+                        run.lanes[cur].until = clock;
+                        run.cur = None;
+                    }
+                }
+                S::End => {
+                    let lane = &mut run.lanes[cur];
+                    let end = lane.vm.take().map_or(0, |v| v.clock);
+                    run.cur = None;
+                    if let Some(p) = lane.parent {
+                        let parent = &mut run.lanes[p];
+                        parent.wait -= 1;
+                        parent.until = parent.until.max(end);
+                        if parent.wait == 0 {
+                            parent.vm.as_mut().unwrap().clock = parent.until;
+                            run.ready(p);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// The op of the last `Event::Op`, again: for a driver that parked the walk at it and now
@@ -682,7 +890,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     }
 
     fn push_body(&mut self, nodes: &'a [Node]) {
-        self.scopes.push(ScopeLevel { bindings: HashMap::new(), body: nodes, depth: self.frames.len() });
+        self.scopes.push(ScopeLevel { bindings: HashMap::new(), arrays: HashMap::new(), body: nodes, depth: self.frames.len() });
         self.stack.push(Cont::Body { nodes, i: 0 });
     }
 
@@ -768,13 +976,42 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             }
             ExprNode::Elem { array, index } => {
                 let i = self.expr(index)?.as_int()?;
+                if let Some(a) = self.computed(array) {
+                    if i < 0 || i as usize >= a.len() {
+                        return other(format!("elem: index {i} outside array `{array}` of {}", a.len()));
+                    }
+                    return Ok(a[i as usize].clone());
+                }
                 let a = self.array(array, "elem")?;
                 if i < 0 || i as usize >= a.len() {
                     return other(format!("elem: index {i} outside parameter array `{array}` of {}", a.len()));
                 }
                 Value::from_pvalue(&a[i as usize])
             }
-            ExprNode::Len(array) => Value::Int(self.array(array, "len")?.len() as i64),
+            ExprNode::Len(array) => match self.computed(array) {
+                Some(a) => Value::Int(a.len() as i64),
+                None => Value::Int(self.array(array, "len")?.len() as i64),
+            },
+            ExprNode::Published(name) => {
+                self.positional_only("published")?;
+                let tl = self.timeline(name, "published")?;
+                let n = tl.lock().unwrap().entries.len();
+                Value::Int(n as i64)
+            }
+            ExprNode::Entry { timeline, index, key } => {
+                self.positional_only("entry")?;
+                let n = self.expr(index)?.as_int()?;
+                let tl = self.timeline(timeline, "entry")?;
+                let g = tl.lock().unwrap();
+                let Some((_, vals)) = usize::try_from(n).ok().and_then(|i| g.entries.get(i)) else {
+                    return other(format!("entry {n} of timeline `{timeline}`: {} published", g.entries.len()));
+                };
+                match vals.iter().find(|(k, _)| k == key) {
+                    Some((_, v)) => v.clone(),
+                    None => return other(format!("entry {n} of timeline `{timeline}` has no `{key}`")),
+                }
+            }
+            ExprNode::Prev { name, init } => self.prev(name, init)?,
             ExprNode::Sum(array) => {
                 let mut int = 0i64;
                 let mut float = 0f64;
@@ -877,6 +1114,90 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
             }
         })
+    }
+
+    /// The `array` named `name` in scope, if one is.
+    fn computed(&self, name: &str) -> Option<Arc<[Value<'a>]>> {
+        self.scopes.iter().rev().find_map(|s| s.arrays.get(name).cloned())
+    }
+
+    /// The timeline a `publish`, `published`, or `entry` names: the one this lane is in.
+    fn timeline(&self, name: &str, what: &str) -> ER<Arc<Mutex<TlShared<'a>>>> {
+        match &self.tl {
+            Some(tl) if tl.lock().unwrap().name == name => Ok(tl.clone()),
+            _ => other(format!("{what}: no timeline `{name}` encloses it (V30)")),
+        }
+    }
+
+    /// A value whose position is the step being walked (a timeline read, a `prev`) has none
+    /// to give an `x @ i`, which recomputes a definition at another index.
+    fn positional_only(&self, what: &str) -> ER<()> {
+        if self.shifts.is_empty() {
+            return Ok(());
+        }
+        let rule = if what == "prev" { "V31" } else { "V30" };
+        other(format!("`{what}` under `@`: its value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})"))
+    }
+
+    /// The level, definition, and loop frame of the `let` `name` a `prev` or a kept value
+    /// names: as `at` finds it, the body's own `let` else the binding in scope.
+    fn prev_target(&self, name: &str) -> Option<(usize, &'a ExprLike)> {
+        let here = self.scopes.len() - 1;
+        if let Some((_, def)) = Self::find_let(self.scopes[here].body, name) {
+            return Some((here, def));
+        }
+        self.scopes[..here].iter().enumerate().rev().find_map(|(l, s)| s.bindings.get(name).map(|b| (l, b.def)))
+    }
+
+    /// `prev(name, init)`: the value `name`'s `let` took in the previous iteration of its loop
+    /// under the same outer indices, `init` in the loop's first.
+    fn prev(&mut self, name: &str, init: &'a Expr) -> ER<Value<'a>> {
+        self.positional_only("prev")?;
+        let Some((level, def)) = self.prev_target(name) else {
+            return other(format!("prev: no `let` of `{name}` in scope (V31)"));
+        };
+        let depth = self.scopes[level].depth;
+        if depth == 0 {
+            return other(format!("prev: `{name}` is not bound in a loop's body (V31)"));
+        }
+        let f = self.frames[depth - 1];
+        let before = f.idx.wrapping_sub(f.step);
+        let outer: Vec<i64> = (0..depth - 1).map(|i| self.frames[i].idx).collect();
+        if let Some(s) = self.prev_slots.get(&(def as *const ExprLike as usize)).filter(|s| s.outer == outer) {
+            if s.cur.0 == before {
+                return Ok(s.cur.1.clone());
+            }
+            if let Some((i, v)) = &s.prev {
+                if s.cur.0 == f.idx && *i == before {
+                    return Ok(v.clone());
+                }
+            }
+        }
+        if f.idx == f.from {
+            return self.expr(init);
+        }
+        other(format!("prev: `{name}` has no value at index {before} of its loop `{}`", f.name))
+    }
+
+    /// Keep a value a `prev` may read: the `let` just evaluated, at its loop's index.
+    fn keep_for_prev(&mut self, def: &'a ExprLike, v: Value<'a>) {
+        let depth = self.scopes.last().unwrap().depth;
+        if depth == 0 || !self.shifts.is_empty() {
+            return;
+        }
+        let idx = self.frames[depth - 1].idx;
+        let outer: Vec<i64> = (0..depth - 1).map(|i| self.frames[i].idx).collect();
+        let key = def as *const ExprLike as usize;
+        match self.prev_slots.get_mut(&key) {
+            Some(s) if s.outer == outer && s.cur.0 != idx => {
+                let old = std::mem::replace(&mut s.cur, (idx, v));
+                s.prev = Some(old);
+            }
+            Some(s) if s.outer == outer => s.cur = (idx, v),
+            _ => {
+                self.prev_slots.insert(key, PrevSlot { outer, cur: (idx, v), prev: None });
+            }
+        }
     }
 
     fn arith(&mut self, a: &'a [Expr; 2], int: impl Fn(i64, i64) -> Option<i64>, float: impl Fn(f64, f64) -> f64, name: &str) -> ER<Value<'a>> {
@@ -1527,8 +1848,59 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         match node {
             Node::Let { name, value } => {
                 let v = self.exprlike(value)?;
+                if self.model.ast.prev_names.get().is_some_and(|p| p.contains(name.as_str())) {
+                    self.keep_for_prev(value, v.clone());
+                }
                 let level = self.scopes.last_mut().unwrap();
                 level.bindings.insert(name.as_str(), Binding { value: v, body: level.body, def: value });
+                Ok(None)
+            }
+            Node::Timeline { name, body } => {
+                if self.tl.is_some() {
+                    return other(format!("timeline `{name}` inside a timeline (V30)"));
+                }
+                let shared = Arc::new(Mutex::new(TlShared { name, entries: Vec::new() }));
+                let snap = Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &self.frames, &self.scopes, &self.phases, &self.open, &self.written, body);
+                let mut main = Vm::resume(snap);
+                main.tl = Some(shared.clone());
+                main.push_body(body);
+                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0 }], heap: BinaryHeap::new(), seq: 0, cur: None };
+                run.ready(0);
+                self.tlrun = Some(Box::new(run));
+                Ok(Some(Next::Timeline))
+            }
+            Node::Publish { timeline, values } => {
+                let tl = self.timeline(timeline, "publish")?;
+                let mut got = Vec::with_capacity(values.len());
+                for (k, e) in values {
+                    got.push((k.as_str(), self.expr(e)?));
+                }
+                tl.lock().unwrap().entries.push((self.clock, got));
+                Ok(None)
+            }
+            Node::Array { name, count, index, value } => {
+                let n = self.expr(count)?.as_int()?;
+                if n < 0 {
+                    return other(format!("array `{name}`: count {n}"));
+                }
+                self.frames.push(Frame { name: index, idx: 0, from: 0, step: 1, iters: n, loader: false });
+                self.depth = self.frames.len();
+                let mut got = Vec::with_capacity(n as usize);
+                let mut r = Ok(());
+                for k in 0..n {
+                    self.frames.last_mut().unwrap().idx = k;
+                    match self.expr(value) {
+                        Ok(v) => got.push(v),
+                        Err(e) => {
+                            r = Err(e);
+                            break;
+                        }
+                    }
+                }
+                self.frames.pop();
+                self.depth = self.frames.len();
+                r?;
+                self.scopes.last_mut().unwrap().arrays.insert(name.as_str(), Arc::from(got));
                 Ok(None)
             }
             Node::Loop { index, from, to, step, body } => {
@@ -1556,12 +1928,16 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 self.push_loop(index, from, step, iters, false, body);
                 Ok(None)
             }
-            Node::Parallel { index, width, body } => {
+            Node::Parallel { index, width, join, body } => {
                 let width = self.expr(width)?.as_int()?;
                 if width < 0 {
                     return other(format!("parallel `{index}`: width {width}"));
                 }
-                self.pending_fork = Some(PendingFork { index, width, loader: false, body });
+                let join = join.unwrap_or(true);
+                if !join && self.tl.is_none() {
+                    return other(format!("parallel `{index}`: not joined outside a timeline (V30)"));
+                }
+                self.pending_fork = Some(PendingFork { index, width, loader: false, join, body });
                 Ok(Some(Next::Fork(ForkKind::Parallel { index, width })))
             }
             Node::Loader { name, index, workers, prefetch, batches, ordered, body } => {
@@ -1571,7 +1947,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 if workers < 1 || prefetch < 0 || batches < 0 {
                     return other(format!("loader: workers {workers}, prefetch {prefetch}, batches {batches}"));
                 }
-                self.pending_fork = Some(PendingFork { index, width: batches, loader: true, body });
+                self.pending_fork = Some(PendingFork { index, width: batches, loader: true, join: true, body });
                 Ok(Some(Next::Fork(ForkKind::Loader { name, index, workers, prefetch, batches, ordered: ordered.unwrap_or(true) })))
             }
             Node::Channel { name, capacity, ordered } => {
@@ -2090,7 +2466,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.14", "name": "t",
+                r#"{{"ast": "0.15", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

@@ -29,3 +29,4 @@ mod emit;
 mod applications;
 mod trace_tool;
 mod usage;
+mod timeline;

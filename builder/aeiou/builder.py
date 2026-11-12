@@ -16,9 +16,9 @@ import typing
 from typing import Any
 
 from .pattern import Pattern
-from .nodes import (Actor, At, BuildError, Consume, Cond, DatasetMeta, DirHandle, Dist, Draw, InventoryHandle,
-                    Expr, FileHandle, FileOf, Handle, Index, Node, ObjectHandle, Op, Param, Pick, Ref,
-                    ast_of, check_ident, distref, lift, lower_bound_of, walk)
+from .nodes import (Actor, At, BuildError, Consume, Cond, DatasetMeta, DirHandle, Dist, Draw, Elem, Entry,
+                    InventoryHandle, Expr, FileHandle, FileOf, Handle, Index, Node, ObjectHandle, Op, Param,
+                    Pick, Published, Reduce, Ref, ast_of, check_ident, distref, lift, lower_bound_of, walk)
 
 OPEN_FLAGS = ("RDONLY", "WRONLY", "RDWR", "CREAT", "TRUNC", "EXCL", "APPEND", "CLOEXEC",
               "DIRECTORY", "DIRECT", "SYNC", "DSYNC", "NOATIME", "NOFOLLOW")
@@ -239,7 +239,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.14"
+    AST_VERSION = "0.15"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -864,15 +864,59 @@ class Cursor:
             yield idx
 
     @contextlib.contextmanager
-    def parallel(self, index: str, width):
+    def parallel(self, index: str, width, *, join: bool = True):
         """`width` concurrent sub-actors, index 0..width, joined on exit. Yields a sub-cursor
-        whose `.index` is the sub-actor index."""
+        whose `.index` is the sub-actor index. `join=False`, only inside a `timeline`: the
+        parent goes on at once (contract 0.15, rule V30)."""
         idx = self._new_index(index)
         self._nonneg_indices.add(index)
         body: list = []
-        self._emit({"parallel": {"index": index, "width": ast_of(lift(width, "width")), "body": body}})
+        node = {"index": index, "width": ast_of(lift(width, "width"))}
+        if not join:
+            if not any(f.kind == "timeline" for f in self._frames):
+                raise BuildError(f"parallel {index!r}: join=False only inside a timeline (V30)")
+            node["join"] = False
+        node["body"] = body
+        self._emit({"parallel": node})
         with self._push(body, "parallel", idx):
             yield Sub(self, idx)
+
+    @contextlib.contextmanager
+    def timeline(self, name: str):
+        """Lanes planned together (contract 0.15, rule V30): this body's main line and every
+        sub-actor of a `parallel` in it, each with a planned clock that `compute` moves; the
+        lane planned soonest takes the next step. Yields the timeline, whose `published` and
+        `entry(n, key)` read what its lanes published before the step being walked."""
+        check_ident(name, "timeline")
+        if any(f.kind == "timeline" for f in self._frames):
+            raise BuildError(f"timeline {name!r} inside a timeline (V30)")
+        body: list = []
+        self._emit({"timeline": {"name": name, "body": body}})
+        with self._push(body, "timeline"):
+            yield Timeline(name)
+
+    def publish(self, timeline, **values):
+        """An entry of the enclosing timeline: these values at this lane's planned time."""
+        name = timeline.name if isinstance(timeline, Timeline) else check_ident(timeline, "timeline")
+        if not values:
+            raise BuildError("publish: no values")
+        self._emit({"publish": {"timeline": name, "values": {
+            check_ident(k, "entry key"): ast_of(lift(v, f"publish {k}")) for k, v in values.items()}}})
+
+    def array(self, name: str, count, index: str, value) -> "ArrayRef":
+        """`count` values computed once, here, each with `index` bound as a loop index (so its
+        draws are positional): `value` is an expression or a function of the index. Read with
+        `[k]` and `.len` (contract 0.15, rule V32)."""
+        check_ident(name, "array")
+        if any(f.kind == "loop" for f in self._frames):
+            raise BuildError(f"array {name!r} inside a loop (V32)")
+        if name in self.wl._param_specs:
+            raise BuildError(f"array {name!r} has the name of a parameter (V32)")
+        idx = self._new_index(index)
+        v = value(idx) if callable(value) else value
+        self._emit({"array": {"name": name, "count": ast_of(lift(count, "array count")), "index": index,
+                              "value": ast_of(lift(v, f"array {name}"))}})
+        return ArrayRef(name)
 
     @contextlib.contextmanager
     def loader(self, name: str, *, workers, prefetch, batches, ordered: bool = True, index: str = "b"):
@@ -1187,6 +1231,34 @@ class Cursor:
             raise BuildError("readdir repeat is always until_end")
         self._op("readdir", {"dir": _handle(dir, "dir").ast(), "repeat": "until_end",
                              "expect": _expect(expect)})
+
+
+class Timeline:
+    """A `timeline` by name: what its lanes published (contract 0.15)."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    @property
+    def published(self) -> Expr:
+        return Published(self.name)
+
+    def entry(self, index, key: str) -> Expr:
+        return Entry(self.name, index, key)
+
+
+class ArrayRef:
+    """An `array` by name: `[k]` is `elem`, `.len` is `len`."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def __getitem__(self, i) -> Expr:
+        return Elem(self.name, i)
+
+    @property
+    def len(self) -> Expr:
+        return Reduce("len", self.name)
 
 
 class Sub:
