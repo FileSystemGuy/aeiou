@@ -11931,9 +11931,131 @@ corpus's cliff (2M tokens, 8 slots) are 30 % under the reference, not 17 %, whic
 proposal of 2026-11-07 that the WG set the pool well below the cliff.
 *Naming (the user's question).* The contract has no `pool`: vLLM's pool is a `tier`. "Pool" had two
 senses in the prose: `gen6`'s, the prompts a session has sent, now a timeline's entries (a group a
-session), and vLLM's KV pool, its own word for its blocks. Proposed, for the user: the first called
+session), and vLLM's KV pool, its own word for its blocks. ~~Proposed, for the user: the first called
 the session's sent prompts or entries in the docs, the second kept as vLLM's name in prose, a tier
-when written.
+when written.~~ Declined by the user (2026-11-13): the contract's word is already `tier`, which is
+enough; the prose is left as it is.
+
+**Tier names, NVIDIA's G1 to G4, and LMCache's eviction read (2026-11-13; the user's decisions the
+same day).** *Names.* The user asked for one unambiguous name a layer of the cache hierarchy, since
+"L1", "L2", "file tier", and "pool" had been mixed. Adopted: NVIDIA's terms, as NVIDIA defines them
+(the BlueField-4 context memory blog, https://developer.nvidia.com/blog/introducing-nvidia-bluefield-4-powered-inference-context-memory-storage-platform-for-the-next-frontier-of-ai,
+and Dynamo's KVBM documents, read 2026-11-13):
+
+| name | NVIDIA's definition | here |
+|---|---|---|
+| G1 | GPU HBM, "hot, latency-critical KV used in active generation" | vLLM's KV pool, a held tier (0.18) |
+| G2 | system RAM, "staging and buffering KV off HBM" (KVBM: pinned host memory) | LMCache's L1, `--l1-size-gb` |
+| G3 | local SSDs, "warm KV that is reused over shorter timescales", "tied to a single node" | LMCache's L2 on a node-local path (`lmcache-local-disk`) |
+| G3.5 | "an Ethernet-attached flash tier optimized specifically for KV cache", pod-wide (CMX, over NVMe and NVMe-oF, NVMe KV extensions among them) | none yet (item 76) |
+| G4 | "shared object and file storage", durable, millisecond latency | LMCache's L2 on a shared filesystem (`lmcache-shared-fs`); Dynamo's object tier |
+
+What the user values is consistent names for HBM, host DRAM, node-local NVMe, and shared storage;
+G3.5 is kept as NVIDIA's name, its technology left open (where it ends and G4 begins is a matter of
+purpose, flash for ephemeral KV against durable shared storage, not of API, and Dynamo's own
+documents disagree on G4: an S3 store in the configuration reference, NFS, Lustre, or GPFS over POSIX
+in one design section). A tier's API is the namespace's attribute, separate from its G number; a
+system under test called G3.5 runs the same calls. LMCache's own L1 and L2 are relative to one
+LMCache server and are not used for tiers in this project's prose. "Pool" stays vLLM's word for
+G1's blocks.
+*Sizes (the user).* The whole hierarchy is modelled, so G1 and G2 get realistic sizes, fixed by the
+WG; they absorb reads and writes, and since they are modelled the plan knows which ops pass them to
+G3 or G4. This supersedes the CPU tier 0 of 2026-10-08 (§3.64; brief §8): LMCache's multi-process
+server requires a G2 (`--l1-size-gb` is required) in any case.
+*LMCache 0.5.5's eviction, read from the installed source* (`venvllm`, the version the captures
+ran; notes in scratch `port/lmcache-eviction-reading.md`):
+- G3 and G4 (L2): one thread for all adapters sleeps 1 s, then for each, if used bytes ≥ 0.8 of
+  `max_capacity_gb` × 2^30, evicts `int(0.2 × tracked keys)` (at least 1) in LRU order, a share of
+  the key count, not of bytes (the config's docstring says memory; the code counts keys). The delete
+  is one batch on the C++ connector's 4 workers, blocking the thread, so the next check is 1 s after
+  the batch ends. No eligibility filter: a key looked up and not yet loaded can be deleted. Recency:
+  a key is created when its store completes and touched only when a load completes (a lookup does
+  not touch). A batch is inserted in reverse, so a request's first chunk is most recent and its tail
+  goes first: `order [touched, neg pos]` in 0.18's terms, the shape of vLLM's.
+  This settles a disagreement between the notes of 2026-11-09 and 11-10 (20 % of the used capacity
+  against 20 % of the tracked keys): keys.
+- G2 (L1): every store lands in G2 first (keys already there skipped), then the store loop copies
+  every key written to G2 to every L2 adapter (G2 never deleted by it). A lookup is served from G2
+  first; only the keys past G2's leading hit go to L2, loaded into G2 as temporary entries deleted
+  after they are read. G2 is touched at a request's end, every key of the request. G2's own loop is
+  the same rule (1 s, 0.8, 20 % of keys, LRU), skipping read-locked keys. A store that finds G2 full
+  between ticks is dropped, never blocked: timing-dependent, so not modelled (never learn from the
+  run), a would-be drop a gate failure, the plan able to check that G2 never fills within a tick.
+- Unlinks are the eviction thread's, a batch a tick: ops of the plan at the tick's planned time,
+  as item 72 (3) asked. The user's remark: that unlinks are ops in the abstract's language is
+  evidence the tier primitive is general.
+- Not readable from the install: the C++ `lmcache_fs` calls (a `.so`); the `dev` reading of
+  2026-11-10 stands until item 74's capture.
+For 0.19: the timed trigger (piece 5) per tier, the eviction body (piece 6) for the unlinks, and G2
+as a tier above G3 or G4, held to a Python reference request by request as the gen9 port was.
+
+**Contract 0.19 proposed: timed eviction, eviction bodies, and G2 above G3 (2026-11-13, at the
+user's request; nothing decided, nothing built).** Pieces 5 and 6 of the tier proposal (the note
+"Tiers as general pieces"), shaped by LMCache 0.5.5 as read above, and what G2 above G3 needs that
+0.18's `lookup` cannot say. Mechanisms in the runner, LMCache's numbers and rules in the abstract.
+*1. Timed eviction.* A tier may declare `evict {every, when, count}`: at every planned instant
+k × `every` from the timeline's start, if `when` holds, the `count` entries least in `order` that no
+lane holds are evicted. `when` and `count` are integer expressions over parameters and two new
+attributes of the tier, `tier used` (in its unit) and `tier entries` (its key count), readable only
+there. LMCache's rule is then the abstract's, not the runner's:
+`every: 1e9`, `when: used × 10 ≥ cap × 8`, `count: max(1, entries × 2 / 10)`. A tier with `evict`
+never evicts at store; its `capacity`, if any, is a hard bound that `full` answers (G2, LMCache's
+slab, a store past it dropped in LMCache: here `fail`, below); without one it only grows between
+ticks (G3, whose `max_capacity_gb` is a parameter the `when` names). Ticks are planned, a fixed grid:
+LMCache's next check starts a second after its delete batch ends, so its period stretches with the
+storage's delete latency, which the rule against learning from the run keeps out (the drift is
+the delete time a second, reported, never modelled). A tick at the same planned instant as a lane's
+step runs first (the timer fires before the work planned with it).
+*2. Eviction bodies.* A tier may declare `on_evict {lanes, body}`: each victim, in eviction order,
+runs `body` with `victim` bound (its key, as `chunk_key` gives it, and its `cached` attributes) on
+one of `lanes` eviction lanes of the timeline, victim i on lane i mod `lanes`, starting at the
+tick's planned instant (LMCache: one batch on the connector's 4 workers; the body opens nothing,
+it is `unlink` of the chunk's file, as the writer named it). An eviction at store (0.18's) runs the
+body on the storing lane before the store. The body may name the victim, parameters, and its
+own lets, never the lane's state (V35, proposed); it may hold no cache or resource. Unlinks are
+then ops of the plan: every KV abstract that adopts them changes its fingerprint (the first 0.19
+change that does).
+*3. Tiers composed in the abstract.* 0.18's `lookup` probes, touches, and stores one tier at once.
+LMCache over G2 and G3: probe G2 from the prompt's start; probe G3 from where G2's hit ends; read
+G3's hits (loaded into G2 as temporary entries, so G2 neither stores nor keeps them); touch G3's
+hits when the load completes; write the chunks past both hits, stored in G2 and in G3 when the write
+completes (G3's `stored` stamp at the write's planned end); at the request's end touch G2 for every
+chunk of the request present there. Proposed, three statements over a range of a `seq`'s chunks,
+`from` and `count`: `probe {cache, tier, seq, per, from, bind}` (the leading run held from `from`,
+nothing changed), `touch {…, from, count}` (the chunks held in it touched, the others ignored),
+`store {…, from, count, hold}` (the chunks not held stored, those held left as they are, as
+LMCache's `reserve_write(new)`). `lookup` stays for a tier whose admission is atomic: its `hold`
+and `full: wait` decide over the whole lookup before anything changes, which three statements
+cannot (vLLM's G1). So promotion, inclusion, exclusion, and write-through are the abstract's
+choice; Dynamo's G1→G2→G3 offload is a body on G1's eviction storing into G2.
+*4. What is not modelled.* LMCache's G3 eviction does not skip keys locked by a lookup, so a delete
+can land between a lookup and its load and turn the load into a miss; here every tier spares held
+entries (a probe followed by its read in one lane step holds nothing; the race needs a delete
+between them, a timing the plan does not have). G2's drop when full between ticks is
+timing-dependent: the plan uses `full: fail` on G2, so a parameter set whose G2 would fill within
+a tick is refused at check, and the WG sizes G2 above it (realistic sizes, the user's decision
+above; a would-be drop in a run is item 72 (7)'s gate failure).
+*5. Held to a reference.* The gen9 port extended with G2 and G3 (scratch `gen10_port.py`), against a
+Python reference that drives LMCache's own `LRUEvictionPolicy` from the installed 0.5.5 with the
+walk's planned events (created, touched, removed) and ticks: every request's G2 and G3 hits, every
+read, write, and unlink, request by request, at two seeds and a G2 near its bound.
+*Questions.*
+- **Q1. `evict {every, when, count}` with `when` and `count` expressions over `tier used` and
+  `tier entries`** (recommended), over fixed fields (`watermark`, `ratio`): LMCache counts keys
+  where its docstring says memory, and the next system will differ again.
+- **Q2. A fixed grid of ticks, a tick before a lane's step at the same instant** (recommended).
+- **Q3. Eviction bodies on `lanes` eviction lanes, victim i on lane i mod `lanes`** (recommended),
+  or on one lane (simpler; LMCache's 4 workers issue the deletes in parallel, which a storage
+  system sees).
+- **Q4. `probe`, `touch`, and `store` beside `lookup`** (recommended). Not an alias: `lookup`'s
+  atomic hold and wait are what G1 needs and three statements cannot give; the no-aliases rule
+  holds since neither can be written as the other.
+- **Q5. G2's `full: fail`** (recommended: the WG sizes G2 so that it never fills within a tick, and
+  check refuses a parameter set where it would), or `skip`, a planned drop (closer to LMCache, but
+  a drop that in a real run depends on timing).
+- Open, for the WG and not the contract: G2's and G3's sizes. Open for later: G4 (`lmcache-shared-fs`)
+  is the same tier shared by a domain's engines, each engine's LMCache accounting only its own
+  stores (the note of 2026-11-10), which item 72 (5)'s domains decide.
 
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
