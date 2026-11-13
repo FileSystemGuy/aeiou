@@ -484,11 +484,16 @@ def test_agentx_holds_simulates_the_engine_s_prefix_cache_under_the_replay(tmp_p
     assert stdout.startswith("pool 1024 tokens, the engine's timeline: 8 requests, 0 preemptions;")
     assert [r[:4] for r in rows] == sorted((s, i, p, looks[-1][1]) for s, i, p, _, looks, _ in REPLAY)
     pred = {(s, i): q for s, i, _, _, q in rows}
-    # 16 blocks of 64 tokens hold every session's blocks: each request finds its whole stored prefix;
-    # the replay serves one model, so session 1's last request finds the other model's [30, 31, 32]
-    assert pred == {(0, 0): 0, (0, 1): 256, (0, 2): 128, (0, 3): 256, (0, 4): 256, (1, 0): 0, (1, 1): 0, (1, 3): 192}
-    for name in ("paced", "service", "serial", "rounds"):            # nothing evicted at this pool, on any timeline
-        assert got[name][0].startswith(f"pool 1024 tokens, the {name if name != 'service' else 'paced'} timeline: 8 requests") and got[name][1] == rows
+    # 16 blocks of 64 tokens, the reply's blocks counted with the prompt's: s0i4 and s1i3 find part of
+    # their stored prefix evicted (until 2026-11-12 `simulate` let the pool pass 16 blocks by the hits it
+    # took out of the free queue, and both found it whole); the replay serves one model, so session 1's
+    # last request finds the other model's [30, 31] still held
+    assert pred == {(0, 0): 0, (0, 1): 256, (0, 2): 128, (0, 3): 256, (0, 4): 128, (1, 0): 0, (1, 1): 0, (1, 3): 128}
+    for name in ("serial", "rounds"):                                # the same evictions one request at a time or in rounds
+        assert got[name][0].startswith(f"pool 1024 tokens, the {name} timeline: 8 requests, 0 preemptions;") and got[name][1] == rows
+    for name in ("paced", "service"):                                # paced, the requests interleave otherwise: neither evicted
+        assert got[name][0].startswith("pool 1024 tokens, the paced timeline: 8 requests, 0 preemptions;")
+        assert {(s, i): q for s, i, _, _, q in got[name][1]} == {**pred, (0, 4): 256, (1, 3): 192}
     # the storage at either holds: the writes are the store's alone; a chunk is 1 GiB here, so distances are in chunks
     store = [l for l in stdout.splitlines() if l.startswith("storage, ")]
     assert len(store) == 2 and store[0].startswith("storage, predicted holds: ") and store[1].startswith("storage, measured holds: ")

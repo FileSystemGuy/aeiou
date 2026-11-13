@@ -843,6 +843,19 @@ def test_agentx_hold_simulation_evicts_a_freed_tail_first_and_preempts_the_last_
     assert (held, preempted) == ({"x": 0, "y": 0, "z": 2}, 1)            # y preempted x, whose tail x3 went first
 
 
+def test_agentx_hold_simulation_never_passes_the_pool(monkeypatch):
+    """A request's hits taken out of the free queue still count toward the pool: `simulate` took
+    them out before it counted the room it needed, so the pool held one block more for each
+    (found 2026-11-12 holding the runner's GPU tier to it, DESIGN_REVIEW.md §3.99, the note
+    "Tiers as general pieces"). Four blocks: `b` finds a1 and a2 free and adds two, so a3 and a4
+    are evicted, and `c` finds none of a3."""
+    monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
+    agentx = importlib.import_module("agentx")
+    blocks = {"a": ["a1", "a2", "a3", "a4"], "b": ["a1", "a2", "b1", "b2"], "c": ["a3"]}
+    held, preempted = agentx.simulate([(0, 1, "a"), (1, 0, "a"), (2, 1, "b"), (3, 0, "b"), (4, 1, "c")], blocks, dict.fromkeys(blocks, 0), 4)
+    assert (held, preempted) == ({"a": 0, "b": 2, "c": 0}, 0)
+
+
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
     """LMCache's `use_odirect` (2026-10-07, DESIGN_REVIEW.md §3.63; captured again 2026-11-05 under the

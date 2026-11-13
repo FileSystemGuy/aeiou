@@ -426,13 +426,14 @@ def simulate(events, blocks, replies, cap):
         held[k] = h
         mine = list(dict.fromkeys(blocks[k])) + [("reply", serial + j) for j in range(-(-replies[k] // BLOCK))]
         serial += len(mine)
-        new = 0
+        new = hits = 0
         for b in mine:
-            if b in queue:
+            if b in queue:                  # held again: out of the free queue, still in the pool
                 del queue[b]
+                hits += 1
             elif b not in ref:
                 new += 1
-        need = len(ref) + len(queue) + new - cap
+        need = len(ref) + len(queue) + hits + new - cap
         while need > 0:
             if queue:
                 queue.popitem(last=False)

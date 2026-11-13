@@ -10378,7 +10378,7 @@ They do, and the pool over the abstract's own demand had never been run. Chunk r
 | source | 2 GiB pool | 6 GiB pool |
 |---|---|---|
 | the trace | 38,818 | 2,321 |
-| the replay's demand, simulated pool | 39,881 | 2,865 |
+| the replay's demand, simulated pool | ~~39,881~~ 40,822 | ~~2,865~~ 3,956 (`simulate` corrected 2026-11-12, the note "Tiers as general pieces") |
 | the abstract, drawn holds (median of 8 seeds) | 21,155 | 2,437 |
 | the abstract's demand, simulated pool (median of 12) | 23,785 (16.2k to 33.9k) | 915 (352 to 4,895) |
 
@@ -10663,16 +10663,17 @@ rows sample all 393 sessions with replacement, 8 seeds. Chunk reads by pool, in 
 
 | pool | reference | abstract, the same arrangement | abstract, drawn (median, range) |
 |---|---|---|---|
-| 1M | 12,971,964 | 12,242,918 (−6 %) | 9,010,264 (6,063,812 to 11,855,766) |
-| 2M | 4,036,273 | 3,369,637 (−17 %) | 1,514,277 (198,229 to 3,370,399) |
-| 4M | 45,622 | 37,405 (−18 %) | 19,281 (7,098 to 45,635) |
+| 1M | ~~12,971,964~~ 13,173,948 | 12,242,918 (~~−6 %~~ −7 %) | 9,010,264 (6,063,812 to 11,855,766) |
+| 2M | ~~4,036,273~~ 4,817,999 | 3,369,637 (~~−17 %~~ −30 %) | 1,514,277 (198,229 to 3,370,399) |
+| 4M | ~~45,622~~ 47,921 | 37,405 (~~−18 %~~ −22 %) | 19,281 (7,098 to 45,635) |
 | 8M | 1,028 | 2,784 | 2,094 (402 to 12,457) |
 | 16M | 196 | 243 | 243 (243 to 5,189) |
 | writes | 229,129 | 230,880 (+1 %) | 242,585 |
 | mean prompt | 252.5k | 243.8k | 207.0k (174.5k to 237.8k) |
 
 Three things. The table holds at the corpus's scale: writes within 1 %, reads within 6 % where the
-pool is far too small and 17 % to 18 % near the cliff, where 3 % shorter prompts (a chain's base past
+pool is far too small and 17 % to 18 % near the cliff (7 % and 22 % to 30 % with `simulate` corrected,
+2026-11-12), where 3 % shorter prompts (a chain's base past
 its prefix is not in the table) move the reads most. The cliff is steep, as the 500k sweep showed: at
 8 slots it falls from 4 million reads to 46 thousand between a pool of 2M and 4M tokens, where the
 slots' live contexts add up. And near it the drawn runs spread seventeen to one (198k to 3.37M at 2M):
@@ -11896,9 +11897,38 @@ equal.
 the free queue before it counts the room it needs, so they are counted nowhere and the pool holds
 one block more for each such hit (98,312 blocks in a pool of 98,304 at step 1,676 of the first
 run; one request's hit 6 where the runner's, at capacity, was 0). vLLM's pool never passes its
-capacity. `compare9.py` uses a corrected copy; the committed `agentx.py` is unchanged and every
+capacity. ~~`compare9.py` uses a corrected copy; the committed `agentx.py` is unchanged and every
 number it gave (§3.64, the grids of 2026-11-07 to 11-11, the measurement above) slightly favours
-the pool. Fixing it, and whether to rerun those numbers, is the user's call.
+the pool. Fixing it, and whether to rerun those numbers, is the user's call.~~
+*Fixed and rerun (the user's go, 2026-11-12).* `simulate` counts a request's hits taken out of the
+free queue as still in the pool (`builder/tests/test_trace.py`, a pool of 4 blocks that the old code
+passed); `test_kits.py`'s small-pool expectations moved where the old code overfilled. The numbers
+it gave, old against new:
+- *§3.64's lab replay*, holds predicted against measured (mean ratio, share within a chunk) and the
+  reads at the predicted holds. At 2 GiB: engine 1.14/76 %, 36,276 reads → 1.12/80 %, 36,643;
+  paced 1.38/58 %, 31,623 → 1.29/62 %, 33,414; serial 0.95/66 %, 39,881 → 0.90/67 %, 40,822;
+  rounds 1.10/61 %, 37,098 → 1.07/61 %, 37,689. At 6 GiB: engine 1.00/97 %, 2,280 → 2,553; paced
+  2,343 → 2,883; serial 0.99/88 %, 2,865 → 0.97/86 %, 3,956; rounds 3,330 → 3,847. The trace's
+  38,818 and 2,321 are unchanged (reads at the measured holds: 38,945 and 2,455). So the pool model
+  over the replay's demand (serial, the table's "simulated pool" row) is 5 % over the trace at 2 GiB
+  and 70 % over at 6 GiB, not 3 % and 23 %: near the top of a pool, where few chunks are read, one
+  block a hit was a large share of what the engine lost. The engine arrangement, closest to the run,
+  stays 6 % to 10 % from the trace.
+- *The generator grids* (`gen6` and the table, 12 seeds, and the held-out halves, 8 seeds; scratch
+  `sess10/grid11.sh`, `summ11.txt`, `summ12.txt`, against `summ9.txt` and `summ10.txt`): reads 0.3 %
+  to 1.5 % higher, writes identical, every gen6-against-table difference and every held-out row
+  within a point of before (64 sessions at 6M: 34.3 → 34.7 reads/s, gen6 −24 % ± 19 either way). The
+  measurement above in the grid's terms: at 6M, 1.0 % of held 0's reads at 32 sessions, 4.4 % (gen6) and
+  5.5 % (the table) at 64, means of 12 seeds,, 13 % to 14 % on the ramp, 51 % at 96 (13 % to 82 %).
+- *The corpus as a session table* (2026-11-07, `corpus/ref.py`): the reference's reads at 1M, 2M, 4M,
+  8M and 16M tokens 12,971,964 → 13,173,948 (+1.6 %), 4,036,273 → 4,817,999 (+19 %), 45,622 → 47,921
+  (+5 %), 1,028 and 196 unchanged; writes 229,129 unchanged. The abstract's reads in the same
+  arrangement were not rerun (no pool model in them), so its gap at the cliff widens: −7 %, −30 %,
+  −22 % against −6 %, −17 %, −18 % (the table there corrected in place).
+Away from the cliff no conclusion changes. Near it the fix matters: §3.64's "the pool's rate is good
+where the demand is" holds at 2 GiB and is weaker at 6 GiB, and the session table's reads at the
+corpus's cliff (2M tokens, 8 slots) are 30 % under the reference, not 17 %, which strengthens the
+proposal of 2026-11-07 that the WG set the pool well below the cliff.
 *Naming (the user's question).* The contract has no `pool`: vLLM's pool is a `tier`. "Pool" had two
 senses in the prose: `gen6`'s, the prompts a session has sent, now a timeline's entries (a group a
 session), and vLLM's KV pool, its own word for its blocks. Proposed, for the user: the first called

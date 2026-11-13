@@ -1716,7 +1716,7 @@ numbers; the order is this note's.
     (a `lookup`'s `hold`, `release`), and `full` (`skip`, `wait`, `fail`); vLLM's pool written as
     a held tier in vLLM's free-queue order, with `full: wait` as its admission, equal request by
     request to `agentx.simulate` corrected (it overfilled the pool by one block a hit, found by
-    the comparison; the committed `agentx.py` not yet changed). Not built: the timed trigger
+    the comparison; fixed the same day and its numbers rerun, the conclusions unchanged). Not built: the timed trigger
     (LMCache's watermark), a statement body on eviction (an unlink, a write to the tier below),
     `preempt`, promotion between tiers, Dynamo's source read.
 
