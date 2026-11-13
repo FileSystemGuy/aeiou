@@ -1635,8 +1635,9 @@ numbers; the order is this note's.
     (7) *The runner*: `launch = plan + L`, L a lane's inherited lag, never shrinking; D, a request's
     own storage wait, judged at p99 per 5-minute window assigned by planned time, the ramp's
     included, with a single-response ceiling (30 s as the example); a store unfinished at its
-    reader's launch waits in the reader's D, staging overflow a gate failure; an eviction batch past
-    the next trigger a failure; a submittable run stops at certain failure, a tuning run under a lag
+    reader's launch waits in the reader's D, staging overflow a gate failure; ~~an eviction batch past
+    the next trigger a failure~~ an eviction batch past the next tick delays the next batch, the overage
+    the eviction lanes' L, reported only (the user, 2026-11-13); a submittable run stops at certain failure, a tuning run under a lag
     ceiling; the benchmark host's own lateness a validity check. Reported: the load curve, read and
     write bandwidth, capacity held, creates, renames, and unlinks a second, eviction bursts, each
     session's L, the sum of D, edge waits and messaging latency, write latency, backlog peak,
@@ -1720,10 +1721,14 @@ numbers; the order is this note's.
     the comparison; fixed the same day and its numbers rerun, the conclusions unchanged). Not built: the timed trigger
     (LMCache's watermark), a statement body on eviction (an unlink, a write to the tier below),
     `preempt`, promotion between tiers, Dynamo's source read.
-    *Contract 0.19 proposed 2026-11-13, not decided (`DESIGN_REVIEW.md` §3.99, the note "Contract
-    0.19 proposed"), after LMCache 0.5.5's eviction was read and NVIDIA's G1 to G4 adopted as the
+    *Contract 0.19 ~~proposed 2026-11-13, not decided~~ decided and built 2026-11-13 (`DESIGN_REVIEW.md` §3.99, the note "Contract
+    0.19 proposed" and its addendum "built"), after LMCache 0.5.5's eviction was read and NVIDIA's G1 to G4 adopted as the
     tier names:* timed eviction (`evict {every, when, count}`), eviction bodies on eviction lanes
-    (the unlinks), and `probe`, `touch`, `store` over a range of chunks for G2 above G3.
+    (the unlinks), and `probe`, `touch`, `store` over a range of chunks, or over an array of them,
+    a store's `taken` (what it newly stored) and `present: renew`, for G2 above G3, written as
+    LMCache writes it; the gen10 ports equal to LMCache's own `LRUEvictionPolicy` request by
+    request and unlink by unlink. Not built: the KV abstract's G2 and G3 (the committed
+    `lmcache-local-disk` still has none), `preempt`, Dynamo's tiers, the run side (item 72 (7)).
 
 76. **Dynamo's block tier (queued by the user 2026-11-10, `DESIGN_REVIEW.md` §3.99 note "The
     generator in the abstract, a shared tier, and events between runners"; not started, not

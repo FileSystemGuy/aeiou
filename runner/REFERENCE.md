@@ -257,6 +257,35 @@ each is a recorded decision and the golden tests pin them.
   one it does not, asks a resource for more than its capacity, or waits for more new entries
   than its tier's capacity, and when every lane left waits. `now` is the lane's planned clock
   in nanoseconds, refused outside a timeline and under an `x @ i` evaluation (V30).
+- **Timed eviction, eviction lanes, and ranges** (contract 0.19, V33 and V35; `vm.rs`'s
+  `TlRun::ticks` and `spawn_evictions`). A tier's `evict` `every` is evaluated when its timeline
+  starts (positive), and its ticks are the planned instants k × `every`, k ≥ 1. Before the
+  driver takes the next lane, every tick at or before that lane's planned time fires, in time
+  order, a tie to the tier declared first, so a tick runs before any lane's step at its instant;
+  no tick fires once no lane is left. A tick evaluates `when` and `count` with `tier used` (the
+  entries' size in the tier's unit) and `tier entries` (their number) and, when `when` holds,
+  evicts the `count` least victims (never a held entry; fewer when fewer are left). A tier with
+  `evict` never evicts at store: a store past its `capacity` is what `full` says, `skip` a
+  planned drop. A tier's `on_evict` `lanes` is evaluated when its timeline starts (positive);
+  each eviction, at a tick or at a store, is a batch: victim i, in eviction order, runs the body
+  on a new lane of the timeline whose key is (the tier's index among the timeline's tiers in
+  declaration order, the tier's batch count, i mod `lanes`, i div `lanes`), at the batch's
+  planned time, with `victim` its key; at one planned time an eviction lane goes before any
+  other lane. The body starts from the bindings visible at the timeline and the timeline's
+  open files. A `probe`, `touch`, or `store` takes the keys of a sequence's whole chunks and the
+  range `from` to `from + count` (to the end for a probe), cut at the sequence's end (`from`
+  and `count` refused when negative): a probe binds the leading run of the range the tier
+  holds; a touch is one event (one `stamp`) for the statement, so every chunk it finds gets the
+  same `touched` and its own `pos`, and goes back into the victim order; a store is one event
+  too, storing each chunk of the range the tier lacks with `stored` and `touched` that count
+  and `pos` its index, leaving the chunks it holds alone, and binds (with `bind`) the leading
+  run of the range held after it. A touch or store with `chunks` acts on the chunks whose
+  indices that array holds (an `array`, a store's `taken`, or a parameter array), in its order,
+  each index checked against the sequence's chunks, a chunk named twice acted on once. A store
+  with `present: renew` removes a chunk it holds that no lane holds (not a victim: no eviction
+  body runs for it) and stores it as if absent, in the same event; with `taken`, it binds in its
+  scope level an array of the indices of the chunks it stored, renewed ones included, in the
+  order acted on. Bindings of a probe and a store are refused under `x @ i` (V33).
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which

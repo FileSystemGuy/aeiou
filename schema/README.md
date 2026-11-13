@@ -1,6 +1,6 @@
 # The AST contract
 
-Version `0.18`, 2026-11-12 (~~`0.17`, the same day~~; ~~`0.16`, the same day~~; ~~`0.15`, the same day~~; ~~`0.14`, 2026-11-02~~; ~~`0.13`, 2026-10-23~~; ~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
+Version `0.19`, 2026-11-13 (~~`0.18`, 2026-11-12~~; ~~`0.17`, the same day~~; ~~`0.16`, the same day~~; ~~`0.15`, the same day~~; ~~`0.14`, 2026-11-02~~; ~~`0.13`, 2026-10-23~~; ~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -105,7 +105,7 @@ builder/.venv/bin/python schema/check.py path/to/x.ast.json   # one file
 **Top level:** `ast` (version), `name`, `doc`, `posix`, `cache`, `s3` (§1, *Declared
 backend*), `params`, `datasets`, `namespaces`, `actors`, `provenance`.
 
-**Statements** (a `body` is an array of these). Nineteen control forms (~~seventeen~~ until contract 0.18, ~~sixteen~~ until 0.16, ~~thirteen~~ until 0.15), eighteen ops.
+**Statements** (a `body` is an array of these). Twenty-two control forms (~~nineteen~~ until contract 0.19, ~~seventeen~~ until 0.18, ~~sixteen~~ until 0.16, ~~thirteen~~ until 0.15), eighteen ops.
 
 | Kind | Semantics |
 |---|---|
@@ -121,11 +121,14 @@ backend*), `params`, `datasets`, `namespaces`, `actors`, `provenance`.
 | `choose {arms: [{weight, body}]}` | Run one arm, chosen positionally by weight (the original *selection*). |
 | `phase {name, body}` | Statistics label; no effect on execution or the fingerprint. `name` may be an expression. |
 | `trace {file, sha256}` | A captured trace of a real application, executed literally, for calibration; never CLOSED. `file` is relative to the document, JSON Lines as `aeiou-trace export` writes it and `runner/REFERENCE.md` §13 defines it (`DESIGN_REVIEW.md` §3.58; the node was `replay` until 2026-10-02). |
-| `timeline {name, caches, resources, body}` | Lanes planned together (contract 0.15, `DESIGN_REVIEW.md` §3.99, brief item 72; V30): the body's main line and every sub-actor of a `parallel` in it is a **lane** with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller **lane key** (the main line's is empty; a sub-actor's is its parent's, then the parent's fork ordinal, then its index); a lane runs until its next `compute`; a joined `parallel` holds its parent until its last sub-actor ends and the parent goes on at that end. The plan is a function of the abstract, its parameters, and the seeds, never of the run; draws keep their positional keys. Never a timeline, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside one. `aeiou check` and `aeiou dry-run` walk it; `aeiou run` refuses it until its run side is built (item 72 (7)). Its `caches` (contract 0.16, brief item 75; V33), each `{name, tiers}`, a tier ~~`{name, evict, capacity, unit}`: `evict: none` keeps every entry and takes no `capacity`; `evict: lru` evicts the entry used longest ago while a store would pass `capacity`, counted in `entries` (the default) or `bytes`, and an entry larger than the whole tier is not stored~~ `{name, order, capacity, unit, full}` (contract 0.18): at most `capacity` (counted in `entries`, the default, or `bytes`) of entries; while a store would pass it, the entry no lane holds whose `order` values are least, compared in turn, is evicted first, a tie to the entry stored first (`order` is a list of integer expressions over `cached` and parameters, computed when the entry is stored, looked up, or released and kept: `[{cached: touched}]` is LRU, `[{cached: stored}]` FIFO, `[{cached: freed}, {neg: {cached: pos}}]` vLLM's free queue); with no `order`, nothing is evicted. An entry larger than the whole tier is not stored. `full`, what a store that finds no room and no victim does: `skip` it (the default), `wait` (the lane waits in planned time until a release makes room for the whole lookup, first come first), or `fail` (the walk is refused). Its `resources` (contract 0.18, V34), each `{name, capacity}`, counted resources held by `acquire`: a queue with `capacity` servers. A cache and a resource start empty with their timeline and are walked with its lanes, in planned order; a lane that waits is parked, and resumes at the planned time of the release that lets it on. |
+| `timeline {name, caches, resources, body}` | Lanes planned together (contract 0.15, `DESIGN_REVIEW.md` §3.99, brief item 72; V30): the body's main line and every sub-actor of a `parallel` in it is a **lane** with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller **lane key** (the main line's is empty; a sub-actor's is its parent's, then the parent's fork ordinal, then its index); a lane runs until its next `compute`; a joined `parallel` holds its parent until its last sub-actor ends and the parent goes on at that end. The plan is a function of the abstract, its parameters, and the seeds, never of the run; draws keep their positional keys. Never a timeline, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside one. `aeiou check` and `aeiou dry-run` walk it; `aeiou run` refuses it until its run side is built (item 72 (7)). Its `caches` (contract 0.16, brief item 75; V33), each `{name, tiers}`, a tier ~~`{name, evict, capacity, unit}`: `evict: none` keeps every entry and takes no `capacity`; `evict: lru` evicts the entry used longest ago while a store would pass `capacity`, counted in `entries` (the default) or `bytes`, and an entry larger than the whole tier is not stored~~ `{name, order, capacity, unit, full}` (contract 0.18): at most `capacity` (counted in `entries`, the default, or `bytes`) of entries; while a store would pass it, the entry no lane holds whose `order` values are least, compared in turn, is evicted first, a tie to the entry stored first (`order` is a list of integer expressions over `cached` and parameters, computed when the entry is stored, looked up, or released and kept: `[{cached: touched}]` is LRU, `[{cached: stored}]` FIFO, `[{cached: freed}, {neg: {cached: pos}}]` vLLM's free queue); with no `order`, nothing is evicted. An entry larger than the whole tier is not stored. `full`, what a store that finds no room and no victim does: `skip` it (the default), `wait` (the lane waits in planned time until a release makes room for the whole lookup, first come first), or `fail` (the walk is refused). Since contract 0.19 (V33, V35), a tier may also declare `evict {every, when, count}`: at every planned instant k × `every` ns from the timeline's start (k ≥ 1), while lanes remain and before any lane's step at that instant, if `when` holds, the `count` entries least in `order` that no lane holds are evicted (`when` and `count` read parameters, literals, and `tier used|entries`; `every` parameters and literals); such a tier never evicts at store, so a store past its `capacity` is what `full` says, `skip` a planned drop; it needs a `capacity` and an `order` and is never `full: wait`. And `on_evict {lanes, body}`: each victim, at a tick or a store, runs `body` with `victim` its key, victim i of the eviction on eviction lane i mod `lanes`, at the eviction's planned instant and before any other lane's step there; the body sees the bindings around the timeline (`runner/REFERENCE.md` §2). Its `resources` (contract 0.18, V34), each `{name, capacity}`, counted resources held by `acquire`: a queue with `capacity` servers. A cache and a resource start empty with their timeline and are walked with its lanes, in planned order; a lane that waits is parked, and resumes at the planned time of the release that lets it on. |
 | `publish {timeline, group, values}` | An **entry** of the enclosing timeline: `values` (name to expression) at this lane's planned time, which the lanes read with `published` and `entry` (V30); in group `group`, an integer, 0 when absent (contract 0.17): a timeline's entries are counted and indexed within their group, so one timeline every session of an engine shares keeps each session's pool its own. |
 | `lookup {cache, tier, seq, per, bind, size, hold}` | The longest run of `seq`'s leading whole chunks of `per` blocks held in tier `tier` of cache `cache` of the enclosing timeline, bound to `bind` as an integer; then ~~every whole chunk, in order, touched if held (a use, for `lru`) and stored if not~~ the chunks the tier holds touched, in order, and then the others stored, in order (contract 0.18; ~~interleaved in contract 0.16~~), as LMCache 0.5.5 looks a prompt up and stores what it missed (V33). A chunk's key is `chunk_key` (`runner/REFERENCE.md` §2). `size`, the bytes of one chunk, exactly when the tier counts bytes. With `hold` (contract 0.18, V34), the chunks found and stored are this lane's under that name until its `release`, never victims meanwhile. `bind` is not positional: `@` and `prev` may not reach it. |
 | `acquire {resource, n, hold}` | `n` units of resource `resource` of the enclosing timeline, this lane's under `hold` until its `release` (contract 0.18, V34); the lane waits in planned time while they are not free or an earlier lane waits for the resource, first come first. |
 | `release {hold}` | What this lane holds under `hold`, given back (contract 0.18, V34): a resource's units, or a tier's entries, which become victims again, `freed` the release. A lane ends holding nothing. |
+| `probe {cache, tier, seq, per, from, bind}` | The longest run of `seq`'s whole chunks of `per` blocks from chunk `from` held in a tier of a cache of the enclosing timeline, bound to `bind` as an integer; nothing changed (contract 0.19, V33). `bind` is not positional. |
+| `touch {cache, tier, seq, per, from, count \| chunks}` | The chunks `from` to `from + count`, cut at the sequence's end, or those whose indices the array `chunks` holds, in its order, that the tier holds, touched as one event: the same `touched` for all, `pos` each one's index (contract 0.19, V33). |
+| `store {cache, tier, seq, per, from, count \| chunks, size, present, bind, taken}` | The chunks `from` to `from + count`, cut at the sequence's end, or those whose indices the array `chunks` holds (an `array`, another store's `taken`, or a parameter array of integers; an index outside the sequence refused when walked), that the tier lacks, stored as one event, `size` each exactly when the tier counts bytes; those it holds left as they are (`present: keep`, the default) or stored again as if absent (`present: renew`: a new entry, taken; one a lane holds is left as it is). With `bind`, the leading run of the range held after it, short by a planned drop; with `taken`, an array of the indices of the chunks it stored, in the order acted on, read with `len` and `elem` after it (contract 0.19, V33). Never on a `full: wait` tier, which only a `lookup` decides. `bind` is not positional. LMCache's G2 above G3: `store` G2 with `taken: t2`, then `store` G3 with `chunks: t2, present: renew`. |
 | `array {name, count, index, value}` | `count` values computed once, where the node stands, each with `index` bound as a loop index so its draws are positional; read with `elem` and `len` as a parameter array is (contract 0.15, V32). |
 | `open {file, flags, mode, expect}` | Flags from the enum in the schema. `DIRECTORY` for `readdir` handles. |
 | `close`, `fstat`, `stat`, `fsync`, `fdatasync`, `unlink` `{file, expect}` | |
@@ -173,6 +176,9 @@ attribute of the entry being ordered: `stored`, `touched`, and `freed`, the tier
 when it was stored, last looked up, and last released (`stored` until then); `hits`, the lookups
 that found it; `pos`, its index in the sequence of the lookup that last found or stored it;
 `size`, in the tier's unit.
+Since contract 0.19: `tier attr`, only in a tier's `evict` `when` and `count` (V33): `used`, its
+entries' size in its unit, and `entries`, their number; `victim {}`, only in an `on_evict` body
+(V35), the key of the entry it runs for, as `chunk_key` gives it.
 
 **Handles:** `ref` (a binding); `file {dataset, id}` (a dataset file by id; an `array` dataset's single file is `id: 0`) or
 `file {of, chunk}` (the container file, or chunk object `k`, of a sample handle); `dir {dataset,
@@ -578,6 +584,23 @@ given again, as for any other parameter~~ (until contract 0.13) a required param
   for more new entries than its tier's capacity, can never go on and is refused; and a timeline
   whose lanes all wait, or have ended, with some still waiting, is refused. `now` stands only
   in a timeline, and `@` may not reach it (V30).
+- **V33, extended** (contract 0.19). A tier's `evict` has a `capacity` and an `order` beside it
+  and no `full: wait`; its `when` and `count` read only parameters, literals, and `tier`, its
+  `every` only parameters and literals, through arithmetic, comparisons, logic, and `cond`;
+  `tier` appears only there. A `probe`, `touch`, or `store` names a cache its timeline declares
+  and a tier of it; a `store` gives a `size` exactly when the tier counts bytes and is never on
+  a `full: wait` tier; the binding of a `probe` or a `store` may not be named by `@` or `prev`.
+  A `touch` or `store` has `from` and `count`, or `chunks` alone, naming an array in scope or a
+  parameter array of integers; a `store`'s `taken` is not the name of a parameter (as V32), is
+  an array from the store on, and what `len` and `elem` read of it varies (V6). When walked:
+  `every` and `lanes` are positive, `from` and `count` not negative, an index of `chunks` one of
+  the sequence's chunks.
+- **V35 an eviction body issues its victim's ops** (added 2026-11-13, contract 0.19, no committed
+  AST has one). An `on_evict` stands on a tier with an `order`; its `lanes` reads only
+  parameters and literals; its body holds no `compute`, `lookup`, `probe`, `touch`, `store`,
+  `acquire`, `release`, `publish`, `parallel`, `loader`, `channel`, `put`, `take`, `barrier`,
+  `timeline`, or `trace`, anywhere in it: it plans no time and changes no cache or timeline, so
+  its ops are at its eviction's planned instant. `victim` appears only in such a body.
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -875,3 +898,12 @@ results are compared by.
   one with none is a 0.18 document with the version changed. Every committed AST was
   regenerated; no fingerprint and no dataset id changed. Reasoning in `DESIGN_REVIEW.md` §3.99,
   the note "Tiers as general pieces, contract 0.18".
+- **0.19** (2026-11-13): timed eviction, eviction bodies, and ranges (the user's answers of
+  2026-11-13): a tier's `evict {every, when, count}` and `on_evict {lanes, body}`, `tier` and
+  `victim`, and `probe`, `touch`, `store` (V33 extended, V35), a store's `taken` and `present`
+  and a `chunks` array in place of a range, so tiers composed in the document (LMCache's G2
+  above G3, G3 written only what G2 newly took, its planned drop, its unlinks as ops of the
+  plan). A 0.18 document is a
+  0.19 document with the version changed, and means the same. Every committed AST was
+  regenerated; no fingerprint and no dataset id changed. Reasoning in `DESIGN_REVIEW.md` §3.99,
+  the note "Contract 0.19 proposed" and the user's answers.

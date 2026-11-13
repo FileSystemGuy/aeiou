@@ -12072,8 +12072,9 @@ read, write, and unlink, request by request, at two seeds and a G2 near its boun
   the next batch launch late by the overage, so slow unlinks show as the eviction lanes' L, reported
   with the run's other lags. (The user recalled "D"; in item 72 (7) D is a request's own storage
   wait and L a lane's inherited lag, and an eviction lane has no request, so its overage is its L.)
-  Item 72 (7) already makes "an eviction batch past the next trigger a failure"; whether that stays a
-  failure or becomes a reported L is not yet asked.
+  ~~Item 72 (7) already makes "an eviction batch past the next trigger a failure"; whether that stays a
+  failure or becomes a reported L is not yet asked.~~ Asked the same day: a reported L only, never a
+  failure (item 72 (7) amended).
 - **Q3: as LMCache does**: the eviction lanes are the connector's workers, `lanes` a parameter (4 in
   0.5.5).
 - **Q4: `probe`, `touch`, and `store` added.**
@@ -12088,6 +12089,46 @@ read, write, and unlink, request by request, at two seeds and a G2 near its boun
   in planned time (G2's planned stores against its planned ticks), within the rule that a `skip`
   is only for a capacity the plan fixes; a real run's drops, which follow real timing, stay a gate
   failure (item 72 (7)). So G2's `full` is `skip`, not `fail`, in 0.19.
+
+*Built (2026-11-13, the user's "build 0.19").* Both checkers, the schema, the runner, the builder,
+and the documents; rule V35 and V33 extended, 21 refusal cases shared by the checkers; every AST
+rebuilt and case re-locked, no fingerprint changed (no committed abstract uses a 0.19 node yet).
+Choices made in the build, within the answers:
+- An eviction at a store (a tier without timed eviction) also runs the `on_evict` body on
+  eviction lanes, at the storing lane's planned instant, not on the storing lane: one mechanism,
+  and the body's ops never delay the lane that stored.
+- `store`, `touch`, and `probe` take no `hold`; a held range is `lookup`'s.
+- *The gap found, and closed the same day.* The first port (`gen10_port.py`) was held to a reference
+  driving LMCache 0.5.5's own `LRUEvictionPolicy` with the walk's planned events, and was equal to it
+  request by request and unlink by unlink at seven configurations, under the abstract's semantics:
+  G3 storing the leading run of G2 held after G2's store. LMCache instead copies to G3 only the
+  chunks newly written into G2, and a chunk G3 holds is written again and made most recent. The two
+  agree while G2 never drops (40 sessions, G2 20,000, G3 200,000: identical) and differ elsewhere by
+  up to 13 % in writes and 13 % in G2 hits (20 sessions, G2 1,500, G3 8,000, a 1M-token G1: writes
+  87,973 against LMCache's 77,863). The user chose (2026-11-13) to close it before committing: a
+  `store`'s `taken`, an array of the indices of the chunks it stored, read by `len` and `elem` as
+  0.15's arrays are; `chunks` in place of `from` and `count` on `store` and `touch`; and
+  `present: renew`, a held chunk stored again as if absent. LMCache is then G2 `store` with
+  `taken: t2`, G3 `store` of `chunks: t2, present: renew, taken: t3`, one file written a chunk of
+  `t3` (`gen10_lmc.py`). It equals the reference's LMCache semantics request by request and unlink
+  by unlink at all seven configurations, the first port still equal to its own:
+
+  | sessions, seed, G2, G3, G1 tokens | LMCache semantics (`gen10_lmc`): G2 hits, G3 reads, writes, unlinks | abstract's first (`gen10_port`) |
+  |---|---|---|
+  | 20, 1, 2,000, 20,000, 6M | 442,223 / 1 / 58,566 / 38,614 | 433,007 / 1 / 60,081 / 38,522 |
+  | 20, 1, 200, 20,000, 6M | 20,251 / 1 / 46,750 / 32,046 | 17,607 / 1 / 46,812 / 32,043 |
+  | 40, 2, 300, 5,000, 6M | 134,194 / 1 / 370,117 / 328,223 | 133,400 / 1 / 381,814 / 329,631 |
+  | 40, 2, 20,000, 200,000, 6M | 1,421,196 / 31,302 / 128,500 / 0 | identical |
+  | 40, 2, 3,000, 20,000, 1M | 876,430 / 1,339,194 / 199,398 / 170,912 | 951,395 / 1,289,848 / 208,123 / 171,162 |
+  | 20, 1, 1,500, 8,000, 1M | 407,944 / 27,937 / 77,863 / 64,730 | 466,833 / 27,097 / 87,973 / 66,222 |
+  | 40, 3, 6,000, 40,000, 2M | 1,298,104 / 91,062 / 158,335 / 122,133 | 1,158,427 / 86,007 / 163,937 / 128,465 |
+
+  The scripts are scratch (`~/MLPerfStorage/limit500k/port/`, `gen10_port.py`, `gen10_lmc.py`,
+  `compare10.py`, `PORT=gen10_lmc SEM=lmcache`). A G2 and G3 smaller than G1 leaves G3 almost never
+  read (one read in four of the seven), since G1 holds more than they do: a realistic hierarchy has
+  G2 at least G1.
+- Not yet: the committed `lmcache-local-disk` abstract written with G2 and G3, `preempt`, Dynamo's
+  tiers, and the run side (item 72 (7)).
 
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the

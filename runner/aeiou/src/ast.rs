@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.18";
+pub const AST_VERSION: &str = "0.19";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -350,9 +350,31 @@ pub enum ExprNode {
     Now(NowArg),
     /// An attribute of the entry a tier's `order` is computed for (contract 0.18, rule V33).
     Cached(CachedAttr),
+    /// What a tier holds, read by its timed eviction's `when` and `count` (contract 0.19, V33).
+    Tier(TierAttr),
+    /// The key of the entry an `on_evict` body runs for (contract 0.19, rule V35).
+    Victim(NowArg),
 }
 
-/// `now` takes no argument: `{"now": {}}`.
+/// What a tier's `evict` may read of the tier (contract 0.19): `used`, its entries' size in the
+/// tier's unit; `entries`, how many it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TierAttr {
+    Used,
+    Entries,
+}
+
+impl TierAttr {
+    pub fn name(self) -> &'static str {
+        match self {
+            TierAttr::Used => "used",
+            TierAttr::Entries => "entries",
+        }
+    }
+}
+
+/// `now` and `victim` take no argument: `{"now": {}}`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NowArg {}
@@ -984,6 +1006,36 @@ pub enum Node {
     Acquire { resource: String, n: Expr, hold: String },
     /// What this lane holds under `hold`, given back (contract 0.18, rule V34).
     Release { hold: String },
+    /// The longest run of `seq`'s whole chunks from chunk `from` held in a tier, bound to `bind`;
+    /// nothing changed (contract 0.19, rule V33).
+    Probe { cache: String, tier: String, seq: Expr, per: Expr, from: Expr, bind: String },
+    /// The chunks `from` to `from + count`, or those an array `chunks` names, that a tier holds,
+    /// touched, as one event (contract 0.19, rule V33).
+    Touch { cache: String, tier: String, seq: Expr, per: Expr, #[serde(default)] from: Option<Expr>, #[serde(default)] count: Option<Expr>, #[serde(default)] chunks: Option<String> },
+    /// The chunks `from` to `from + count`, or those an array `chunks` names, that a tier lacks
+    /// (with `present: renew`, all of them), stored, as one event; with `bind`, the leading run of
+    /// the range held after it; with `taken`, an array of the indices of the chunks it stored
+    /// (contract 0.19, rule V33).
+    Store {
+        cache: String,
+        tier: String,
+        seq: Expr,
+        per: Expr,
+        #[serde(default)]
+        from: Option<Expr>,
+        #[serde(default)]
+        count: Option<Expr>,
+        #[serde(default)]
+        chunks: Option<String>,
+        #[serde(default)]
+        size: Option<Expr>,
+        #[serde(default)]
+        bind: Option<String>,
+        #[serde(default)]
+        present: Present,
+        #[serde(default)]
+        taken: Option<String>,
+    },
 
     Open { file: Handle, flags: Vec<OpenFlag>, #[serde(default)] mode: Option<u32>, #[serde(default)] expect: Expect },
     Close(FileOp),
@@ -1029,6 +1081,9 @@ impl Node {
             Node::Lookup { .. } => "lookup",
             Node::Acquire { .. } => "acquire",
             Node::Release { .. } => "release",
+            Node::Probe { .. } => "probe",
+            Node::Touch { .. } => "touch",
+            Node::Store { .. } => "store",
             Node::Open { .. } => "open",
             Node::Close(_) => "close",
             Node::Read { .. } => "read",
@@ -1058,7 +1113,7 @@ impl Node {
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
                 | Node::Cond { .. } | Node::Choose { .. } | Node::Phase { .. } | Node::Trace { .. }
                 | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. } | Node::Lookup { .. }
-                | Node::Acquire { .. } | Node::Release { .. }
+                | Node::Acquire { .. } | Node::Release { .. } | Node::Probe { .. } | Node::Touch { .. } | Node::Store { .. }
         )
     }
 }
@@ -1068,7 +1123,7 @@ impl Node {
 pub static LOOKUP_DEF: ExprLike = ExprLike::Expr(Expr::Lit(Literal::Int(0)));
 
 /// A cache of a timeline (contract 0.16, rule V33): its tiers, walked in planned order.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CacheDecl {
     pub name: String,
@@ -1076,8 +1131,9 @@ pub struct CacheDecl {
 }
 
 /// A tier of a cache: its capacity, the order its victims are taken in, and what a store
-/// that finds no victim does (contract 0.18).
-#[derive(Debug, Clone, Deserialize)]
+/// that finds no victim does (contract 0.18); when its victims go, and what each runs (contract
+/// 0.19).
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TierDecl {
     pub name: String,
@@ -1091,6 +1147,43 @@ pub struct TierDecl {
     pub unit: TierUnit,
     #[serde(default)]
     pub full: Full,
+    /// Timed eviction (contract 0.19): victims taken at planned ticks, never at store.
+    #[serde(default)]
+    pub evict: Option<TimedEvict>,
+    /// The statements each victim runs, on eviction lanes (contract 0.19, rule V35).
+    #[serde(default)]
+    pub on_evict: Option<OnEvict>,
+}
+
+/// At every planned instant k × `every` from the timeline's start, while lanes remain: if `when`
+/// holds, the `count` entries least in the tier's `order` that no lane holds are evicted
+/// (contract 0.19). `when` and `count` read parameters, literals, and `tier`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimedEvict {
+    pub every: Expr,
+    pub when: Expr,
+    pub count: Expr,
+}
+
+/// `body` run for each victim with `victim` its key, victim i of a batch on eviction lane
+/// i mod `lanes`, at the instant of the tick or the store that evicted it (contract 0.19, V35).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OnEvict {
+    pub lanes: Expr,
+    pub body: Body,
+}
+
+/// What a `store` does with a chunk the tier holds already (contract 0.19).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Present {
+    /// Left as it is.
+    #[default]
+    Keep,
+    /// Stored again, as if it were absent: a new entry, and taken.
+    Renew,
 }
 
 /// What a store does when the tier has no room and no victim left (contract 0.18).

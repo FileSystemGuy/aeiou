@@ -522,8 +522,14 @@ Contract 0.18 (the same day, the user's choices): tiers as general pieces with e
 policy written in the abstract: a victim `order` of expressions, holds, `full` (skip, wait, or
 fail), a timeline's counted `resources` with `acquire` and `release`, and `now`; rule V34. With
 them vLLM's GPU pool and the engine's request slots are written in an abstract and held to the
-reference request by request. Not built: LMCache's watermark eviction (a timed trigger), what an
-eviction issues (an unlink, a write to the tier below), `preempt`, and Dynamo's tiers.
+reference request by request. Not built: ~~LMCache's watermark eviction (a timed trigger), what an
+eviction issues (an unlink, a write to the tier below),~~ `preempt`, and Dynamo's tiers.
+Contract 0.19 (2026-11-13, the user's answers): timed eviction (`evict {every, when, count}`,
+the rule an expression over what the tier holds), an eviction body run for each victim on
+eviction lanes (an unlink is an op of the plan), and `probe`, `touch`, and `store` over a range
+of chunks or an array of them (a store's `taken`, what it newly stored, and `present: renew`),
+so G2 above G3 (NVIDIA's names, adopted the same day) and LMCache's planned drop are
+written in the abstract; rule V35. Not yet written with them: the KV abstract's G2 and G3.
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

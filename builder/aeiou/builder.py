@@ -239,7 +239,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.18"
+    AST_VERSION = "0.19"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -900,12 +900,20 @@ class Cursor:
                 check_ident(c, "cache")
                 if not tiers:
                     raise BuildError(f"cache {c!r} has no tiers (V33)")
-            node["caches"] = [{"name": c, "tiers": list(tiers)} for c, tiers in caches.items()]
+            node["caches"] = [{"name": c, "tiers": [dict(t) for t in tiers]} for c, tiers in caches.items()]
         if resources:
             node["resources"] = [{"name": check_ident(r, "resource"), "capacity": ast_of(lift(n, f"resource {r} capacity"))}
                                  for r, n in resources.items()]
         node["body"] = body
         self._emit({"timeline": node})
+        # an eviction body (contract 0.19): its statements written where the timeline stands
+        for c in node.get("caches", []):
+            for t in c["tiers"]:
+                if "on_evict" in t:
+                    fn, ebody = t["on_evict"]["body"], []
+                    t["on_evict"] = {"lanes": t["on_evict"]["lanes"], "body": ebody}
+                    with self._push(ebody, "on_evict"):
+                        fn(self)
         with self._push(body, "timeline"):
             yield Timeline(name)
 
@@ -941,6 +949,76 @@ class Cursor:
         self._emit({"lookup": node})
         self._top.bindings[bind] = None
         return Ref(bind)
+
+    def _range(self, what: str, cache: str, tier: str, seq, per) -> dict:
+        if not any(f.kind == "timeline" for f in self._frames):
+            raise BuildError(f"{what}: no timeline declares cache {cache!r} around it (V33)")
+        return {"cache": check_ident(cache, "cache"), "tier": check_ident(tier, "tier"),
+                "seq": ast_of(lift(seq, f"{what} seq")), "per": ast_of(lift(per, f"{what} per"))}
+
+    def probe(self, cache: str, tier: str, seq, per, frm, bind: str) -> Ref:
+        """The longest run of `seq`'s whole chunks of `per` blocks from chunk `frm` held in `tier`
+        of `cache`, bound to `bind`; nothing changed (contract 0.19, rule V33). Returns the
+        binding, which `@` and `prev` may not read."""
+        check_ident(bind, "binding")
+        node = self._range("probe", cache, tier, seq, per)
+        node["from"] = ast_of(lift(frm, "probe from"))
+        node["bind"] = bind
+        self._emit({"probe": node})
+        self._top.bindings[bind] = None
+        return Ref(bind)
+
+    def _chosen(self, what: str, node: dict, frm, count, chunks):
+        """A `touch` or `store`'s chunks: `frm` and `count`, or the array `chunks` (an `array`'s
+        ArrayRef, a store's `taken`, or a parameter array's name), not both (contract 0.19, V33)."""
+        if chunks is not None:
+            if frm is not None or count is not None:
+                raise BuildError(f"{what}: `chunks` in place of `from` and `count`, not beside them (V33)")
+            node["chunks"] = check_ident(chunks.name if isinstance(chunks, ArrayRef) else chunks, "chunks")
+        elif frm is None or count is None:
+            raise BuildError(f"{what}: a range needs `from` and `count`, or `chunks` (V33)")
+        else:
+            node["from"] = ast_of(lift(frm, f"{what} from"))
+            node["count"] = ast_of(lift(count, f"{what} count"))
+
+    def touch(self, cache: str, tier: str, seq, per, frm=None, count=None, *, chunks=None):
+        """The chunks `frm` to `frm + count`, or those whose indices the array `chunks` holds, that
+        `tier` of `cache` holds, touched as one event (contract 0.19, rule V33)."""
+        node = self._range("touch", cache, tier, seq, per)
+        self._chosen("touch", node, frm, count, chunks)
+        self._emit({"touch": node})
+
+    def store(self, cache: str, tier: str, seq, per, frm=None, count=None, size=None, bind: str | None = None, *,
+              chunks=None, present: str | None = None, taken: str | None = None):
+        """The chunks `frm` to `frm + count`, or those whose indices the array `chunks` holds, that
+        `tier` of `cache` lacks, stored as one event, `size` each in a tier that counts bytes;
+        with `present="renew"`, those it holds stored again as if absent (contract 0.19, rule V33).
+        With `bind`, the leading run of the range held after it (a planned drop leaves it short);
+        with `taken`, an array of the indices of the chunks it stored. Returns the binding's Ref,
+        the ArrayRef of `taken`, both as a pair, or None."""
+        node = self._range("store", cache, tier, seq, per)
+        self._chosen("store", node, frm, count, chunks)
+        if size is not None:
+            node["size"] = ast_of(lift(size, "store size"))
+        if present is not None:
+            if present not in ("keep", "renew"):
+                raise BuildError(f"store present: one of keep, renew, not {present!r}")
+            node["present"] = present
+        if bind is not None:
+            node["bind"] = check_ident(bind, "binding")
+        if taken is not None:
+            check_ident(taken, "taken")
+            if taken in self.wl._param_specs:
+                raise BuildError(f"store: `taken` {taken!r} has the name of a parameter (V32)")
+            node["taken"] = taken
+        self._emit({"store": node})
+        out = []
+        if bind is not None:
+            self._top.bindings[bind] = None
+            out.append(Ref(bind))
+        if taken is not None:
+            out.append(ArrayRef(taken))
+        return None if not out else out[0] if len(out) == 1 else tuple(out)
 
     def acquire(self, resource: str, n, hold: str):
         """`n` units of a resource of the enclosing timeline, this lane's under `hold` until

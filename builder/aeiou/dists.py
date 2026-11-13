@@ -183,18 +183,50 @@ def now() -> Expr:
     return Plain({"now": {}})
 
 
+TIER_ATTRS = ("used", "entries")
+
+
+def tier_attr(attr: str) -> Expr:
+    """What a tier holds, read by its timed eviction's `when` and `count` (contract 0.19, rule
+    V33): `used` (its entries' size in the tier's unit) or `entries` (how many it holds)."""
+    from .nodes import Plain
+    if attr not in TIER_ATTRS:
+        raise BuildError(f"tier_attr: one of {', '.join(TIER_ATTRS)}, got {attr!r}")
+    return Plain({"tier": attr})
+
+
+def victim() -> Expr:
+    """The key of the entry an `on_evict` body runs for (contract 0.19, rule V35), as
+    `chunk_key` gives it."""
+    from .nodes import Plain
+    return Plain({"victim": {}})
+
+
+def timed(every, when, count) -> dict:
+    """A tier's timed eviction (contract 0.19, rule V33), for `tier(evict=...)`: at every
+    planned instant k × `every` ns, if `when` holds, the `count` entries least in the tier's
+    order that no lane holds are evicted, never at store. `when` and `count` read parameters,
+    literals, and `tier_attr`; `every` parameters and literals."""
+    return {"every": ast_of(lift(every, "evict every")), "when": ast_of(lift(when, "evict when")),
+            "count": ast_of(lift(count, "evict count"))}
+
+
 def lru() -> list:
     """The order that evicts the entry looked up longest ago first: `[cached("touched")]`."""
     return [cached("touched")]
 
 
-def tier(name: str, order=None, capacity=None, unit: str = "entries", full: str = "skip") -> dict:
+def tier(name: str, order=None, capacity=None, unit: str = "entries", full: str = "skip", evict: dict | None = None,
+         on_evict=None) -> dict:
     """A tier of a timeline's cache (contracts 0.16 and 0.18, rule V33): at most `capacity`
     (in entries or bytes) of entries no lane holds evicted least `order` first (a list of
     integer expressions over `cached` and parameters, compared in turn; `lru()` for the entry
     looked up longest ago), never one a lane holds. With no `order`, nothing is evicted. `full`,
     what a store finding no room and no victim does: `skip` it, `wait` (the lane waits for a
-    release, first come first), or `fail`."""
+    release, first come first), or `fail`. `evict` (contract 0.19), `timed(...)`: victims taken
+    at planned ticks instead of at store. `on_evict` (contract 0.19, rule V35), `(lanes, fn)`:
+    each victim runs the statements `fn(b)` writes on the builder `b` it is given, with
+    `victim()` its key, victim i of a batch on eviction lane i mod `lanes`."""
     if unit not in ("entries", "bytes"):
         raise BuildError(f"tier {name!r}: unit is `entries` or `bytes`, got {unit!r}")
     if full not in ("skip", "wait", "fail"):
@@ -212,6 +244,17 @@ def tier(name: str, order=None, capacity=None, unit: str = "entries", full: str 
         t["unit"] = unit
     if full != "skip":
         t["full"] = full
+    if evict is not None:
+        if capacity is None or order is None:
+            raise BuildError(f"tier {name!r}: `evict` needs a capacity and an order (V33)")
+        t["evict"] = dict(evict)
+    if on_evict is not None:
+        lanes, fn = on_evict
+        if order is None:
+            raise BuildError(f"tier {name!r}: `on_evict` with no `order`, so nothing is evicted (V35)")
+        if not callable(fn):
+            raise BuildError(f"tier {name!r}: `on_evict` is (lanes, fn), fn writing the body")
+        t["on_evict"] = {"lanes": ast_of(lift(lanes, f"tier {name} on_evict lanes")), "body": fn}
     return t
 
 

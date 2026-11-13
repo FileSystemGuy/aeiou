@@ -5,7 +5,7 @@
     {
       "name": "safetensors_load",
       "abstract": "model-loading/safetensors-load/safetensors_load.ast.json",
-      "ast_sha256": "18d97adc1922a9a73156e58f1619b76811afa2efb45a899356898201044c52a5",
+      "ast_sha256": "f714d32ad96ab286e6ff1dc2034c3a8c0aeaa6d98d68eaa027496acf4c14e1c7",
       "params": {
         "bytes": {"default": [536870912, 134217728, 67108864, 1073741824, 16384]},
         "config_bytes": {"default": 4096},

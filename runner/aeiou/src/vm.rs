@@ -286,6 +286,10 @@ struct Tier<'a> {
     bytes: bool,
     full: Full,
     order: Option<&'a [Expr]>,
+    /// Timed eviction (contract 0.19): victims go at its ticks, never at store.
+    timed: bool,
+    /// Whether its victims run an `on_evict` body (contract 0.19).
+    on_evict: bool,
     used: i64,
     unheld: i64,
     stamp: i64,
@@ -548,6 +552,20 @@ struct TlShared<'a> {
     /// Tiers and resources a step gave room in, with the planned time: their first waiter
     /// tries again then.
     wake: Vec<(Waitable<'a>, i64)>,
+    /// Victims a store evicted from a tier with an `on_evict` body, with the planned time
+    /// (contract 0.19): the driver gives each its eviction lane.
+    evicted: Vec<(Waitable<'a>, i64, Vec<i64>)>,
+}
+
+/// A tier's eviction, as the driver of its timeline keeps it (contract 0.19): its timed rule
+/// and next tick, and its `on_evict` body with what the body starts from.
+struct EvictLanes<'m, 'a> {
+    /// Its index among the timeline's tiers, in declaration order: an eviction lane's key starts
+    /// with it.
+    idx: i64,
+    timed: Option<(&'a TimedEvict, i64, i64)>,
+    body: Option<(Snapshot<'m, 'a>, i64)>,
+    batches: i64,
 }
 
 /// One lane of a timeline: its walk (`None` once it has ended), its key, the lane that waits
@@ -562,6 +580,8 @@ struct Lane<'m, 'a> {
     until: i64,
     /// Waiting on a tier or a resource (contract 0.18), out of the heap until woken.
     parked: bool,
+    /// An eviction lane (contract 0.19): at the same planned time, it goes before the others.
+    evict: bool,
 }
 
 /// A timeline being walked: its lanes, a heap of (planned time, lane key, order put, lane)
@@ -569,16 +589,91 @@ struct Lane<'m, 'a> {
 struct TlRun<'m, 'a> {
     shared: Arc<Mutex<TlShared<'a>>>,
     lanes: Vec<Lane<'m, 'a>>,
-    heap: BinaryHeap<Reverse<(i64, Vec<i64>, u64, usize)>>,
+    /// (planned time, 0 for an eviction lane and 1 for the others, lane key, order put, lane)
+    heap: BinaryHeap<Reverse<(i64, u8, Vec<i64>, u64, usize)>>,
     seq: u64,
     cur: Option<usize>,
+    /// Its tiers' eviction (contract 0.19), by cache and tier, in declaration order.
+    evict: Vec<(Waitable<'a>, EvictLanes<'m, 'a>)>,
+    /// A walk that evaluates a timed tier's `when` and `count` (parameters, literals, `tier`).
+    eval: Option<Box<Vm<'m, 'a>>>,
 }
 
-impl TlRun<'_, '_> {
+impl<'m, 'a> TlRun<'m, 'a> {
     fn ready(&mut self, l: usize) {
-        let t = self.lanes[l].vm.as_ref().map_or(0, |v| v.clock);
+        let lane = &self.lanes[l];
+        let t = lane.vm.as_ref().map_or(0, |v| v.clock);
         self.seq += 1;
-        self.heap.push(Reverse((t, self.lanes[l].key.clone(), self.seq, l)));
+        self.heap.push(Reverse((t, u8::from(!lane.evict), lane.key.clone(), self.seq, l)));
+    }
+
+    /// Each victim's eviction lane (contract 0.19): victim i of the batch on lane i mod `lanes`,
+    /// its key (the tier's index, the batch, the lane, its place on the lane), at `at`.
+    fn spawn_evictions(&mut self, w: Waitable<'a>, at: i64, keys: Vec<i64>) {
+        let Some((_, e)) = self.evict.iter_mut().find(|(x, _)| *x == w) else { return };
+        let Some((snap, lanes)) = &e.body else { return };
+        let (idx, batch, lanes, snap) = (e.idx, e.batches, *lanes, snap.clone());
+        e.batches += 1;
+        for (i, k) in keys.into_iter().enumerate() {
+            let i = i as i64;
+            let mut kid = Vm::resume(snap.clone());
+            kid.tl = Some(self.shared.clone());
+            kid.clock = at;
+            kid.lane = self.lanes.len();
+            kid.victim = Some(k);
+            kid.start(snap.body);
+            self.lanes.push(Lane { vm: Some(kid), key: vec![idx, batch, i % lanes, i / lanes], parent: None, forks: 0, wait: 0, until: 0, parked: false, evict: true });
+            let l = self.lanes.len() - 1;
+            self.ready(l);
+        }
+    }
+
+    /// The ticks due at or before `upto`, in planned order (a tie to the tier declared first):
+    /// each evicts, when its `when` holds, its `count` victims least in order that no lane
+    /// holds, and starts their eviction lanes at the tick.
+    fn ticks(&mut self, upto: i64) -> Result<()> {
+        loop {
+            let Some(i) = (0..self.evict.len())
+                .filter_map(|i| self.evict[i].1.timed.map(|(_, _, next)| (next, i)))
+                .filter(|(next, _)| *next <= upto)
+                .min()
+                .map(|(_, i)| i)
+            else {
+                return Ok(());
+            };
+            let (w, e) = &mut self.evict[i];
+            let w = *w;
+            let (rule, every, at) = e.timed.expect("a tick is a timed tier's");
+            e.timed = Some((rule, every, at.checked_add(every).ok_or_else(|| anyhow!("a planned time past 2^63-1 ns"))?));
+            let mut g = self.shared.lock().unwrap();
+            let name = g.name;
+            let t = g.tiers.get_mut(&w).expect("a timed tier is declared");
+            let state = [t.used, t.entries.len() as i64];
+            let ev = self.eval.as_mut().expect("a timeline with a timed tier has its evaluator");
+            ev.tier_state = Some(state);
+            let r = (|| -> ER<(bool, i64)> { Ok((ev.expr(&rule.when)?.as_bool()?, ev.expr(&rule.count)?.as_int()?)) })();
+            ev.tier_state = None;
+            let (go, count) = r.map_err(|e| match e {
+                EvalError::Other(e) => e.context(format!("timeline `{}`: tier `{}` of cache `{}`: its `evict` at {at} ns", name, w.1, w.0)),
+                EvalError::BelowFrom => anyhow!("timeline `{}`: tier `{}` of cache `{}`: its `evict` at {at} ns", name, w.1, w.0),
+            })?;
+            if !go || count <= 0 {
+                continue;
+            }
+            let mut gone = Vec::new();
+            while (gone.len() as i64) < count {
+                let Some((_, k)) = t.victims.pop_first() else { break };
+                let v = t.entries.remove(&k).expect("a victim is held in the tier");
+                t.used -= v.size;
+                t.unheld -= v.size;
+                gone.push(k);
+            }
+            let body = t.on_evict;
+            drop(g);
+            if body && !gone.is_empty() {
+                self.spawn_evictions(w, at, gone);
+            }
+        }
     }
 }
 
@@ -642,6 +737,10 @@ pub struct Vm<'m, 'a> {
     key_memo: Vec<(Arc<Seq>, i64, Arc<Vec<u64>>)>,
     /// While a tier's `order` is computed: the entry's values `cached` reads.
     cached: Option<[i64; 6]>,
+    /// While a timed tier's `when` and `count` are computed: what `tier` reads (contract 0.19).
+    tier_state: Option<[i64; 2]>,
+    /// In an eviction lane: its victim's key, which `victim` reads (contract 0.19).
+    victim: Option<i64>,
     /// What this lane holds, by name (contract 0.18).
     holds: Vec<(&'a str, Hold<'a>)>,
     /// This lane's index in its timeline.
@@ -689,6 +788,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             prev_slots: HashMap::new(),
             key_memo: Vec::new(),
             cached: None,
+            tier_state: None,
+            victim: None,
             holds: Vec::new(),
             lane: 0,
         }
@@ -724,6 +825,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             prev_slots: HashMap::new(),
             key_memo: Vec::new(),
             cached: None,
+            tier_state: None,
+            victim: None,
             holds: Vec::new(),
             lane: 0,
         }
@@ -767,6 +870,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         self.tlrun = None;
         self.prev_slots.clear();
         self.key_memo.clear();
+        self.victim = None;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -867,8 +971,14 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         loop {
             let cur = match run.cur {
                 Some(c) => c,
-                None => match run.heap.pop() {
-                    Some(Reverse((_, _, _, l))) => {
+                None => match {
+                    if let Some(Reverse((t, ..))) = run.heap.peek() {
+                        let t = *t;
+                        run.ticks(t)?;
+                    }
+                    run.heap.pop()
+                } {
+                    Some(Reverse((_, _, _, _, l))) => {
                         run.cur = Some(l);
                         l
                     }
@@ -896,9 +1006,14 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                             let v = lane.vm.as_mut().unwrap();
                             v.clock = v.clock.max(t);
                             run.seq += 1;
-                            run.heap.push(Reverse((v.clock, lane.key.clone(), run.seq, l)));
+                            run.heap.push(Reverse((v.clock, u8::from(!lane.evict), lane.key.clone(), run.seq, l)));
                         }
                     }
+                }
+                let evicted = std::mem::take(&mut g.evicted);
+                drop(g);
+                for (w, at, keys) in evicted {
+                    run.spawn_evictions(w, at, keys);
                 }
             }
             match s {
@@ -951,7 +1066,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         kid.start_sub(k);
                         let mut kkey = key.clone();
                         kkey.push(k);
-                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0, parked: false });
+                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0, parked: false, evict: false });
                         let l = run.lanes.len() - 1;
                         run.ready(l);
                     }
@@ -1141,6 +1256,14 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             ExprNode::Cached(a) => match self.cached {
                 Some(v) => Value::Int(v[*a as usize]),
                 None => return other(format!("cached `{}`: outside a tier's `order` (V33)", a.name())),
+            },
+            ExprNode::Tier(a) => match self.tier_state {
+                Some(v) => Value::Int(v[*a as usize]),
+                None => return other(format!("tier `{}`: outside a tier's `evict` (V33)", a.name())),
+            },
+            ExprNode::Victim(_) => match self.victim {
+                Some(k) => Value::Int(k),
+                None => return other("victim: outside a tier's `on_evict` body (V35)"),
             },
             ExprNode::Published(arg) => {
                 self.positional_only("published")?;
@@ -1358,6 +1481,100 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
 
     /// A value whose position is the step being walked (a timeline read, a `prev`) has none
     /// to give an `x @ i`, which recomputes a definition at another index.
+    /// Room for `unit` more in a tier of capacity `cap`: a tier with timed eviction makes none
+    /// at store (its victims go at its ticks, contract 0.19); another evicts the victims least in
+    /// its order, noting their keys. Whether the room is there.
+    fn make_room(t: &mut Tier<'a>, unit: i64, cap: i64, gone: &mut Vec<i64>) -> bool {
+        if unit > cap {
+            return false;
+        }
+        while t.used + unit > cap {
+            if t.timed {
+                return false;
+            }
+            let Some((_, victim)) = t.victims.pop_first() else {
+                return false;
+            };
+            let v = t.entries.remove(&victim).expect("a victim is held in the tier");
+            t.used -= v.size;
+            t.unheld -= v.size;
+            gone.push(victim);
+        }
+        true
+    }
+
+    /// A `probe`, `touch`, or `store`'s keys, one a whole chunk of `seq`, and its range, `from`
+    /// to `from + count` cut at the sequence's end (contract 0.19).
+    fn range(&mut self, s: &'a Expr, per: &'a Expr, from: &'a Expr, count: Option<&'a Expr>, what: &str) -> ER<(Vec<i64>, usize, usize)> {
+        let s = self.seq_of(s, what)?;
+        let per = self.expr(per)?.as_int()?;
+        let from = self.expr(from)?.as_int()?;
+        if from < 0 {
+            return other(format!("{what}: from {from}, below the first chunk"));
+        }
+        let count = match count {
+            Some(c) => {
+                let n = self.expr(c)?.as_int()?;
+                if n < 0 {
+                    return other(format!("{what}: count {n}"));
+                }
+                Some(n)
+            }
+            None => None,
+        };
+        let keys: Vec<i64> = self.chunk_keys(&s, per, what)?.iter().map(|h| seq::key(*h)).collect();
+        let n = keys.len();
+        let from = (from as u64).min(n as u64) as usize;
+        let to = match count {
+            Some(c) => (from as u64).saturating_add(c as u64).min(n as u64) as usize,
+            None => n,
+        };
+        Ok((keys, from, to))
+    }
+
+    /// A `touch` or `store`'s keys and the indices of the chunks it acts on, in order: `from`
+    /// to `from + count` cut at the sequence's end, or the elements of the array `chunks`
+    /// (contract 0.19).
+    fn chosen(&mut self, s: &'a Expr, per: &'a Expr, from: Option<&'a Expr>, count: Option<&'a Expr>, chunks: Option<&'a str>, what: &str) -> ER<(Vec<i64>, Vec<usize>)> {
+        match (from, count, chunks) {
+            (Some(f), Some(c), None) => {
+                let (keys, from, to) = self.range(s, per, f, Some(c), what)?;
+                Ok((keys, (from..to).collect()))
+            }
+            (None, None, Some(name)) => {
+                let vals: Vec<Value<'a>> = match self.computed(name) {
+                    Some(a) => a.to_vec(),
+                    None => match self.array(name, what) {
+                        Ok(a) => a.iter().map(Value::from_pvalue).collect(),
+                        Err(_) => return other(format!("{what}: no array `{name}` in scope")),
+                    },
+                };
+                let s = self.seq_of(s, what)?;
+                let per = self.expr(per)?.as_int()?;
+                let keys: Vec<i64> = self.chunk_keys(&s, per, what)?.iter().map(|h| seq::key(*h)).collect();
+                let mut idx = Vec::with_capacity(vals.len());
+                for v in vals {
+                    let i = v.as_int()?;
+                    if i < 0 || i as u64 >= keys.len() as u64 {
+                        return other(format!("{what}: chunk {i}, outside the sequence's {} chunks", keys.len()));
+                    }
+                    idx.push(i as usize);
+                }
+                Ok((keys, idx))
+            }
+            (_, _, Some(_)) => other(format!("{what}: `chunks` in place of `from` and `count`, not beside them (V33)")),
+            _ => other(format!("{what}: a range needs `from` and `count`, or `chunks` (V33)")),
+        }
+    }
+
+    /// The enclosing timeline, for a statement that names one of its caches (V33).
+    fn cache_of(&self, cache: &str, what: &str) -> ER<Arc<Mutex<TlShared<'a>>>> {
+        match self.tl.clone() {
+            Some(tl) => Ok(tl),
+            None => other(format!("{what}: no timeline declares cache `{cache}` around it (V33)")),
+        }
+    }
+
     /// A tier's `order` values for an entry with these attributes (contract 0.18).
     fn order_of(&mut self, order: &'a [Expr], attrs: [i64; 6]) -> ER<Vec<i64>> {
         let saved = self.cached.replace(attrs);
@@ -2112,6 +2329,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     return other(format!("timeline `{name}` inside a timeline (V30)"));
                 }
                 let mut tiers = HashMap::new();
+                let mut evict = Vec::new();
+                let mut idx = 0i64;
                 for c in caches {
                     for t in &c.tiers {
                         let capacity = match &t.capacity {
@@ -2124,11 +2343,38 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                             }
                             None => None,
                         };
+                        let timed = match &t.evict {
+                            Some(ev) => {
+                                let every = self.expr(&ev.every)?.as_int()?;
+                                if every <= 0 {
+                                    return other(format!("tier `{}` of cache `{}`: evict every {every} ns, not positive", t.name, c.name));
+                                }
+                                Some((ev, every, every))
+                            }
+                            None => None,
+                        };
+                        let body = match &t.on_evict {
+                            Some(oe) => {
+                                let lanes = self.expr(&oe.lanes)?.as_int()?;
+                                if lanes <= 0 {
+                                    return other(format!("tier `{}` of cache `{}`: on_evict lanes {lanes}, not positive", t.name, c.name));
+                                }
+                                let snap = Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &self.frames, &self.scopes, &self.phases, &self.open, &self.written, &oe.body);
+                                Some((snap, lanes))
+                            }
+                            None => None,
+                        };
+                        if timed.is_some() || body.is_some() {
+                            evict.push(((c.name.as_str(), t.name.as_str()), EvictLanes { idx, timed, body, batches: 0 }));
+                        }
+                        idx += 1;
                         let tier = Tier {
                             capacity,
                             bytes: t.unit == TierUnit::Bytes,
                             full: t.full,
                             order: t.order.as_deref(),
+                            timed: t.evict.is_some(),
+                            on_evict: t.on_evict.is_some(),
                             used: 0,
                             unheld: 0,
                             stamp: 0,
@@ -2146,12 +2392,13 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     }
                     res.insert(r.name.as_str(), Res { capacity: n, used: 0 });
                 }
-                let shared = Arc::new(Mutex::new(TlShared { name, entries: HashMap::new(), tiers, resources: res, waiters: HashMap::new(), wake: Vec::new() }));
+                let shared = Arc::new(Mutex::new(TlShared { name, entries: HashMap::new(), tiers, resources: res, waiters: HashMap::new(), wake: Vec::new(), evicted: Vec::new() }));
                 let snap = Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &self.frames, &self.scopes, &self.phases, &self.open, &self.written, body);
+                let eval = evict.iter().any(|(_, e)| e.timed.is_some()).then(|| Box::new(Vm::resume(snap.clone())));
                 let mut main = Vm::resume(snap);
                 main.tl = Some(shared.clone());
                 main.push_body(body);
-                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false }], heap: BinaryHeap::new(), seq: 0, cur: None };
+                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false, evict: false }], heap: BinaryHeap::new(), seq: 0, cur: None, evict, eval };
                 run.ready(0);
                 self.tlrun = Some(Box::new(run));
                 Ok(Some(Next::Timeline))
@@ -2203,7 +2450,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                             Some(_) => {}
                         }
                     }
-                    let free = cap - t.used + if t.order.is_some() { t.unheld - found_unheld } else { 0 };
+                    let free = cap - t.used + if t.order.is_some() && !t.timed { t.unheld - found_unheld } else { 0 };
                     let waiting = g.waiters.get(&w).is_some_and(|q| q.front().is_some_and(|&l| l != self.lane));
                     if need > cap {
                         return other(format!("lookup: {need} of new entries in tier `{tier}` of cache `{cache}`, past its capacity {cap}, can never fit"));
@@ -2229,6 +2476,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 let t = g.tiers.get_mut(&w).unwrap();
                 let present: std::collections::HashSet<i64> = uniq.iter().filter(|(k, _)| t.entries.contains_key(k)).map(|(k, _)| *k).collect();
                 let mut held = Vec::new();
+                let mut gone = Vec::new();
                 // the keys held first, then the others stored, each in order
                 for &(k, pos) in &uniq {
                     let Some(e) = t.entries.get_mut(&k) else { continue };
@@ -2263,17 +2511,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         if unit > cap {
                             continue;
                         }
-                        let mut room = true;
-                        while t.used + unit > cap {
-                            let Some((_, victim)) = t.victims.pop_first() else {
-                                room = false;
-                                break;
-                            };
-                            let v = t.entries.remove(&victim).expect("a victim is held in the tier");
-                            t.used -= v.size;
-                            t.unheld -= v.size;
-                        }
-                        if !room {
+                        if !Self::make_room(t, unit, cap, &mut gone) {
                             match t.full {
                                 Full::Skip => continue,
                                 _ => return other(format!("lookup: tier `{tier}` of cache `{cache}` found no room it had counted")),
@@ -2294,12 +2532,128 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     t.used += unit;
                     t.entries.insert(k, e);
                 }
+                if t.on_evict && !gone.is_empty() {
+                    g.evicted.push((w, self.clock, gone));
+                }
                 drop(guard);
                 if let Some(h) = hold {
                     self.holds.push((h.as_str(), Hold::Tier { cache: cache.as_str(), tier: tier.as_str(), keys: held }));
                 }
                 let level = self.scopes.last_mut().unwrap();
                 level.bindings.insert(bind.as_str(), Binding { value: Value::Int(hit as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
+                Ok(None)
+            }
+            Node::Probe { cache, tier, seq: s, per, from, bind } => {
+                let (keys, from, _) = self.range(s, per, from, None, "probe")?;
+                let tl = self.cache_of(cache, "probe")?;
+                let g = tl.lock().unwrap();
+                let Some(t) = g.tiers.get(&(cache.as_str(), tier.as_str())) else {
+                    return other(format!("probe: cache `{cache}` has no tier `{tier}` (V33)"));
+                };
+                let hit = keys.iter().skip(from).take_while(|k| t.entries.contains_key(k)).count();
+                drop(g);
+                let level = self.scopes.last_mut().unwrap();
+                level.bindings.insert(bind.as_str(), Binding { value: Value::Int(hit as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
+                Ok(None)
+            }
+            Node::Touch { cache, tier, seq: s, per, from, count, chunks } => {
+                let (keys, idx) = self.chosen(s, per, from.as_ref(), count.as_ref(), chunks.as_deref(), "touch")?;
+                let tl = self.cache_of(cache, "touch")?;
+                let mut guard = tl.lock().unwrap();
+                let Some(t) = guard.tiers.get_mut(&(cache.as_str(), tier.as_str())) else {
+                    return other(format!("touch: cache `{cache}` has no tier `{tier}` (V33)"));
+                };
+                // one event for the statement: `pos` orders the chunks it touches
+                t.stamp += 1;
+                let now = t.stamp;
+                let mut seen = std::collections::HashSet::new();
+                for &pos in &idx {
+                    let k = keys[pos];
+                    if !seen.insert(k) {
+                        continue;
+                    }
+                    let Some(e) = t.entries.get_mut(&k) else { continue };
+                    e.touched = now;
+                    e.hits += 1;
+                    e.pos = pos as i64;
+                    if e.holds == 0 {
+                        if let Some(old) = e.ord.take() {
+                            t.victims.remove(&old);
+                            let o = (self.order_of(t.order.expect("an entry in the victim order has an order"), e.attrs())?, e.stored as u64);
+                            t.victims.insert(o.clone(), k);
+                            e.ord = Some(o);
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            Node::Store { cache, tier, seq: s, per, from, count, chunks, size, bind, present, taken } => {
+                let (keys, idx) = self.chosen(s, per, from.as_ref(), count.as_ref(), chunks.as_deref(), "store")?;
+                let size = match size {
+                    Some(e) => self.expr(e)?.as_int()?,
+                    None => 1,
+                };
+                let tl = self.cache_of(cache, "store")?;
+                let mut guard = tl.lock().unwrap();
+                let g = &mut *guard;
+                let w: Waitable<'a> = (cache.as_str(), tier.as_str());
+                let Some(t) = g.tiers.get_mut(&w) else {
+                    return other(format!("store: cache `{cache}` has no tier `{tier}` (V33)"));
+                };
+                let unit = if t.bytes { size } else { 1 };
+                t.stamp += 1;
+                let now = t.stamp;
+                let mut gone = Vec::new();
+                let mut took = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                for &pos in &idx {
+                    let k = keys[pos];
+                    if !seen.insert(k) {
+                        continue;
+                    }
+                    if let Some(e) = t.entries.get(&k) {
+                        // renew: the held entry goes, without being a victim, and is stored new
+                        if *present == Present::Keep || e.holds > 0 {
+                            continue;
+                        }
+                        let e = t.entries.remove(&k).expect("held");
+                        if let Some(o) = e.ord {
+                            t.victims.remove(&o);
+                            t.unheld -= e.size;
+                        }
+                        t.used -= e.size;
+                    }
+                    if let Some(cap) = t.capacity {
+                        if !Self::make_room(t, unit, cap, &mut gone) {
+                            match t.full {
+                                Full::Fail => return other(format!("store: tier `{tier}` of cache `{cache}` is full: past its capacity {cap} (full: fail)")),
+                                _ => continue,
+                            }
+                        }
+                    }
+                    let mut e = Ent { size: unit, stored: now, touched: now, freed: now, hits: 0, pos: pos as i64, holds: 0, ord: None };
+                    if let Some(order) = t.order {
+                        let o = (self.order_of(order, e.attrs())?, e.stored as u64);
+                        t.victims.insert(o.clone(), k);
+                        t.unheld += unit;
+                        e.ord = Some(o);
+                    }
+                    t.used += unit;
+                    t.entries.insert(k, e);
+                    took.push(Value::Int(pos as i64));
+                }
+                let held = idx.iter().take_while(|&&i| t.entries.contains_key(&keys[i])).count();
+                if t.on_evict && !gone.is_empty() {
+                    g.evicted.push((w, self.clock, gone));
+                }
+                drop(guard);
+                let level = self.scopes.last_mut().unwrap();
+                if let Some(b) = bind {
+                    level.bindings.insert(b.as_str(), Binding { value: Value::Int(held as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
+                }
+                if let Some(a) = taken {
+                    level.arrays.insert(a.as_str(), Arc::from(took));
+                }
                 Ok(None)
             }
             Node::Acquire { resource, n, hold } => {
@@ -2961,7 +3315,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.18", "name": "t",
+                r#"{{"ast": "0.19", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

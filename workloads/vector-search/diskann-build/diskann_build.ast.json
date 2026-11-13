@@ -1,5 +1,5 @@
 {
-  "ast": "0.18",
+  "ast": "0.19",
   "name": "diskann_build",
   "doc": "Single builder: PQ training and compression, partition into shards, per-shard build, merge, disk layout, sample.",
   "params": {
@@ -3567,10 +3567,9 @@
       "script": "diskann_build.py",
       "sha256": "5f43732661ba42a7a9629221d8fe4cd6e05b6130beef0475de35a2d5dd70f376",
       "builder_version": "0.4.0",
-      "git": "8b2a9824ed1d"
+      "git": "5d96eb82527d"
     },
     "python": "3.12.13",
-    "built_twice_identical": true,
-    "ast_sha256": "6ef1f99193f41f5b2bf41ae37281101acaf00547414ae73f92634e19303b3c52"
+    "ast_sha256": "35c131ea16780ae36b639e6824a9186daef3edbe7bdf90bbbb08422be017ee13"
   }
 }

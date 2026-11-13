@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.18",
+      "const": "0.19",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -774,6 +774,18 @@
                 "size"
               ],
               "description": "An attribute of the entry a tier's `order` is computed for (contract 0.18, rule V33), only there: `stored`, `touched`, `freed` the tier's event counts when it was stored, last looked up, and last released (`stored` until then); `hits` the lookups that found it; `pos` its index in the sequence of the lookup that last found or stored it; `size` its size in the tier's unit."
+            },
+            "tier": {
+              "enum": [
+                "used",
+                "entries"
+              ],
+              "description": "What a tier holds, read by its timed eviction's `when` and `count` (contract 0.19, rule V33), only there: `used` its entries' size in the tier's unit, `entries` how many it holds."
+            },
+            "victim": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "The key of the entry an `on_evict` body runs for (contract 0.19, rule V35), only in that body."
             }
           }
         }
@@ -2174,6 +2186,122 @@
             }
           },
           "description": "What this lane holds under `hold`, given back (contract 0.18, rule V34): a resource's units, or a tier's entries, which become victims again with `freed` the release. A lane ends holding nothing."
+        },
+        "probe": {
+          "type": "object",
+          "required": [
+            "cache",
+            "tier",
+            "seq",
+            "per",
+            "from",
+            "bind"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "cache": {
+              "$ref": "#/$defs/ident"
+            },
+            "tier": {
+              "$ref": "#/$defs/ident"
+            },
+            "seq": {
+              "$ref": "#/$defs/expr"
+            },
+            "per": {
+              "$ref": "#/$defs/expr"
+            },
+            "from": {
+              "$ref": "#/$defs/expr"
+            },
+            "bind": {
+              "$ref": "#/$defs/ident"
+            }
+          },
+          "description": "The longest run of `seq`'s whole chunks of `per` blocks from chunk `from` held in a tier of a cache of the enclosing timeline, bound to `bind` as an integer; nothing changed (contract 0.19, rule V33). Not positional: `@` and `prev` may not reach `bind`."
+        },
+        "touch": {
+          "type": "object",
+          "required": [
+            "cache",
+            "tier",
+            "seq",
+            "per"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "cache": {
+              "$ref": "#/$defs/ident"
+            },
+            "tier": {
+              "$ref": "#/$defs/ident"
+            },
+            "seq": {
+              "$ref": "#/$defs/expr"
+            },
+            "per": {
+              "$ref": "#/$defs/expr"
+            },
+            "from": {
+              "$ref": "#/$defs/expr"
+            },
+            "count": {
+              "$ref": "#/$defs/expr"
+            },
+            "chunks": {
+              "$ref": "#/$defs/ident"
+            }
+          },
+          "description": "The chunks `from` to `from + count` (cut at the sequence's end), or those whose indices the array `chunks` holds (an `array`, a `store`'s `taken`, or a parameter array; an index outside the sequence refused), that a tier holds, touched as one event: `touched` the same for all, `pos` each chunk's index; the others ignored (contract 0.19, rule V33). `from` and `count` together, or `chunks` alone."
+        },
+        "store": {
+          "type": "object",
+          "required": [
+            "cache",
+            "tier",
+            "seq",
+            "per"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "cache": {
+              "$ref": "#/$defs/ident"
+            },
+            "tier": {
+              "$ref": "#/$defs/ident"
+            },
+            "seq": {
+              "$ref": "#/$defs/expr"
+            },
+            "per": {
+              "$ref": "#/$defs/expr"
+            },
+            "from": {
+              "$ref": "#/$defs/expr"
+            },
+            "count": {
+              "$ref": "#/$defs/expr"
+            },
+            "chunks": {
+              "$ref": "#/$defs/ident"
+            },
+            "size": {
+              "$ref": "#/$defs/expr"
+            },
+            "present": {
+              "enum": [
+                "keep",
+                "renew"
+              ]
+            },
+            "bind": {
+              "$ref": "#/$defs/ident"
+            },
+            "taken": {
+              "$ref": "#/$defs/ident"
+            }
+          },
+          "description": "The chunks `from` to `from + count` (cut at the sequence's end), or those whose indices the array `chunks` holds (an `array`, a `store`'s `taken`, or a parameter array; an index outside the sequence refused), that a tier lacks, stored as one event, each `size` in a tier that counts bytes, exactly then; those it holds left as they are, or, with `present: renew`, stored again as if absent (a new entry; a chunk a lane holds is left as it is). A tier with timed eviction makes no room at store, so a chunk past its capacity is what `full` says (`skip`: a planned drop). With `bind`, the leading run of the range held after it; with `taken`, an array of the indices of the chunks it stored, in the order acted on, read with `len` and `elem` after the store (contract 0.19, rule V33; not the name of a parameter, V32); not on a tier whose `full` is `wait`. `from` and `count` together, or `chunks` alone. Not positional: `@` and `prev` may not reach `bind`."
         }
       }
     },
@@ -2321,9 +2449,47 @@
             "fail"
           ],
           "description": "What a store does when the tier has no room and no victim left (contract 0.18): `skip` (the default) leaves the entry out; `wait` holds the lane, in planned time, until a release makes room for the whole lookup, first come first; `fail` refuses the walk. `wait` and `fail` need a `capacity`."
+        },
+        "evict": {
+          "type": "object",
+          "required": [
+            "every",
+            "when",
+            "count"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "every": {
+              "$ref": "#/$defs/expr"
+            },
+            "when": {
+              "$ref": "#/$defs/expr"
+            },
+            "count": {
+              "$ref": "#/$defs/expr"
+            }
+          },
+          "description": "Timed eviction (contract 0.19, rule V33): at every planned instant k × `every` ns from the timeline's start, while lanes remain and before any lane's step at that instant, if `when` holds, the `count` entries least in `order` that no lane holds are evicted; never at store. `when` and `count` read parameters, literals, and `tier`; `every` parameters and literals. Needs a `capacity` and an `order`; not with `full` `wait`."
+        },
+        "on_evict": {
+          "type": "object",
+          "required": [
+            "lanes",
+            "body"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "lanes": {
+              "$ref": "#/$defs/expr"
+            },
+            "body": {
+              "$ref": "#/$defs/body"
+            }
+          },
+          "description": "What each victim runs (contract 0.19, rule V35): `body`, with `victim` its key, on eviction lanes of the timeline, victim i of a batch on lane i mod `lanes`, at the planned instant of the tick or the store that evicted it, before any other lane's step at that instant. The body sees the bindings around the timeline and parameters; it holds no `compute`, `lookup`, `probe`, `touch`, `store`, `acquire`, `release`, `publish`, `parallel`, `loader`, channel, barrier, timeline, or trace. `lanes` reads parameters and literals. Needs an `order`."
         }
       },
-      "description": "A tier (contracts 0.16 and 0.18, rule V33): at most `capacity` (counted in entries, the default, or bytes) of entries no lane holds evicted by `order`; held entries are never victims; an entry larger than the tier is not stored."
+      "description": "A tier (contracts 0.16, 0.18, and 0.19, rule V33): at most `capacity` (counted in entries, the default, or bytes) of entries no lane holds evicted by `order`, at store or, with `evict`, at planned ticks; held entries are never victims; an entry larger than the tier is not stored."
     },
     "resource": {
       "type": "object",

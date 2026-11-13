@@ -32,12 +32,13 @@ from .pattern import Pattern
 OPS = ("open", "close", "read", "write", "lseek", "ioctl", "fadvise", "fstat", "stat", "fsync", "fdatasync",
        "unlink", "truncate", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
 STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond", "choose",
-              "phase", "trace", "timeline", "publish", "array", "lookup", "acquire", "release") + OPS
+              "phase", "trace", "timeline", "publish", "array", "lookup", "acquire", "release", "probe", "touch",
+              "store") + OPS
 DISTS = ("const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture")
 EXPRS = ("param", "index", "ref", "at", "actor", "draw", "elem", "len", "sum", "size", "offset", "unit_index", "units",
          "chunks", "count", "dirs", "add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "neg", "eq", "ne", "lt",
          "le", "gt", "ge", "and", "or", "not", "cond", "published", "entry", "prev", "fresh", "shared", "prefix", "cat",
-         "seq_len", "chunk_key", "now", "cached")
+         "seq_len", "chunk_key", "now", "cached", "tier", "victim")
 HANDLES = ("ref", "file", "dir", "object", "inventory", "consume", "pick", "unit", "column")
 
 # The measured attributes in a few words each (the dictionary has their meanings in full).
@@ -319,6 +320,10 @@ class Describer:
             return "now"
         if k == "cached":
             return f"cached.{a}"
+        if k == "tier":
+            return f"tier.{a}"
+        if k == "victim":
+            return "victim"
         if k == "chunk_key":
             return f"chunk_key({self.sym(a['seq'])}, {self.sym(a['chunk'])}, {self.sym(a['per'])})"
         if k == "entry":
@@ -640,7 +645,14 @@ class Describer:
             keep = f"evicting the entry used longest ago past {cap}"
         else:
             keep = f"evicting past {cap} the entry least by ({', '.join(self.sym(e) for e in t['order'])})"
+        if "evict" in t:
+            ev = t["evict"]
+            keep = (f"evicting, every {self.value(ev['every'], 'ns')} of planned time, when `{self.sym(ev['when'])}`, "
+                    f"`{self.sym(ev['count'])}` entries least by ({', '.join(self.sym(e) for e in t['order'])}), "
+                    f"holding at most {cap}")
         full = {"skip": "", "wait": "; a lookup that finds no room waits for a release", "fail": "; a lookup that finds no room fails"}[t.get("full", "skip")]
+        if "evict" in t and t.get("full", "skip") == "skip":
+            full = "; a store past it is dropped"
         return f"tier `{t['name']}`, {keep}{full}"
 
     def statement(self, node: dict, depth: int) -> list[str]:
@@ -659,14 +671,38 @@ class Describer:
                 f" Its cache `{c['name']}`: " + "; ".join(self.tier(t) for t in c["tiers"]) + "."
                 for c in a.get("caches", []))
             res = "".join(f" Its resource `{r['name']}` of {self.value(r['capacity'], 'count')} units." for r in a.get("resources", []))
-            return [pad + f"A timeline `{a['name']}`: its lanes, this one and every parallel sub-actor in it, "
-                    "planned together and taken in planned order." + caches + res] + self.body(a["body"], depth + 1)
+            out = [pad + f"A timeline `{a['name']}`: its lanes, this one and every parallel sub-actor in it, "
+                   "planned together and taken in planned order." + caches + res]
+            for c in a.get("caches", []):
+                for t in c["tiers"]:
+                    if "on_evict" in t:
+                        out.append("  " * (depth + 1) + f"- Each victim of tier `{t['name']}`, on "
+                                   f"{self.value(t['on_evict']['lanes'], 'count')} eviction lanes at its eviction's planned time:")
+                        out += self.body(t["on_evict"]["body"], depth + 2)
+            return out + self.body(a["body"], depth + 1)
         if k == "lookup":
             held = (f" The lane holds them under `{a['hold']}` until it releases it, so none is evicted meanwhile."
                     if "hold" in a else "")
             return [pad + f"Looks up `{self.sym(a['seq'])}` in tier `{a['tier']}` of cache `{a['cache']}`, by chunks of "
                     f"{self.value(a['per'], 'count')} blocks: `{a['bind']}` is the leading chunks held; those held are then "
                     "touched, the others stored." + held]
+        if k in ("probe", "touch", "store"):
+            rng = (f"from chunk `{self.sym(a['from'])}`" if k == "probe" else
+                   f"chunks in `{a['chunks']}`" if "chunks" in a else
+                   f"chunks `{self.sym(a['from'])}` to `{self.sym(a['from'])}` + `{self.sym(a['count'])}`")
+            what = {"probe": f"Probes `{self.sym(a['seq'])}` {rng}", "touch": f"Touches `{self.sym(a['seq'])}`'s {rng}",
+                    "store": f"Stores `{self.sym(a['seq'])}`'s {rng}"}[k]
+            if k == "probe":
+                tail = f": `{a['bind']}` is the leading chunks held, nothing changed."
+            elif k == "touch":
+                tail = " that it holds, as one event."
+            else:
+                tail = (" that it lacks, as one event" if a.get("present") != "renew" else
+                        ", those it lacks and those held stored again, as one event")
+                tail += "".join(f"; `{a[k]}` is " + t for k, t in (("bind", "the leading chunks held after it"),
+                                                                   ("taken", "the indices of the chunks it stored")) if k in a) + "."
+            return [pad + f"{what} in tier `{a['tier']}` of cache `{a['cache']}`, by chunks of "
+                    f"{self.value(a['per'], 'count')} blocks{tail}"]
         if k == "acquire":
             return [pad + f"Takes {self.value(a['n'], 'count')} units of `{a['resource']}` as `{a['hold']}`, "
                     "waiting in planned time while they are not free, first come first."]

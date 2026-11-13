@@ -147,6 +147,19 @@ and no victim does; `c.timeline(..., resources={"slots": 16})`; `c.acquire(resou
 and `c.release(hold)` (V34); a `lookup`'s `hold`; and `now()`, the lane's planned time (V30).
 The builder refuses `acquire` and `release` outside a timeline, an unknown `cached` attribute,
 and an `order` or `full` with no capacity.
+Since contract 0.19 (2026-11-13, `DESIGN_REVIEW.md` §3.99, the note "Contract 0.19 proposed"):
+`tier(..., evict=timed(every, when, count), on_evict=(lanes, fn))`, timed eviction with
+`when` and `count` over `tier_attr("used")` and `tier_attr("entries")` (LMCache's rule:
+`timed(10**9, tier_attr("used") * 10 >= cap * 8, max_(1, tier_attr("entries") * 2 // 10))`),
+and an eviction body that `fn(b)` writes on the builder `b`, where the timeline stands, with
+`victim()` the evicted entry's key (V35); `c.probe(cache, tier, seq, per, frm, bind)`,
+`c.touch(cache, tier, seq, per, frm, count, *, chunks=None)`, and `c.store(cache, tier, seq,
+per, frm, count, size=None, bind=None, *, chunks=None, present=None, taken=None)` over a range
+of chunks, or over the chunks whose indices an array holds (`chunks`, an `ArrayRef` or a name);
+`present="renew"` stores again what the tier holds, and `taken` names the array of the indices
+the store stored, returned as an `ArrayRef` (a pair `(Ref, ArrayRef)` with `bind`) (V33). The builder refuses them outside a
+timeline, an `evict` with no capacity or order, an `on_evict` with no order, and an unknown
+`tier_attr`.
 
 **Expressions**: node arithmetic (`+ - * // %`, `ceil_div`, `min_`, `max_`, `-x`), comparisons
 (`== != < <= > >=`), `&`, `|`, `~`, `when(test, a, b)` (arms may be expressions, distributions,

@@ -369,7 +369,8 @@ class SeqOp(Expr):
 
 
 class Plain(Expr):
-    """An expression with no operands, as written (contract 0.18): `now` and `cached`."""
+    """An expression with no operands, as written (contracts 0.18 and 0.19): `now`, `cached`,
+    `tier`, and `victim`."""
     __slots__ = ("node",)
 
     def __init__(self, node: dict):

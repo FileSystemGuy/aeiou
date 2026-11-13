@@ -21,7 +21,7 @@ SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "choose", "phase", "trace", "timeline", "publish", "array", "lookup",
-           "acquire", "release"}
+           "acquire", "release", "probe", "touch", "store"}
 # V30: what a timeline's lanes may not hold: they are planned, never waiting on one another
 NOT_IN_TIMELINE = {"loader", "channel", "put", "take", "barrier", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
@@ -319,18 +319,50 @@ ORDER_THROUGH = {"add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "e
 def order_reads(e):
     """V33: the first thing a tier's `order` reads that it may not (an order reads parameters,
     literals, and `cached`), by its JSON key. As the runner's `order_reads`."""
+    return plan_reads(e, "cached")
+
+
+def plan_reads(e, also):
+    """V33 (contract 0.19): what a tier's `order` (`also` "cached"), `evict` `when` and
+    `count` (`also` "tier"), or `evict` `every` and `on_evict` `lanes` (`also` None) reads
+    that it may not: parameters, literals, and `also`, through arithmetic, comparisons, logic,
+    and `cond`. As the runner's `plan_reads`."""
     if isinstance(e, list):
-        return next((r for r in map(order_reads, e) if r), None)
+        return next((r for r in (plan_reads(x, also) for x in e) if r), None)
     if not isinstance(e, dict):
         return None
     k, a = next(iter(e.items()))
-    if k in ("param", "cached"):
+    if k == "param" or (also is not None and k == also):
         return None
     if k in ORDER_THROUGH:
-        return order_reads(a)
+        return plan_reads(a, also)
     if k == "cond":
-        return order_reads(a["if"]) or order_reads(a["then"]) or order_reads(a["else"])
+        return plan_reads(a["if"], also) or plan_reads(a["then"], also) or plan_reads(a["else"], also)
     return k
+
+
+# V35: what an `on_evict` body may not hold: anything that plans time, holds, or changes a cache
+# or a timeline (a body issues its victim's ops at its tick)
+EVICT_BANS = {"compute", "lookup", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
+              "loader", "channel", "put", "take", "barrier", "timeline", "trace"}
+
+
+def evict_bans(nodes, p, out):
+    """V35: the statements of an `on_evict` body it may not hold, with their paths. As the
+    runner's `evict_bans`."""
+    for i, node in enumerate(nodes):
+        kind, a = next(iter(node.items()))
+        np = p + [i]
+        if kind in EVICT_BANS:
+            out.append((np, kind))
+        elif kind in ("loop", "phase"):
+            evict_bans(a["body"], np + [kind, "body"], out)
+        elif kind == "cond":
+            evict_bans(a["then"], np + ["cond", "then"], out)
+            evict_bans(a.get("else", []), np + ["cond", "else"], out)
+        elif kind == "choose":
+            for j, arm in enumerate(a["arms"]):
+                evict_bans(arm["body"], np + ["choose", "arms", j, "body"], out)
 
 
 def param_refs(x, out: set):
@@ -379,6 +411,10 @@ class Check:
         self.caches = {}
         # V33: checking a tier's `order`, where `cached` may be read
         self.in_order = False
+        # V33: checking a tier's `evict` `when` and `count`, where `tier` may be read
+        self.in_evict = False
+        # V35: checking an `on_evict` body, where `victim` may be read
+        self.in_on_evict = False
         # V34: the enclosing timeline's resources, and the holds its `acquire`s and `lookup`s name
         self.resources = set()
         self.holds = set()
@@ -708,7 +744,7 @@ class Check:
             kinds = {self.pkind(x) for x in v} if isinstance(v, list) else set()
             return kinds.pop() if len(kinds) == 1 else None
         if k in ("index", "actor", "count", "dirs", "len", "published", "size", "offset", "unit_index", "units", "chunks",
-                 "seq_len", "chunk_key", "now", "cached"):
+                 "seq_len", "chunk_key", "now", "cached", "tier", "victim"):
             return "int"
         if k in ("fresh", "shared", "prefix", "cat"):
             return "seq"
@@ -928,7 +964,7 @@ class Check:
         if not isinstance(e, dict):
             return False
         k, a = next(iter(e.items()))
-        if k in ("index", "at", "published", "entry", "prev", "now", "cached"):
+        if k in ("index", "at", "published", "entry", "prev", "now", "cached", "tier", "victim"):
             return True
         if k == "fresh":                     # new blocks at every position, as a draw
             return bool(scope.indices) or self.varies(a, scope)
@@ -938,10 +974,12 @@ class Check:
             return scope.is_varying(a)
         if k in self.DRAWS:
             return bool(scope.indices)
+        if k == "len" and a in scope.taken:
+            return True
         if k in self.INVARIANT:
             return False
         if k == "elem":
-            return self.varies(a["index"], scope)
+            return a["array"] in scope.taken or self.varies(a["index"], scope)
         if k in ("file", "dir", "unit", "column", "cond"):
             return any(self.varies(v, scope) for v in a.values())
         if k == "object":
@@ -1001,6 +1039,7 @@ class Check:
             self.err(p, f"a timeline inside timeline `{self.timeline[0]}`: lanes are planned in one timeline at a time (V30)")
             return
         self.caches = {}
+        on_evict = []
         for i, c in enumerate(a.get("caches", [])):
             cp = p + ["caches", i]
             if c["name"] in self.caches:
@@ -1033,7 +1072,41 @@ class Check:
                     self.expr(e, op, scope)
                     self.in_order = False
                     self.typed(e, op, scope)
-                tiers[t["name"]] = t.get("unit", "entries")
+                if "evict" in t:
+                    ev, ep = t["evict"], tp + ["evict"]
+                    if "capacity" not in t:
+                        self.err(tp, f"tier `{t['name']}`: `evict` with no `capacity` (V33)")
+                    if "order" not in t:
+                        self.err(tp, f"tier `{t['name']}`: `evict` with no `order`, so it has no victims (V33)")
+                    if t.get("full") == "wait":
+                        self.err(tp, f"tier `{t['name']}`: `evict` with `full` `wait`; a timed tier's room comes at its ticks, not at a release (V33)")
+                    for k, also in (("every", None), ("when", "tier"), ("count", "tier")):
+                        bad = plan_reads(ev[k], also)
+                        if bad:
+                            what = "parameters, literals, and `tier`" if also else "parameters and literals"
+                            self.err(ep + [k], f"tier `{t['name']}`: its `evict` `{k}` reads `{bad}`; it reads only {what} (V33)")
+                            continue
+                        self.in_evict = True
+                        self.expr(ev[k], ep + [k], scope)
+                        self.in_evict = False
+                        if k != "when":
+                            self.typed(ev[k], ep + [k], scope)
+                if "on_evict" in t:
+                    oe, op = t["on_evict"], tp + ["on_evict"]
+                    if "order" not in t:
+                        self.err(tp, f"tier `{t['name']}`: `on_evict` with no `order`, so nothing is evicted (V35)")
+                    bad = plan_reads(oe["lanes"], None)
+                    if bad:
+                        self.err(op + ["lanes"], f"tier `{t['name']}`: its `on_evict` `lanes` reads `{bad}`; it reads only parameters and literals (V35)")
+                    else:
+                        self.expr(oe["lanes"], op + ["lanes"], scope)
+                        self.typed(oe["lanes"], op + ["lanes"], scope)
+                    bans = []
+                    evict_bans(oe["body"], op + ["body"], bans)
+                    for bp, what in bans:
+                        self.err(bp, f"a `{what}` in an `on_evict` body, which only issues the victim's ops at its tick (V35)")
+                    on_evict.append((oe["body"], op + ["body"]))
+                tiers[t["name"]] = (t.get("unit", "entries"), t.get("full", "skip"))
             self.caches[c["name"]] = tiers
         self.resources = set()
         for i, r in enumerate(a.get("resources", [])):
@@ -1048,6 +1121,11 @@ class Check:
         self.holds = set()
         holds(a["body"], self.holds)
         self.timeline = (a["name"], keys)
+        # an eviction body sees what the timeline sees where it stands, and `victim`
+        for b, bp in on_evict:
+            self.in_on_evict = True
+            self.body(b, bp, scope.child())
+            self.in_on_evict = False
         self.body(a["body"], p + ["body"], scope)
         self.timeline = None
         self.caches = {}
@@ -1080,7 +1158,7 @@ class Check:
         elif tier not in self.caches[cache]:
             self.err(p, f"lookup: cache `{cache}` has no tier `{tier}` (V33)")
         else:
-            unit = self.caches[cache][tier]
+            unit = self.caches[cache][tier][0]
         if unit == "bytes" and "size" not in a:
             self.err(p, f"lookup: tier `{tier}` counts bytes, so the lookup needs a `size` (V33)")
         if unit == "entries" and "size" in a:
@@ -1093,6 +1171,75 @@ class Check:
                 self.typed(a[k], p + [k], scope)
         scope.bind(a["bind"], 0, True, "int")
         scope.unpositional[a["bind"]] = "V33"
+
+    def range_stmt(self, what, a, ints, p, scope):
+        """V33 (contract 0.19): a `probe`, `touch`, or `store`: its cache and tier declared by
+        the enclosing timeline, its `seq` a sequence, its integers integers; the tier's unit and
+        `full`, when it is declared."""
+        cache, tier = a["cache"], a["tier"]
+        found = None
+        if cache not in self.caches:
+            self.err(p, f"{what}: no timeline declares cache `{cache}` around it (V33)")
+        elif tier not in self.caches[cache]:
+            self.err(p, f"{what}: cache `{cache}` has no tier `{tier}` (V33)")
+        else:
+            found = self.caches[cache][tier]
+        self.expr(a["seq"], p + ["seq"], scope)
+        self.seq_arg(a["seq"], what, p + ["seq"], scope)
+        for k in ("per",) + ints:
+            self.expr(a[k], p + [k], scope)
+            self.typed(a[k], p + [k], scope)
+        return found
+
+    def n_probe(self, a, p, scope):
+        self.range_stmt("probe", a, ("from",), p, scope)
+        scope.bind(a["bind"], 0, True, "int")
+        scope.unpositional[a["bind"]] = "V33"
+
+    def chosen(self, what, a, p, scope):
+        """V33 (contract 0.19): a `touch` or `store` acts on `from` and `count`, or on the chunks
+        an array `chunks` names, one of an `array`, a `store`'s `taken`, or a parameter array of
+        integers; the integers it reads, for `range_stmt`."""
+        has = "from" in a, "count" in a, "chunks" in a
+        if has == (False, False, True):
+            name = a["chunks"]
+            if name not in scope.arrays:
+                if name not in self.params:
+                    self.err(p + ["chunks"], f"unknown parameter array `{name}`")
+                else:
+                    self.array(name, what, p + ["chunks"], numbers=True)
+        elif has[2]:
+            self.err(p, f"{what}: `chunks` in place of `from` and `count`, not beside them (V33)")
+        elif has[:2] != (True, True):
+            self.err(p, f"{what}: a range needs `from` and `count`, or `chunks` (V33)")
+        return tuple(k for k in ("from", "count") if k in a)
+
+    def n_touch(self, a, p, scope):
+        self.range_stmt("touch", a, self.chosen("touch", a, p, scope), p, scope)
+
+    def n_store(self, a, p, scope):
+        tier = a["tier"]
+        ints = self.chosen("store", a, p, scope)
+        if "taken" in a and a["taken"] in self.params:
+            self.err(p + ["taken"], f"store: `taken` `{a['taken']}` has the name of a parameter, which `elem` and `len` also read (V32)")
+        found = self.range_stmt("store", a, ints, p, scope)
+        if found is not None:
+            unit, full = found
+            if unit == "bytes" and "size" not in a:
+                self.err(p, f"store: tier `{tier}` counts bytes, so the store needs a `size` (V33)")
+            if unit == "entries" and "size" in a:
+                self.err(p, f"store: tier `{tier}` counts entries, so the store takes no `size` (V33)")
+            if full == "wait":
+                self.err(p, f"store: tier `{tier}` waits when full, which only a `lookup` decides before it changes anything (V33)")
+        if "size" in a:
+            self.expr(a["size"], p + ["size"], scope)
+            self.typed(a["size"], p + ["size"], scope)
+        if "bind" in a:
+            scope.bind(a["bind"], 0, True, "int")
+            scope.unpositional[a["bind"]] = "V33"
+        if "taken" in a:
+            scope.arrays.add(a["taken"])
+            scope.taken.add(a["taken"])
 
     def seq_arg(self, e, what, p, scope):
         """V33: an operand a `seq` is read from is one where the document shows its kind."""
@@ -1340,6 +1487,12 @@ class Check:
         elif k == "cached":
             if not self.in_order:
                 self.err(p, f"cached `{a}`: outside a tier's `order` (V33)")
+        elif k == "tier":
+            if not self.in_evict:
+                self.err(p, f"tier `{a}`: outside a tier's `evict` (V33)")
+        elif k == "victim":
+            if not self.in_on_evict:
+                self.err(p, "victim: outside a tier's `on_evict` body (V35)")
         elif k == "published":
             if isinstance(a, dict):              # a timeline and a group (contract 0.17)
                 self.in_timeline(a["timeline"], "published", p)
@@ -1734,6 +1887,8 @@ class Scope:
         self.fields = set(fields) | (parent.fields if parent else set())
         self.loop_body = False   # the body of a `loop` (V31)
         self.arrays = set(parent.arrays) if parent else set()   # the `array`s in scope (V32)
+        # the arrays a `store`'s `taken` binds, which vary with what the tier holds (V6)
+        self.taken = set(parent.taken) if parent else set()
         # V30, V31: the bindings whose definition reads the timeline or `prev`, by the rule
         self.unpositional = dict(parent.unpositional) if parent else {}
 

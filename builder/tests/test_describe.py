@@ -60,3 +60,33 @@ def test_entries_in_groups_are_described():
     assert d.sym({"published": {"timeline": "tl", "group": {"index": "s"}}}) == "published(tl, group s)"
     assert d.sym({"entry": {"timeline": "tl", "group": 2, "index": 0, "key": "v"}}) == "tl[0 of group 2].v"
     assert d.body([{"publish": {"timeline": "tl", "group": 2, "values": {"v": 1}}}], 0) == ["- Publishes to `tl`, group `2`: v = `1`."]
+
+
+def test_timed_eviction_eviction_bodies_and_ranges_are_described():
+    """Contract 0.19: a tier's `evict` and `on_evict`, `probe`, `touch`, `store`, `tier`, `victim`."""
+    d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)
+    g3 = {"name": "g3", "order": [{"cached": "touched"}, {"neg": {"cached": "pos"}}], "capacity": 10,
+          "evict": {"every": 1000, "when": {"ge": [{"tier": "used"}, 8]}, "count": 2},
+          "on_evict": {"lanes": 4, "body": [{"unlink": {"file": {"file": {"dataset": "d", "id": {"victim": {}}}}}}]}}
+    s = {"fresh": 4}
+    tl = {"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": [g3]}], "body": [
+        {"probe": {"cache": "lm", "tier": "g3", "seq": s, "per": 1, "from": 0, "bind": "h"}},
+        {"touch": {"cache": "lm", "tier": "g3", "seq": s, "per": 1, "from": 0, "count": {"ref": "h"}}},
+        {"store": {"cache": "lm", "tier": "g3", "seq": s, "per": 1, "from": {"ref": "h"}, "count": 4, "bind": "n"}},
+        {"store": {"cache": "lm", "tier": "g3", "seq": s, "per": 1, "from": 0, "count": 1}}]}}
+    lines = d.body([tl], 0)
+    assert "`tier.used >= 8`" in lines[0] or "tier.used" in lines[0], lines
+    assert "a store past it is dropped" in lines[0], lines
+    assert "Each victim of tier `g3`, on 4 eviction lanes" in lines[1], lines
+    assert any("Probes `fresh(4)` from chunk `0` in tier `g3`" in l and "nothing changed" in l for l in lines), lines
+    assert any(l.strip().startswith("- Touches `fresh(4)`'s chunks `0` to `0` + `h`") for l in lines), lines
+    assert any("`n` is the leading chunks held after it" in l for l in lines), lines
+    assert d.sym({"victim": {}}) == "victim" and d.sym({"tier": "entries"}) == "tier.entries"
+    tl = {"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": [g3]}], "body": [
+        {"store": {"cache": "lm", "tier": "g3", "seq": s, "per": 1, "from": 0, "count": 4, "taken": "t2"}},
+        {"store": {"cache": "lm", "tier": "g3", "seq": s, "per": 1, "chunks": "t2", "present": "renew", "taken": "t3"}},
+        {"touch": {"cache": "lm", "tier": "g3", "seq": s, "per": 1, "chunks": "t3"}}]}}
+    lines = d.body([tl], 0)
+    assert any("`t2` is the indices of the chunks it stored" in l for l in lines), lines
+    assert any("Stores `fresh(4)`'s chunks in `t2` in tier `g3`" in l and "those held stored again" in l for l in lines), lines
+    assert any("Touches `fresh(4)`'s chunks in `t3`" in l for l in lines), lines

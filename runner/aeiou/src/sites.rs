@@ -148,7 +148,7 @@ fn expr(e: &Expr, p: &mut Path) {
     };
     match node {
         ExprNode::Param(_) | ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_)
-        | ExprNode::Now(_) | ExprNode::Cached(_) => {}
+        | ExprNode::Now(_) | ExprNode::Cached(_) | ExprNode::Tier(_) | ExprNode::Victim(_) => {}
         ExprNode::Published(arg) => {
             if let Some(g) = arg.group() {
                 p.with(&["published", "group"], |p| expr(g, p));
@@ -305,6 +305,15 @@ fn node(n: &Node, p: &mut Path) {
                     for (o, e) in t.order.iter().flatten().enumerate() {
                         p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "order", &o.to_string()], |p| expr(e, p));
                     }
+                    if let Some(ev) = &t.evict {
+                        for (f, e) in [("every", &ev.every), ("when", &ev.when), ("count", &ev.count)] {
+                            p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "evict", f], |p| expr(e, p));
+                        }
+                    }
+                    if let Some(oe) = &t.on_evict {
+                        p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "on_evict", "lanes"], |p| expr(&oe.lanes, p));
+                        p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "on_evict", "body"], |p| body(&oe.body, p));
+                    }
                 }
             }
             for (i, r) in resources.iter().enumerate() {
@@ -314,6 +323,25 @@ fn node(n: &Node, p: &mut Path) {
         }
         Node::Acquire { n, .. } => p.with(&[k, "n"], |p| expr(n, p)),
         Node::Release { .. } => {}
+        Node::Probe { seq, per, from, .. } => {
+            for (f, e) in [("seq", seq), ("per", per), ("from", from)] {
+                p.with(&[k, f], |p| expr(e, p));
+            }
+        }
+        Node::Touch { seq, per, from, count, .. } => {
+            for (f, e) in [("seq", Some(seq)), ("per", Some(per)), ("from", from.as_ref()), ("count", count.as_ref())] {
+                if let Some(e) = e {
+                    p.with(&[k, f], |p| expr(e, p));
+                }
+            }
+        }
+        Node::Store { seq, per, from, count, size, .. } => {
+            for (f, e) in [("seq", Some(seq)), ("per", Some(per)), ("from", from.as_ref()), ("count", count.as_ref()), ("size", size.as_ref())] {
+                if let Some(e) = e {
+                    p.with(&[k, f], |p| expr(e, p));
+                }
+            }
+        }
         Node::Lookup { seq, per, size, .. } => {
             p.with(&[k, "seq"], |p| expr(seq, p));
             p.with(&[k, "per"], |p| expr(per, p));
