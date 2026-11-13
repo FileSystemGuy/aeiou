@@ -332,8 +332,13 @@ fn expr_refs<'a>(e: &'a Expr, out: &mut BTreeSet<&'a str>) {
         ExprNode::Param(name) => {
             out.insert(name.as_str());
         }
-        ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Published(_) => {}
-        ExprNode::At { index, .. } | ExprNode::Elem { index, .. } | ExprNode::Entry { index, .. } => expr_refs(index, out),
+        ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => {}
+        ExprNode::Published(arg) => arg.group().into_iter().for_each(|g| expr_refs(g, out)),
+        ExprNode::Entry { group, index, .. } => {
+            group.iter().for_each(|g| expr_refs(g, out));
+            expr_refs(index, out)
+        }
+        ExprNode::At { index, .. } | ExprNode::Elem { index, .. } => expr_refs(index, out),
         ExprNode::Prev { init, .. } => expr_refs(init, out),
         ExprNode::Fresh(f) => expr_refs(&f.n, out),
         ExprNode::SeqLen(e) => expr_refs(e, out),
@@ -425,7 +430,7 @@ fn unpositional(v: &ExprLike) -> Option<&'static str> {
 fn publishes<'a>(nodes: &'a [Node], name: &str, out: &mut BTreeSet<&'a str>) {
     for n in nodes {
         match n {
-            Node::Publish { timeline, values } if timeline == name => out.extend(values.keys().map(String::as_str)),
+            Node::Publish { timeline, values, .. } if timeline == name => out.extend(values.keys().map(String::as_str)),
             Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. } => publishes(body, name, out),
             Node::Cond { then, otherwise, .. } => {
                 publishes(then, name, out);
@@ -1258,8 +1263,12 @@ impl<'a> Checker<'a> {
                 scope.bind(bind, &LOOKUP_DEF, true, Some("int"), (None, None));
                 scope.unpositional.insert(bind.as_str(), "V33");
             }
-            Node::Publish { timeline, values } => {
+            Node::Publish { timeline, group, values } => {
                 self.in_timeline(timeline, "publish", pp, st);
+                if let Some(g) = group {
+                    self.expr(g, &p(pp, &["group"]), scope, st, None);
+                    self.int(g, &p(pp, &["group"]), scope);
+                }
                 for (k, e) in values {
                     let vp = p(pp, &["values", k]);
                     if !is_ident(k) {
@@ -1971,10 +1980,18 @@ impl<'a> Checker<'a> {
                     self.array(name, "len", path, false);
                 }
             }
-            ExprNode::Published(name) => {
-                self.in_timeline(name, "published", path, st);
+            ExprNode::Published(arg) => {
+                self.in_timeline(arg.timeline(), "published", path, st);
+                if let Some(g) = arg.group() {
+                    self.expr(g, &p(path, &["group"]), scope, st, None);
+                    self.int(g, &p(path, &["group"]), scope);
+                }
             }
-            ExprNode::Entry { timeline, index, key } => {
+            ExprNode::Entry { timeline, group, index, key } => {
+                if let Some(g) = group {
+                    self.expr(g, &p(path, &["group"]), scope, st, None);
+                    self.int(g, &p(path, &["group"]), scope);
+                }
                 if self.in_timeline(timeline, "entry", path, st) && !st.timeline.as_ref().is_some_and(|(_, k)| k.contains(key.as_str())) {
                     self.err(path, format!("entry: timeline `{timeline}` publishes no `{key}` (V30)"));
                 }

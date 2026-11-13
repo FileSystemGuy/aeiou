@@ -239,7 +239,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.16"
+    AST_VERSION = "0.17"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -906,12 +906,17 @@ class Cursor:
             yield Timeline(name)
 
     def publish(self, timeline, **values):
-        """An entry of the enclosing timeline: these values at this lane's planned time."""
-        name = timeline.name if isinstance(timeline, Timeline) else check_ident(timeline, "timeline")
+        """An entry of the enclosing timeline: these values at this lane's planned time; in a
+        group when `timeline` is `tl.group(g)` (contract 0.17)."""
+        group = timeline.gid if isinstance(timeline, TimelineGroup) else None
+        name = timeline.name if isinstance(timeline, (Timeline, TimelineGroup)) else check_ident(timeline, "timeline")
         if not values:
             raise BuildError("publish: no values")
-        self._emit({"publish": {"timeline": name, "values": {
-            check_ident(k, "entry key"): ast_of(lift(v, f"publish {k}")) for k, v in values.items()}}})
+        node = {"timeline": name}
+        if group is not None:
+            node["group"] = ast_of(group)
+        node["values"] = {check_ident(k, "entry key"): ast_of(lift(v, f"publish {k}")) for k, v in values.items()}
+        self._emit({"publish": node})
 
     def lookup(self, cache: str, tier: str, seq, per, bind: str, size=None) -> Ref:
         """The longest run of `seq`'s leading whole chunks of `per` blocks held in `tier` of
@@ -1271,6 +1276,25 @@ class Timeline:
 
     def entry(self, index, key: str) -> Expr:
         return Entry(self.name, index, key)
+
+    def group(self, g) -> "TimelineGroup":
+        """The entries of group `g` (contract 0.17): counted and indexed apart from the others,
+        and `publish(tl.group(g), ...)` puts one there."""
+        return TimelineGroup(self.name, lift(g, "timeline group"))
+
+
+class TimelineGroup:
+    """A group of a timeline's entries (contract 0.17)."""
+
+    def __init__(self, name: str, gid):
+        self.name, self.gid = name, gid
+
+    @property
+    def published(self) -> Expr:
+        return Published(self.name, self.gid)
+
+    def entry(self, index, key: str) -> Expr:
+        return Entry(self.name, index, key, self.gid)
 
 
 class ArrayRef:

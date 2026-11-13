@@ -147,8 +147,18 @@ fn expr(e: &Expr, p: &mut Path) {
         Expr::Node(n) => n.as_ref(),
     };
     match node {
-        ExprNode::Param(_) | ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Published(_) => {}
-        ExprNode::Entry { index, .. } => p.with(&["entry", "index"], |p| expr(index, p)),
+        ExprNode::Param(_) | ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => {}
+        ExprNode::Published(arg) => {
+            if let Some(g) = arg.group() {
+                p.with(&["published", "group"], |p| expr(g, p));
+            }
+        }
+        ExprNode::Entry { group, index, .. } => {
+            if let Some(g) = group {
+                p.with(&["entry", "group"], |p| expr(g, p));
+            }
+            p.with(&["entry", "index"], |p| expr(index, p))
+        }
         ExprNode::Prev { name, init } => {
             p.prev.insert(name.clone());
             p.with(&["prev", "init"], |p| expr(init, p));
@@ -302,7 +312,10 @@ fn node(n: &Node, p: &mut Path) {
                 p.with(&[k, "size"], |p| expr(e, p));
             }
         }
-        Node::Publish { values, .. } => {
+        Node::Publish { group, values, .. } => {
+            if let Some(g) = group {
+                p.with(&[k, "group"], |p| expr(g, p));
+            }
             for (name, e) in values {
                 p.with(&[k, "values", name], |p| expr(e, p));
             }

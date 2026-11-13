@@ -1580,9 +1580,10 @@ numbers; the order is this note's.
     pool, which `@` cannot recompute; the port resumes on them.
     *Contract 0.16, 2026-11-12 (the note "Chunks named from lineage"):* gap 1, each prompt a
     `seq` and its chunks found or stored by `lookup` in a cache of its timeline; the port's chunk
-    reads and writes equal the reference's request by request (20 sessions, held 0). Open, for
-    the user: the store is a session's, since one timeline of every session would pool every
-    session's prompts; entries in groups is the proposed remedy.
+    reads and writes equal the reference's request by request (20 sessions, held 0).
+    *Contract 0.17, the same day:* a timeline's entries in groups (the user's choice), so one
+    timeline and one store serve every session of an engine, each drawing from its own prompts;
+    equal to the reference at 20 and 40 sessions.
 
 72. **The plan, domains, and events in the contract (decided by the user 2026-11-09 and 2026-11-10,
     `DESIGN_REVIEW.md` §3.99 items 4 to 9 and 13, and the note "The generator in the abstract, a

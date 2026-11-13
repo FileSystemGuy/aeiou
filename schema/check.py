@@ -1024,6 +1024,9 @@ class Check:
 
     def n_publish(self, a, p, scope):
         self.in_timeline(a["timeline"], "publish", p)
+        if "group" in a:                         # contract 0.17
+            self.expr(a["group"], p + ["group"], scope)
+            self.typed(a["group"], p + ["group"], scope)
         for k, e in a["values"].items():
             self.expr(e, p + ["values", k], scope)
 
@@ -1247,8 +1250,16 @@ class Check:
             self.expr(a["index"], p + ["index"], scope)
             self.typed(a["index"], p + ["index"], scope)
         elif k == "published":
-            self.in_timeline(a, "published", p)
+            if isinstance(a, dict):              # a timeline and a group (contract 0.17)
+                self.in_timeline(a["timeline"], "published", p)
+                self.expr(a["group"], p + ["group"], scope)
+                self.typed(a["group"], p + ["group"], scope)
+            else:
+                self.in_timeline(a, "published", p)
         elif k == "entry":
+            if "group" in a:
+                self.expr(a["group"], p + ["group"], scope)
+                self.typed(a["group"], p + ["group"], scope)
             if self.in_timeline(a["timeline"], "entry", p) and a["key"] not in self.timeline[1]:
                 self.err(p, f"entry: timeline `{a['timeline']}` publishes no `{a['key']}` (V30)")
             self.expr(a["index"], p + ["index"], scope)

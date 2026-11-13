@@ -1,6 +1,6 @@
 # The AST contract
 
-Version `0.16`, 2026-11-12 (~~`0.15`, the same day~~; ~~`0.14`, 2026-11-02~~; ~~`0.13`, 2026-10-23~~; ~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
+Version `0.17`, 2026-11-12 (~~`0.16`, the same day~~; ~~`0.15`, the same day~~; ~~`0.14`, 2026-11-02~~; ~~`0.13`, 2026-10-23~~; ~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -122,7 +122,7 @@ backend*), `params`, `datasets`, `namespaces`, `actors`, `provenance`.
 | `phase {name, body}` | Statistics label; no effect on execution or the fingerprint. `name` may be an expression. |
 | `trace {file, sha256}` | A captured trace of a real application, executed literally, for calibration; never CLOSED. `file` is relative to the document, JSON Lines as `aeiou-trace export` writes it and `runner/REFERENCE.md` §13 defines it (`DESIGN_REVIEW.md` §3.58; the node was `replay` until 2026-10-02). |
 | `timeline {name, caches, body}` | Lanes planned together (contract 0.15, `DESIGN_REVIEW.md` §3.99, brief item 72; V30): the body's main line and every sub-actor of a `parallel` in it is a **lane** with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller **lane key** (the main line's is empty; a sub-actor's is its parent's, then the parent's fork ordinal, then its index); a lane runs until its next `compute`; a joined `parallel` holds its parent until its last sub-actor ends and the parent goes on at that end. The plan is a function of the abstract, its parameters, and the seeds, never of the run; draws keep their positional keys. Never a timeline, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside one. `aeiou check` and `aeiou dry-run` walk it; `aeiou run` refuses it until its run side is built (item 72 (7)). Its `caches` (contract 0.16, brief item 75; V33), each `{name, tiers}`, a tier `{name, evict, capacity, unit}`: `evict: none` keeps every entry and takes no `capacity`; `evict: lru` evicts the entry used longest ago while a store would pass `capacity`, counted in `entries` (the default) or `bytes`, and an entry larger than the whole tier is not stored. A cache starts empty with its timeline and is walked with its lanes, in planned order. |
-| `publish {timeline, values}` | An **entry** of the enclosing timeline: `values` (name to expression) at this lane's planned time, which the lanes read with `published` and `entry` (V30). |
+| `publish {timeline, group, values}` | An **entry** of the enclosing timeline: `values` (name to expression) at this lane's planned time, which the lanes read with `published` and `entry` (V30); in group `group`, an integer, 0 when absent (contract 0.17): a timeline's entries are counted and indexed within their group, so one timeline every session of an engine shares keeps each session's pool its own. |
 | `lookup {cache, tier, seq, per, bind, size}` | The longest run of `seq`'s leading whole chunks of `per` blocks held in tier `tier` of cache `cache` of the enclosing timeline, bound to `bind` as an integer; then every whole chunk, in order, touched if held (a use, for `lru`) and stored if not (contract 0.16, V33), as LMCache 0.5.5 looks a prompt up and stores what it missed. A chunk's key is `chunk_key` (`runner/REFERENCE.md` §2). `size`, the bytes of one chunk, exactly when the tier counts bytes. `bind` is not positional: `@` and `prev` may not reach it. |
 | `array {name, count, index, value}` | `count` values computed once, where the node stands, each with `index` bound as a loop index so its draws are positional; read with `elem` and `len` as a parameter array is (contract 0.15, V32). |
 | `open {file, flags, mode, expect}` | Flags from the enum in the schema. `DIRECTORY` for `readdir` handles. |
@@ -147,7 +147,8 @@ distributions, or handles (this is how a distribution or a phase name is selecte
 Since contract 0.15: `elem` and `len` also of an `array` in scope; `published timeline`, the
 entries the timeline holds before the step being walked, and `entry {timeline, index, key}`,
 value `key` of entry `index` in planned order (`index` below `published`, a run-time error
-otherwise), V30; `prev {ref, init}`, the value the `let` `ref`, bound directly in a loop's
+otherwise), V30; since contract 0.17 `published {timeline, group}` and `entry {timeline, group,
+index, key}` count and index within one group (0 when absent); `prev {ref, init}`, the value the `let` `ref`, bound directly in a loop's
 body, took in the previous iteration of that loop under the same outer indices, `init` in the
 loop's first iteration, V31: the same as `ref @ (i − step)` for a positional binding, read
 rather than recomputed, so it can carry a value that depends on the timeline. `published`,
@@ -839,3 +840,9 @@ results are compared by.
   A 0.15 document is a 0.16 document with the version changed. Every committed AST was
   regenerated; no fingerprint and no dataset id changed. Reasoning in `DESIGN_REVIEW.md`
   §3.99, the note "Chunks named from lineage, contract 0.16".
+- **0.17** (2026-11-12): a timeline's entries in groups: `publish`, `published`, and `entry`
+  take an integer `group`, 0 when absent (§2), so the sessions of one engine share its timeline
+  and its cache while each draws from its own prompts. A 0.16 document is a 0.17 document with
+  the version changed, and means the same. Every committed AST was regenerated; no fingerprint
+  and no dataset id changed. Reasoning in `DESIGN_REVIEW.md` §3.99, the note "Chunks named
+  from lineage, contract 0.16", its addendum.

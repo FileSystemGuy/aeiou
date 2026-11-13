@@ -34,3 +34,10 @@ def test_the_seq_kinds_a_cache_and_a_lookup_are_described():
     assert d.gist([tl]) == ""                       # a lookup alone does no I/O
     lru = {"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": [{"name": "d", "evict": "lru", "capacity": 3}]}], "body": []}}
     assert "tier `d`, evicting the entry used longest ago past 3 entries." in d.body([lru], 0)[0]
+
+
+def test_entries_in_groups_are_described():
+    d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)
+    assert d.sym({"published": {"timeline": "tl", "group": {"index": "s"}}}) == "published(tl, group s)"
+    assert d.sym({"entry": {"timeline": "tl", "group": 2, "index": 0, "key": "v"}}) == "tl[0 of group 2].v"
+    assert d.body([{"publish": {"timeline": "tl", "group": 2, "values": {"v": 1}}}], 0) == ["- Publishes to `tl`, group `2`: v = `1`."]

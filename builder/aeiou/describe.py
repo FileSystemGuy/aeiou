@@ -306,7 +306,7 @@ class Describer:
         if k == "prev":
             return f"prev({a['ref']}, {self.sym(a['init'])})"
         if k == "published":
-            return f"published({a})"
+            return f"published({a})" if isinstance(a, str) else f"published({a['timeline']}, group {self.sym(a['group'])})"
         if k == "fresh":
             return f"fresh({self.sym(a)})"
         if k == "shared":
@@ -318,7 +318,8 @@ class Describer:
         if k == "chunk_key":
             return f"chunk_key({self.sym(a['seq'])}, {self.sym(a['chunk'])}, {self.sym(a['per'])})"
         if k == "entry":
-            return f"{a['timeline']}[{self.sym(a['index'])}].{a['key']}"
+            g = f" of group {self.sym(a['group'])}" if "group" in a else ""
+            return f"{a['timeline']}[{self.sym(a['index'])}{g}].{a['key']}"
         if k == "actor":
             return "actor id" if a == "id" else "actors"
         if k == "draw":
@@ -649,7 +650,8 @@ class Describer:
                     "touched, those not held stored."]
         if k == "publish":
             vals = ", ".join(f"{n} = `{self.sym(v)}`" for n, v in a["values"].items())
-            return [pad + f"Publishes to `{a['timeline']}`: {vals}."]
+            g = f", group `{self.sym(a['group'])}`" if "group" in a else ""
+            return [pad + f"Publishes to `{a['timeline']}`{g}: {vals}."]
         if k == "array":
             return [pad + f"An array `{a['name']}` of {self.value(a['count'], 'count')} values, "
                     f"each `{self.sym(a['value'])}` at its `{a['index']}`."]

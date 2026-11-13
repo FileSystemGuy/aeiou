@@ -512,7 +512,8 @@ struct PendingFork<'a> {
 /// values. Shared by the lanes of one timeline, which run one at a time.
 struct TlShared<'a> {
     name: &'a str,
-    entries: Vec<(i64, Vec<(&'a str, Value<'a>)>)>,
+    /// By group (contract 0.17; 0 when a `publish` gives none), each group's in planned order.
+    entries: HashMap<i64, Vec<(i64, Vec<(&'a str, Value<'a>)>)>>,
     /// Its caches' tiers, by cache and tier name (contract 0.16).
     tiers: HashMap<(&'a str, &'a str), Tier>,
 }
@@ -1044,19 +1045,23 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Some(a) => Value::Int(a.len() as i64),
                 None => Value::Int(self.array(array, "len")?.len() as i64),
             },
-            ExprNode::Published(name) => {
+            ExprNode::Published(arg) => {
                 self.positional_only("published")?;
-                let tl = self.timeline(name, "published")?;
-                let n = tl.lock().unwrap().entries.len();
+                let group = self.group(arg.group())?;
+                let tl = self.timeline(arg.timeline(), "published")?;
+                let n = tl.lock().unwrap().entries.get(&group).map_or(0, Vec::len);
                 Value::Int(n as i64)
             }
-            ExprNode::Entry { timeline, index, key } => {
+            ExprNode::Entry { timeline, group, index, key } => {
                 self.positional_only("entry")?;
+                let gr = self.group(group.as_ref())?;
                 let n = self.expr(index)?.as_int()?;
                 let tl = self.timeline(timeline, "entry")?;
                 let g = tl.lock().unwrap();
-                let Some((_, vals)) = usize::try_from(n).ok().and_then(|i| g.entries.get(i)) else {
-                    return other(format!("entry {n} of timeline `{timeline}`: {} published", g.entries.len()));
+                let held = g.entries.get(&gr).map_or(&[][..], Vec::as_slice);
+                let Some((_, vals)) = usize::try_from(n).ok().and_then(|i| held.get(i)) else {
+                    let of = if group.is_some() { format!(" of group {gr}") } else { String::new() };
+                    return other(format!("entry {n}{of} of timeline `{timeline}`: {} published", held.len()));
                 };
                 match vals.iter().find(|(k, _)| k == key) {
                     Some((_, v)) => v.clone(),
@@ -1217,6 +1222,14 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         match &self.tl {
             Some(tl) if tl.lock().unwrap().name == name => Ok(tl.clone()),
             _ => other(format!("{what}: no timeline `{name}` encloses it (V30)")),
+        }
+    }
+
+    /// A timeline's group (contract 0.17): 0 when none is given.
+    fn group(&mut self, e: Option<&'a Expr>) -> ER<i64> {
+        match e {
+            Some(e) => Ok(self.expr(e)?.as_int()?),
+            None => Ok(0),
         }
     }
 
@@ -1996,7 +2009,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         tiers.insert((c.name.as_str(), t.name.as_str()), tier);
                     }
                 }
-                let shared = Arc::new(Mutex::new(TlShared { name, entries: Vec::new(), tiers }));
+                let shared = Arc::new(Mutex::new(TlShared { name, entries: HashMap::new(), tiers }));
                 let snap = Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &self.frames, &self.scopes, &self.phases, &self.open, &self.written, body);
                 let mut main = Vm::resume(snap);
                 main.tl = Some(shared.clone());
@@ -2006,13 +2019,14 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 self.tlrun = Some(Box::new(run));
                 Ok(Some(Next::Timeline))
             }
-            Node::Publish { timeline, values } => {
+            Node::Publish { timeline, group, values } => {
                 let tl = self.timeline(timeline, "publish")?;
+                let group = self.group(group.as_ref())?;
                 let mut got = Vec::with_capacity(values.len());
                 for (k, e) in values {
                     got.push((k.as_str(), self.expr(e)?));
                 }
-                tl.lock().unwrap().entries.push((self.clock, got));
+                tl.lock().unwrap().entries.entry(group).or_default().push((self.clock, got));
                 Ok(None)
             }
             Node::Lookup { cache, tier, seq: s, per, bind, size } => {
@@ -2627,7 +2641,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.16", "name": "t",
+                r#"{{"ast": "0.17", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

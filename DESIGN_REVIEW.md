@@ -11830,6 +11830,18 @@ the session, counted and indexed within it); caches shared by several timelines 
 walked one after another, not in planned order between them); or a store a session for now.
 Also a choice of the port's, noted: a session's main prefix is its first prompt's first
 `min(len, mb)` blocks, where `sim5` takes the first main prompt at least `mb` long.
+*Addendum, the same day: entries in groups, contract 0.17 (the user's choice of the three).*
+`publish`, `published`, and `entry` take an integer `group`, 0 when absent, so a 0.16 document
+means the same; a timeline's entries are counted and indexed within their group. The port
+(scratch `port/gen8_port.py`, `compare8.py`) is one timeline for the engine, a session a lane
+arriving at a uniform time in the first hour, its pool its group, the store one for all: at 20
+sessions, 3,681 requests, 2,244,278 reads and 50,602 writes; at 40 sessions on another seed, 9,589
+requests, 7,006,112 reads and 129,929 writes; every request equal to the reference, which now runs
+one store over the walk's order across sessions, the keys one-to-one. Both checkers, 4 shared
+refusal cases, `timeline.rs` and the builder's and describer's tests; every committed AST
+regenerated, no fingerprint changed. Next for the KV abstract: what the engine holds (vLLM's pool
+as a tier, with the engine's queue of slots, item 72 (1)), LMCache's watermark eviction, then gaps
+6 to 8.
 
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the

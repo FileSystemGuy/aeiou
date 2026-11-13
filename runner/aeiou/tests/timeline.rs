@@ -24,7 +24,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(params: Value, body: Value) -> String {
-    json!({"ast": "0.16", "name": "t", "params": params,
+    json!({"ast": "0.17", "name": "t", "params": params,
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -152,6 +152,31 @@ fn an_entry_not_yet_published_or_a_key_it_lacks_is_refused_when_walked() {
     fails(json!([tl(json!([{"publish": {"timeline": "tl", "values": {"v": 1}}},
                            stat(json!({"entry": {"timeline": "tl", "index": 0, "key": "w"}})), {"publish": {"timeline": "tl", "values": {"w": 2}}}]))]),
           "entry 0 of timeline `tl` has no `w`");
+}
+
+/// Entries in groups (contract 0.17): `publish` puts an entry in its `group` (0 when none is
+/// given), and `published` and `entry` count and index within one group, so a session's pool
+/// is its own in a timeline every session of an engine shares.
+#[test]
+fn entries_in_groups_are_counted_and_indexed_within_their_group() {
+    let put = |g: Option<i64>, v: i64| match g {
+        Some(g) => json!({"publish": {"timeline": "tl", "group": g, "values": {"v": v}}}),
+        None => json!({"publish": {"timeline": "tl", "values": {"v": v}}}),
+    };
+    let body = json!([tl(json!([
+        put(None, 1), put(Some(1), 2), put(Some(1), 3), put(Some(0), 4),
+        stat(json!({"published": "tl"})),
+        stat(json!({"published": {"timeline": "tl", "group": 1}})),
+        stat(json!({"published": {"timeline": "tl", "group": {"add": [6, 1]}}})),
+        stat(json!({"entry": {"timeline": "tl", "group": 1, "index": 1, "key": "v"}})),
+        stat(json!({"entry": {"timeline": "tl", "index": 1, "key": "v"}})),
+        stat(json!({"entry": {"timeline": "tl", "group": 0, "index": 0, "key": "v"}}))]))]);
+    assert_eq!(walk(body), ["d/2", "d/2", "d/0", "d/3", "d/4", "d/1"]);
+    fails(json!([tl(json!([put(Some(1), 2), stat(json!({"entry": {"timeline": "tl", "group": 1, "index": 1, "key": "v"}})), put(Some(1), 3)]))]),
+          "entry 1 of group 1 of timeline `tl`: 1 published");
+    // a group is an integer
+    let e = refused(json!([tl(json!([{"publish": {"timeline": "tl", "group": "s", "values": {"v": 1}}}]))]));
+    assert!(e.iter().any(|m| m.contains("expected an integer, got a string (V27)")), "{e:#?}");
 }
 
 /// The timeline ends when its last lane does; the actor goes on after it, and a second

@@ -321,25 +321,34 @@ class Prev(Expr):
 
 
 class Published(Expr):
-    """The entries a timeline holds before this step (contract 0.15, rule V30)."""
-    __slots__ = ("timeline",)
+    """The entries a timeline holds before this step (contract 0.15, rule V30), in `group`
+    (contract 0.17; group 0 when None)."""
+    __slots__ = ("timeline", "group")
 
-    def __init__(self, timeline: str):
+    def __init__(self, timeline: str, group=None):
         self.timeline = check_ident(timeline, "timeline")
+        self.group = None if group is None else lift(group, "published group")
 
     def ast(self):
-        return {"published": self.timeline}
+        if self.group is None:
+            return {"published": self.timeline}
+        return {"published": {"timeline": self.timeline, "group": ast_of(self.group)}}
 
 
 class Entry(Expr):
     """Value `key` of a timeline's entry `index`, in planned order (rule V30)."""
-    __slots__ = ("timeline", "index", "key")
+    __slots__ = ("timeline", "index", "key", "group")
 
-    def __init__(self, timeline: str, index, key: str):
+    def __init__(self, timeline: str, index, key: str, group=None):
         self.timeline, self.index, self.key = check_ident(timeline, "timeline"), lift(index, "entry index"), check_ident(key, "entry key")
+        self.group = None if group is None else lift(group, "entry group")
 
     def ast(self):
-        return {"entry": {"timeline": self.timeline, "index": ast_of(self.index), "key": self.key}}
+        e = {"timeline": self.timeline}
+        if self.group is not None:
+            e["group"] = ast_of(self.group)
+        e.update(index=ast_of(self.index), key=self.key)
+        return {"entry": e}
 
 
 class SeqOp(Expr):

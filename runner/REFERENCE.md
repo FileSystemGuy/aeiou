@@ -194,8 +194,8 @@ each is a recorded decision and the golden tests pin them.
   own walk), then its index; so a parent goes on before its sub-actors at the same time, and the
   order put back decides only between steps of one lane. A joined fork takes its parent off
   the heap until the last sub-actor ends, and the parent's clock becomes the latest end. A
-  `publish` appends `(clock, values)` to the timeline's entries, which `published` counts and
-  `entry` reads; both are refused under an `x @ i` evaluation (V30). The ops' keys and the
+  `publish` appends `(clock, values)` to the timeline's entries of its group (contract 0.17; 0
+  when it gives none), which `published` counts and `entry` reads, each within one group; both are refused under an `x @ i` evaluation (V30). The ops' keys and the
   fingerprint are as anywhere: a lane's indices are its frames', a sub-actor's with its
   `parallel` index. The planned clock is not yet in `--emit-trace`'s `t`, which stays the walk's
   order; `aeiou run` refuses a timeline until its run side is built (brief item 72 (7)).

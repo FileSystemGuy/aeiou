@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.16",
+      "const": "0.17",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -631,8 +631,28 @@
               "description": "Expression-level conditional; arms may be expressions, distributions, or handles."
             },
             "published": {
-              "$ref": "#/$defs/ident",
-              "description": "The number of entries the named timeline holds before this step, in planned order (contract 0.15, rule V30). Not positional: `@` may not reach it."
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ident"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "timeline",
+                    "group"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "timeline": {
+                      "$ref": "#/$defs/ident"
+                    },
+                    "group": {
+                      "$ref": "#/$defs/expr"
+                    }
+                  }
+                }
+              ],
+              "description": "The number of entries the named timeline holds before this step in one group, in planned order (contract 0.15, rule V30): a timeline's name for its group 0, or `{timeline, group}` (contract 0.17), `group` an integer. Not positional: `@` may not reach it."
             },
             "entry": {
               "type": "object",
@@ -646,6 +666,9 @@
                 "timeline": {
                   "$ref": "#/$defs/ident"
                 },
+                "group": {
+                  "$ref": "#/$defs/expr"
+                },
                 "index": {
                   "$ref": "#/$defs/expr"
                 },
@@ -653,7 +676,7 @@
                   "$ref": "#/$defs/ident"
                 }
               },
-              "description": "Value `key` of entry `index` of the named timeline, in planned order; `index` below `published` (contract 0.15, rule V30). Not positional: `@` may not reach it."
+              "description": "Value `key` of entry `index` of the named timeline in group `group` (contract 0.17; 0 when absent), in planned order; `index` below that group's `published` (contract 0.15, rule V30). Not positional: `@` may not reach it."
             },
             "prev": {
               "type": "object",
@@ -2020,6 +2043,9 @@
             "timeline": {
               "$ref": "#/$defs/ident"
             },
+            "group": {
+              "$ref": "#/$defs/expr"
+            },
             "values": {
               "type": "object",
               "propertyNames": {
@@ -2030,7 +2056,7 @@
               }
             }
           },
-          "description": "An entry of the enclosing timeline: these values at this lane's planned time, which the other lanes read with `published` and `entry` (contract 0.15, rule V30)."
+          "description": "An entry of the enclosing timeline: these values at this lane's planned time, in group `group` (contract 0.17, an integer; 0 when absent), which the other lanes read with `published` and `entry` of that group (contract 0.15, rule V30)."
         },
         "array": {
           "type": "object",

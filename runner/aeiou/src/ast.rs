@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.16";
+pub const AST_VERSION: &str = "0.17";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -327,9 +327,10 @@ pub enum ExprNode {
     Cond(CondExpr),
     /// The entries of the named timeline published before this step, in planned order
     /// (contract 0.15, rule V30).
-    Published(String),
-    /// Value `key` of entry `index` of the named timeline, in planned order (rule V30).
-    Entry { timeline: String, index: Expr, key: String },
+    Published(PublishedArg),
+    /// Value `key` of entry `index` of the named timeline, in planned order (rule V30), within
+    /// `group` (contract 0.17; 0 when none is given).
+    Entry { timeline: String, #[serde(default)] group: Option<Expr>, index: Expr, key: String },
     /// The value the `let` `ref` took in the previous iteration of its loop, `init` in the
     /// first (contract 0.15, rule V31).
     Prev { #[serde(rename = "ref")] name: String, init: Expr },
@@ -345,6 +346,37 @@ pub enum ExprNode {
     SeqLen(Expr),
     /// The key of whole chunk `chunk` of `per` blocks: the chained hash of every block to its end.
     ChunkKey { seq: Expr, chunk: Expr, per: Expr },
+}
+
+/// What `published` names: a timeline (its group 0), or a timeline and a group (contract 0.17).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum PublishedArg {
+    Timeline(String),
+    Group(PublishedGroup),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublishedGroup {
+    pub timeline: String,
+    pub group: Expr,
+}
+
+impl PublishedArg {
+    pub fn timeline(&self) -> &str {
+        match self {
+            PublishedArg::Timeline(t) => t,
+            PublishedArg::Group(g) => &g.timeline,
+        }
+    }
+
+    pub fn group(&self) -> Option<&Expr> {
+        match self {
+            PublishedArg::Timeline(_) => None,
+            PublishedArg::Group(g) => Some(&g.group),
+        }
+    }
 }
 
 /// `fresh`: new blocks at a position. `site` is the hash of the node's JSON pointer, as a
@@ -901,7 +933,8 @@ pub enum Node {
     /// Lanes planned together, taken in planned order (contract 0.15, rule V30).
     Timeline { name: String, #[serde(default)] caches: Vec<CacheDecl>, body: Body },
     /// An entry of the named timeline: these values at this lane's planned time (rule V30).
-    Publish { timeline: String, values: std::collections::BTreeMap<String, Expr> },
+    /// In `group` (contract 0.17; 0 when none is given).
+    Publish { timeline: String, #[serde(default)] group: Option<Expr>, values: std::collections::BTreeMap<String, Expr> },
     /// `count` values computed once, each with `index` bound as a loop's (rule V32).
     Array { name: String, count: Expr, index: String, value: Expr },
     /// The longest run of `seq`'s leading chunks found in a tier of a cache of the enclosing

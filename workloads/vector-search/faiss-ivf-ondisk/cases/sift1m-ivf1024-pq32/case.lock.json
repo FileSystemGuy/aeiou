@@ -5,7 +5,7 @@
     {
       "name": "faiss_ivf_ondisk",
       "abstract": "vector-search/faiss-ivf-ondisk/faiss_ivf_ondisk.ast.json",
-      "ast_sha256": "6717102776db9e42aec5e254b8fb2ad60c50a865e286f714c171afc243df2189",
+      "ast_sha256": "f079ce0a58f2aa6e3170d75049d54e0c0a974adb853be0c40f106bf20b3b4ddf",
       "params": {
         "batch": {"default": 1},
         "calls": {"default": 20},

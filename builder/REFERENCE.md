@@ -135,6 +135,8 @@ per)` (a sequence is not a number: `+` on one is refused by V27, use `cat`);
 `tier(name, evict="none"|"lru", capacity=None, unit="entries"|"bytes")` checked as it is made;
 and `c.lookup(cache, tier, seq, per, bind, size=None)`, returning the binding of the leading
 chunks held (V33). The builder refuses a `lookup` outside a timeline and a cache without tiers.
+Since contract 0.17: `tl.group(g)`, a group of the timeline's entries, with `.published` and
+`.entry(n, key)` counted within it, and `c.publish(tl.group(g), ...)` putting an entry there.
 
 **Expressions**: node arithmetic (`+ - * // %`, `ceil_div`, `min_`, `max_`, `-x`), comparisons
 (`== != < <= > >=`), `&`, `|`, `~`, `when(test, a, b)` (arms may be expressions, distributions,

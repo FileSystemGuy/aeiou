@@ -120,7 +120,7 @@ fn small_file_training_is_sequential_and_flat() {
 fn extents_by_hand() {
     use serde_json::{json, Value};
     let ast = json!({
-        "ast": "0.16", "name": "t",
+        "ast": "0.17", "name": "t",
         "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id}", "count": 1, "size": {"const": 1048576}, "seed": 1}},
         "actors": {"gpu": {"body": [
             {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},
@@ -190,7 +190,7 @@ fn what_a_path_holds_ends_and_moves_its_history() {
     let close = |v: u64| json!({"close": {"file": obj(v)}});
     let io = |op: &str, v: u64, len: u64| json!({op: {"file": obj(v), "len": len, "offset": 0}});
     let ast = json!({
-        "ast": "0.16", "name": "t",
+        "ast": "0.17", "name": "t",
         "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": "as_written", "seed": 3}},
         "actors": {"gpu": {"body": [
             open(1, &["WRONLY", "CREAT"]), io("write", 1, k), close(1),
@@ -259,7 +259,7 @@ fn what_a_path_holds_ends_and_moves_its_history() {
     let text = std::fs::read(&emitted).unwrap();
     let sha: String = <sha2::Sha256 as sha2::Digest>::digest(&text).iter().map(|b| format!("{b:02x}")).collect();
     let node = dir.join("node.ast.json");
-    let node_ast = json!({"ast": "0.16", "name": "node", "params": {}, "datasets": {}, "actors": {"app": {"count": 1, "body": [{"trace": {"file": "t.jsonl", "sha256": sha}}]}}});
+    let node_ast = json!({"ast": "0.17", "name": "node", "params": {}, "datasets": {}, "actors": {"app": {"count": 1, "body": [{"trace": {"file": "t.jsonl", "sha256": sha}}]}}});
     std::fs::write(&node, node_ast.to_string()).unwrap();
     let dry = |ast: &std::path::Path, to: &std::path::Path, more: &[&str]| {
         ok(std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"))
