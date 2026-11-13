@@ -1,5 +1,5 @@
 {
-  "ast": "0.17",
+  "ast": "0.18",
   "name": "file_per_sample",
   "doc": "PyTorch DataLoader over an ImageFolder-style corpus; W workers, B files per batch, in-order delivery.",
   "params": {
@@ -433,10 +433,10 @@
       "script": "file_per_sample.py",
       "sha256": "436b924102e2f3b8e592bf6a9ae3b10d10ae9e2871d2b84478c29a5cb00ce49e",
       "builder_version": "0.4.0",
-      "git": "4f404b0e198b"
+      "git": "8b2a9824ed1d"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "8659b9c10c64842362aa21c75ecdd3c269cb25bce2b9a3574a2db6b26a0ad887"
+    "ast_sha256": "a9d2eee3dad3bb8bd923bea6e9ab9f16e3d8a73dadfcd35cbaaea70e833e5c20"
   }
 }

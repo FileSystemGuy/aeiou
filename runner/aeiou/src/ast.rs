@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.17";
+pub const AST_VERSION: &str = "0.18";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -346,6 +346,43 @@ pub enum ExprNode {
     SeqLen(Expr),
     /// The key of whole chunk `chunk` of `per` blocks: the chained hash of every block to its end.
     ChunkKey { seq: Expr, chunk: Expr, per: Expr },
+    /// This lane's planned time in nanoseconds (contract 0.18, rule V30).
+    Now(NowArg),
+    /// An attribute of the entry a tier's `order` is computed for (contract 0.18, rule V33).
+    Cached(CachedAttr),
+}
+
+/// `now` takes no argument: `{"now": {}}`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NowArg {}
+
+/// What a tier's `order` may read of an entry (contract 0.18): `stored`, `touched`, and `freed`
+/// are the tier's event counts when the entry was stored, last looked up, and last released
+/// (`stored` until it is first released); `hits` the lookups that found it; `pos` its index in
+/// the sequence of the lookup that last found or stored it; `size` its size in the tier's unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CachedAttr {
+    Stored,
+    Touched,
+    Freed,
+    Hits,
+    Pos,
+    Size,
+}
+
+impl CachedAttr {
+    pub fn name(self) -> &'static str {
+        match self {
+            CachedAttr::Stored => "stored",
+            CachedAttr::Touched => "touched",
+            CachedAttr::Freed => "freed",
+            CachedAttr::Hits => "hits",
+            CachedAttr::Pos => "pos",
+            CachedAttr::Size => "size",
+        }
+    }
 }
 
 /// What `published` names: a timeline (its group 0), or a timeline and a group (contract 0.17).
@@ -931,7 +968,7 @@ pub enum Node {
     Phase { name: Expr, body: Body },
     Trace { file: String, sha256: String },
     /// Lanes planned together, taken in planned order (contract 0.15, rule V30).
-    Timeline { name: String, #[serde(default)] caches: Vec<CacheDecl>, body: Body },
+    Timeline { name: String, #[serde(default)] caches: Vec<CacheDecl>, #[serde(default)] resources: Vec<ResourceDecl>, body: Body },
     /// An entry of the named timeline: these values at this lane's planned time (rule V30).
     /// In `group` (contract 0.17; 0 when none is given).
     Publish { timeline: String, #[serde(default)] group: Option<Expr>, values: std::collections::BTreeMap<String, Expr> },
@@ -939,7 +976,14 @@ pub enum Node {
     Array { name: String, count: Expr, index: String, value: Expr },
     /// The longest run of `seq`'s leading chunks found in a tier of a cache of the enclosing
     /// timeline, bound to `bind`; those touched, the rest stored (contract 0.16, rule V33).
-    Lookup { cache: String, tier: String, seq: Expr, per: Expr, bind: String, #[serde(default)] size: Option<Expr> },
+    /// With `hold` (contract 0.18, rule V34), the entries found and stored are held by this lane
+    /// under that name until a `release` of it: a held entry is never a victim.
+    Lookup { cache: String, tier: String, seq: Expr, per: Expr, bind: String, #[serde(default)] size: Option<Expr>, #[serde(default)] hold: Option<String> },
+    /// `n` units of a resource of the enclosing timeline, held by this lane under `hold` until a
+    /// `release`; the lane waits while they are not free (contract 0.18, rule V34).
+    Acquire { resource: String, n: Expr, hold: String },
+    /// What this lane holds under `hold`, given back (contract 0.18, rule V34).
+    Release { hold: String },
 
     Open { file: Handle, flags: Vec<OpenFlag>, #[serde(default)] mode: Option<u32>, #[serde(default)] expect: Expect },
     Close(FileOp),
@@ -983,6 +1027,8 @@ impl Node {
             Node::Publish { .. } => "publish",
             Node::Array { .. } => "array",
             Node::Lookup { .. } => "lookup",
+            Node::Acquire { .. } => "acquire",
+            Node::Release { .. } => "release",
             Node::Open { .. } => "open",
             Node::Close(_) => "close",
             Node::Read { .. } => "read",
@@ -1012,6 +1058,7 @@ impl Node {
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
                 | Node::Cond { .. } | Node::Choose { .. } | Node::Phase { .. } | Node::Trace { .. }
                 | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. } | Node::Lookup { .. }
+                | Node::Acquire { .. } | Node::Release { .. }
         )
     }
 }
@@ -1028,25 +1075,54 @@ pub struct CacheDecl {
     pub tiers: Vec<TierDecl>,
 }
 
-/// A tier of a cache: what it evicts, and over what capacity.
+/// A tier of a cache: its capacity, the order its victims are taken in, and what a store
+/// that finds no victim does (contract 0.18).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TierDecl {
     pub name: String,
-    pub evict: Evict,
+    /// The victim order: the entry whose values are least, compared in turn, is evicted first,
+    /// a tie to the entry stored first. Absent, nothing is evicted.
+    #[serde(default)]
+    pub order: Option<Vec<Expr>>,
     #[serde(default)]
     pub capacity: Option<Expr>,
     #[serde(default)]
     pub unit: TierUnit,
+    #[serde(default)]
+    pub full: Full,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// What a store does when the tier has no room and no victim left (contract 0.18).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Evict {
-    /// Nothing evicted: every entry kept.
-    None,
-    /// The entry used longest ago evicted first.
-    Lru,
+pub enum Full {
+    /// The entry is not stored.
+    #[default]
+    Skip,
+    /// The lane waits, in planned time, until a release makes room for the whole lookup.
+    Wait,
+    /// The walk is refused.
+    Fail,
+}
+
+impl Full {
+    pub fn name(self) -> &'static str {
+        match self {
+            Full::Skip => "skip",
+            Full::Wait => "wait",
+            Full::Fail => "fail",
+        }
+    }
+}
+
+/// A counted resource of a timeline (contract 0.18, rule V34): `capacity` units, held by
+/// `acquire` and given back by `release`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceDecl {
+    pub name: String,
+    pub capacity: Expr,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]

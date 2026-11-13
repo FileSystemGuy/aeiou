@@ -4,9 +4,9 @@
   "runs": [
     {
       "ast": "parquet_stream",
-      "ast_sha256": "3c4ab3022b359d00c0fdc3e35fac7e4582c4fa766b1cab90f42dde62b7ab10ae",
+      "ast_sha256": "0ddf02531bb9f760c81a108b196f094fcb26ac956925be5c0cd4890da4dbdbf0",
       "params": "case.lock.json",
-      "params_sha256": "1a98721153f38236c283c29a0db7d8eb5e4ce82ba32a39cbc3263eb42ae21e3a",
+      "params_sha256": "b3e33ba02d29277729c3f97eecfc8ca82bd5e37e91827355e6a8ac6c4266a0c1",
       "gpus": 1,
       "seeds": [
         1,

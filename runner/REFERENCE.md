@@ -221,15 +221,42 @@ each is a recorded decision and the golden tests pin them.
   chunks that end in it and not in its left child, for the first `per` asked; a walk keeps the
   keys of its last four sequences. Every walk over a tree is a loop, and so is its drop, so a
   lineage of any length costs no stack.
-- **A timeline's caches and `lookup`** (contract 0.16). A cache's tiers are made when its
-  timeline starts, `capacity` evaluated there, and live in the timeline's shared state, so
-  every lane's `lookup` meets them in planned order. A `lookup` computes its sequence's keys,
-  counts the leading ones held (the hit, bound to `bind`), then takes every key in order:
-  held, it is touched (moved to the most recently used end); not held, it is stored, evicting
-  from the least recently used end while the tier's used capacity plus its size (one entry, or
-  `size` bytes) would pass `capacity`. A store may evict a key the same lookup touched; an entry
-  larger than the whole tier is not stored. The order is a definition: a change to it changes
-  every op set a cache decides. A lookup's binding is refused under an `x @ i` evaluation (V33).
+- **A timeline's caches and `lookup`** (contract 0.16; order, holds, and `full` contract 0.18,
+  `vm.rs`'s `Tier`). A cache's tiers are made when its timeline starts, `capacity` evaluated
+  there, and live in the timeline's shared state, so every lane's `lookup` meets them in planned
+  order. A tier counts an event (`stamp`) at every key a lookup touches or stores and at every
+  release. An entry keeps `stored`, `touched`, `freed` (those counts), `hits`, `pos` (its index,
+  first occurrence, in the sequence of the lookup that last found or stored it), `size` (one, or
+  the lookup's `size` in a tier of bytes), and the holds on it. An entry no lane holds is in the
+  victim order under the key (its `order` values, its `stored`), the values computed with
+  `cached` reading the entry when it is stored, looked up, or released, never in between. A
+  `lookup` computes its sequence's keys, counts the leading ones held (the hit, bound to
+  `bind`), and takes each key once, at its first index: ~~every key in order: held, it is
+  touched (moved to the most recently used end); not held, it is stored, evicting from the
+  least recently used end while the tier's used capacity plus its size (one entry, or `size`
+  bytes) would pass `capacity`. A store may evict a key the same lookup touched~~ first every key
+  the tier holds, in order, touched (with `hold`, held too, and out of the victim order); then
+  every other key, in order, stored, evicting the least victim while the used capacity plus its
+  size would pass `capacity`; when none is left, `full` decides: `skip` leaves the key out,
+  `fail` refuses the walk, and `wait` never gets there: before it changes anything, a lookup
+  of a `wait` tier counts the new entries' size against the free capacity plus the victims'
+  (less those it found), and parks the lane when they do not fit or an earlier lane waits on
+  the tier. A key stored with `hold` is held. An entry larger than the whole tier is not
+  stored. A `release` of a lookup's hold takes one hold off each of its keys, and one whose
+  holds reach 0 gets `freed` that release's count and its place in the victim order. The order
+  is a definition: a change to it changes every op set a cache decides. A lookup's binding is
+  refused under an `x @ i` evaluation (V33).
+- **Resources, holds, and waiting lanes** (contract 0.18, V34). A resource's `capacity` is
+  evaluated when its timeline starts. An `acquire` takes `n` units when they are free and no
+  earlier lane waits on the resource; otherwise its lane is parked, first come first, the
+  statement to run again. A `release` gives back what its hold names and puts the tier or
+  resource's first waiting lane back on the heap at the later of its own clock and the
+  release's; a lane that goes on puts the next waiter back at its own clock. So a resource of C
+  units is a queue with C servers in planned time, and a full `wait` tier vLLM's admission. A
+  walk is refused when a lane ends holding something, takes a hold it holds already, releases
+  one it does not, asks a resource for more than its capacity, or waits for more new entries
+  than its tier's capacity, and when every lane left waits. `now` is the lane's planned clock
+  in nanoseconds, refused outside a timeline and under an `x @ i` evaluation (V30).
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which

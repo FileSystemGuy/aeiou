@@ -258,43 +258,56 @@ struct Binding<'a> {
 /// Sequences whose chunk keys a walk holds, the latest last.
 const KEY_MEMO: usize = 4;
 
-/// A tier of a timeline's cache (contract 0.16): its entries by key, with the order each was
-/// last used in and its size, and that order's index.
-struct Tier {
-    capacity: Option<i64>,
-    bytes: bool,
-    used: i64,
-    stamp: u64,
-    entries: HashMap<i64, (u64, i64)>,
-    order: std::collections::BTreeMap<u64, i64>,
+/// An entry of a tier: its size in the tier's unit, what an `order` reads of it, the holds on
+/// it, and its place in the victim order while it has none.
+struct Ent {
+    size: i64,
+    stored: i64,
+    touched: i64,
+    freed: i64,
+    hits: i64,
+    pos: i64,
+    holds: u32,
+    ord: Option<(Vec<i64>, u64)>,
 }
 
-impl Tier {
-    /// Touch `k` if held, else store it, evicting the entries used longest ago while the
-    /// tier would pass its capacity; an entry larger than the whole tier is not stored.
-    fn touch_or_store(&mut self, k: i64, size: i64) {
-        self.stamp += 1;
-        if let Some((old, _)) = self.entries.get_mut(&k) {
-            self.order.remove(old);
-            *old = self.stamp;
-            self.order.insert(self.stamp, k);
-            return;
-        }
-        let size = if self.bytes { size } else { 1 };
-        if let Some(cap) = self.capacity {
-            if size > cap {
-                return;
-            }
-            while self.used + size > cap {
-                let Some((_, victim)) = self.order.pop_first() else { break };
-                let (_, sz) = self.entries.remove(&victim).expect("an ordered entry is held");
-                self.used -= sz;
-            }
-        }
-        self.entries.insert(k, (self.stamp, size));
-        self.order.insert(self.stamp, k);
-        self.used += size;
+impl Ent {
+    /// The values `cached` reads, in `CachedAttr`'s order.
+    fn attrs(&self) -> [i64; 6] {
+        [self.stored, self.touched, self.freed, self.hits, self.pos, self.size]
     }
+}
+
+/// A tier of a timeline's cache (contract 0.16; its order, holds, and `full` contract 0.18):
+/// its entries by key and, of those no lane holds, the victim order (an entry's `order` values
+/// and the event count it was stored at, least first). `unheld` is the size of those.
+struct Tier<'a> {
+    capacity: Option<i64>,
+    bytes: bool,
+    full: Full,
+    order: Option<&'a [Expr]>,
+    used: i64,
+    unheld: i64,
+    stamp: i64,
+    entries: HashMap<i64, Ent>,
+    victims: std::collections::BTreeMap<(Vec<i64>, u64), i64>,
+}
+
+/// A counted resource of a timeline (contract 0.18): its capacity and the units held.
+struct Res {
+    capacity: i64,
+    used: i64,
+}
+
+/// What a lane waits on: a tier, by cache and tier, or a resource, as ("", name) (a cache's
+/// name is an identifier, never empty).
+type Waitable<'a> = (&'a str, &'a str);
+
+/// What a lane holds under a name (contract 0.18): a tier's entries, or a resource's units.
+#[derive(Clone)]
+enum Hold<'a> {
+    Tier { cache: &'a str, tier: &'a str, keys: Vec<i64> },
+    Resource { name: &'a str, n: i64 },
 }
 
 #[derive(Clone)]
@@ -439,6 +452,18 @@ enum Next<'a> {
     Control(Control<'a>),
     Fork(ForkKind<'a>),
     Trace(Arc<crate::trace::TraceFile>),
+    /// A lane cannot go on until a release (contract 0.18): the statement runs again then.
+    Block,
+}
+
+/// What a lane's step gave `tl_step`.
+enum LaneEv<'a> {
+    Op,
+    Ctl(Control<'a>),
+    Fork(ForkKind<'a>),
+    Trace,
+    Block,
+    End,
 }
 
 /// The op the last `Next::Op` describes; `next` lends it out as an `Op`. A `path` of `None`
@@ -515,7 +540,14 @@ struct TlShared<'a> {
     /// By group (contract 0.17; 0 when a `publish` gives none), each group's in planned order.
     entries: HashMap<i64, Vec<(i64, Vec<(&'a str, Value<'a>)>)>>,
     /// Its caches' tiers, by cache and tier name (contract 0.16).
-    tiers: HashMap<(&'a str, &'a str), Tier>,
+    tiers: HashMap<(&'a str, &'a str), Tier<'a>>,
+    /// Its resources, by name (contract 0.18).
+    resources: HashMap<&'a str, Res>,
+    /// The lanes waiting on each tier or resource, first come first.
+    waiters: HashMap<Waitable<'a>, std::collections::VecDeque<usize>>,
+    /// Tiers and resources a step gave room in, with the planned time: their first waiter
+    /// tries again then.
+    wake: Vec<(Waitable<'a>, i64)>,
 }
 
 /// One lane of a timeline: its walk (`None` once it has ended), its key, the lane that waits
@@ -528,6 +560,8 @@ struct Lane<'m, 'a> {
     forks: i64,
     wait: i64,
     until: i64,
+    /// Waiting on a tier or a resource (contract 0.18), out of the heap until woken.
+    parked: bool,
 }
 
 /// A timeline being walked: its lanes, a heap of (planned time, lane key, order put, lane)
@@ -606,6 +640,12 @@ pub struct Vm<'m, 'a> {
     prev_slots: HashMap<usize, PrevSlot<'a>>,
     /// The chunk keys of the sequences this walk asked of last, by sequence and `per`.
     key_memo: Vec<(Arc<Seq>, i64, Arc<Vec<u64>>)>,
+    /// While a tier's `order` is computed: the entry's values `cached` reads.
+    cached: Option<[i64; 6]>,
+    /// What this lane holds, by name (contract 0.18).
+    holds: Vec<(&'a str, Hold<'a>)>,
+    /// This lane's index in its timeline.
+    lane: usize,
 }
 
 /// The bounds of a VM's file geometry cache (`Vm::geom`): the files an actor interleaves
@@ -648,6 +688,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             tlrun: None,
             prev_slots: HashMap::new(),
             key_memo: Vec::new(),
+            cached: None,
+            holds: Vec::new(),
+            lane: 0,
         }
     }
 
@@ -680,6 +723,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             tlrun: None,
             prev_slots: HashMap::new(),
             key_memo: Vec::new(),
+            cached: None,
+            holds: Vec::new(),
+            lane: 0,
         }
     }
 
@@ -788,8 +834,27 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Some(Next::Control(c)) => Some(Event::Control(c, self.ctx())),
                 Some(Next::Fork(k)) => Some(Event::Fork(k)),
                 Some(Next::Trace(t)) => Some(Event::Trace(t, self.ctx())),
+                Some(Next::Block) => return Err(anyhow!("a lane waited outside a timeline (V34)")),
             });
         }
+    }
+
+    /// A lane's next event, for `tl_step`: `next` without the timeline (a lane holds none, V30)
+    /// and with `Block`.
+    fn lane_next(&mut self) -> Result<LaneEv<'a>> {
+        let n = match self.step() {
+            Ok(n) => n,
+            Err(e) => return Err(self.wrap(e)),
+        };
+        Ok(match n {
+            None => LaneEv::End,
+            Some(Next::Op) => LaneEv::Op,
+            Some(Next::Control(c)) => LaneEv::Ctl(c),
+            Some(Next::Fork(k)) => LaneEv::Fork(k),
+            Some(Next::Trace(_)) => LaneEv::Trace,
+            Some(Next::Block) => LaneEv::Block,
+            Some(Next::Timeline) => unreachable!("a timeline inside a timeline is refused when entered"),
+        })
     }
 
     /// A timeline's next event: the lane planned soonest steps until it issues an op or a
@@ -797,13 +862,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     /// at its clock; a joined fork holds it until they end), or ends. `None` when every lane
     /// has ended.
     fn tl_step(&mut self) -> Result<Option<(usize, TlOut<'a>)>> {
-        enum S<'a> {
-            Op,
-            Ctl(Control<'a>),
-            Fork(ForkKind<'a>),
-            Trace,
-            End,
-        }
+        type S<'a> = LaneEv<'a>;
         let run = self.tlrun.as_mut().unwrap();
         loop {
             let cur = match run.cur {
@@ -813,18 +872,40 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         run.cur = Some(l);
                         l
                     }
-                    None => return Ok(None),
+                    None => {
+                        let g = run.shared.lock().unwrap();
+                        if let Some(((c, t), _)) = g.waiters.iter().filter(|(_, q)| !q.is_empty()).min_by_key(|(w, _)| **w) {
+                            let what = if c.is_empty() { format!("resource `{t}`") } else { format!("tier `{t}` of cache `{c}`") };
+                            bail!("timeline `{}`: lanes wait on {what}, and no lane that could release it is left (V34)", g.name);
+                        }
+                        return Ok(None);
+                    }
                 },
             };
             let vm = run.lanes[cur].vm.as_mut().unwrap();
-            let s = match vm.next()? {
-                None => S::End,
-                Some(Event::Op(..)) => S::Op,
-                Some(Event::Control(c, _)) => S::Ctl(c),
-                Some(Event::Fork(k)) => S::Fork(k),
-                Some(Event::Trace(..)) => S::Trace,
-            };
+            let s = vm.lane_next()?;
+            {
+                // a release or a waiter gone through gave room: its first waiter tries again
+                let mut g = run.shared.lock().unwrap();
+                let wake = std::mem::take(&mut g.wake);
+                for (w, t) in wake {
+                    if let Some(&l) = g.waiters.get(&w).and_then(|q| q.front()) {
+                        let lane = &mut run.lanes[l];
+                        if lane.parked {
+                            lane.parked = false;
+                            let v = lane.vm.as_mut().unwrap();
+                            v.clock = v.clock.max(t);
+                            run.seq += 1;
+                            run.heap.push(Reverse((v.clock, lane.key.clone(), run.seq, l)));
+                        }
+                    }
+                }
+            }
             match s {
+                S::Block => {
+                    run.lanes[cur].parked = true;
+                    run.cur = None;
+                }
                 S::Op => return Ok(Some((cur, TlOut::Op))),
                 S::Ctl(Control::Compute { ns }) => {
                     let vm = run.lanes[cur].vm.as_mut().unwrap();
@@ -848,7 +929,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     return Err(vm.wrap(EvalError::Other(anyhow!("a `{what}` inside a timeline: its lanes are planned, never waiting on one another but by a joined `parallel` (V30)"))));
                 }
                 S::Trace | S::Fork(ForkKind::Loader { .. }) => {
-                    let what = if matches!(s, S::Trace) { "trace" } else { "loader" };
+                    let what = if matches!(s, LaneEv::Trace) { "trace" } else { "loader" };
                     let vm = run.lanes[cur].vm.as_ref().unwrap();
                     return Err(vm.wrap(EvalError::Other(anyhow!("a `{what}` inside a timeline: its lanes are planned, never waiting on one another but by a joined `parallel` (V30)"))));
                 }
@@ -866,10 +947,11 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         let mut kid = Vm::resume(snap.clone());
                         kid.tl = Some(run.shared.clone());
                         kid.clock = clock;
+                        kid.lane = run.lanes.len();
                         kid.start_sub(k);
                         let mut kkey = key.clone();
                         kkey.push(k);
-                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0 });
+                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0, parked: false });
                         let l = run.lanes.len() - 1;
                         run.ready(l);
                     }
@@ -882,6 +964,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 S::End => {
                     let lane = &mut run.lanes[cur];
+                    if let Some((h, _)) = lane.vm.as_ref().and_then(|v| v.holds.first()) {
+                        let g = run.shared.lock().unwrap();
+                        bail!("timeline `{}`: a lane ended holding `{h}`, which only its own `release` gives back (V34)", g.name);
+                    }
                     let end = lane.vm.take().map_or(0, |v| v.clock);
                     run.cur = None;
                     if let Some(p) = lane.parent {
@@ -1044,6 +1130,17 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             ExprNode::Len(array) => match self.computed(array) {
                 Some(a) => Value::Int(a.len() as i64),
                 None => Value::Int(self.array(array, "len")?.len() as i64),
+            },
+            ExprNode::Now(_) => {
+                self.positional_only("now")?;
+                if self.tl.is_none() {
+                    return other("now: outside a timeline, where nothing is planned (V30)");
+                }
+                Value::Int(self.clock)
+            }
+            ExprNode::Cached(a) => match self.cached {
+                Some(v) => Value::Int(v[*a as usize]),
+                None => return other(format!("cached `{}`: outside a tier's `order` (V33)", a.name())),
             },
             ExprNode::Published(arg) => {
                 self.positional_only("published")?;
@@ -1261,6 +1358,22 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
 
     /// A value whose position is the step being walked (a timeline read, a `prev`) has none
     /// to give an `x @ i`, which recomputes a definition at another index.
+    /// A tier's `order` values for an entry with these attributes (contract 0.18).
+    fn order_of(&mut self, order: &'a [Expr], attrs: [i64; 6]) -> ER<Vec<i64>> {
+        let saved = self.cached.replace(attrs);
+        let r = order.iter().map(|e| self.expr(e).and_then(|v| Ok(v.as_int()?))).collect();
+        self.cached = saved;
+        r
+    }
+
+    /// A hold this lane is about to take is not one it holds (contract 0.18).
+    fn not_held(&self, hold: &str, what: &str) -> ER<()> {
+        if self.holds.iter().any(|(h, _)| *h == hold) {
+            return other(format!("{what}: this lane holds `{hold}` already; `release` it first (V34)"));
+        }
+        Ok(())
+    }
+
     fn positional_only(&self, what: &str) -> ER<()> {
         if self.shifts.is_empty() {
             return Ok(());
@@ -1930,6 +2043,12 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     }
                     *i += 1;
                     if let Some(n) = self.statement(&nodes[at])? {
+                        if matches!(n, Next::Block) {
+                            // the statement runs again when the lane is woken
+                            if let Some(Cont::Body { i, .. }) = self.stack.last_mut() {
+                                *i = at;
+                            }
+                        }
                         return Ok(Some(n));
                     }
                 }
@@ -1988,7 +2107,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 level.bindings.insert(name.as_str(), Binding { value: v, body: level.body, def: value, walked: false });
                 Ok(None)
             }
-            Node::Timeline { name, caches, body } => {
+            Node::Timeline { name, caches, resources, body } => {
                 if self.tl.is_some() {
                     return other(format!("timeline `{name}` inside a timeline (V30)"));
                 }
@@ -2005,16 +2124,34 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                             }
                             None => None,
                         };
-                        let tier = Tier { capacity, bytes: t.unit == TierUnit::Bytes, used: 0, stamp: 0, entries: HashMap::new(), order: Default::default() };
+                        let tier = Tier {
+                            capacity,
+                            bytes: t.unit == TierUnit::Bytes,
+                            full: t.full,
+                            order: t.order.as_deref(),
+                            used: 0,
+                            unheld: 0,
+                            stamp: 0,
+                            entries: HashMap::new(),
+                            victims: Default::default(),
+                        };
                         tiers.insert((c.name.as_str(), t.name.as_str()), tier);
                     }
                 }
-                let shared = Arc::new(Mutex::new(TlShared { name, entries: HashMap::new(), tiers }));
+                let mut res = HashMap::new();
+                for r in resources {
+                    let n = self.expr(&r.capacity)?.as_int()?;
+                    if n < 0 {
+                        return other(format!("resource `{}`: capacity {n}", r.name));
+                    }
+                    res.insert(r.name.as_str(), Res { capacity: n, used: 0 });
+                }
+                let shared = Arc::new(Mutex::new(TlShared { name, entries: HashMap::new(), tiers, resources: res, waiters: HashMap::new(), wake: Vec::new() }));
                 let snap = Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &self.frames, &self.scopes, &self.phases, &self.open, &self.written, body);
                 let mut main = Vm::resume(snap);
                 main.tl = Some(shared.clone());
                 main.push_body(body);
-                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0 }], heap: BinaryHeap::new(), seq: 0, cur: None };
+                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false }], heap: BinaryHeap::new(), seq: 0, cur: None };
                 run.ready(0);
                 self.tlrun = Some(Box::new(run));
                 Ok(Some(Next::Timeline))
@@ -2029,7 +2166,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 tl.lock().unwrap().entries.entry(group).or_default().push((self.clock, got));
                 Ok(None)
             }
-            Node::Lookup { cache, tier, seq: s, per, bind, size } => {
+            Node::Lookup { cache, tier, seq: s, per, bind, size, hold } => {
                 let s = self.seq_of(s, "lookup")?;
                 let per = self.expr(per)?.as_int()?;
                 let size = match size {
@@ -2040,17 +2177,200 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 let Some(tl) = self.tl.clone() else {
                     return other(format!("lookup: no timeline declares cache `{cache}` around it (V33)"));
                 };
-                let mut g = tl.lock().unwrap();
-                let Some(t) = g.tiers.get_mut(&(cache.as_str(), tier.as_str())) else {
+                if let Some(h) = hold {
+                    self.not_held(h, "lookup")?;
+                }
+                let mut guard = tl.lock().unwrap();
+                let g = &mut *guard;
+                let w: Waitable<'a> = (cache.as_str(), tier.as_str());
+                let Some(t) = g.tiers.get_mut(&w) else {
                     return other(format!("lookup: cache `{cache}` has no tier `{tier}` (V33)"));
                 };
-                let hit = keys.iter().take_while(|h| t.entries.contains_key(&seq::key(**h))).count();
-                for h in keys.iter() {
-                    t.touch_or_store(seq::key(*h), size);
+                let keys: Vec<i64> = keys.iter().map(|h| seq::key(*h)).collect();
+                let hit = keys.iter().take_while(|k| t.entries.contains_key(k)).count();
+                // the keys once each, with the index each first comes at
+                let mut seen = std::collections::HashSet::with_capacity(keys.len());
+                let uniq: Vec<(i64, i64)> = keys.iter().enumerate().filter(|(_, k)| seen.insert(**k)).map(|(i, k)| (*k, i as i64)).collect();
+                let unit = if t.bytes { size } else { 1 };
+                if let (Some(cap), Full::Wait | Full::Fail) = (t.capacity, t.full) {
+                    // the whole lookup fits, or it waits (or fails) before it changes anything
+                    let mut need = 0i64;
+                    let mut found_unheld = 0i64;
+                    for (k, _) in &uniq {
+                        match t.entries.get(k) {
+                            None => need += unit,
+                            Some(e) if e.holds == 0 && t.order.is_some() => found_unheld += e.size,
+                            Some(_) => {}
+                        }
+                    }
+                    let free = cap - t.used + if t.order.is_some() { t.unheld - found_unheld } else { 0 };
+                    let waiting = g.waiters.get(&w).is_some_and(|q| q.front().is_some_and(|&l| l != self.lane));
+                    if need > cap {
+                        return other(format!("lookup: {need} of new entries in tier `{tier}` of cache `{cache}`, past its capacity {cap}, can never fit"));
+                    }
+                    if need > free || (waiting && t.full == Full::Wait) {
+                        if t.full == Full::Fail {
+                            return other(format!("lookup: tier `{tier}` of cache `{cache}` is full: {need} more past its capacity {cap} (full: fail)"));
+                        }
+                        let q = g.waiters.entry(w).or_default();
+                        if !q.contains(&self.lane) {
+                            q.push_back(self.lane);
+                        }
+                        return Ok(Some(Next::Block));
+                    }
+                    let q = g.waiters.entry(w).or_default();
+                    if q.front() == Some(&self.lane) {
+                        q.pop_front();
+                        if !q.is_empty() {
+                            g.wake.push((w, self.clock));
+                        }
+                    }
                 }
-                drop(g);
+                let t = g.tiers.get_mut(&w).unwrap();
+                let present: std::collections::HashSet<i64> = uniq.iter().filter(|(k, _)| t.entries.contains_key(k)).map(|(k, _)| *k).collect();
+                let mut held = Vec::new();
+                // the keys held first, then the others stored, each in order
+                for &(k, pos) in &uniq {
+                    let Some(e) = t.entries.get_mut(&k) else { continue };
+                    t.stamp += 1;
+                    e.touched = t.stamp;
+                    e.hits += 1;
+                    e.pos = pos;
+                    if e.holds == 0 {
+                        if let Some(old) = e.ord.take() {
+                            t.victims.remove(&old);
+                            t.unheld -= e.size;
+                        }
+                    }
+                    if hold.is_some() {
+                        e.holds += 1;
+                        held.push(k);
+                    } else if e.holds == 0 {
+                        let order = t.order.unwrap_or(&[]);
+                        if !order.is_empty() {
+                            let o = (self.order_of(order, e.attrs())?, e.stored as u64);
+                            t.victims.insert(o.clone(), k);
+                            t.unheld += e.size;
+                            e.ord = Some(o);
+                        }
+                    }
+                }
+                for &(k, pos) in &uniq {
+                    if present.contains(&k) {
+                        continue;
+                    }
+                    if let Some(cap) = t.capacity {
+                        if unit > cap {
+                            continue;
+                        }
+                        let mut room = true;
+                        while t.used + unit > cap {
+                            let Some((_, victim)) = t.victims.pop_first() else {
+                                room = false;
+                                break;
+                            };
+                            let v = t.entries.remove(&victim).expect("a victim is held in the tier");
+                            t.used -= v.size;
+                            t.unheld -= v.size;
+                        }
+                        if !room {
+                            match t.full {
+                                Full::Skip => continue,
+                                _ => return other(format!("lookup: tier `{tier}` of cache `{cache}` found no room it had counted")),
+                            }
+                        }
+                    }
+                    t.stamp += 1;
+                    let mut e = Ent { size: unit, stored: t.stamp, touched: t.stamp, freed: t.stamp, hits: 0, pos, holds: 0, ord: None };
+                    if hold.is_some() {
+                        e.holds = 1;
+                        held.push(k);
+                    } else if let Some(order) = t.order {
+                        let o = (self.order_of(order, e.attrs())?, e.stored as u64);
+                        t.victims.insert(o.clone(), k);
+                        t.unheld += unit;
+                        e.ord = Some(o);
+                    }
+                    t.used += unit;
+                    t.entries.insert(k, e);
+                }
+                drop(guard);
+                if let Some(h) = hold {
+                    self.holds.push((h.as_str(), Hold::Tier { cache: cache.as_str(), tier: tier.as_str(), keys: held }));
+                }
                 let level = self.scopes.last_mut().unwrap();
                 level.bindings.insert(bind.as_str(), Binding { value: Value::Int(hit as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
+                Ok(None)
+            }
+            Node::Acquire { resource, n, hold } => {
+                let n = self.expr(n)?.as_int()?;
+                if n < 0 {
+                    return other(format!("acquire: {n} units of resource `{resource}`"));
+                }
+                self.not_held(hold, "acquire")?;
+                let Some(tl) = self.tl.clone() else {
+                    return other(format!("acquire: no timeline declares resource `{resource}` around it (V34)"));
+                };
+                let mut g = tl.lock().unwrap();
+                let w: Waitable<'a> = ("", resource.as_str());
+                let waiting = g.waiters.get(&w).is_some_and(|q| q.front().is_some_and(|&l| l != self.lane));
+                let Some(r) = g.resources.get_mut(resource.as_str()) else {
+                    return other(format!("acquire: no timeline declares resource `{resource}` around it (V34)"));
+                };
+                if n > r.capacity {
+                    return other(format!("acquire: {n} units of resource `{resource}`, past its capacity {}, can never be held", r.capacity));
+                }
+                if waiting || r.used + n > r.capacity {
+                    let q = g.waiters.entry(w).or_default();
+                    if !q.contains(&self.lane) {
+                        q.push_back(self.lane);
+                    }
+                    return Ok(Some(Next::Block));
+                }
+                r.used += n;
+                let q = g.waiters.entry(w).or_default();
+                if q.front() == Some(&self.lane) {
+                    q.pop_front();
+                    if !q.is_empty() {
+                        g.wake.push((w, self.clock));
+                    }
+                }
+                drop(g);
+                self.holds.push((hold.as_str(), Hold::Resource { name: resource.as_str(), n }));
+                Ok(None)
+            }
+            Node::Release { hold } => {
+                let Some(i) = self.holds.iter().position(|(h, _)| *h == hold.as_str()) else {
+                    return other(format!("release: this lane holds no `{hold}` (V34)"));
+                };
+                let (_, h) = self.holds.remove(i);
+                let tl = self.tl.clone().expect("a lane holds only in a timeline");
+                let mut g = tl.lock().unwrap();
+                match h {
+                    Hold::Resource { name, n } => {
+                        g.resources.get_mut(name).expect("a held resource is declared").used -= n;
+                        g.wake.push((("", name), self.clock));
+                    }
+                    Hold::Tier { cache, tier, keys } => {
+                        let t = g.tiers.get_mut(&(cache, tier)).expect("a held tier is declared");
+                        t.stamp += 1;
+                        let now = t.stamp;
+                        for k in keys {
+                            let e = t.entries.get_mut(&k).expect("a held entry is never evicted");
+                            e.holds -= 1;
+                            if e.holds == 0 {
+                                e.freed = now;
+                                if let Some(order) = t.order {
+                                    let o = (self.order_of(order, e.attrs())?, e.stored as u64);
+                                    t.victims.insert(o.clone(), k);
+                                    t.unheld += e.size;
+                                    e.ord = Some(o);
+                                }
+                            }
+                        }
+                        g.wake.push(((cache, tier), self.clock));
+                    }
+                }
                 Ok(None)
             }
             Node::Array { name, count, index, value } => {
@@ -2641,7 +2961,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.17", "name": "t",
+                r#"{{"ast": "0.18", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

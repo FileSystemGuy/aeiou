@@ -21,7 +21,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.17", "name": "t", "params": {},
+    json!({"ast": "0.18", "name": "t", "params": {},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -113,7 +113,7 @@ fn tl(tiers: Value, body: Value) -> Value {
 }
 
 fn unbounded() -> Value {
-    json!([{"name": "disk", "evict": "none"}])
+    json!([{"name": "disk"}])
 }
 
 // ---------------------------------------------------------------- the seq value
@@ -206,14 +206,15 @@ fn a_lookup_finds_the_longest_stored_prefix_and_stores_the_rest() {
 /// a hit is a use.
 #[test]
 fn an_lru_tier_evicts_the_entry_used_longest_ago() {
-    let lru = json!([{"name": "disk", "evict": "lru", "capacity": 3}]);
-    // A, B two chunks each in three entries: each store evicts the other's first chunk, so
-    // alternating they always miss; A twice running hits whole the second time
+    let lru = json!([{"name": "disk", "order": [{"cached": "touched"}], "capacity": 3}]);
+    // A, B two chunks each in three entries: a lookup touches the chunks it finds before it
+    // stores the others (contract 0.18), so alternating they miss their first chunk until A's
+    // survives B's second store; A twice running hits whole the second time
     let body = json!([tl(lru.clone(), json!([
         let_("a", fresh(8)), let_("b", fresh(8)),
         lookup(r("a"), "h0"), lookup(r("b"), "h1"), lookup(r("a"), "h2"), lookup(r("b"), "h3"), lookup(r("a"), "h4"), lookup(r("a"), "h5"),
         stat(r("h0")), stat(r("h1")), stat(r("h2")), stat(r("h3")), stat(r("h4")), stat(r("h5"))]))]);
-    assert_eq!(walk(body), ["d/0", "d/0", "d/0", "d/0", "d/0", "d/2"]);
+    assert_eq!(walk(body), ["d/0", "d/0", "d/0", "d/0", "d/1", "d/2"]);
     // a hit touches: A hit again after C makes C the oldest, so D evicts C, not A
     let body = json!([tl(lru, json!([
         let_("a", fresh(8)), let_("c", fresh(4)), let_("d", fresh(4)),
@@ -225,7 +226,7 @@ fn an_lru_tier_evicts_the_entry_used_longest_ago() {
 /// A tier counted in bytes takes each lookup's `size`, the bytes of one chunk.
 #[test]
 fn a_tier_in_bytes_evicts_by_the_sizes_stored() {
-    let tiers = json!([{"name": "disk", "evict": "lru", "capacity": 10, "unit": "bytes"}]);
+    let tiers = json!([{"name": "disk", "order": [{"cached": "touched"}], "capacity": 10, "unit": "bytes"}]);
     let lk = |s: Value, b: &str| json!({"lookup": {"cache": "lm", "tier": "disk", "seq": s, "per": 4, "bind": b, "size": 4}});
     let body = json!([tl(tiers, json!([
         let_("a", fresh(8)), let_("b", fresh(4)),
@@ -233,7 +234,7 @@ fn a_tier_in_bytes_evicts_by_the_sizes_stored() {
         stat(r("h1")), stat(r("h3"))]))]);
     assert_eq!(walk(body), ["d/2", "d/0"]);
     // an entry larger than the tier is not stored
-    let tiers = json!([{"name": "disk", "evict": "lru", "capacity": 3, "unit": "bytes"}]);
+    let tiers = json!([{"name": "disk", "order": [{"cached": "touched"}], "capacity": 3, "unit": "bytes"}]);
     let body = json!([tl(tiers, json!([lk(shared(1, 4), "h0"), lk(shared(1, 4), "h1"), stat(r("h1"))]))]);
     assert_eq!(walk(body), ["d/0"]);
 }
@@ -272,14 +273,15 @@ fn the_validator_holds_seqs_caches_and_lookups_to_their_rules() {
     };
     has(json!([lookup(fresh(4), "h")]), "lookup: no timeline declares cache `lm` around it (V33)");
     has(json!([{"timeline": {"name": "tl", "body": [lookup(fresh(4), "h")]}}]), "lookup: no timeline declares cache `lm` around it (V33)");
-    has(json!([tl(json!([{"name": "mem", "evict": "none"}]), json!([lookup(fresh(4), "h")]))]), "lookup: cache `lm` has no tier `disk` (V33)");
-    has(json!([tl(json!([{"name": "disk", "evict": "lru"}]), json!([]))]), "tier `disk`: `lru` needs a `capacity` (V33)");
-    has(json!([tl(json!([{"name": "disk", "evict": "none", "capacity": 4}]), json!([]))]), "tier `disk`: `none` keeps every entry, so it takes no `capacity` (V33)");
-    has(json!([tl(json!([{"name": "disk", "evict": "none"}, {"name": "disk", "evict": "none"}]), json!([]))]), "tier `disk` declared twice in cache `lm` (V33)");
+    has(json!([tl(json!([{"name": "mem"}]), json!([lookup(fresh(4), "h")]))]), "lookup: cache `lm` has no tier `disk` (V33)");
+    has(json!([tl(json!([{"name": "disk", "order": [{"cached": "touched"}]}]), json!([]))]), "tier `disk`: an `order` with no `capacity`, so nothing is ever evicted (V33)");
+    has(json!([tl(json!([{"name": "disk", "full": "wait"}]), json!([]))]), "tier `disk`: `full` `wait` with no `capacity`, so it is never full (V33)");
+    has(json!([tl(json!([{"name": "disk", "order": [], "capacity": 4}]), json!([]))]), "tier `disk`: an empty `order` (V33)");
+    has(json!([tl(json!([{"name": "disk"}, {"name": "disk"}]), json!([]))]), "tier `disk` declared twice in cache `lm` (V33)");
     has(json!([tl(json!([]), json!([]))]), "cache `lm` has no tiers (V33)");
     has(json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": unbounded()}, {"name": "lm", "tiers": unbounded()}], "body": []}}]),
         "cache `lm` declared twice (V33)");
-    has(json!([tl(json!([{"name": "disk", "evict": "lru", "capacity": 8, "unit": "bytes"}]), json!([lookup(fresh(4), "h")]))]),
+    has(json!([tl(json!([{"name": "disk", "order": [{"cached": "touched"}], "capacity": 8, "unit": "bytes"}]), json!([lookup(fresh(4), "h")]))]),
         "lookup: tier `disk` counts bytes, so the lookup needs a `size` (V33)");
     has(json!([tl(unbounded(), json!([{"lookup": {"cache": "lm", "tier": "disk", "seq": fresh(4), "per": 4, "bind": "h", "size": 4}}]))]),
         "lookup: tier `disk` counts entries, so the lookup takes no `size` (V33)");
@@ -330,8 +332,8 @@ fn the_walk_refuses_what_the_validator_would() {
         Err(e) => assert!(e.contains(needle), "wanted `{needle}` in:\n{e}"),
     };
     no(json!([lookup(fresh(4), "h")]), "lookup: no timeline declares cache `lm` around it (V33)");
-    no(json!([tl(json!([{"name": "mem", "evict": "none"}]), json!([lookup(fresh(4), "h")]))]), "lookup: cache `lm` has no tier `disk` (V33)");
-    no(json!([tl(json!([{"name": "disk", "evict": "lru", "capacity": -1}]), json!([]))]), "tier `disk` of cache `lm`: capacity -1");
+    no(json!([tl(json!([{"name": "mem"}]), json!([lookup(fresh(4), "h")]))]), "lookup: cache `lm` has no tier `disk` (V33)");
+    no(json!([tl(json!([{"name": "disk", "order": [{"cached": "touched"}], "capacity": -1}]), json!([]))]), "tier `disk` of cache `lm`: capacity -1");
     no(json!([tl(unbounded(), json!([{"lookup": {"cache": "lm", "tier": "disk", "seq": fresh(4), "per": 0, "bind": "h"}}]))]), "lookup: `per` 0, not positive");
     no(json!([tl(unbounded(), json!([lookup(json!(3), "h")]))]), "lookup: expected a seq, got int");
     no(json!([stat(json!({"seq_len": cat(fresh(1), json!(2))}))]), "cat: expected a seq, got int");

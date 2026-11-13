@@ -147,7 +147,8 @@ fn expr(e: &Expr, p: &mut Path) {
         Expr::Node(n) => n.as_ref(),
     };
     match node {
-        ExprNode::Param(_) | ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => {}
+        ExprNode::Param(_) | ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_)
+        | ExprNode::Now(_) | ExprNode::Cached(_) => {}
         ExprNode::Published(arg) => {
             if let Some(g) = arg.group() {
                 p.with(&["published", "group"], |p| expr(g, p));
@@ -295,16 +296,24 @@ fn node(n: &Node, p: &mut Path) {
             p.with(&[k, "body"], |p| body(b, p));
         }
         Node::Compute { ns } => p.with(&[k, "ns"], |p| expr(ns, p)),
-        Node::Timeline { caches, body: b, .. } => {
+        Node::Timeline { caches, resources, body: b, .. } => {
             for (i, c) in caches.iter().enumerate() {
                 for (j, t) in c.tiers.iter().enumerate() {
                     if let Some(e) = &t.capacity {
                         p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "capacity"], |p| expr(e, p));
                     }
+                    for (o, e) in t.order.iter().flatten().enumerate() {
+                        p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "order", &o.to_string()], |p| expr(e, p));
+                    }
                 }
+            }
+            for (i, r) in resources.iter().enumerate() {
+                p.with(&[k, "resources", &i.to_string(), "capacity"], |p| expr(&r.capacity, p));
             }
             p.with(&[k, "body"], |p| body(b, p))
         }
+        Node::Acquire { n, .. } => p.with(&[k, "n"], |p| expr(n, p)),
+        Node::Release { .. } => {}
         Node::Lookup { seq, per, size, .. } => {
             p.with(&[k, "seq"], |p| expr(seq, p));
             p.with(&[k, "per"], |p| expr(per, p));

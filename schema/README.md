@@ -1,6 +1,6 @@
 # The AST contract
 
-Version `0.17`, 2026-11-12 (~~`0.16`, the same day~~; ~~`0.15`, the same day~~; ~~`0.14`, 2026-11-02~~; ~~`0.13`, 2026-10-23~~; ~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
+Version `0.18`, 2026-11-12 (~~`0.17`, the same day~~; ~~`0.16`, the same day~~; ~~`0.15`, the same day~~; ~~`0.14`, 2026-11-02~~; ~~`0.13`, 2026-10-23~~; ~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -105,7 +105,7 @@ builder/.venv/bin/python schema/check.py path/to/x.ast.json   # one file
 **Top level:** `ast` (version), `name`, `doc`, `posix`, `cache`, `s3` (§1, *Declared
 backend*), `params`, `datasets`, `namespaces`, `actors`, `provenance`.
 
-**Statements** (a `body` is an array of these). Seventeen control forms (~~sixteen~~ until contract 0.16, ~~thirteen~~ until 0.15), eighteen ops.
+**Statements** (a `body` is an array of these). Nineteen control forms (~~seventeen~~ until contract 0.18, ~~sixteen~~ until 0.16, ~~thirteen~~ until 0.15), eighteen ops.
 
 | Kind | Semantics |
 |---|---|
@@ -121,9 +121,11 @@ backend*), `params`, `datasets`, `namespaces`, `actors`, `provenance`.
 | `choose {arms: [{weight, body}]}` | Run one arm, chosen positionally by weight (the original *selection*). |
 | `phase {name, body}` | Statistics label; no effect on execution or the fingerprint. `name` may be an expression. |
 | `trace {file, sha256}` | A captured trace of a real application, executed literally, for calibration; never CLOSED. `file` is relative to the document, JSON Lines as `aeiou-trace export` writes it and `runner/REFERENCE.md` §13 defines it (`DESIGN_REVIEW.md` §3.58; the node was `replay` until 2026-10-02). |
-| `timeline {name, caches, body}` | Lanes planned together (contract 0.15, `DESIGN_REVIEW.md` §3.99, brief item 72; V30): the body's main line and every sub-actor of a `parallel` in it is a **lane** with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller **lane key** (the main line's is empty; a sub-actor's is its parent's, then the parent's fork ordinal, then its index); a lane runs until its next `compute`; a joined `parallel` holds its parent until its last sub-actor ends and the parent goes on at that end. The plan is a function of the abstract, its parameters, and the seeds, never of the run; draws keep their positional keys. Never a timeline, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside one. `aeiou check` and `aeiou dry-run` walk it; `aeiou run` refuses it until its run side is built (item 72 (7)). Its `caches` (contract 0.16, brief item 75; V33), each `{name, tiers}`, a tier `{name, evict, capacity, unit}`: `evict: none` keeps every entry and takes no `capacity`; `evict: lru` evicts the entry used longest ago while a store would pass `capacity`, counted in `entries` (the default) or `bytes`, and an entry larger than the whole tier is not stored. A cache starts empty with its timeline and is walked with its lanes, in planned order. |
+| `timeline {name, caches, resources, body}` | Lanes planned together (contract 0.15, `DESIGN_REVIEW.md` §3.99, brief item 72; V30): the body's main line and every sub-actor of a `parallel` in it is a **lane** with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller **lane key** (the main line's is empty; a sub-actor's is its parent's, then the parent's fork ordinal, then its index); a lane runs until its next `compute`; a joined `parallel` holds its parent until its last sub-actor ends and the parent goes on at that end. The plan is a function of the abstract, its parameters, and the seeds, never of the run; draws keep their positional keys. Never a timeline, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside one. `aeiou check` and `aeiou dry-run` walk it; `aeiou run` refuses it until its run side is built (item 72 (7)). Its `caches` (contract 0.16, brief item 75; V33), each `{name, tiers}`, a tier ~~`{name, evict, capacity, unit}`: `evict: none` keeps every entry and takes no `capacity`; `evict: lru` evicts the entry used longest ago while a store would pass `capacity`, counted in `entries` (the default) or `bytes`, and an entry larger than the whole tier is not stored~~ `{name, order, capacity, unit, full}` (contract 0.18): at most `capacity` (counted in `entries`, the default, or `bytes`) of entries; while a store would pass it, the entry no lane holds whose `order` values are least, compared in turn, is evicted first, a tie to the entry stored first (`order` is a list of integer expressions over `cached` and parameters, computed when the entry is stored, looked up, or released and kept: `[{cached: touched}]` is LRU, `[{cached: stored}]` FIFO, `[{cached: freed}, {neg: {cached: pos}}]` vLLM's free queue); with no `order`, nothing is evicted. An entry larger than the whole tier is not stored. `full`, what a store that finds no room and no victim does: `skip` it (the default), `wait` (the lane waits in planned time until a release makes room for the whole lookup, first come first), or `fail` (the walk is refused). Its `resources` (contract 0.18, V34), each `{name, capacity}`, counted resources held by `acquire`: a queue with `capacity` servers. A cache and a resource start empty with their timeline and are walked with its lanes, in planned order; a lane that waits is parked, and resumes at the planned time of the release that lets it on. |
 | `publish {timeline, group, values}` | An **entry** of the enclosing timeline: `values` (name to expression) at this lane's planned time, which the lanes read with `published` and `entry` (V30); in group `group`, an integer, 0 when absent (contract 0.17): a timeline's entries are counted and indexed within their group, so one timeline every session of an engine shares keeps each session's pool its own. |
-| `lookup {cache, tier, seq, per, bind, size}` | The longest run of `seq`'s leading whole chunks of `per` blocks held in tier `tier` of cache `cache` of the enclosing timeline, bound to `bind` as an integer; then every whole chunk, in order, touched if held (a use, for `lru`) and stored if not (contract 0.16, V33), as LMCache 0.5.5 looks a prompt up and stores what it missed. A chunk's key is `chunk_key` (`runner/REFERENCE.md` §2). `size`, the bytes of one chunk, exactly when the tier counts bytes. `bind` is not positional: `@` and `prev` may not reach it. |
+| `lookup {cache, tier, seq, per, bind, size, hold}` | The longest run of `seq`'s leading whole chunks of `per` blocks held in tier `tier` of cache `cache` of the enclosing timeline, bound to `bind` as an integer; then ~~every whole chunk, in order, touched if held (a use, for `lru`) and stored if not~~ the chunks the tier holds touched, in order, and then the others stored, in order (contract 0.18; ~~interleaved in contract 0.16~~), as LMCache 0.5.5 looks a prompt up and stores what it missed (V33). A chunk's key is `chunk_key` (`runner/REFERENCE.md` §2). `size`, the bytes of one chunk, exactly when the tier counts bytes. With `hold` (contract 0.18, V34), the chunks found and stored are this lane's under that name until its `release`, never victims meanwhile. `bind` is not positional: `@` and `prev` may not reach it. |
+| `acquire {resource, n, hold}` | `n` units of resource `resource` of the enclosing timeline, this lane's under `hold` until its `release` (contract 0.18, V34); the lane waits in planned time while they are not free or an earlier lane waits for the resource, first come first. |
+| `release {hold}` | What this lane holds under `hold`, given back (contract 0.18, V34): a resource's units, or a tier's entries, which become victims again, `freed` the release. A lane ends holding nothing. |
 | `array {name, count, index, value}` | `count` values computed once, where the node stands, each with `index` bound as a loop index so its draws are positional; read with `elem` and `len` as a parameter array is (contract 0.15, V32). |
 | `open {file, flags, mode, expect}` | Flags from the enum in the schema. `DIRECTORY` for `readdir` handles. |
 | `close`, `fstat`, `stat`, `fsync`, `fdatasync`, `unlink` `{file, expect}` | |
@@ -165,6 +167,12 @@ non-negative integer, the chained hash of every block to its end, so two sequenc
 key exactly when they hold the same blocks up to it, however they were put together. A `seq`
 may be bound, published, read back with `entry`, and carried with `prev`; it is not a number,
 a condition, or a name's field (V27).
+Since contract 0.18: `now {}`, this lane's planned time in nanoseconds, only in a timeline
+(V30) and not positional, as `published` is; `cached attr`, only in a tier's `order` (V33), an
+attribute of the entry being ordered: `stored`, `touched`, and `freed`, the tier's event counts
+when it was stored, last looked up, and last released (`stored` until then); `hits`, the lookups
+that found it; `pos`, its index in the sequence of the lookup that last found or stored it;
+`size`, in the tier's unit.
 
 **Handles:** `ref` (a binding); `file {dataset, id}` (a dataset file by id; an `array` dataset's single file is `id: 0`) or
 `file {of, chunk}` (the container file, or chunk object `k`, of a sample handle); `dir {dataset,
@@ -268,7 +276,7 @@ The schema cannot express these; `check.py` does, and so does the Rust validator
 (`runner/aeiou/src/validate.rs`, `aeiou check`), whose messages CI diffs with `check.py`'s over
 every committed AST; most messages name their rule. V5 holds by
 construction (the schema has no clock or counter to read), V9 is the builder's, V10 is the
-runner's evaluation, and V16 the runner's at `aeiou run`; every other rule, V1 to V33 (~~V1 to V27~~, ~~V1 to V32~~), both
+runner's evaluation, and V16 the runner's at `aeiou run`; every other rule, V1 to V34 (~~V1 to V27~~, ~~V1 to V32~~, ~~V1 to V33~~), both
 checkers enforce.
 
 - **V1 Names resolve.** Every `param`, dataset, namespace, channel, index, and `ref` is
@@ -553,12 +561,23 @@ given again, as for any other parameter~~ (until contract 0.13) a required param
   a parameter, which `elem` and `len` also read.
 - **V33 a cache is its timeline's, and a `seq` is read as one** (added 2026-11-12, contract
   0.16, no committed AST has one). A cache's name is declared once in its timeline, has at
-  least one tier, its tiers' names once each; an `lru` tier has a `capacity`, a `none` tier
-  none. A `lookup` names a cache its timeline declares and a tier of it, gives a `size`
+  least one tier, its tiers' names once each; ~~an `lru` tier has a `capacity`, a `none` tier
+  none~~ a tier with an `order` or a `full` other than `skip` has a `capacity`, an `order` is
+  not empty, and it reads only parameters, literals, and `cached`, through arithmetic,
+  comparisons, logic, and `cond` (contract 0.18); `cached` appears only in an `order`. A `lookup` names a cache its timeline declares and a tier of it, gives a `size`
   exactly when the tier counts bytes, and its `bind` may not be named by `@` (the runner
   refuses one reached through another binding when walked) or by `prev` (V31). An operand
   `prefix`, `cat`, `seq_len`, `chunk_key`, or `lookup` reads a sequence from is one where the
   document shows its kind; a `seq` is no number (V27).
+- **V34 holds and resources are a timeline's** (added 2026-11-12, contract 0.18, no committed AST
+  has one). A resource's name is declared once in its timeline and its capacity is an integer.
+  `acquire` and `release` stand only in a timeline; an `acquire` names a resource its timeline
+  declares; a `release` names a hold an `acquire` or a `lookup` of its timeline takes. When
+  walked: a lane takes a hold it does not hold already, releases only what it holds, and ends
+  holding nothing; an `acquire` past the resource's capacity, or a lookup that waits or fails
+  for more new entries than its tier's capacity, can never go on and is refused; and a timeline
+  whose lanes all wait, or have ended, with some still waiting, is refused. `now` stands only
+  in a timeline, and `@` may not reach it (V30).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -846,3 +865,13 @@ results are compared by.
   the version changed, and means the same. Every committed AST was regenerated; no fingerprint
   and no dataset id changed. Reasoning in `DESIGN_REVIEW.md` §3.99, the note "Chunks named
   from lineage, contract 0.16", its addendum.
+- **0.18** (2026-11-12): tiers as general pieces with the policies in the document (the user's
+  choices of 2026-11-12): a tier's victim `order` as expressions over `cached` (`evict: lru`
+  becomes `order: [{cached: touched}]`, `evict: none` no `order`), `full`, a `lookup`'s `hold`,
+  a timeline's `resources`, `acquire`, `release`, and `now` (V33, V34); a lookup now touches
+  every chunk it finds before it stores the others. Provisional until a second workload uses
+  them: the first is vLLM's KV pool and the engine's request slots under the KV-cache session
+  generator (brief items 72 (1) and 75). A 0.17 document with an `evict` is rewritten as above;
+  one with none is a 0.18 document with the version changed. Every committed AST was
+  regenerated; no fingerprint and no dataset id changed. Reasoning in `DESIGN_REVIEW.md` §3.99,
+  the note "Tiers as general pieces, contract 0.18".

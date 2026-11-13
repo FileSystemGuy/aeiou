@@ -515,9 +515,15 @@ the `seq`, a sequence of blocks kept as a shared tree (`fresh`, `shared`, `prefi
 `seq_len`, and `chunk_key`, a chunk's key from every block up to its end), and a timeline's
 `caches`, tiers that keep everything or evict the least recently used past a capacity, met by
 `lookup` in planned order; rule V33 in both checkers. Item 75's cache is built for one tier and
-LRU; LMCache's watermark eviction, vLLM's GPU pool as a tier, and the engine's queue are not.
+LRU; ~~LMCache's watermark eviction, vLLM's GPU pool as a tier, and the engine's queue are not~~.
 Contract 0.17 (the same day): a timeline's entries in groups, so the sessions of one engine
 share its timeline and cache while each draws from its own prompts.
+Contract 0.18 (the same day, the user's choices): tiers as general pieces with each system's
+policy written in the abstract: a victim `order` of expressions, holds, `full` (skip, wait, or
+fail), a timeline's counted `resources` with `acquire` and `release`, and `now`; rule V34. With
+them vLLM's GPU pool and the engine's request slots are written in an abstract and held to the
+reference request by request. Not built: LMCache's watermark eviction (a timed trigger), what an
+eviction issues (an unlink, a write to the tier below), `preempt`, and Dynamo's tiers.
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

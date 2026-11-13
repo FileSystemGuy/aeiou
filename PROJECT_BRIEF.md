@@ -1648,6 +1648,10 @@ numbers; the order is this note's.
     timeline built"):* (1)'s timeline construct as `timeline`, `publish`, `published`, `entry`,
     and `parallel`'s `join: false`, walked in planned order by `check` and `dry-run`; `run`
     refuses a timeline until (7) is built; the planned clock not yet in `--emit-trace`.
+    *Contract 0.18, the same day (the user's choices; `DESIGN_REVIEW.md` §3.99, the note "Tiers as
+    general pieces"):* (1)'s queue with a fixed number of servers as a timeline's `resources`,
+    taken by `acquire` and given back by `release`, a lane waiting in planned time, first come
+    first; with item 75's held GPU tier, the engine's admission; `now`, a lane's planned time.
     (8) *Opt-in.* An abstract without a timeline runs exactly as today, independent actors, no
     per-op cost of the plan; D and the lag are the case's results, judged through the `result.`
     constraints, never runner-wide (training's pass stays accelerator utilization). Accepted when
@@ -1704,8 +1708,17 @@ numbers; the order is this note's.
     lineage"):* a timeline's `caches`, a tier keeping every entry or evicting the least recently
     used past a capacity in entries or bytes, and `lookup`, with the `seq` and `chunk_key` that
     name a chunk by its prefix (gap 1 of item 71). Not built: LMCache's watermark eviction, a tier
-    of more than one level and promotion, the write policies, vLLM's pool as a tier, the unlinks
+    of more than one level and promotion, the write policies, ~~vLLM's pool as a tier~~, the unlinks
     an eviction issues (item 72 (3)), Dynamo's source read.
+    *Contract 0.18, the same day (the user's choices of 2026-11-12: the policies in the abstract,
+    the runner carrying mechanisms; `DESIGN_REVIEW.md` §3.99, the note "Tiers as general
+    pieces"):* a tier's victim `order` as expressions over `cached` (`lru()` one of them), holds
+    (a `lookup`'s `hold`, `release`), and `full` (`skip`, `wait`, `fail`); vLLM's pool written as
+    a held tier in vLLM's free-queue order, with `full: wait` as its admission, equal request by
+    request to `agentx.simulate` corrected (it overfilled the pool by one block a hit, found by
+    the comparison; the committed `agentx.py` not yet changed). Not built: the timed trigger
+    (LMCache's watermark), a statement body on eviction (an unlink, a write to the tier below),
+    `preempt`, promotion between tiers, Dynamo's source read.
 
 76. **Dynamo's block tier (queued by the user 2026-11-10, `DESIGN_REVIEW.md` §3.99 note "The
     generator in the abstract, a shared tier, and events between runners"; not started, not

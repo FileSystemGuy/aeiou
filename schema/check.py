@@ -20,7 +20,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-8"))
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
-           "compute", "cond", "choose", "phase", "trace", "timeline", "publish", "array", "lookup"}
+           "compute", "cond", "choose", "phase", "trace", "timeline", "publish", "array", "lookup",
+           "acquire", "release"}
 # V30: what a timeline's lanes may not hold: they are planned, never waiting on one another
 NOT_IN_TIMELINE = {"loader", "channel", "put", "take", "barrier", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
@@ -260,7 +261,7 @@ def unpositional(v):
     if not isinstance(v, dict) or len(v) != 1:
         return None
     k, a = next(iter(v.items()))
-    if k in ("published", "entry"):
+    if k in ("published", "entry", "now"):
         return "V30"
     if k == "prev":
         return "V31"
@@ -292,6 +293,44 @@ def publishes(nodes, name, out):
         elif kind == "choose":
             for arm in a["arms"]:
                 publishes(arm["body"], name, out)
+
+
+def holds(nodes, out):
+    """V34: the holds the `acquire`s and `lookup`s of a timeline's body name, anywhere in it."""
+    for node in nodes:
+        kind, a = next(iter(node.items()))
+        if kind == "acquire" or (kind == "lookup" and "hold" in a):
+            out.add(a["hold"])
+        elif kind in ("loop", "parallel", "loader", "phase"):
+            holds(a["body"], out)
+        elif kind == "cond":
+            holds(a["then"], out)
+            holds(a.get("else", []), out)
+        elif kind == "choose":
+            for arm in a["arms"]:
+                holds(arm["body"], out)
+
+
+# V33: what a tier's `order` may read through: arithmetic, comparisons, logic, and `cond`
+ORDER_THROUGH = {"add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "eq", "ne", "lt", "le",
+                 "gt", "ge", "and", "or", "neg", "not"}
+
+
+def order_reads(e):
+    """V33: the first thing a tier's `order` reads that it may not (an order reads parameters,
+    literals, and `cached`), by its JSON key. As the runner's `order_reads`."""
+    if isinstance(e, list):
+        return next((r for r in map(order_reads, e) if r), None)
+    if not isinstance(e, dict):
+        return None
+    k, a = next(iter(e.items()))
+    if k in ("param", "cached"):
+        return None
+    if k in ORDER_THROUGH:
+        return order_reads(a)
+    if k == "cond":
+        return order_reads(a["if"]) or order_reads(a["then"]) or order_reads(a["else"])
+    return k
 
 
 def param_refs(x, out: set):
@@ -338,6 +377,11 @@ class Check:
         self.timeline = None
         # V33: the enclosing timeline's caches, each tier with its unit
         self.caches = {}
+        # V33: checking a tier's `order`, where `cached` may be read
+        self.in_order = False
+        # V34: the enclosing timeline's resources, and the holds its `acquire`s and `lookup`s name
+        self.resources = set()
+        self.holds = set()
         # V32: the loops enclosing the node being checked
         self.loops = 0
         # V31: the next `body` is a `loop`'s
@@ -664,7 +708,7 @@ class Check:
             kinds = {self.pkind(x) for x in v} if isinstance(v, list) else set()
             return kinds.pop() if len(kinds) == 1 else None
         if k in ("index", "actor", "count", "dirs", "len", "published", "size", "offset", "unit_index", "units", "chunks",
-                 "seq_len", "chunk_key"):
+                 "seq_len", "chunk_key", "now", "cached"):
             return "int"
         if k in ("fresh", "shared", "prefix", "cat"):
             return "seq"
@@ -884,7 +928,7 @@ class Check:
         if not isinstance(e, dict):
             return False
         k, a = next(iter(e.items()))
-        if k in ("index", "at", "published", "entry", "prev"):
+        if k in ("index", "at", "published", "entry", "prev", "now", "cached"):
             return True
         if k == "fresh":                     # new blocks at every position, as a draw
             return bool(scope.indices) or self.varies(a, scope)
@@ -969,21 +1013,62 @@ class Check:
                 tp = cp + ["tiers", j]
                 if t["name"] in tiers:
                     self.err(tp, f"tier `{t['name']}` declared twice in cache `{c['name']}` (V33)")
-                if t["evict"] == "lru" and "capacity" not in t:
-                    self.err(tp, f"tier `{t['name']}`: `lru` needs a `capacity` (V33)")
-                if t["evict"] == "none" and "capacity" in t:
-                    self.err(tp, f"tier `{t['name']}`: `none` keeps every entry, so it takes no `capacity` (V33)")
+                if "capacity" not in t:
+                    if "order" in t:
+                        self.err(tp, f"tier `{t['name']}`: an `order` with no `capacity`, so nothing is ever evicted (V33)")
+                    if t.get("full", "skip") != "skip":
+                        self.err(tp, f"tier `{t['name']}`: `full` `{t['full']}` with no `capacity`, so it is never full (V33)")
+                if t.get("order") == []:
+                    self.err(tp + ["order"], f"tier `{t['name']}`: an empty `order` (V33)")
                 if "capacity" in t:
                     self.expr(t["capacity"], tp + ["capacity"], scope)
                     self.typed(t["capacity"], tp + ["capacity"], scope)
+                for o, e in enumerate(t.get("order", [])):
+                    op = tp + ["order", o]
+                    bad = order_reads(e)
+                    if bad:
+                        self.err(op, f"tier `{t['name']}`: its `order` reads `{bad}`; an order reads only parameters, literals, and `cached` (V33)")
+                        continue
+                    self.in_order = True
+                    self.expr(e, op, scope)
+                    self.in_order = False
+                    self.typed(e, op, scope)
                 tiers[t["name"]] = t.get("unit", "entries")
             self.caches[c["name"]] = tiers
+        self.resources = set()
+        for i, r in enumerate(a.get("resources", [])):
+            rp = p + ["resources", i]
+            if r["name"] in self.resources:
+                self.err(rp, f"resource `{r['name']}` declared twice (V34)")
+            self.resources.add(r["name"])
+            self.expr(r["capacity"], rp + ["capacity"], scope)
+            self.typed(r["capacity"], rp + ["capacity"], scope)
         keys = set()
         publishes(a["body"], a["name"], keys)
+        self.holds = set()
+        holds(a["body"], self.holds)
         self.timeline = (a["name"], keys)
         self.body(a["body"], p + ["body"], scope)
         self.timeline = None
         self.caches = {}
+        self.resources = set()
+        self.holds = set()
+
+    def n_acquire(self, a, p, scope):
+        """V34: an `acquire` names a resource its timeline declares, `n` an integer."""
+        if self.timeline is None:
+            self.err(p, "acquire: outside a timeline, where nothing is planned (V34)")
+        elif a["resource"] not in self.resources:
+            self.err(p, f"acquire: no timeline declares resource `{a['resource']}` around it (V34)")
+        self.expr(a["n"], p + ["n"], scope)
+        self.typed(a["n"], p + ["n"], scope)
+
+    def n_release(self, a, p, scope):
+        """V34: a `release` names a hold an `acquire` or `lookup` of its timeline takes."""
+        if self.timeline is None:
+            self.err(p, "release: outside a timeline, where nothing is planned (V34)")
+        elif a["hold"] not in self.holds:
+            self.err(p, f"release: no `acquire` or `lookup` of timeline `{self.timeline[0]}` holds `{a['hold']}` (V34)")
 
     def n_lookup(self, a, p, scope):
         """V33: a `lookup` names a tier of a cache its timeline declares, gives a `size` exactly
@@ -1249,6 +1334,12 @@ class Check:
                 self.array(a["array"], "elem", p)
             self.expr(a["index"], p + ["index"], scope)
             self.typed(a["index"], p + ["index"], scope)
+        elif k == "now":
+            if self.timeline is None:
+                self.err(p, "now: outside a timeline, where nothing is planned (V30)")
+        elif k == "cached":
+            if not self.in_order:
+                self.err(p, f"cached `{a}`: outside a tier's `order` (V33)")
         elif k == "published":
             if isinstance(a, dict):              # a timeline and a group (contract 0.17)
                 self.in_timeline(a["timeline"], "published", p)
@@ -1393,7 +1484,7 @@ class Check:
         if rule == "V33":
             self.err(p, f"`{name} @`: it is bound by a `lookup`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)")
         elif rule:
-            self.err(p, f"`{name} @`: its definition reads `published`, `entry`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})")
+            self.err(p, f"`{name} @`: its definition reads `published`, `entry`, `now`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})")
         # of two `let`s of one name in this body, which one an `at` reads is not defined
         if name in scope.twice:
             self.err(p, f"`{name} @` names a binding this body defines more than once, "

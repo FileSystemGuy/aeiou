@@ -162,20 +162,56 @@ def chunk_key(seq, chunk, per) -> Expr:
     return SeqOp("chunk_key", {"seq": lift(seq, "chunk_key"), "chunk": lift(chunk, "chunk_key chunk"), "per": lift(per, "chunk_key per")})
 
 
-def tier(name: str, evict: str = "none", capacity=None, unit: str = "entries") -> dict:
-    """A tier of a timeline's cache (contract 0.16, rule V33): `none` keeps every entry; `lru`
-    evicts the entry used longest ago while a store would pass `capacity`, in entries or bytes."""
-    if evict not in ("none", "lru"):
-        raise BuildError(f"tier {name!r}: evict is `none` or `lru`, got {evict!r}")
+CACHED = ("stored", "touched", "freed", "hits", "pos", "size")
+
+
+def cached(attr: str) -> Expr:
+    """An attribute of the entry a tier's `order` is computed for (contract 0.18, rule V33):
+    `stored`, `touched`, `freed` (the tier's event counts when it was stored, last looked up,
+    and last released), `hits`, `pos` (its index in the sequence of the lookup that last found
+    or stored it), or `size`."""
+    from .nodes import Plain
+    if attr not in CACHED:
+        raise BuildError(f"cached: one of {', '.join(CACHED)}, got {attr!r}")
+    return Plain({"cached": attr})
+
+
+def now() -> Expr:
+    """This lane's planned time in nanoseconds (contract 0.18, rule V30): only in a timeline,
+    and not positional, so `@` and `prev` may not reach it."""
+    from .nodes import Plain
+    return Plain({"now": {}})
+
+
+def lru() -> list:
+    """The order that evicts the entry looked up longest ago first: `[cached("touched")]`."""
+    return [cached("touched")]
+
+
+def tier(name: str, order=None, capacity=None, unit: str = "entries", full: str = "skip") -> dict:
+    """A tier of a timeline's cache (contracts 0.16 and 0.18, rule V33): at most `capacity`
+    (in entries or bytes) of entries no lane holds evicted least `order` first (a list of
+    integer expressions over `cached` and parameters, compared in turn; `lru()` for the entry
+    looked up longest ago), never one a lane holds. With no `order`, nothing is evicted. `full`,
+    what a store finding no room and no victim does: `skip` it, `wait` (the lane waits for a
+    release, first come first), or `fail`."""
     if unit not in ("entries", "bytes"):
         raise BuildError(f"tier {name!r}: unit is `entries` or `bytes`, got {unit!r}")
-    if (evict == "lru") != (capacity is not None):
-        raise BuildError(f"tier {name!r}: `lru` takes a capacity and `none` none (V33)")
-    t = {"name": name, "evict": evict}
+    if full not in ("skip", "wait", "fail"):
+        raise BuildError(f"tier {name!r}: full is `skip`, `wait`, or `fail`, got {full!r}")
+    if capacity is None and (order is not None or full != "skip"):
+        raise BuildError(f"tier {name!r}: an `order` or a `full` other than `skip` needs a capacity (V33)")
+    if order is not None and not order:
+        raise BuildError(f"tier {name!r}: an empty `order` (V33)")
+    t = {"name": name}
+    if order is not None:
+        t["order"] = [ast_of(lift(e, f"tier {name} order")) for e in order]
     if capacity is not None:
         t["capacity"] = ast_of(lift(capacity, f"tier {name} capacity"))
     if unit != "entries":
         t["unit"] = unit
+    if full != "skip":
+        t["full"] = full
     return t
 
 

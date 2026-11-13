@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.17",
+      "const": "0.18",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -758,6 +758,22 @@
                 }
               },
               "description": "The key of whole chunk `chunk` (from 0) of `per` blocks of a `seq`, a non-negative integer: the chained hash of every block to the chunk's end (runner/REFERENCE.md §2), so two sequences give one key exactly when they hold the same blocks up to it (contract 0.16)."
+            },
+            "now": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "This lane's planned time in nanoseconds (contract 0.18, rule V30): only in a timeline, and not positional (`@` and `prev` may not reach it)."
+            },
+            "cached": {
+              "enum": [
+                "stored",
+                "touched",
+                "freed",
+                "hits",
+                "pos",
+                "size"
+              ],
+              "description": "An attribute of the entry a tier's `order` is computed for (contract 0.18, rule V33), only there: `stored`, `touched`, `freed` the tier's event counts when it was stored, last looked up, and last released (`stored` until then); `hits` the lookups that found it; `pos` its index in the sequence of the lookup that last found or stored it; `size` its size in the tier's unit."
             }
           }
         }
@@ -2026,11 +2042,18 @@
               },
               "description": "The timeline's caches (contract 0.16, rule V33): their state walked in planned order with the lanes, empty when the timeline starts."
             },
+            "resources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/resource"
+              },
+              "description": "The timeline's counted resources (contract 0.18, rule V34), none held when it starts."
+            },
             "body": {
               "$ref": "#/$defs/body"
             }
           },
-          "description": "Lanes planned together (contract 0.15, DESIGN_REVIEW.md §3.99, rule V30): the body's main line and every sub-actor of a `parallel` in it is a lane with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. Never a `timeline`, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside. Its `caches` (contract 0.16, rule V33) are walked with its lanes, in planned order. `aeiou run` does not run one yet."
+          "description": "Lanes planned together (contract 0.15, DESIGN_REVIEW.md §3.99, rule V30): the body's main line and every sub-actor of a `parallel` in it is a lane with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. Never a `timeline`, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside. Its `caches` (contract 0.16, rule V33) and `resources` (contract 0.18, rule V34) are walked with its lanes, in planned order; a lane that must wait for one is parked until a release, and resumes at the release's planned time. `aeiou run` does not run one yet."
         },
         "publish": {
           "type": "object",
@@ -2111,9 +2134,46 @@
             },
             "size": {
               "$ref": "#/$defs/expr"
+            },
+            "hold": {
+              "$ref": "#/$defs/ident"
             }
           },
-          "description": "The longest run of `seq`'s leading whole chunks of `per` blocks held in a tier of a cache of the enclosing timeline, bound to `bind` as an integer; each chunk then touched, in order, those not held stored (contract 0.16, rule V33). `size`, the bytes of one chunk, exactly when the tier counts bytes. Not positional: `@` and `prev` may not reach `bind`."
+          "description": "The longest run of `seq`'s leading whole chunks of `per` blocks held in a tier of a cache of the enclosing timeline, bound to `bind` as an integer; then the chunks the tier holds touched, in order, and the others stored, in order (contract 0.18; 0.16 interleaved them), each `size` in a tier that counts bytes, exactly then. With `hold` (contract 0.18, rule V34), the chunks found and stored are held by this lane under that name until its `release`, never victims meanwhile. Not positional: `@` and `prev` may not reach `bind`."
+        },
+        "acquire": {
+          "type": "object",
+          "required": [
+            "resource",
+            "n",
+            "hold"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "resource": {
+              "$ref": "#/$defs/ident"
+            },
+            "n": {
+              "$ref": "#/$defs/expr"
+            },
+            "hold": {
+              "$ref": "#/$defs/ident"
+            }
+          },
+          "description": "`n` units of a resource of the enclosing timeline, held by this lane under `hold` until its `release` (contract 0.18, rule V34); the lane waits in planned time while they are not free or an earlier lane waits, first come first."
+        },
+        "release": {
+          "type": "object",
+          "required": [
+            "hold"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "hold": {
+              "$ref": "#/$defs/ident"
+            }
+          },
+          "description": "What this lane holds under `hold`, given back (contract 0.18, rule V34): a resource's units, or a tier's entries, which become victims again with `freed` the release. A lane ends holding nothing."
         }
       }
     },
@@ -2231,19 +2291,19 @@
     "tier": {
       "type": "object",
       "required": [
-        "name",
-        "evict"
+        "name"
       ],
       "additionalProperties": false,
       "properties": {
         "name": {
           "$ref": "#/$defs/ident"
         },
-        "evict": {
-          "enum": [
-            "none",
-            "lru"
-          ]
+        "order": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/expr"
+          },
+          "description": "The victim order (contract 0.18): integer expressions over `cached` and parameters, computed for an entry when it is stored, looked up, or released and kept; the entry whose values are least, compared in turn, is evicted first, a tie to the entry stored first. Absent, nothing is evicted. Needs a `capacity`."
         },
         "capacity": {
           "$ref": "#/$defs/expr"
@@ -2253,9 +2313,34 @@
             "entries",
             "bytes"
           ]
+        },
+        "full": {
+          "enum": [
+            "skip",
+            "wait",
+            "fail"
+          ],
+          "description": "What a store does when the tier has no room and no victim left (contract 0.18): `skip` (the default) leaves the entry out; `wait` holds the lane, in planned time, until a release makes room for the whole lookup, first come first; `fail` refuses the walk. `wait` and `fail` need a `capacity`."
         }
       },
-      "description": "A tier: `none` keeps every entry (no `capacity`); `lru` evicts the entry used longest ago while a store would pass `capacity`, counted in entries (the default) or bytes; an entry larger than the tier is not stored (contract 0.16, rule V33)."
+      "description": "A tier (contracts 0.16 and 0.18, rule V33): at most `capacity` (counted in entries, the default, or bytes) of entries no lane holds evicted by `order`; held entries are never victims; an entry larger than the tier is not stored."
+    },
+    "resource": {
+      "type": "object",
+      "required": [
+        "name",
+        "capacity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ident"
+        },
+        "capacity": {
+          "$ref": "#/$defs/expr"
+        }
+      },
+      "description": "A counted resource of a timeline (contract 0.18, rule V34): `capacity` units, held by `acquire` and given back by `release`; a queue with `capacity` servers."
     }
   }
 }

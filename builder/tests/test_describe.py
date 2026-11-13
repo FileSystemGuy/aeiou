@@ -24,7 +24,7 @@ def test_the_seq_kinds_a_cache_and_a_lookup_are_described():
     d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)
     s = {"cat": [{"prefix": [{"shared": {"id": 1, "n": 4}}, 2]}, {"fresh": 4}]}
     tl = {"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": [
-        {"name": "disk", "evict": "lru", "capacity": 64, "unit": "bytes"}, {"name": "all", "evict": "none"}]}],
+        {"name": "disk", "order": [{"cached": "touched"}], "capacity": 64, "unit": "bytes"}, {"name": "all"}]}],
         "body": [{"lookup": {"cache": "lm", "tier": "disk", "seq": s, "per": 4, "bind": "h", "size": 2}}]}}
     lines = d.body([tl], 0)
     assert "tier `disk`, evicting the entry used longest ago past 64 bytes; tier `all`, keeping every entry." in lines[0], lines
@@ -32,8 +32,27 @@ def test_the_seq_kinds_a_cache_and_a_lookup_are_described():
     assert d.sym({"chunk_key": {"seq": {"ref": "s"}, "chunk": 0, "per": 4}}) == "chunk_key(s, 0, 4)"
     assert d.sym({"seq_len": {"ref": "s"}}) == "seq_len(s)"
     assert d.gist([tl]) == ""                       # a lookup alone does no I/O
-    lru = {"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": [{"name": "d", "evict": "lru", "capacity": 3}]}], "body": []}}
+    lru = {"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": [{"name": "d", "order": [{"cached": "touched"}], "capacity": 3}]}], "body": []}}
     assert "tier `d`, evicting the entry used longest ago past 3 entries." in d.body([lru], 0)[0]
+
+
+def test_orders_holds_resources_and_now_are_described():
+    """Contract 0.18: a tier's order and `full`, a held lookup, `acquire`, `release`, `now`, `cached`."""
+    d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)
+    tiers = [{"name": "hbm", "order": [{"cached": "freed"}, {"neg": {"cached": "pos"}}], "capacity": 8, "full": "wait"},
+             {"name": "pin", "capacity": 4, "full": "fail"}]
+    tl = {"timeline": {"name": "tl", "caches": [{"name": "g", "tiers": tiers}], "resources": [{"name": "slots", "capacity": 2}],
+          "body": [{"acquire": {"resource": "slots", "n": 1, "hold": "s"}},
+                   {"lookup": {"cache": "g", "tier": "hbm", "seq": {"fresh": 4}, "per": 1, "bind": "h", "hold": "kv"}},
+                   {"release": {"hold": "kv"}}, {"release": {"hold": "s"}}]}}
+    lines = d.body([tl], 0)
+    assert ("tier `hbm`, evicting past 8 entries the entry least by (cached.freed, −cached.pos); a lookup that finds no room "
+            "waits for a release; tier `pin`, keeping every entry up to 4 entries; a lookup that finds no room fails.") in lines[0], lines
+    assert "Its resource `slots` of 2 units." in lines[0]
+    assert lines[1] == "  - Takes 1 units of `slots` as `s`, waiting in planned time while they are not free, first come first."
+    assert "The lane holds them under `kv` until it releases it" in lines[2]
+    assert lines[3:] == ["  - Releases `kv`.", "  - Releases `s`."]
+    assert d.sym({"now": {}}) == "now"
 
 
 def test_entries_in_groups_are_described():

@@ -368,6 +368,17 @@ class SeqOp(Expr):
         return {self.kind: [ast_of(x) for x in a]}
 
 
+class Plain(Expr):
+    """An expression with no operands, as written (contract 0.18): `now` and `cached`."""
+    __slots__ = ("node",)
+
+    def __init__(self, node: dict):
+        self.node = node
+
+    def ast(self):
+        return dict(self.node)
+
+
 class At(Expr):
     __slots__ = ("name", "index")
 

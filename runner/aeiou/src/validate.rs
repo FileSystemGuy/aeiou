@@ -222,6 +222,11 @@ struct ActorState<'a> {
     caches: HashMap<&'a str, Vec<(&'a str, TierUnit)>>,
     /// V31: the next `body` is a `loop`'s.
     loop_next: bool,
+    /// V33: checking a tier's `order`, where `cached` may be read.
+    in_order: bool,
+    /// V34: the enclosing timeline's resources, and the holds its `acquire`s and `lookup`s name.
+    resources: HashSet<&'a str>,
+    holds: BTreeSet<&'a str>,
 }
 
 impl<'a> Scope<'a> {
@@ -332,7 +337,8 @@ fn expr_refs<'a>(e: &'a Expr, out: &mut BTreeSet<&'a str>) {
         ExprNode::Param(name) => {
             out.insert(name.as_str());
         }
-        ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => {}
+        ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_)
+        | ExprNode::Now(_) | ExprNode::Cached(_) => {}
         ExprNode::Published(arg) => arg.group().into_iter().for_each(|g| expr_refs(g, out)),
         ExprNode::Entry { group, index, .. } => {
             group.iter().for_each(|g| expr_refs(g, out));
@@ -403,7 +409,7 @@ fn unpositional(v: &ExprLike) -> Option<&'static str> {
     fn walk(e: &Expr) -> Option<&'static str> {
         let Expr::Node(n) = e else { return None };
         match n.as_ref() {
-            ExprNode::Published(_) | ExprNode::Entry { .. } => Some("V30"),
+            ExprNode::Published(_) | ExprNode::Entry { .. } | ExprNode::Now(_) => Some("V30"),
             ExprNode::Prev { .. } => Some("V31"),
             ExprNode::At { index, .. } | ExprNode::Elem { index, .. } => walk(index),
             ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
@@ -423,6 +429,69 @@ fn unpositional(v: &ExprLike) -> Option<&'static str> {
     match v {
         ExprLike::Expr(e) => walk(e),
         _ => None,
+    }
+}
+
+/// V34: the holds the `acquire`s and `lookup`s of a timeline's body name, anywhere in it.
+fn holds<'a>(nodes: &'a [Node], out: &mut BTreeSet<&'a str>) {
+    for n in nodes {
+        match n {
+            Node::Acquire { hold, .. } | Node::Lookup { hold: Some(hold), .. } => {
+                out.insert(hold.as_str());
+            }
+            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } => holds(body, out),
+            Node::Cond { then, otherwise, .. } => {
+                holds(then, out);
+                if let Some(b) = otherwise {
+                    holds(b, out);
+                }
+            }
+            Node::Choose { arms, .. } => arms.iter().for_each(|a| holds(&a.body, out)),
+            _ => {}
+        }
+    }
+}
+
+/// V33: the first thing a tier's `order` reads that it may not (an order reads parameters,
+/// literals, and `cached`, through arithmetic, comparisons, and `cond`), by its JSON key.
+fn order_reads(e: &Expr) -> Option<&'static str> {
+    let Expr::Node(n) = e else { return None };
+    let like = |l: &ExprLike| match l {
+        ExprLike::Expr(e) => order_reads(e),
+        _ => Some("a handle"),
+    };
+    match n.as_ref() {
+        ExprNode::Param(_) | ExprNode::Cached(_) => None,
+        ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
+        | ExprNode::Max(a) | ExprNode::Eq(a) | ExprNode::Ne(a) | ExprNode::Lt(a) | ExprNode::Le(a) | ExprNode::Gt(a) | ExprNode::Ge(a) => a.iter().find_map(order_reads),
+        ExprNode::And(a) | ExprNode::Or(a) => a.iter().find_map(order_reads),
+        ExprNode::Neg(e) | ExprNode::Not(e) => order_reads(e),
+        ExprNode::Cond(c) => order_reads(&c.test).or_else(|| like(&c.then)).or_else(|| like(&c.otherwise)),
+        ExprNode::Index(_) => Some("index"),
+        ExprNode::Ref(_) => Some("ref"),
+        ExprNode::At { .. } => Some("at"),
+        ExprNode::Actor(_) => Some("actor"),
+        ExprNode::Draw(_) => Some("draw"),
+        ExprNode::Elem { .. } => Some("elem"),
+        ExprNode::Len(_) => Some("len"),
+        ExprNode::Sum(_) => Some("sum"),
+        ExprNode::Size(_) => Some("size"),
+        ExprNode::Offset(_) => Some("offset"),
+        ExprNode::UnitIndex(_) => Some("unit_index"),
+        ExprNode::Units(_) => Some("units"),
+        ExprNode::Chunks(_) => Some("chunks"),
+        ExprNode::Count(_) => Some("count"),
+        ExprNode::Dirs(_) => Some("dirs"),
+        ExprNode::Published(_) => Some("published"),
+        ExprNode::Entry { .. } => Some("entry"),
+        ExprNode::Prev { .. } => Some("prev"),
+        ExprNode::Fresh(_) => Some("fresh"),
+        ExprNode::Shared { .. } => Some("shared"),
+        ExprNode::Prefix(_) => Some("prefix"),
+        ExprNode::Cat(_) => Some("cat"),
+        ExprNode::SeqLen(_) => Some("seq_len"),
+        ExprNode::ChunkKey { .. } => Some("chunk_key"),
+        ExprNode::Now(_) => Some("now"),
     }
 }
 
@@ -878,7 +947,8 @@ impl<'a> Checker<'a> {
             Expr::Node(n) => n,
         };
         match &**n {
-            ExprNode::Index(_) | ExprNode::At { .. } | ExprNode::Published(_) | ExprNode::Entry { .. } | ExprNode::Prev { .. } => true,
+            ExprNode::Index(_) | ExprNode::At { .. } | ExprNode::Published(_) | ExprNode::Entry { .. } | ExprNode::Prev { .. } | ExprNode::Now(_)
+            | ExprNode::Cached(_) => true,
             ExprNode::Ref(name) => scope.is_varying(name),
             ExprNode::Draw(_) => !scope.indices.is_empty(),
             ExprNode::Param(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => false,
@@ -1180,7 +1250,7 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["sha256"]), "not a lowercase hex sha256");
                 }
             }
-            Node::Timeline { name, caches, body } => {
+            Node::Timeline { name, caches, resources, body } => {
                 if !is_ident(name) {
                     self.err(&p(pp, &["name"]), "not an identifier");
                 }
@@ -1210,29 +1280,65 @@ impl<'a> Checker<'a> {
                         if tiers.iter().any(|(n, _)| *n == t.name) {
                             self.err(&tp, format!("tier `{}` declared twice in cache `{}` (V33)", t.name, c.name));
                         }
-                        match (t.evict, &t.capacity) {
-                            (Evict::Lru, None) => self.err(&tp, format!("tier `{}`: `lru` needs a `capacity` (V33)", t.name)),
-                            (Evict::None, Some(_)) => self.err(&tp, format!("tier `{}`: `none` keeps every entry, so it takes no `capacity` (V33)", t.name)),
-                            _ => {}
+                        if t.capacity.is_none() {
+                            if t.order.is_some() {
+                                self.err(&tp, format!("tier `{}`: an `order` with no `capacity`, so nothing is ever evicted (V33)", t.name));
+                            }
+                            if t.full != Full::Skip {
+                                self.err(&tp, format!("tier `{}`: `full` `{}` with no `capacity`, so it is never full (V33)", t.name, t.full.name()));
+                            }
+                        }
+                        if t.order.as_ref().is_some_and(|o| o.is_empty()) {
+                            self.err(&p(&tp, &["order"]), format!("tier `{}`: an empty `order` (V33)", t.name));
                         }
                         if let Some(e) = &t.capacity {
                             self.expr(e, &p(&tp, &["capacity"]), scope, st, None);
                             self.int(e, &p(&tp, &["capacity"]), scope);
                         }
+                        for (o, e) in t.order.iter().flatten().enumerate() {
+                            let op = p(&tp, &["order", &o.to_string()]);
+                            if let Some(k) = order_reads(e) {
+                                self.err(&op, format!("tier `{}`: its `order` reads `{k}`; an order reads only parameters, literals, and `cached` (V33)", t.name));
+                                continue;
+                            }
+                            st.in_order = true;
+                            self.expr(e, &op, scope, st, None);
+                            st.in_order = false;
+                            self.int(e, &op, scope);
+                        }
                         tiers.push((t.name.as_str(), t.unit));
                     }
                     st.caches.insert(c.name.as_str(), tiers);
                 }
+                st.resources.clear();
+                for (i, r) in resources.iter().enumerate() {
+                    let rp = p(pp, &["resources", &i.to_string()]);
+                    if !is_ident(&r.name) {
+                        self.err(&p(&rp, &["name"]), "not an identifier");
+                    }
+                    if !st.resources.insert(r.name.as_str()) {
+                        self.err(&rp, format!("resource `{}` declared twice (V34)", r.name));
+                    }
+                    self.expr(&r.capacity, &p(&rp, &["capacity"]), scope, st, None);
+                    self.int(&r.capacity, &p(&rp, &["capacity"]), scope);
+                }
                 let mut keys = BTreeSet::new();
                 publishes(body, name, &mut keys);
+                st.holds.clear();
+                holds(body, &mut st.holds);
                 st.timeline = Some((name.as_str(), keys));
                 self.body(body, &p(pp, &["body"]), scope, st);
                 st.timeline = None;
                 st.caches.clear();
+                st.resources.clear();
+                st.holds.clear();
             }
-            Node::Lookup { cache, tier, seq, per, bind, size } => {
+            Node::Lookup { cache, tier, seq, per, bind, size, hold } => {
                 if !is_ident(bind) {
                     self.err(&p(pp, &["bind"]), "not an identifier");
+                }
+                if hold.as_ref().is_some_and(|h| !is_ident(h)) {
+                    self.err(&p(pp, &["hold"]), "not an identifier");
                 }
                 let unit = match st.caches.get(cache.as_str()) {
                     None => {
@@ -1263,6 +1369,27 @@ impl<'a> Checker<'a> {
                 scope.bind(bind, &LOOKUP_DEF, true, Some("int"), (None, None));
                 scope.unpositional.insert(bind.as_str(), "V33");
             }
+            Node::Acquire { resource, n, hold } => {
+                if !is_ident(hold) {
+                    self.err(&p(pp, &["hold"]), "not an identifier");
+                }
+                if st.timeline.is_none() {
+                    self.err(pp, "acquire: outside a timeline, where nothing is planned (V34)");
+                } else if !st.resources.contains(resource.as_str()) {
+                    self.err(pp, format!("acquire: no timeline declares resource `{resource}` around it (V34)"));
+                }
+                self.expr(n, &p(pp, &["n"]), scope, st, None);
+                self.int(n, &p(pp, &["n"]), scope);
+            }
+            Node::Release { hold } => match &st.timeline {
+                None => self.err(pp, "release: outside a timeline, where nothing is planned (V34)"),
+                Some((t, _)) => {
+                    if !st.holds.contains(hold.as_str()) {
+                        let t = *t;
+                        self.err(pp, format!("release: no `acquire` or `lookup` of timeline `{t}` holds `{hold}` (V34)"));
+                    }
+                }
+            },
             Node::Publish { timeline, group, values } => {
                 self.in_timeline(timeline, "publish", pp, st);
                 if let Some(g) = group {
@@ -1699,7 +1826,7 @@ impl<'a> Checker<'a> {
                 _ => None,
             },
             ExprNode::Index(_) | ExprNode::Actor(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Len(_) | ExprNode::Published(_) | ExprNode::Size(_)
-            | ExprNode::Offset(_) | ExprNode::UnitIndex(_) | ExprNode::Units(_) | ExprNode::Chunks(_) => Some("int"),
+            | ExprNode::Offset(_) | ExprNode::UnitIndex(_) | ExprNode::Units(_) | ExprNode::Chunks(_) | ExprNode::Now(_) | ExprNode::Cached(_) => Some("int"),
             ExprNode::Eq(_) | ExprNode::Ne(_) | ExprNode::Lt(_) | ExprNode::Le(_) | ExprNode::Gt(_) | ExprNode::Ge(_) | ExprNode::And(_)
             | ExprNode::Or(_) | ExprNode::Not(_) => Some("bool"),
             ExprNode::Cond(c) => {
@@ -1980,6 +2107,16 @@ impl<'a> Checker<'a> {
                     self.array(name, "len", path, false);
                 }
             }
+            ExprNode::Now(_) => {
+                if st.timeline.is_none() {
+                    self.err(path, "now: outside a timeline, where nothing is planned (V30)");
+                }
+            }
+            ExprNode::Cached(a) => {
+                if !st.in_order {
+                    self.err(path, format!("cached `{}`: outside a tier's `order` (V33)", a.name()));
+                }
+            }
             ExprNode::Published(arg) => {
                 self.in_timeline(arg.timeline(), "published", path, st);
                 if let Some(g) = arg.group() {
@@ -2134,7 +2271,7 @@ impl<'a> Checker<'a> {
         if scope.unpositional.get(name) == Some(&"V33") {
             self.err(path, format!("`{name} @`: it is bound by a `lookup`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)"));
         } else if let Some(rule) = scope.unpositional.get(name) {
-            self.err(path, format!("`{name} @`: its definition reads `published`, `entry`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})"));
+            self.err(path, format!("`{name} @`: its definition reads `published`, `entry`, `now`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})"));
         }
         // of two `let`s of one name in this body, which one an `at` reads is not defined
         if scope.twice.contains(name) {

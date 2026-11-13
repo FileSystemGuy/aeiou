@@ -11843,6 +11843,68 @@ regenerated, no fingerprint changed. Next for the KV abstract: what the engine h
 as a tier, with the engine's queue of slots, item 72 (1)), LMCache's watermark eviction, then gaps
 6 to 8.
 
+**Tiers as general pieces, contract 0.18 (the user's questions and choices, 2026-11-12; built the
+same day).** *What the GPU pool is worth.* Every port comparison so far held the engine to holding
+nothing (`held` 0). Measured with `sim5.py` (16 slots, FCFS, `agentx.simulate`, an unbounded LMCache
+store, hours 1 to 3) on `gen6`'s sessions, four seeds (scratch `sim5h.py`, a pool of −1 meaning held
+0, `held0.jsonl`): with a 6M-token pool the chunk reads are 0.6 to 1.9 % of held 0's at 32 sessions,
+2.3 to 4.4 % at 64, 6.5 to 21.4 % on the morning ramp at 64, 12.8 to 61.3 % at 96 (the engine full,
+the cliff of the note of 2026-11-07); with 12M, 0.1 to 3.5 %. Writes are the same either way. So
+the pool decides the reads, and held 0 (vLLM's prefix caching off) would be another workload, not
+a bound.
+*The user's concern, and the choice.* Coding vLLM's pool and scheduler would tie the benchmark to
+one version of one engine, and NVIDIA's G1 to G4 each have their own strategy, changing fast. The
+user asked for a primitive that outlives them, policies as AST expressions and parameters. The
+proposal (scratch `port/tiers-proposal.md`) split a tier into pieces: a capacity; a victim order as
+expressions over the entry's attributes, computed only when something happens to the entry and kept
+(so the order stays a sorted map, and no policy whose order drifts with time alone); holds; what a
+full tier does (`wait`, `preempt`, `skip`, `fail`; a `skip` only for a capacity fixed in the plan,
+never a drop that depends on storage speed, which the rule against learning from the run forbids);
+when eviction runs (at store, or on a planned timer between marks); a statement body on eviction;
+counted resources. On paper it fits LMCache's LRU and watermark, vLLM v1's pool and scheduler,
+DiskANN's node cache, `tf.data`'s `cache()`, and S3-FIFO (two tiers and a ghost tier); Dynamo's
+cascade probably (its source unread); not ARC or LIRS, which adapt their own parameters. The
+user agreed to the four questions: `evict` replaced by an `order` expression (`lru()` a builder
+function, no alias), the eviction action a statement body, the slot queue a counted resource, and
+the build order the measurement set: holds, `wait`, the planned clock, orders, and resources first
+(vLLM's pool and the queue), the watermark and eviction bodies next, Dynamo after its source.
+*Built, contract 0.18.* A tier `{name, order, capacity, unit, full}`, `cached` (`stored`,
+`touched`, `freed`: the tier's event counts; `hits`, `pos`, `size`), a `lookup`'s `hold`, a
+timeline's `resources`, `acquire`, `release`, `now`; rules V33 extended and V34 in both checkers,
+14 shared refusal cases more; `tests/tiers.rs` (FIFO, LRU, and LFU as orders; vLLM's tail-first
+release; holds never victims; `skip` and `fail`; lanes waiting for a release, first come first,
+head of line included; the walk's refusals: a lane ending holding, a deadlock, a hold taken twice;
+`now` and `@`). A lookup now touches every chunk it finds before it stores the others (0.16
+interleaved them): one test's expectation moved, A's first chunk surviving B's second store. A
+waiting lane is parked off the heap and its statement runs again when a release puts it back, at
+the release's planned time. Every committed AST regenerated, every case re-locked, shapes changed
+only in their hashes, no fingerprint changed. Not built: `preempt` (a lane's planned compute cut
+short and its request requeued), the timed trigger, the eviction body, promotion.
+*Held to the reference* (scratch `port/gen9_port.py`, `compare9.py`): `gen8_port` with a resource of
+16 slots and a GPU tier of `pool_tokens` / 64 entries in vLLM's order (`freed`, then minus `pos`),
+`full: wait`; a request takes a slot, looks its prompt and its reply's blocks up holding them,
+then reads LMCache from the chunk holding the tokens the GPU held, computes, and releases both. The
+references are independent: the slot queue checked by its properties (never more than 16 running,
+none admitted before it was ready or after one ready later, a wait ending at another's end), the
+pool by `agentx.simulate` over the walk's admissions and releases, LMCache by
+`agentx.lmcache_accesses` at those holds. At 20 sessions (seed 1), 3,182 requests, 618 waiting for a
+slot: every request's GPU hit equal, 4,011 LMCache reads against 1,809,313 with nothing held, 51,213
+writes, each request equal, the keys one-to-one; at 40 (seed 2), 9,322 requests, 30,203 reads
+(6,929,121 with nothing held), 124,375 writes, equal; at 40 with a 2M-token pool, 137,278 reads,
+equal.
+*Found by the comparison: `agentx.simulate` overfills the pool.* It takes a request's hits out of
+the free queue before it counts the room it needs, so they are counted nowhere and the pool holds
+one block more for each such hit (98,312 blocks in a pool of 98,304 at step 1,676 of the first
+run; one request's hit 6 where the runner's, at capacity, was 0). vLLM's pool never passes its
+capacity. `compare9.py` uses a corrected copy; the committed `agentx.py` is unchanged and every
+number it gave (§3.64, the grids of 2026-11-07 to 11-11, the measurement above) slightly favours
+the pool. Fixing it, and whether to rerun those numbers, is the user's call.
+*Naming (the user's question).* The contract has no `pool`: vLLM's pool is a `tier`. "Pool" had two
+senses in the prose: `gen6`'s, the prompts a session has sent, now a timeline's entries (a group a
+session), and vLLM's KV pool, its own word for its blocks. Proposed, for the user: the first called
+the session's sent prompts or entries in the docs, the second kept as vLLM's name in prose, a tier
+when written.
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes
