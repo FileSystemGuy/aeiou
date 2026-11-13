@@ -4,9 +4,9 @@
   "runs": [
     {
       "ast": "diskann_build",
-      "ast_sha256": "9f349e1cd9b28750482909943966361b024199e24def120a66bccb3adb495cea",
+      "ast_sha256": "556ee21c5de5b940df213c836b6d518b9ddd388d921be59f8c085672bed34963",
       "params": "case.lock.json",
-      "params_sha256": "864db8c8086f9dabf6795bd0cff71aed59f3cea31a3706b3dbbc58511364ae2b",
+      "params_sha256": "4fbfcf7cb301b0519e0006c11c8d43a64ea9abe5b8debbfddcbf7762ceceab1a",
       "gpus": 1,
       "seeds": [
         1,

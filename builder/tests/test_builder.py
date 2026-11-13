@@ -135,7 +135,7 @@ def test_a_required_parameter_in_an_at_offset_is_judged_when_given():
             a.let("x", when(d <= r, a.ref("x").at(r - d), 0))
             a.stat(ds.file(a.ref("x")))
     ast = w.build()
-    assert ast["ast"] == "0.15"
+    assert ast["ast"] == "0.16"
     assert ast["params"]["gap"] == {"kind": "dist"}
     assert not check.Check(copy.deepcopy(ast), "t").run()
     assert AP.given_rules(ast, {}) == []                                   # a fragment that leaves it to another
@@ -343,7 +343,7 @@ def test_an_inventory_is_a_constant_name_in_a_consumed_datasets_root():
             g.write(inv, 1)
         g.close(inv)
     ast = w.build()
-    assert ast["ast"] == "0.15"
+    assert ast["ast"] == "0.16"
     assert ast["datasets"]["train"]["inventory"] == {"name": "inventory.txt", "entry": {"param": "entry"}}
     assert ast["actors"]["gpu"]["body"][0]["let"]["value"] == {"inventory": "train"}
     _, check = _load()
@@ -391,7 +391,7 @@ def test_a_parameter_is_required_scale_or_storage_reported():
             g.open(f, "RDONLY"); g.read(f, w.P.hdr_read, repeat="until_eof"); g.close(f)
         g.compute(w.P.step_time)
     ast = w.build()
-    assert ast["ast"] == "0.15"
+    assert ast["ast"] == "0.16"
     assert ast["params"]["batch"] == {"kind": "int", "unit": "count"}
     assert ast["params"]["step_time"] == {"kind": "dist", "unit": "ns"}
     assert ast["params"]["sizes"] == {"kind": "array", "items": "int"}
@@ -426,7 +426,7 @@ def test_a_storage_reported_value_may_name_a_namespace():
         o = g.let("o", out.object(n=0))
         g.open(o, "WRONLY|CREAT|TRUNC"); g.write(o, w.P.buf); g.close(o)
     ast = w.build()
-    assert ast["ast"] == "0.15"
+    assert ast["ast"] == "0.16"
     assert ast["params"]["buf"]["default"] == {"from": "st_blksize", "of": "out", "fallback": 1 * MiB}
     _, check = _load()
     assert not check.Check(copy.deepcopy(ast), "x").run()
@@ -489,7 +489,7 @@ def test_a_sub_actor_positions_its_ops_on_an_inherited_handle():
     from aeiou.validate import _load
     _, check = _load()
     f = {"file": {"dataset": "d", "id": 0}}
-    ast = {"ast": "0.15", "name": "t",
+    ast = {"ast": "0.16", "name": "t",
            "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 1,
                               "size": {"const": 4096}, "seed": 1}},
            "actors": {"gpu": {"body": [
@@ -892,7 +892,7 @@ def test_check_py_v12_refuses_mkdir_and_rmdir_on_a_dataset_directory():
     import copy
     from aeiou.validate import _load
     _, check = _load()
-    base = {"ast": "0.15", "name": "m", "params": {},
+    base = {"ast": "0.16", "name": "m", "params": {},
             "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "map",
                                "count": 8, "size": {"const": 4096}, "seed": 1}},
             "actors": {"gpu": {"count": 1, "body": []}}}
@@ -907,7 +907,7 @@ def test_check_py_v12_refuses_mkdir_and_rmdir_on_a_dataset_directory():
 def _v3_chain(dist, params=None):
     """The `x @ i - d` loop of the rule V3 review (RC1, bug 30), `d` drawn from `dist`."""
     return {
-        "ast": "0.15", "name": "v3_chain", "params": params or {},
+        "ast": "0.16", "name": "v3_chain", "params": params or {},
         "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 4,
                            "size": {"const": 4096}, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"loop": {"index": "i", "to": 4, "body": [
@@ -1014,7 +1014,7 @@ def test_a_dataset_size_is_never_below_zero():
         d = {"layout": layout, "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": size, "seed": 1}
         if layout == "array":
             d.update(pattern="d/all", slot=64)
-        ast = {"ast": "0.15", "name": "t", "params": params or {}, "datasets": {"d": d},
+        ast = {"ast": "0.16", "name": "t", "params": params or {}, "datasets": {"d": d},
                "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": 0}}}}]}}}
         return check.Check(ast, "t").run()
 
@@ -1110,7 +1110,7 @@ def test_at_names_the_binding_its_body_shadows():
 
     def doc(inner):
         return {
-            "ast": "0.15", "name": "shadow",
+            "ast": "0.16", "name": "shadow",
             "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
             "actors": {"gpu": {"count": 1, "body": [{"loop": {"index": "i", "to": 3, "body": [
                 {"let": {"name": "x", "value": {"mul": [{"index": "i"}, 1000]}}},
@@ -1213,7 +1213,7 @@ def test_a_consume_is_under_loops_of_fixed_count(tmp_path):
 def _size_errs(size):
     from aeiou.validate import _load
     _, check = _load()
-    ast = {"ast": "0.15", "name": "t",
+    ast = {"ast": "0.16", "name": "t",
            "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4,
                               "size": size, "seed": 1}},
            "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": 0}}}}]}}}
@@ -1287,7 +1287,7 @@ def test_a_channel_or_loader_inside_a_fork_is_refused():
     _, check = _load()
 
     def errs(*body):
-        return check.Check({"ast": "0.15", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+        return check.Check({"ast": "0.16", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
 
     chan = {"channel": {"name": "c", "capacity": 2}}
 
@@ -1379,7 +1379,7 @@ def test_a_channel_a_loaders_workers_use_is_declared_once_or_beside_it():
     _, check = _load()
 
     def errs(*body):
-        return check.Check({"ast": "0.15", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+        return check.Check({"ast": "0.16", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
 
     chan = {"channel": {"name": "c", "capacity": 2}}
 
@@ -1429,7 +1429,7 @@ def test_a_value_of_a_kind_the_runner_refuses_is_refused_at_check():
         if count is not None:
             actor["count"] = count
         return check.Check({
-            "ast": "0.15", "name": "v27",
+            "ast": "0.16", "name": "v27",
             "params": {"s": {"default": "x"}, "n": {"default": 2}, "d": {"default": {"uniform": {"lo": 1, "hi": 4}}},
                        "a": {"default": [1, 2]}},
             "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 10, "seed": 1}},
@@ -1482,7 +1482,7 @@ def test_a_take_inside_a_loader_body_is_refused():
     _, check = _load()
 
     def errs(*body):
-        return check.Check({"ast": "0.15", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+        return check.Check({"ast": "0.16", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
 
     chan = {"channel": {"name": "c", "capacity": 4}}
 
@@ -1546,7 +1546,7 @@ def test_a_parameter_defined_through_itself_is_refused_with_its_cycle(tmp_path):
     returned. Both checkers refuse every parameter on a cycle, with the cycle, the same path
     and message, and judge the document no further; a parameter naming another is accepted."""
     def doc(params):
-        return json.dumps({"ast": "0.15", "name": "cyc", "params": params,
+        return json.dumps({"ast": "0.16", "name": "cyc", "params": params,
                            "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4,
                                               "size": {"param": "pa"}, "seed": 1}},
                            "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"draw": {"param": "pa"}}}}}}]}}})
@@ -1586,7 +1586,7 @@ def test_a_draw_of_a_kind_the_runner_refuses_is_refused_at_check(tmp_path):
     U = {"uniform": {"lo": 1, "hi": 4}}
 
     def doc(size, *body):
-        return {"ast": "0.15", "name": "v27",
+        return {"ast": "0.16", "name": "v27",
                 "params": {"n": {"default": 3}, "d": {"default": U}, "cd": {"default": {"const": {"param": "d"}}},
                            "cn": {"default": {"const": {"param": "n"}}}, "cs": {"default": {"const": "x"}}},
                 "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": size, "seed": 1}},
@@ -1667,7 +1667,7 @@ def test_a_comparison_or_array_read_the_runner_refuses_is_refused_at_check(tmp_p
     _, check = _load()
 
     def doc(body):
-        return {"ast": "0.15", "name": "v27",
+        return {"ast": "0.16", "name": "v27",
                 "params": {"n": {"default": 3}, "s": {"default": "x"}, "z": {"default": None}, "arr": {"default": [1, 2.5]},
                            "sarr": {"default": ["a", "b"]}, "d": {"default": {"uniform": {"lo": 1, "hi": 4}}}},
                 "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 10, "seed": 1}},
@@ -1771,7 +1771,7 @@ def test_a_timeline_its_publishes_reads_prev_and_an_array_serialize_and_validate
                 a.stat(ds.file(when(x > 0, tl.entry(x - 1, "v"), 0)))
     ast = w.build()
     body = ast["actors"]["gpu"]["body"][0]["timeline"]
-    assert body["name"] == "tl" and ast["ast"] == "0.15"
+    assert body["name"] == "tl" and ast["ast"] == "0.16"
     arr, par, loop = body["body"]
     assert arr == {"array": {"name": "bs", "count": 3, "index": "b", "value": {"draw": {"uniform": {"lo": 1, "hi": 9}}}}}
     assert par["parallel"]["join"] is False
@@ -1817,3 +1817,62 @@ def test_what_contract_0_15_refuses_is_refused_at_construction(build, needle):
     with pytest.raises(BuildError, match=needle):
         with w.actor("gpu") as a:
             build(a)
+
+
+# ---- contract 0.16: the seq value, a timeline's caches, lookup (DESIGN_REVIEW.md §3.99, brief item 75) ----
+
+def test_a_seq_a_cache_and_a_lookup_serialize_and_validate():
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.timeline("tl", caches={"lm": [tier("disk", "lru", capacity=P.n), tier("all")]}) as tl:
+            with a.loop("i", 3):
+                s = a.let("s", cat(prefix(a.ref("s").prev(shared(1, 4)), 4), fresh(4)))
+                h = a.lookup("lm", "disk", s, 4, "h")
+                a.lookup("lm", "all", s, 4, "g")
+                a.publish(tl, p=s)
+                with a.loop("c", seq_len(s) // 4, start=h) as c:
+                    a.stat(ds.file(chunk_key(s, c, 4) % 1000))
+    ast = w.build()
+    t = ast["actors"]["gpu"]["body"][0]["timeline"]
+    assert ast["ast"] == "0.16"
+    assert t["caches"] == [{"name": "lm", "tiers": [{"name": "disk", "evict": "lru", "capacity": {"param": "n"}}, {"name": "all", "evict": "none"}]}]
+    body = t["body"][0]["loop"]["body"]
+    assert body[0]["let"]["value"] == {"cat": [{"prefix": [{"prev": {"ref": "s", "init": {"shared": {"id": 1, "n": 4}}}}, 4]}, {"fresh": 4}]}
+    assert body[1] == {"lookup": {"cache": "lm", "tier": "disk", "seq": {"ref": "s"}, "per": 4, "bind": "h"}}
+    assert body[4]["loop"]["from"] == {"ref": "h"}
+    assert body[4]["loop"]["to"] == {"div": [{"seq_len": {"ref": "s"}}, 4]}
+    assert body[4]["loop"]["body"][0]["stat"]["file"]["file"]["id"] == {"mod": [{"chunk_key": {"seq": {"ref": "s"}, "chunk": {"index": "c"}, "per": 4}}, 1000]}
+    validate(ast)          # raises on an error
+
+
+def test_a_byte_tier_and_its_lookup_size():
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.timeline("tl", caches={"lm": [tier("disk", "lru", capacity=1 * MiB, unit="bytes")]}):
+            a.lookup("lm", "disk", fresh(8), 4, "h", size=4096)
+    t = w.build()["actors"]["gpu"]["body"][0]["timeline"]
+    assert t["caches"][0]["tiers"][0]["unit"] == "bytes"
+    assert t["body"][0]["lookup"]["size"] == 4096
+    validate(w.build())
+
+
+@pytest.mark.parametrize("build, needle", [
+    (lambda a: a.lookup("lm", "disk", fresh(4), 4, "h"), "no timeline declares cache"),
+    (lambda a: tier("x", "lru"), "takes a capacity"),
+    (lambda a: tier("x", "none", capacity=3), "takes a capacity"),
+    (lambda a: tier("x", "fifo"), "`none` or `lru`"),
+    (lambda a: tier("x", unit="pages"), "`entries` or `bytes`"),
+])
+def test_what_contract_0_16_refuses_is_refused_at_construction(build, needle):
+    w, P, ds = _wl()
+    with pytest.raises(BuildError, match=needle):
+        with w.actor("gpu") as a:
+            build(a)
+
+
+def test_a_cache_without_tiers_is_refused_at_construction():
+    w, P, ds = _wl()
+    with pytest.raises(BuildError, match="has no tiers"):
+        with w.actor("gpu") as a:
+            with a.timeline("tl", caches={"lm": []}):
+                pass

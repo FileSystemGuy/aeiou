@@ -510,6 +510,13 @@ in its loop's previous iteration, and the `array`, values drawn once by position
 V32 in both checkers. `aeiou check` and `aeiou dry-run` walk a timeline; `aeiou run` refuses
 one until its run side, issuing each lane's ops at their planned times, is built (item 72 (7)).
 
+Contract 0.16 (2026-11-12, brief items 71 and 75, `DESIGN_REVIEW.md` §3.99, provisional likewise):
+the `seq`, a sequence of blocks kept as a shared tree (`fresh`, `shared`, `prefix`, `cat`,
+`seq_len`, and `chunk_key`, a chunk's key from every block up to its end), and a timeline's
+`caches`, tiers that keep everything or evict the least recently used past a capacity, met by
+`lookup` in planned order; rule V33 in both checkers. Item 75's cache is built for one tier and
+LRU; LMCache's watermark eviction, vLLM's GPU pool as a tier, and the engine's queue are not.
+
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the
 system's), uv (0.13.5, `required-version` in `builder/pyproject.toml`, installed in CI by

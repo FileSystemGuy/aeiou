@@ -20,7 +20,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-8"))
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
-           "compute", "cond", "choose", "phase", "trace", "timeline", "publish", "array"}
+           "compute", "cond", "choose", "phase", "trace", "timeline", "publish", "array", "lookup"}
 # V30: what a timeline's lanes may not hold: they are planned, never waiting on one another
 NOT_IN_TIMELINE = {"loader", "channel", "put", "take", "barrier", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
@@ -269,8 +269,12 @@ def unpositional(v):
     if k == "cond":
         return unpositional(a["if"]) or unpositional(a["then"]) or unpositional(a["else"])
     if k in ("add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "eq", "ne", "lt", "le",
-             "gt", "ge", "and", "or", "neg", "not"):
+             "gt", "ge", "and", "or", "neg", "not", "fresh", "prefix", "cat", "seq_len"):
         return unpositional(a)
+    if k == "shared":
+        return unpositional(a["id"]) or unpositional(a["n"])
+    if k == "chunk_key":
+        return unpositional(a["seq"]) or unpositional(a["chunk"]) or unpositional(a["per"])
     return None
 
 
@@ -332,6 +336,8 @@ class Check:
         self.drawing = set()
         # V30: the enclosing timeline's name and the keys its `publish`es give
         self.timeline = None
+        # V33: the enclosing timeline's caches, each tier with its unit
+        self.caches = {}
         # V32: the loops enclosing the node being checked
         self.loops = 0
         # V31: the next `body` is a `loop`'s
@@ -607,9 +613,9 @@ class Check:
 
     # ---- V27: the kind a value is known to have ----
     KINDS = {"int": "an integer", "float": "a float", "bool": "a bool", "str": "a string", "none": "null",
-             "dist": "a distribution", "array": "an array", "handle": "a handle"}
+             "dist": "a distribution", "array": "an array", "handle": "a handle", "seq": "a seq"}
     # where the runner needs an integer or a number it reads a float, rounded, and a bool as 0 or 1
-    NOT_NUMBER = {"str", "none", "dist", "array", "handle"}
+    NOT_NUMBER = {"str", "none", "dist", "array", "handle", "seq"}
     # an operand of arithmetic is an integer or a float
     NOT_OPERAND = NOT_NUMBER | {"bool"}
     # a condition is a bool or an integer
@@ -657,8 +663,11 @@ class Check:
                 return self.ast["params"][a["array"]].get("items")
             kinds = {self.pkind(x) for x in v} if isinstance(v, list) else set()
             return kinds.pop() if len(kinds) == 1 else None
-        if k in ("index", "actor", "count", "dirs", "len", "published", "size", "offset", "unit_index", "units", "chunks"):
+        if k in ("index", "actor", "count", "dirs", "len", "published", "size", "offset", "unit_index", "units", "chunks",
+                 "seq_len", "chunk_key"):
             return "int"
+        if k in ("fresh", "shared", "prefix", "cat"):
+            return "seq"
         if k in ("eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not"):
             return "bool"
         if k == "cond":
@@ -877,6 +886,10 @@ class Check:
         k, a = next(iter(e.items()))
         if k in ("index", "at", "published", "entry", "prev"):
             return True
+        if k == "fresh":                     # new blocks at every position, as a draw
+            return bool(scope.indices) or self.varies(a, scope)
+        if k in ("shared", "chunk_key"):
+            return any(self.varies(v, scope) for v in a.values())
         if k == "ref":
             return scope.is_varying(a)
         if k in self.DRAWS:
@@ -943,11 +956,64 @@ class Check:
         if self.timeline is not None:
             self.err(p, f"a timeline inside timeline `{self.timeline[0]}`: lanes are planned in one timeline at a time (V30)")
             return
+        self.caches = {}
+        for i, c in enumerate(a.get("caches", [])):
+            cp = p + ["caches", i]
+            if c["name"] in self.caches:
+                self.err(cp, f"cache `{c['name']}` declared twice (V33)")
+                continue
+            if not c["tiers"]:
+                self.err(cp, f"cache `{c['name']}` has no tiers (V33)")
+            tiers = {}
+            for j, t in enumerate(c["tiers"]):
+                tp = cp + ["tiers", j]
+                if t["name"] in tiers:
+                    self.err(tp, f"tier `{t['name']}` declared twice in cache `{c['name']}` (V33)")
+                if t["evict"] == "lru" and "capacity" not in t:
+                    self.err(tp, f"tier `{t['name']}`: `lru` needs a `capacity` (V33)")
+                if t["evict"] == "none" and "capacity" in t:
+                    self.err(tp, f"tier `{t['name']}`: `none` keeps every entry, so it takes no `capacity` (V33)")
+                if "capacity" in t:
+                    self.expr(t["capacity"], tp + ["capacity"], scope)
+                    self.typed(t["capacity"], tp + ["capacity"], scope)
+                tiers[t["name"]] = t.get("unit", "entries")
+            self.caches[c["name"]] = tiers
         keys = set()
         publishes(a["body"], a["name"], keys)
         self.timeline = (a["name"], keys)
         self.body(a["body"], p + ["body"], scope)
         self.timeline = None
+        self.caches = {}
+
+    def n_lookup(self, a, p, scope):
+        """V33: a `lookup` names a tier of a cache its timeline declares, gives a `size` exactly
+        when the tier counts bytes, and binds the walk's value, which `@` cannot recompute."""
+        cache, tier = a["cache"], a["tier"]
+        unit = None
+        if cache not in self.caches:
+            self.err(p, f"lookup: no timeline declares cache `{cache}` around it (V33)")
+        elif tier not in self.caches[cache]:
+            self.err(p, f"lookup: cache `{cache}` has no tier `{tier}` (V33)")
+        else:
+            unit = self.caches[cache][tier]
+        if unit == "bytes" and "size" not in a:
+            self.err(p, f"lookup: tier `{tier}` counts bytes, so the lookup needs a `size` (V33)")
+        if unit == "entries" and "size" in a:
+            self.err(p, f"lookup: tier `{tier}` counts entries, so the lookup takes no `size` (V33)")
+        self.expr(a["seq"], p + ["seq"], scope)
+        self.seq_arg(a["seq"], "lookup", p + ["seq"], scope)
+        for k in ("per", "size"):
+            if k in a:
+                self.expr(a[k], p + [k], scope)
+                self.typed(a[k], p + [k], scope)
+        scope.bind(a["bind"], 0, True, "int")
+        scope.unpositional[a["bind"]] = "V33"
+
+    def seq_arg(self, e, what, p, scope):
+        """V33: an operand a `seq` is read from is one where the document shows its kind."""
+        k = self.kind(e, scope)
+        if k is not None and k != "seq":
+            self.err(p, f"{what}: expected a seq, got {k} (V33)")
 
     def in_timeline(self, name, what, p):
         """V30: a `publish`, `published`, or `entry` names the timeline it is in."""
@@ -1196,7 +1262,34 @@ class Check:
                 self.err(p, f"prev: no `let` of `{name}` in scope (V31)")
             elif not s.loop_body:
                 self.err(p, f"prev: `{name}` is not bound directly in a loop's body, so it has no previous iteration (V31)")
+            if scope.lookup_unpositional(name) == "V33":
+                self.err(p, f"prev: `{name}` is bound by a `lookup`, not a `let` (V31)")
             self.expr(a["init"], p + ["init"], scope)
+        elif k == "fresh":
+            self.expr(a, p + ["fresh"], scope)
+            self.typed(a, p + ["fresh"], scope)
+        elif k == "shared":
+            for f in ("id", "n"):
+                self.expr(a[f], p + [f], scope)
+                self.typed(a[f], p + [f], scope)
+        elif k == "prefix":
+            self.expr(a[0], p + [0], scope)
+            self.seq_arg(a[0], "prefix", p + [0], scope)
+            self.expr(a[1], p + [1], scope)
+            self.typed(a[1], p + [1], scope)
+        elif k == "cat":
+            for i, x in enumerate(a):
+                self.expr(x, p + [i], scope)
+                self.seq_arg(x, "cat", p + [i], scope)
+        elif k == "seq_len":
+            self.expr(a, p, scope)
+            self.seq_arg(a, "seq_len", p, scope)
+        elif k == "chunk_key":
+            self.expr(a["seq"], p + ["seq"], scope)
+            self.seq_arg(a["seq"], "chunk_key", p + ["seq"], scope)
+            for f in ("chunk", "per"):
+                self.expr(a[f], p + [f], scope)
+                self.typed(a[f], p + [f], scope)
         elif k == "len" and a in scope.arrays:
             pass
         elif k in ("len", "sum"):
@@ -1286,7 +1379,9 @@ class Check:
                 self.err(p, f"`{name} @` names a binding of this loop body, so its index must be "
                             f"{{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1")
         rule = scope.lookup_unpositional(name)
-        if rule:
+        if rule == "V33":
+            self.err(p, f"`{name} @`: it is bound by a `lookup`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)")
+        elif rule:
             self.err(p, f"`{name} @`: its definition reads `published`, `entry`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})")
         # of two `let`s of one name in this body, which one an `at` reads is not defined
         if name in scope.twice:

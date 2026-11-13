@@ -33,7 +33,8 @@ use crate::ast::Access;
 use crate::ast::*;
 use crate::eval::*;
 use crate::pattern::FieldValue;
-use crate::rng::{position_key, Words};
+use crate::rng::{labeled_key, position_key, Words};
+use crate::seq::{self, Seq};
 
 // ---------------------------------------------------------------- ops and sinks
 
@@ -250,6 +251,50 @@ struct Binding<'a> {
     body: &'a [Node],
     /// The `let` that bound it: of two `let`s of one name in a body, the one in scope.
     def: &'a ExprLike,
+    /// Bound by a `lookup` (contract 0.16): the walk's value, which `@` cannot recompute.
+    walked: bool,
+}
+
+/// Sequences whose chunk keys a walk holds, the latest last.
+const KEY_MEMO: usize = 4;
+
+/// A tier of a timeline's cache (contract 0.16): its entries by key, with the order each was
+/// last used in and its size, and that order's index.
+struct Tier {
+    capacity: Option<i64>,
+    bytes: bool,
+    used: i64,
+    stamp: u64,
+    entries: HashMap<i64, (u64, i64)>,
+    order: std::collections::BTreeMap<u64, i64>,
+}
+
+impl Tier {
+    /// Touch `k` if held, else store it, evicting the entries used longest ago while the
+    /// tier would pass its capacity; an entry larger than the whole tier is not stored.
+    fn touch_or_store(&mut self, k: i64, size: i64) {
+        self.stamp += 1;
+        if let Some((old, _)) = self.entries.get_mut(&k) {
+            self.order.remove(old);
+            *old = self.stamp;
+            self.order.insert(self.stamp, k);
+            return;
+        }
+        let size = if self.bytes { size } else { 1 };
+        if let Some(cap) = self.capacity {
+            if size > cap {
+                return;
+            }
+            while self.used + size > cap {
+                let Some((_, victim)) = self.order.pop_first() else { break };
+                let (_, sz) = self.entries.remove(&victim).expect("an ordered entry is held");
+                self.used -= sz;
+            }
+        }
+        self.entries.insert(k, (self.stamp, size));
+        self.order.insert(self.stamp, k);
+        self.used += size;
+    }
 }
 
 #[derive(Clone)]
@@ -468,6 +513,8 @@ struct PendingFork<'a> {
 struct TlShared<'a> {
     name: &'a str,
     entries: Vec<(i64, Vec<(&'a str, Value<'a>)>)>,
+    /// Its caches' tiers, by cache and tier name (contract 0.16).
+    tiers: HashMap<(&'a str, &'a str), Tier>,
 }
 
 /// One lane of a timeline: its walk (`None` once it has ended), its key, the lane that waits
@@ -556,6 +603,8 @@ pub struct Vm<'m, 'a> {
     tlrun: Option<Box<TlRun<'m, 'a>>>,
     /// The values of the `let`s a `prev` reads, by definition.
     prev_slots: HashMap<usize, PrevSlot<'a>>,
+    /// The chunk keys of the sequences this walk asked of last, by sequence and `per`.
+    key_memo: Vec<(Arc<Seq>, i64, Arc<Vec<u64>>)>,
 }
 
 /// The bounds of a VM's file geometry cache (`Vm::geom`): the files an actor interleaves
@@ -597,6 +646,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             clock: 0,
             tlrun: None,
             prev_slots: HashMap::new(),
+            key_memo: Vec::new(),
         }
     }
 
@@ -628,6 +678,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             clock: 0,
             tlrun: None,
             prev_slots: HashMap::new(),
+            key_memo: Vec::new(),
         }
     }
 
@@ -668,6 +719,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         self.clock = 0;
         self.tlrun = None;
         self.prev_slots.clear();
+        self.key_memo.clear();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1012,6 +1064,45 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
             }
             ExprNode::Prev { name, init } => self.prev(name, init)?,
+            ExprNode::Fresh(f) => {
+                let n = self.expr(&f.n)?.as_int()?;
+                if n < 0 {
+                    return other(format!("fresh: {n} blocks"));
+                }
+                Value::Seq(seq::run(self.draw_key(f.site.get()), n))
+            }
+            ExprNode::Shared { id, n } => {
+                let id = self.expr(id)?.as_int()?;
+                let n = self.expr(n)?.as_int()?;
+                if n < 0 {
+                    return other(format!("shared: {n} blocks"));
+                }
+                Value::Seq(seq::run(labeled_key(0, "shared", &[id as u64]), n))
+            }
+            ExprNode::Prefix([s, k]) => {
+                let s = self.seq_of(s, "prefix")?;
+                let k = self.expr(k)?.as_int()?;
+                if !(0..=s.len()).contains(&k) {
+                    return other(format!("prefix: {k} blocks of a sequence of {}", s.len()));
+                }
+                Value::Seq(seq::prefix(&s, k))
+            }
+            ExprNode::Cat([a, b]) => {
+                let a = self.seq_of(a, "cat")?;
+                let b = self.seq_of(b, "cat")?;
+                Value::Seq(seq::cat(&a, &b))
+            }
+            ExprNode::SeqLen(s) => Value::Int(self.seq_of(s, "seq_len")?.len()),
+            ExprNode::ChunkKey { seq: s, chunk, per } => {
+                let s = self.seq_of(s, "chunk_key")?;
+                let c = self.expr(chunk)?.as_int()?;
+                let per = self.expr(per)?.as_int()?;
+                let keys = self.chunk_keys(&s, per, "chunk_key")?;
+                match usize::try_from(c).ok().and_then(|i| keys.get(i)) {
+                    Some(h) => Value::Int(seq::key(*h)),
+                    None => return other(format!("chunk_key: chunk {c} of a sequence of {} whole chunks of {per}", keys.len())),
+                }
+            }
             ExprNode::Sum(array) => {
                 let mut int = 0i64;
                 let mut float = 0f64;
@@ -1127,6 +1218,32 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             Some(tl) if tl.lock().unwrap().name == name => Ok(tl.clone()),
             _ => other(format!("{what}: no timeline `{name}` encloses it (V30)")),
         }
+    }
+
+    fn seq_of(&mut self, e: &'a Expr, what: &str) -> ER<Arc<Seq>> {
+        match self.expr(e)? {
+            Value::Seq(s) => Ok(s),
+            v => other(format!("{what}: expected a seq, got {}", v.kind())),
+        }
+    }
+
+    /// The chained hashes of `s`'s whole chunks of `per` blocks, from the walk's few latest.
+    fn chunk_keys(&mut self, s: &Arc<Seq>, per: i64, what: &str) -> ER<Arc<Vec<u64>>> {
+        if per <= 0 {
+            return other(format!("{what}: `per` {per}, not positive"));
+        }
+        if let Some(i) = self.key_memo.iter().position(|(q, p, _)| Arc::ptr_eq(q, s) && *p == per) {
+            let m = self.key_memo.remove(i);
+            let keys = m.2.clone();
+            self.key_memo.push(m);
+            return Ok(keys);
+        }
+        let keys = Arc::new(seq::chunk_hashes(s, per));
+        if self.key_memo.len() == KEY_MEMO {
+            self.key_memo.remove(0);
+        }
+        self.key_memo.push((s.clone(), per, keys.clone()));
+        Ok(keys)
     }
 
     /// A value whose position is the step being walked (a timeline read, a `prev`) has none
@@ -1323,6 +1440,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             if let Some(b) = level.bindings.get(name) {
                 return Ok(b.value.clone());
             }
+        }
+        if !self.shifts.is_empty() && self.scopes[below..].iter().any(|l| l.bindings.get(name).is_some_and(|b| b.walked)) {
+            return other(format!("`{name}` under `@`: bound by a `lookup`, its value is the one the step being walked sees, which `@` cannot recompute at another index (V33)"));
         }
         other(format!("binding `{name}` not in scope (a forward reference needs `at`)"))
     }
@@ -1852,14 +1972,31 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     self.keep_for_prev(value, v.clone());
                 }
                 let level = self.scopes.last_mut().unwrap();
-                level.bindings.insert(name.as_str(), Binding { value: v, body: level.body, def: value });
+                level.bindings.insert(name.as_str(), Binding { value: v, body: level.body, def: value, walked: false });
                 Ok(None)
             }
-            Node::Timeline { name, body } => {
+            Node::Timeline { name, caches, body } => {
                 if self.tl.is_some() {
                     return other(format!("timeline `{name}` inside a timeline (V30)"));
                 }
-                let shared = Arc::new(Mutex::new(TlShared { name, entries: Vec::new() }));
+                let mut tiers = HashMap::new();
+                for c in caches {
+                    for t in &c.tiers {
+                        let capacity = match &t.capacity {
+                            Some(e) => {
+                                let n = self.expr(e)?.as_int()?;
+                                if n < 0 {
+                                    return other(format!("tier `{}` of cache `{}`: capacity {n}", t.name, c.name));
+                                }
+                                Some(n)
+                            }
+                            None => None,
+                        };
+                        let tier = Tier { capacity, bytes: t.unit == TierUnit::Bytes, used: 0, stamp: 0, entries: HashMap::new(), order: Default::default() };
+                        tiers.insert((c.name.as_str(), t.name.as_str()), tier);
+                    }
+                }
+                let shared = Arc::new(Mutex::new(TlShared { name, entries: Vec::new(), tiers }));
                 let snap = Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &self.frames, &self.scopes, &self.phases, &self.open, &self.written, body);
                 let mut main = Vm::resume(snap);
                 main.tl = Some(shared.clone());
@@ -1876,6 +2013,30 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     got.push((k.as_str(), self.expr(e)?));
                 }
                 tl.lock().unwrap().entries.push((self.clock, got));
+                Ok(None)
+            }
+            Node::Lookup { cache, tier, seq: s, per, bind, size } => {
+                let s = self.seq_of(s, "lookup")?;
+                let per = self.expr(per)?.as_int()?;
+                let size = match size {
+                    Some(e) => self.expr(e)?.as_int()?,
+                    None => 1,
+                };
+                let keys = self.chunk_keys(&s, per, "lookup")?;
+                let Some(tl) = self.tl.clone() else {
+                    return other(format!("lookup: no timeline declares cache `{cache}` around it (V33)"));
+                };
+                let mut g = tl.lock().unwrap();
+                let Some(t) = g.tiers.get_mut(&(cache.as_str(), tier.as_str())) else {
+                    return other(format!("lookup: cache `{cache}` has no tier `{tier}` (V33)"));
+                };
+                let hit = keys.iter().take_while(|h| t.entries.contains_key(&seq::key(**h))).count();
+                for h in keys.iter() {
+                    t.touch_or_store(seq::key(*h), size);
+                }
+                drop(g);
+                let level = self.scopes.last_mut().unwrap();
+                level.bindings.insert(bind.as_str(), Binding { value: Value::Int(hit as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
                 Ok(None)
             }
             Node::Array { name, count, index, value } => {
@@ -2466,7 +2627,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.15", "name": "t",
+                r#"{{"ast": "0.16", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

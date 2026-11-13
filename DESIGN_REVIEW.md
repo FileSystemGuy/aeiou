@@ -11792,6 +11792,45 @@ stack (a 64 MiB thread stack; the `gen5` port's `@` chains needed 48 to 64 MiB a
 its state is `prev`, its pool entries. Gaps 2 to 5 are closed for this generator; 1 (chunk names
 from lineage, with item 75's cache) is next, then 6 to 8.
 
+**Chunks named from lineage, contract 0.16 (decided by the user 2026-11-12, built the same day; gap 1
+of the note "The generator ported to an abstract").** The proposal (scratch
+`limit500k/port/chunks-proposal.md`) put three questions; the user chose each recommendation. (1) A
+prompt's blocks as a value of the language, the `seq`, over a lineage walk by entry (a main chain of
+1,500 extensions puts chunk 0's origin 1,500 entries up) or bounded loops: `fresh n`, new blocks
+whose origin is the node's position, keyed as a draw; `shared {id, n}`, a prefix common to every lane
+and run (a system prompt, as `sim5` makes the main and sub-agent prefixes every session's);
+`prefix`, `cat`, `seq_len`; and `chunk_key`, the chained hash of every block to a chunk's end,
+`agentx.chunk_ids`'s rule, so two sequences share a chunk exactly when they share everything up to
+its end. Built as a shared tree, not a list of runs: a list holds one run a step of a prompt's
+lineage, and a timeline keeps every prompt it published; a node on a sequence's left spine keeps
+its chunks' hashes, so a request costs the chunks it adds; every walk and drop is a loop (the
+lesson of item 73). (2) Item 75's first cut: a timeline's `caches`, tiers that keep every entry or
+evict the least recently used past a capacity in entries or bytes, and `lookup`, which binds the
+leading chunks held, then touches each chunk held and stores each one not, LMCache 0.5.5's lookup
+and store at prefill. Its exact order is a definition (`runner/REFERENCE.md` §2). `from` of the
+proposal was left out: in LMCache the lookup covers the whole prefix and what the engine holds
+bounds only the reads, which the abstract's loop says. (3) One timeline an engine, the sessions its
+lanes. Rule V33 in both checkers, 22 shared refusal cases; `tests/seqcache.rs` (the algebra, keys
+equal exactly when prefixes are, positional `fresh`, the LRU's order, bytes, planned order across
+lanes, `@` refused) and `seq.rs`'s own test (a tree of 400 extensions, cuts, and reuses against a
+flat list, and a 200,000-deep chain dropped without recursion). Every committed AST regenerated at
+0.16, every case re-locked, no fingerprint and no dataset id changed.
+*Held to the reference* (scratch `port/gen7_port.py`, `compare7.py`): `gen6_port` with each prompt a
+`seq` and, after each request, its chunks read from the stored prefix and the rest written, one file
+a key (the engine holding nothing, held 0). The reference is independent of `seq`: each request's
+blocks rebuilt from its marker's lineage ints, then `agentx.chunk_ids` and `agentx.lmcache_accesses`
+over the dry run's walk order. At 20 sessions, 6,962 requests: every request's reads and writes equal
+the reference's, 6,677,242 reads and 79,312 writes, the 78,090 keys one-to-one with the reference's; a second seed, 5,658 requests, 4,404,680 reads and 104,828 writes, likewise.
+*Found building the port, not decided:* (3) cannot be written as chosen. A fresh prompt's reused
+start is drawn from its own session's earlier prompts, and in one timeline of every session
+`published` and `entry` count and index every session's entries together, so the pool would be the
+engine's. The port above therefore keeps a timeline, and so a store, a session, which no engine
+has. Options put to the user: entries in groups (`publish`, `published`, and `entry` taking a group,
+the session, counted and indexed within it); caches shared by several timelines (but timelines are
+walked one after another, not in planned order between them); or a store a session for now.
+Also a choice of the port's, noted: a session's main prefix is its first prompt's first
+`min(len, mb)` blocks, where `sim5` takes the first main prompt at least `mb` long.
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes

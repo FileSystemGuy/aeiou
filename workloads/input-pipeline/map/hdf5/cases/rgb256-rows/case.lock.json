@@ -5,7 +5,7 @@
     {
       "name": "hdf5_map",
       "abstract": "input-pipeline/map/hdf5/hdf5_map.ast.json",
-      "ast_sha256": "ea4444de9fd694ac9e734185673f63cfdec099468cc9238dcbb90913e132e2eb",
+      "ast_sha256": "cd01b16acee27e4d024e2f61c975e3056d90ea3ef34f9cbb7eb839656319e91c",
       "params": {
         "batch": {"default": 32},
         "prefetch": {"default": 2},

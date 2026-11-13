@@ -90,8 +90,9 @@ A body is an array of statements: sixteen control forms and eighteen operations.
 | `choose {arms: [{weight, body}]}` | Run one arm, chosen positionally by weight. |
 | `phase {name, body}` | A statistics label; no effect on execution or the fingerprint. |
 | `trace {file, sha256}` | A captured trace of a real application, executed literally, one lane per traced task; for calibration, never comparable across systems as a scored workload. The file is **aeiou-trace**(1) `export`'s. |
-| `timeline {name, body}` | Lanes planned together (contract 0.15): the body's main line and every sub-actor of a `parallel` in it, each with a planned clock that `compute` moves. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. **aeiou check** and **aeiou dry-run** walk it; **aeiou run** refuses it until its run side is built. |
+| `timeline {name, caches, body}` | Lanes planned together (contract 0.15): the body's main line and every sub-actor of a `parallel` in it, each with a planned clock that `compute` moves. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. **aeiou check** and **aeiou dry-run** walk it; **aeiou run** refuses it until its run side is built. Its `caches` (contract 0.16), each `{name, tiers}`, a tier `{name, evict: none|lru, capacity, unit: entries|bytes}`, are walked with its lanes in planned order (V33). |
 | `publish {timeline, values}` | An entry of the enclosing timeline: these values at this lane's planned time (V30). |
+| `lookup {cache, tier, seq, per, bind, size}` | The leading whole chunks of `per` blocks of `seq` held in a tier of a cache of the enclosing timeline, bound to `bind`; every chunk then touched if held, stored if not (contract 0.16, V33). |
 | `array {name, count, index, value}` | `count` values computed once, each with `index` bound as a loop index, read with `elem` and `len` (V32). |
 | `open {file, flags, mode, expect}` | Flags from the schema's enum (`RDONLY`, `WRONLY`, `RDWR`, `CREAT`, `TRUNC`, `APPEND`, `CLOEXEC`, `DIRECTORY`, ...). |
 | `close`, `fstat`, `stat`, `fsync`, `fdatasync`, `unlink` `{file, expect}` | |
@@ -114,6 +115,7 @@ that probes for a file); any other failure aborts the run.
 `index`, `ref`, `at {ref, index}` (the binding as it was at another index of its loop),
 `actor: id|count`, `draw dist`; `elem {array, index}`, `len`, `sum` over parameter arrays (`elem` and `len` also over an `array`);
 `published timeline` and `entry {timeline, index, key}`, what the timeline's lanes published before this step (V30); `prev {ref, init}`, the value a `let` of a loop's body took in the previous iteration (V31);
+a `seq` of blocks (contract 0.16): `fresh n` (new blocks at this position), `shared {id, n}` (a prefix common to every lane and run), `prefix [s, k]`, `cat [a, b]`, `seq_len s`, and `chunk_key {seq, chunk, per}` (the key of a whole chunk, equal for two sequences exactly when they hold the same blocks up to its end);
 `size`, `offset`, `unit_index`, `units`, `chunks` of a handle, `count` and `dirs` of a
 dataset; `add sub mul div mod ceil_div min max neg`; `eq ne lt le gt ge and or not`; and
 `cond {if, then, else}` whose arms may be expressions, distributions, or handles.
@@ -238,6 +240,10 @@ these, and the builder enforces most of them at construction:
 - **V31** A `prev` names a `let` bound directly in a loop's body; no `@` naming a binding
   whose definition reads `prev`.
 - **V32** An `array` is never inside a loop and never named as a parameter.
+- **V33** A cache is declared once in its timeline, with tiers named once each, an `lru` tier
+  with a `capacity` and a `none` tier without; a `lookup` names a cache of its timeline and a
+  tier of it, gives `size` exactly when the tier counts bytes, and its binding is named by no
+  `@` and no `prev`; a `seq` is read where a sequence is, never as a number.
 
 ## PARAMETER FILES
 

@@ -42,6 +42,7 @@ pub mod report;
 pub mod requests;
 pub mod rng;
 pub mod run;
+pub mod seq;
 pub mod sites;
 pub mod strace;
 pub mod trace;

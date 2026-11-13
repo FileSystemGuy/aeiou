@@ -98,7 +98,7 @@ fn an_emitted_file_runs_as_a_trace_node_of_the_same_numbers() {
     std::fs::write(
         &ast,
         format!(
-            r#"{{"ast": "0.15", "name": "node", "doc": "the emitted file", "params": {{}}, "datasets": {{}},
+            r#"{{"ast": "0.16", "name": "node", "doc": "the emitted file", "params": {{}}, "datasets": {{}},
                 "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "a.jsonl", "sha256": "{sha}"}}}}]}}}}}}"#
         ),
     )

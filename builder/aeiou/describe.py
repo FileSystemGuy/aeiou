@@ -32,11 +32,12 @@ from .pattern import Pattern
 OPS = ("open", "close", "read", "write", "lseek", "ioctl", "fadvise", "fstat", "stat", "fsync", "fdatasync",
        "unlink", "truncate", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
 STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond", "choose",
-              "phase", "trace", "timeline", "publish", "array") + OPS
+              "phase", "trace", "timeline", "publish", "array", "lookup") + OPS
 DISTS = ("const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture")
 EXPRS = ("param", "index", "ref", "at", "actor", "draw", "elem", "len", "sum", "size", "offset", "unit_index", "units",
          "chunks", "count", "dirs", "add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "neg", "eq", "ne", "lt",
-         "le", "gt", "ge", "and", "or", "not", "cond", "published", "entry", "prev")
+         "le", "gt", "ge", "and", "or", "not", "cond", "published", "entry", "prev", "fresh", "shared", "prefix", "cat",
+         "seq_len", "chunk_key")
 HANDLES = ("ref", "file", "dir", "object", "inventory", "consume", "pick", "unit", "column")
 
 # The measured attributes in a few words each (the dictionary has their meanings in full).
@@ -306,6 +307,16 @@ class Describer:
             return f"prev({a['ref']}, {self.sym(a['init'])})"
         if k == "published":
             return f"published({a})"
+        if k == "fresh":
+            return f"fresh({self.sym(a)})"
+        if k == "shared":
+            return f"shared({self.sym(a['id'])}, {self.sym(a['n'])})"
+        if k in ("prefix", "cat"):
+            return f"{k}({self.sym(a[0])}, {self.sym(a[1])})"
+        if k == "seq_len":
+            return f"seq_len({self.sym(a)})"
+        if k == "chunk_key":
+            return f"chunk_key({self.sym(a['seq'])}, {self.sym(a['chunk'])}, {self.sym(a['per'])})"
         if k == "entry":
             return f"{a['timeline']}[{self.sym(a['index'])}].{a['key']}"
         if k == "actor":
@@ -623,8 +634,19 @@ class Describer:
             end = "joined at the end" if a.get("join", True) else "not joined: the lane goes on at once"
             return [pad + f"{w} in parallel, `{a['index']}` = 0 onward, {end}:"] + self.body(a["body"], depth + 1)
         if k == "timeline":
+            caches = "".join(
+                f" Its cache `{c['name']}`: " + "; ".join(
+                    f"tier `{t['name']}`, " + ("keeping every entry" if t["evict"] == "none" else
+                                              (f"evicting the entry used longest ago past {self.value(t['capacity'], 'bytes')}" if t.get("unit") == "bytes" else
+                                               f"evicting the entry used longest ago past {self.bare(t['capacity'], 'count')} entries"))
+                    for t in c["tiers"]) + "."
+                for c in a.get("caches", []))
             return [pad + f"A timeline `{a['name']}`: its lanes, this one and every parallel sub-actor in it, "
-                    "planned together and taken in planned order:"] + self.body(a["body"], depth + 1)
+                    "planned together and taken in planned order." + caches] + self.body(a["body"], depth + 1)
+        if k == "lookup":
+            return [pad + f"Looks up `{self.sym(a['seq'])}` in tier `{a['tier']}` of cache `{a['cache']}`, by chunks of "
+                    f"{self.value(a['per'], 'count')} blocks: `{a['bind']}` is the leading chunks held; every chunk is then "
+                    "touched, those not held stored."]
         if k == "publish":
             vals = ", ".join(f"{n} = `{self.sym(v)}`" for n, v in a["values"].items())
             return [pad + f"Publishes to `{a['timeline']}`: {vals}."]
@@ -833,7 +855,7 @@ class Describer:
         if k == "timeline":
             inner = self.gist(a["body"])
             return f"lanes planned together: {inner}" if inner else ""
-        return ""                                       # a channel's declaration, a publish, an array
+        return ""                                       # a channel's declaration, a publish, an array, a lookup
 
     def handle_gist(self, h, pending: str | None = None) -> str:
         """A handle in a few words; `pending` is the one the last binding named, no op between."""

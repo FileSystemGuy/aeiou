@@ -118,6 +118,7 @@ fn kind_name(kind: &str) -> &'static str {
         "none" => "null",
         "dist" => "a distribution",
         "array" => "an array",
+        "seq" => "a seq",
         _ => "a handle",
     }
 }
@@ -142,13 +143,13 @@ fn pvalue_kind(v: &PValue) -> &'static str {
 
 /// V27: where the runner needs an integer or a number it reads a float, rounded, and a bool as
 /// 0 or 1.
-const NOT_NUMBER: &[&str] = &["str", "none", "dist", "array", "handle"];
+const NOT_NUMBER: &[&str] = &["str", "none", "dist", "array", "handle", "seq"];
 /// An operand of arithmetic is an integer or a float.
-const NOT_OPERAND: &[&str] = &["str", "none", "dist", "array", "handle", "bool"];
+const NOT_OPERAND: &[&str] = &["str", "none", "dist", "array", "handle", "bool", "seq"];
 /// A condition is a bool or an integer.
-const NOT_CONDITION: &[&str] = &["str", "none", "dist", "array", "handle", "float"];
+const NOT_CONDITION: &[&str] = &["str", "none", "dist", "array", "handle", "float", "seq"];
 /// A `str` field of a namespace object takes a string.
-const NOT_STRING: &[&str] = &["int", "float", "bool", "none", "dist", "array", "handle"];
+const NOT_STRING: &[&str] = &["int", "float", "bool", "none", "dist", "array", "handle", "seq"];
 
 struct Checker<'a> {
     ast: &'a Ast,
@@ -217,6 +218,8 @@ struct ActorState<'a> {
     timeline: Option<(&'a str, BTreeSet<&'a str>)>,
     /// V32: the loops enclosing the node being checked.
     loops: usize,
+    /// V33: the enclosing timeline's caches, each tier with its unit.
+    caches: HashMap<&'a str, Vec<(&'a str, TierUnit)>>,
     /// V31: the next `body` is a `loop`'s.
     loop_next: bool,
 }
@@ -332,6 +335,13 @@ fn expr_refs<'a>(e: &'a Expr, out: &mut BTreeSet<&'a str>) {
         ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Published(_) => {}
         ExprNode::At { index, .. } | ExprNode::Elem { index, .. } | ExprNode::Entry { index, .. } => expr_refs(index, out),
         ExprNode::Prev { init, .. } => expr_refs(init, out),
+        ExprNode::Fresh(f) => expr_refs(&f.n, out),
+        ExprNode::SeqLen(e) => expr_refs(e, out),
+        ExprNode::Shared { id: a, n: b } | ExprNode::Prefix([a, b]) | ExprNode::Cat([a, b]) => {
+            expr_refs(a, out);
+            expr_refs(b, out);
+        }
+        ExprNode::ChunkKey { seq, chunk, per } => [seq, chunk, per].into_iter().for_each(|e| expr_refs(e, out)),
         ExprNode::Draw(d) => distref_refs(&d.dist, out),
         ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => handle_refs(h, out),
         ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
@@ -394,7 +404,10 @@ fn unpositional(v: &ExprLike) -> Option<&'static str> {
             ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
             | ExprNode::Max(a) | ExprNode::Eq(a) | ExprNode::Ne(a) | ExprNode::Lt(a) | ExprNode::Le(a) | ExprNode::Gt(a) | ExprNode::Ge(a) => a.iter().find_map(walk),
             ExprNode::And(a) | ExprNode::Or(a) => a.iter().find_map(walk),
-            ExprNode::Neg(e) | ExprNode::Not(e) => walk(e),
+            ExprNode::Neg(e) | ExprNode::Not(e) | ExprNode::SeqLen(e) => walk(e),
+            ExprNode::Fresh(f) => walk(&f.n),
+            ExprNode::Shared { id: a, n: b } | ExprNode::Prefix([a, b]) | ExprNode::Cat([a, b]) => walk(a).or_else(|| walk(b)),
+            ExprNode::ChunkKey { seq, chunk, per } => walk(seq).or_else(|| walk(chunk)).or_else(|| walk(per)),
             ExprNode::Cond(c) => walk(&c.test).or_else(|| [&c.then, &c.otherwise].into_iter().find_map(|v| match v {
                 ExprLike::Expr(e) => walk(e),
                 _ => None,
@@ -869,8 +882,12 @@ impl<'a> Checker<'a> {
             ExprNode::Add(x) | ExprNode::Sub(x) | ExprNode::Mul(x) | ExprNode::Div(x) | ExprNode::Mod(x) | ExprNode::CeilDiv(x) | ExprNode::Min(x) | ExprNode::Max(x)
             | ExprNode::Eq(x) | ExprNode::Ne(x) | ExprNode::Lt(x) | ExprNode::Le(x) | ExprNode::Gt(x) | ExprNode::Ge(x) => x.iter().any(|e| self.varies(e, scope)),
             ExprNode::And(x) | ExprNode::Or(x) => x.iter().any(|e| self.varies(e, scope)),
-            ExprNode::Neg(e) | ExprNode::Not(e) => self.varies(e, scope),
+            ExprNode::Neg(e) | ExprNode::Not(e) | ExprNode::SeqLen(e) => self.varies(e, scope),
             ExprNode::Cond(c) => self.varies(&c.test, scope) || self.exprlike_varies(&c.then, scope) || self.exprlike_varies(&c.otherwise, scope),
+            // new blocks at every position, as a draw
+            ExprNode::Fresh(f) => !scope.indices.is_empty() || self.varies(&f.n, scope),
+            ExprNode::Shared { id: a, n: b } | ExprNode::Prefix([a, b]) | ExprNode::Cat([a, b]) => self.varies(a, scope) || self.varies(b, scope),
+            ExprNode::ChunkKey { seq, chunk, per } => [seq, chunk, per].into_iter().any(|e| self.varies(e, scope)),
         }
     }
 
@@ -1158,7 +1175,7 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["sha256"]), "not a lowercase hex sha256");
                 }
             }
-            Node::Timeline { name, body } => {
+            Node::Timeline { name, caches, body } => {
                 if !is_ident(name) {
                     self.err(&p(pp, &["name"]), "not an identifier");
                 }
@@ -1166,11 +1183,80 @@ impl<'a> Checker<'a> {
                     self.err(pp, format!("a timeline inside timeline `{outer}`: lanes are planned in one timeline at a time (V30)"));
                     return;
                 }
+                st.caches.clear();
+                for (i, c) in caches.iter().enumerate() {
+                    let cp = p(pp, &["caches", &i.to_string()]);
+                    if !is_ident(&c.name) {
+                        self.err(&p(&cp, &["name"]), "not an identifier");
+                    }
+                    if st.caches.contains_key(c.name.as_str()) {
+                        self.err(&cp, format!("cache `{}` declared twice (V33)", c.name));
+                        continue;
+                    }
+                    if c.tiers.is_empty() {
+                        self.err(&cp, format!("cache `{}` has no tiers (V33)", c.name));
+                    }
+                    let mut tiers: Vec<(&'a str, TierUnit)> = Vec::new();
+                    for (j, t) in c.tiers.iter().enumerate() {
+                        let tp = p(&cp, &["tiers", &j.to_string()]);
+                        if !is_ident(&t.name) {
+                            self.err(&p(&tp, &["name"]), "not an identifier");
+                        }
+                        if tiers.iter().any(|(n, _)| *n == t.name) {
+                            self.err(&tp, format!("tier `{}` declared twice in cache `{}` (V33)", t.name, c.name));
+                        }
+                        match (t.evict, &t.capacity) {
+                            (Evict::Lru, None) => self.err(&tp, format!("tier `{}`: `lru` needs a `capacity` (V33)", t.name)),
+                            (Evict::None, Some(_)) => self.err(&tp, format!("tier `{}`: `none` keeps every entry, so it takes no `capacity` (V33)", t.name)),
+                            _ => {}
+                        }
+                        if let Some(e) = &t.capacity {
+                            self.expr(e, &p(&tp, &["capacity"]), scope, st, None);
+                            self.int(e, &p(&tp, &["capacity"]), scope);
+                        }
+                        tiers.push((t.name.as_str(), t.unit));
+                    }
+                    st.caches.insert(c.name.as_str(), tiers);
+                }
                 let mut keys = BTreeSet::new();
                 publishes(body, name, &mut keys);
                 st.timeline = Some((name.as_str(), keys));
                 self.body(body, &p(pp, &["body"]), scope, st);
                 st.timeline = None;
+                st.caches.clear();
+            }
+            Node::Lookup { cache, tier, seq, per, bind, size } => {
+                if !is_ident(bind) {
+                    self.err(&p(pp, &["bind"]), "not an identifier");
+                }
+                let unit = match st.caches.get(cache.as_str()) {
+                    None => {
+                        self.err(pp, format!("lookup: no timeline declares cache `{cache}` around it (V33)"));
+                        None
+                    }
+                    Some(tiers) => match tiers.iter().find(|(n, _)| n == tier) {
+                        None => {
+                            self.err(pp, format!("lookup: cache `{cache}` has no tier `{tier}` (V33)"));
+                            None
+                        }
+                        Some((_, u)) => Some(*u),
+                    },
+                };
+                match (unit, size) {
+                    (Some(TierUnit::Bytes), None) => self.err(pp, format!("lookup: tier `{tier}` counts bytes, so the lookup needs a `size` (V33)")),
+                    (Some(TierUnit::Entries), Some(_)) => self.err(pp, format!("lookup: tier `{tier}` counts entries, so the lookup takes no `size` (V33)")),
+                    _ => {}
+                }
+                self.expr(seq, &p(pp, &["seq"]), scope, st, None);
+                self.seq_arg(seq, "lookup", &p(pp, &["seq"]), scope);
+                for (k, e) in [("per", Some(per)), ("size", size.as_ref())] {
+                    if let Some(e) = e {
+                        self.expr(e, &p(pp, &[k]), scope, st, None);
+                        self.int(e, &p(pp, &[k]), scope);
+                    }
+                }
+                scope.bind(bind, &LOOKUP_DEF, true, Some("int"), (None, None));
+                scope.unpositional.insert(bind.as_str(), "V33");
             }
             Node::Publish { timeline, values } => {
                 self.in_timeline(timeline, "publish", pp, st);
@@ -1612,6 +1698,8 @@ impl<'a> Checker<'a> {
                 if t == self.like_kind(&c.otherwise, scope) { t } else { None }
             }
             ExprNode::Draw(d) => self.draw_kind(&d.dist, scope),
+            ExprNode::Fresh(_) | ExprNode::Shared { .. } | ExprNode::Prefix(_) | ExprNode::Cat(_) => Some("seq"),
+            ExprNode::SeqLen(_) | ExprNode::ChunkKey { .. } => Some("int"),
             _ => None,
         }
     }
@@ -1734,6 +1822,15 @@ impl<'a> Checker<'a> {
                 }
             }
             Some(_) => self.err(path, format!("{op}: parameter `{name}` is not an array (V27)")),
+        }
+    }
+
+    /// V33: an operand a `seq` is read from is one where the document shows its kind.
+    fn seq_arg(&mut self, e: &Expr, what: &str, path: &P, scope: &Scope<'a>) {
+        if let Some(k) = self.kind(e, scope) {
+            if k != "seq" {
+                self.err(path, format!("{what}: expected a seq, got {k} (V33)"));
+            }
         }
     }
 
@@ -1895,7 +1992,44 @@ impl<'a> Checker<'a> {
                     Some(l) if !scope.loop_body[l] => self.err(path, format!("prev: `{name}` is not bound directly in a loop's body, so it has no previous iteration (V31)")),
                     Some(_) => {}
                 }
+                if scope.unpositional.get(name.as_str()) == Some(&"V33") {
+                    self.err(path, format!("prev: `{name}` is bound by a `lookup`, not a `let` (V31)"));
+                }
                 self.expr(init, &p(path, &["init"]), scope, st, None);
+            }
+            ExprNode::Fresh(f) => {
+                self.expr(&f.n, &p(path, &["fresh"]), scope, st, None);
+                self.int(&f.n, &p(path, &["fresh"]), scope);
+            }
+            ExprNode::Shared { id, n } => {
+                for (k, e) in [("id", id), ("n", n)] {
+                    self.expr(e, &p(path, &[k]), scope, st, None);
+                    self.int(e, &p(path, &[k]), scope);
+                }
+            }
+            ExprNode::Prefix([s, k]) => {
+                self.expr(s, &p(path, &["0"]), scope, st, None);
+                self.seq_arg(s, "prefix", &p(path, &["0"]), scope);
+                self.expr(k, &p(path, &["1"]), scope, st, None);
+                self.int(k, &p(path, &["1"]), scope);
+            }
+            ExprNode::Cat(a) => {
+                for (i, x) in a.iter().enumerate() {
+                    self.expr(x, &p(path, &[&i.to_string()]), scope, st, None);
+                    self.seq_arg(x, "cat", &p(path, &[&i.to_string()]), scope);
+                }
+            }
+            ExprNode::SeqLen(s) => {
+                self.expr(s, path, scope, st, None);
+                self.seq_arg(s, "seq_len", path, scope);
+            }
+            ExprNode::ChunkKey { seq, chunk, per } => {
+                self.expr(seq, &p(path, &["seq"]), scope, st, None);
+                self.seq_arg(seq, "chunk_key", &p(path, &["seq"]), scope);
+                for (k, e) in [("chunk", chunk), ("per", per)] {
+                    self.expr(e, &p(path, &[k]), scope, st, None);
+                    self.int(e, &p(path, &[k]), scope);
+                }
             }
             ExprNode::Sum(name) => self.array(name, "sum", path, true),
             ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => self.handle(h, path, scope, st),
@@ -1980,7 +2114,9 @@ impl<'a> Checker<'a> {
         if (binding == Some(name) || scope.forward.contains(name)) && !ok {
             self.err(path, format!("`{name} @` names a binding of this loop body, so its index must be {{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1"));
         }
-        if let Some(rule) = scope.unpositional.get(name) {
+        if scope.unpositional.get(name) == Some(&"V33") {
+            self.err(path, format!("`{name} @`: it is bound by a `lookup`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)"));
+        } else if let Some(rule) = scope.unpositional.get(name) {
             self.err(path, format!("`{name} @`: its definition reads `published`, `entry`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})"));
         }
         // of two `let`s of one name in this body, which one an `at` reads is not defined

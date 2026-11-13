@@ -187,6 +187,22 @@ fn expr(e: &Expr, p: &mut Path) {
             p.with(&["cond", "then"], |p| exprlike(&c.then, p));
             p.with(&["cond", "else"], |p| exprlike(&c.otherwise, p));
         }
+        ExprNode::Fresh(f) => {
+            f.site.set(site_hash(&p.pointer()));
+            p.with(&["fresh"], |p| expr(&f.n, p));
+        }
+        ExprNode::Shared { id, n } => {
+            p.with(&["shared", "id"], |p| expr(id, p));
+            p.with(&["shared", "n"], |p| expr(n, p));
+        }
+        ExprNode::Prefix(a) => args(a, "prefix", p),
+        ExprNode::Cat(a) => args(a, "cat", p),
+        ExprNode::SeqLen(e) => p.with(&["seq_len"], |p| expr(e, p)),
+        ExprNode::ChunkKey { seq, chunk, per } => {
+            p.with(&["chunk_key", "seq"], |p| expr(seq, p));
+            p.with(&["chunk_key", "chunk"], |p| expr(chunk, p));
+            p.with(&["chunk_key", "per"], |p| expr(per, p));
+        }
     }
 }
 
@@ -269,7 +285,23 @@ fn node(n: &Node, p: &mut Path) {
             p.with(&[k, "body"], |p| body(b, p));
         }
         Node::Compute { ns } => p.with(&[k, "ns"], |p| expr(ns, p)),
-        Node::Timeline { body: b, .. } => p.with(&[k, "body"], |p| body(b, p)),
+        Node::Timeline { caches, body: b, .. } => {
+            for (i, c) in caches.iter().enumerate() {
+                for (j, t) in c.tiers.iter().enumerate() {
+                    if let Some(e) = &t.capacity {
+                        p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "capacity"], |p| expr(e, p));
+                    }
+                }
+            }
+            p.with(&[k, "body"], |p| body(b, p))
+        }
+        Node::Lookup { seq, per, size, .. } => {
+            p.with(&[k, "seq"], |p| expr(seq, p));
+            p.with(&[k, "per"], |p| expr(per, p));
+            if let Some(e) = size {
+                p.with(&[k, "size"], |p| expr(e, p));
+            }
+        }
         Node::Publish { values, .. } => {
             for (name, e) in values {
                 p.with(&[k, "values", name], |p| expr(e, p));

@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.15",
+      "const": "0.16",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -671,6 +671,70 @@
                 }
               },
               "description": "The value the `let` `ref`, bound directly in a loop's body, took in the previous iteration of that loop under the same outer indices; `init` in the loop's first iteration. The same as `ref @ (i - step)` for a positional binding, read rather than recomputed, so it carries a value that depends on a timeline (contract 0.15, rule V31). `@` may not reach it."
+            },
+            "fresh": {
+              "$ref": "#/$defs/expr",
+              "description": "A `seq` of this many new blocks (contract 0.16, rule V33): their origin is this node's position, keyed as a draw is (seed, actor, site, enclosing indices), so they are new at every position and the same when `@` recomputes them."
+            },
+            "shared": {
+              "type": "object",
+              "required": [
+                "id",
+                "n"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/expr"
+                },
+                "n": {
+                  "$ref": "#/$defs/expr"
+                }
+              },
+              "description": "A `seq` of the first `n` blocks of the shared prefix `id` (an integer): the same blocks in every lane, actor, and run (contract 0.16), as a system prompt is every session's."
+            },
+            "prefix": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "$ref": "#/$defs/expr"
+              },
+              "description": "The first blocks of a `seq`: `[seq, k]`, `0 <= k <= seq_len` (contract 0.16)."
+            },
+            "cat": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "$ref": "#/$defs/expr"
+              },
+              "description": "One `seq` after another: `[a, b]` (contract 0.16)."
+            },
+            "seq_len": {
+              "$ref": "#/$defs/expr",
+              "description": "The blocks of a `seq` (contract 0.16)."
+            },
+            "chunk_key": {
+              "type": "object",
+              "required": [
+                "seq",
+                "chunk",
+                "per"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "seq": {
+                  "$ref": "#/$defs/expr"
+                },
+                "chunk": {
+                  "$ref": "#/$defs/expr"
+                },
+                "per": {
+                  "$ref": "#/$defs/expr"
+                }
+              },
+              "description": "The key of whole chunk `chunk` (from 0) of `per` blocks of a `seq`, a non-negative integer: the chained hash of every block to the chunk's end (runner/REFERENCE.md §2), so two sequences give one key exactly when they hold the same blocks up to it (contract 0.16)."
             }
           }
         }
@@ -1932,11 +1996,18 @@
             "name": {
               "$ref": "#/$defs/ident"
             },
+            "caches": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/cache"
+              },
+              "description": "The timeline's caches (contract 0.16, rule V33): their state walked in planned order with the lanes, empty when the timeline starts."
+            },
             "body": {
               "$ref": "#/$defs/body"
             }
           },
-          "description": "Lanes planned together (contract 0.15, DESIGN_REVIEW.md §3.99, rule V30): the body's main line and every sub-actor of a `parallel` in it is a lane with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. Never a `timeline`, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside. `aeiou run` does not run one yet."
+          "description": "Lanes planned together (contract 0.15, DESIGN_REVIEW.md §3.99, rule V30): the body's main line and every sub-actor of a `parallel` in it is a lane with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. Never a `timeline`, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside. Its `caches` (contract 0.16, rule V33) are walked with its lanes, in planned order. `aeiou run` does not run one yet."
         },
         "publish": {
           "type": "object",
@@ -1985,6 +2056,38 @@
             }
           },
           "description": "`count` values computed once, where the node stands, each with `index` bound as a loop index (so its draws are positional), read with `elem` and `len` as a parameter array is; never inside a loop, never the name of a parameter (contract 0.15, rule V32)."
+        },
+        "lookup": {
+          "type": "object",
+          "required": [
+            "cache",
+            "tier",
+            "seq",
+            "per",
+            "bind"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "cache": {
+              "$ref": "#/$defs/ident"
+            },
+            "tier": {
+              "$ref": "#/$defs/ident"
+            },
+            "seq": {
+              "$ref": "#/$defs/expr"
+            },
+            "per": {
+              "$ref": "#/$defs/expr"
+            },
+            "bind": {
+              "$ref": "#/$defs/ident"
+            },
+            "size": {
+              "$ref": "#/$defs/expr"
+            }
+          },
+          "description": "The longest run of `seq`'s leading whole chunks of `per` blocks held in a tier of a cache of the enclosing timeline, bound to `bind` as an integer; each chunk then touched, in order, those not held stored (contract 0.16, rule V33). `size`, the bytes of one chunk, exactly when the tier counts bytes. Not positional: `@` and `prev` may not reach `bind`."
         }
       }
     },
@@ -2078,6 +2181,55 @@
           "minimum": 1
         }
       }
+    },
+    "cache": {
+      "type": "object",
+      "required": [
+        "name",
+        "tiers"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ident"
+        },
+        "tiers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tier"
+          }
+        }
+      },
+      "description": "A cache of a timeline (contract 0.16, brief item 75): its tiers by name."
+    },
+    "tier": {
+      "type": "object",
+      "required": [
+        "name",
+        "evict"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ident"
+        },
+        "evict": {
+          "enum": [
+            "none",
+            "lru"
+          ]
+        },
+        "capacity": {
+          "$ref": "#/$defs/expr"
+        },
+        "unit": {
+          "enum": [
+            "entries",
+            "bytes"
+          ]
+        }
+      },
+      "description": "A tier: `none` keeps every entry (no `capacity`); `lru` evicts the entry used longest ago while a store would pass `capacity`, counted in entries (the default) or bytes; an entry larger than the tier is not stored (contract 0.16, rule V33)."
     }
   }
 }

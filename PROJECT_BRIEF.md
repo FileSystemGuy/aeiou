@@ -1578,6 +1578,11 @@ numbers; the order is this note's.
     timeline (gap 2), a `parallel` not joined (gap 3), the `array` (gap 4), and `prev`, the
     value of a binding in its loop's previous iteration, for lane state that depends on the
     pool, which `@` cannot recompute; the port resumes on them.
+    *Contract 0.16, 2026-11-12 (the note "Chunks named from lineage"):* gap 1, each prompt a
+    `seq` and its chunks found or stored by `lookup` in a cache of its timeline; the port's chunk
+    reads and writes equal the reference's request by request (20 sessions, held 0). Open, for
+    the user: the store is a session's, since one timeline of every session would pool every
+    session's prompts; entries in groups is the proposed remedy.
 
 72. **The plan, domains, and events in the contract (decided by the user 2026-11-09 and 2026-11-10,
     `DESIGN_REVIEW.md` §3.99 items 4 to 9 and 13, and the note "The generator in the abstract, a
@@ -1694,6 +1699,12 @@ numbers; the order is this note's.
     `runner/REFERENCE.md`, a change to one changing every KV fingerprint; the runner is the only
     reproducer of the op set, a run's exported trace the way to analyse it elsewhere. Provisional in
     the contract until a second workload uses it.
+    *Built 2026-11-12, contract 0.16 (`DESIGN_REVIEW.md` §3.99, the note "Chunks named from
+    lineage"):* a timeline's `caches`, a tier keeping every entry or evicting the least recently
+    used past a capacity in entries or bytes, and `lookup`, with the `seq` and `chunk_key` that
+    name a chunk by its prefix (gap 1 of item 71). Not built: LMCache's watermark eviction, a tier
+    of more than one level and promotion, the write policies, vLLM's pool as a tier, the unlinks
+    an eviction issues (item 72 (3)), Dynamo's source read.
 
 76. **Dynamo's block tier (queued by the user 2026-11-10, `DESIGN_REVIEW.md` §3.99 note "The
     generator in the abstract, a shared tier, and events between runners"; not started, not

@@ -4,9 +4,9 @@
   "runs": [
     {
       "ast": "npy_per_sample",
-      "ast_sha256": "ee2be230477b52ead1af9ccba058fe667b2c30de6e17ef7d9a9bba5a6007188d",
+      "ast_sha256": "2a514752ea0864e6a2bb8aac9fb9bd8f97838ad2754593325f39b0716d8e64a8",
       "params": "case.lock.json",
-      "params_sha256": "05c78aa35f4b8fdd15f2f9b73c5540f4a96ab54ede9227a3ead53fa91cee4dda",
+      "params_sha256": "61b1803774fd53e5ed961015ea10221d1f20dd730ca7a7002a96a1f76bf63b01",
       "gpus": 1,
       "seeds": [
         1,

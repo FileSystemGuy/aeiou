@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 
-from .nodes import BuildError, Dist, Draw, Cond, lift, distref
+from .nodes import BuildError, Dist, Draw, Cond, Expr, SeqOp, ast_of, lift, distref
 
 none = None   # the `none` outcome of a mixture arm
 
@@ -126,6 +126,57 @@ def draw(dist) -> Draw:
 def when(test, then, otherwise) -> Cond:
     """Expression conditional. The arms may be expressions, distributions, or handles."""
     return Cond(test, then, otherwise)
+
+
+def fresh(n) -> Expr:
+    """A `seq` of `n` new blocks, new at every position and the same when `@` recomputes them
+    (contract 0.16)."""
+    return SeqOp("fresh", lift(n, "fresh"))
+
+
+def shared(id, n) -> Expr:
+    """A `seq` of the first `n` blocks of shared prefix `id`: the same in every lane, actor, and
+    run, as a system prompt is every session's (contract 0.16)."""
+    return SeqOp("shared", {"id": lift(id, "shared id"), "n": lift(n, "shared n")})
+
+
+def prefix(seq, k) -> Expr:
+    """The first `k` blocks of a `seq` (contract 0.16)."""
+    return SeqOp("prefix", (lift(seq, "prefix"), lift(k, "prefix k")))
+
+
+def cat(a, b) -> Expr:
+    """One `seq` after another (contract 0.16)."""
+    return SeqOp("cat", (lift(a, "cat"), lift(b, "cat")))
+
+
+def seq_len(seq) -> Expr:
+    """The blocks of a `seq` (contract 0.16)."""
+    return SeqOp("seq_len", lift(seq, "seq_len"))
+
+
+def chunk_key(seq, chunk, per) -> Expr:
+    """The key of whole chunk `chunk` of `per` blocks of a `seq`: the chained hash of every
+    block to its end, equal for two sequences exactly when they hold the same blocks up to it
+    (contract 0.16)."""
+    return SeqOp("chunk_key", {"seq": lift(seq, "chunk_key"), "chunk": lift(chunk, "chunk_key chunk"), "per": lift(per, "chunk_key per")})
+
+
+def tier(name: str, evict: str = "none", capacity=None, unit: str = "entries") -> dict:
+    """A tier of a timeline's cache (contract 0.16, rule V33): `none` keeps every entry; `lru`
+    evicts the entry used longest ago while a store would pass `capacity`, in entries or bytes."""
+    if evict not in ("none", "lru"):
+        raise BuildError(f"tier {name!r}: evict is `none` or `lru`, got {evict!r}")
+    if unit not in ("entries", "bytes"):
+        raise BuildError(f"tier {name!r}: unit is `entries` or `bytes`, got {unit!r}")
+    if (evict == "lru") != (capacity is not None):
+        raise BuildError(f"tier {name!r}: `lru` takes a capacity and `none` none (V33)")
+    t = {"name": name, "evict": evict}
+    if capacity is not None:
+        t["capacity"] = ast_of(lift(capacity, f"tier {name} capacity"))
+    if unit != "entries":
+        t["unit"] = unit
+    return t
 
 
 def ceil_div(a, b):

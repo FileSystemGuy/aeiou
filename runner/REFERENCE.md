@@ -209,6 +209,27 @@ each is a recorded decision and the golden tests pin them.
   for each `index` in `0..count`, with a frame for `index` pushed, so its draws are keyed as a
   loop's; the values are held by the body's scope, and `elem` and `len` read them before a
   parameter of that name (V32 refuses the clash).
+- **A `seq` and its chunk keys** (contract 0.16, 2026-11-12, `DESIGN_REVIEW.md` §3.99, `seq.rs`).
+  A block is `(origin, offset)`, two 64-bit integers. `fresh n` gives offsets `0..n` of the
+  origin `position_key(seed, actor, site, indices)`, a draw's key at that node; `shared {id,
+  n}` offsets `0..n` of `labeled_key(0, "shared", [id])`, no seed. A sequence is a tree, a run
+  of one origin's blocks or one sequence after another, shared, never copied; `prefix` builds
+  the nodes right of its cut anew and shares those left of it. The hash of whole chunk `c` of
+  `per` blocks is `h(c) = xxh3_64_with_seed(bytes, h(c − 1))`, `h(−1) = 0`, the bytes each block's
+  origin then offset, little-endian; its key, as `chunk_key` gives it and a cache holds it,
+  `h(c) >> 1` (63 bits, never negative). A node at a sequence's start keeps the hashes of the
+  chunks that end in it and not in its left child, for the first `per` asked; a walk keeps the
+  keys of its last four sequences. Every walk over a tree is a loop, and so is its drop, so a
+  lineage of any length costs no stack.
+- **A timeline's caches and `lookup`** (contract 0.16). A cache's tiers are made when its
+  timeline starts, `capacity` evaluated there, and live in the timeline's shared state, so
+  every lane's `lookup` meets them in planned order. A `lookup` computes its sequence's keys,
+  counts the leading ones held (the hit, bound to `bind`), then takes every key in order:
+  held, it is touched (moved to the most recently used end); not held, it is stored, evicting
+  from the least recently used end while the tier's used capacity plus its size (one entry, or
+  `size` bytes) would pass `capacity`. A store may evict a key the same lookup touched; an entry
+  larger than the whole tier is not stored. The order is a definition: a change to it changes
+  every op set a cache decides. A lookup's binding is refused under an `x @ i` evaluation (V33).
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which

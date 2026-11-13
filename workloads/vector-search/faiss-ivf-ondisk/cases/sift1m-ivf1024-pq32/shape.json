@@ -4,9 +4,9 @@
   "runs": [
     {
       "ast": "faiss_ivf_ondisk",
-      "ast_sha256": "716e3f0afa13670ddb064145263850871bcf3221bf416c3bbd0bfd3369dbe70a",
+      "ast_sha256": "fefe758a228f6964491bfa11d20d235d0cb6290696d2af5fa15c783a9215c0d2",
       "params": "case.lock.json",
-      "params_sha256": "abcd2265f07dbad9529c7c22c2e5ab25cdbe7af721360885facb9f96330c345c",
+      "params_sha256": "4901dc5261332e9f20d6be573192fdbe16773a4bc146644003fa02ec9e5de6c8",
       "gpus": 1,
       "seeds": [
         1,

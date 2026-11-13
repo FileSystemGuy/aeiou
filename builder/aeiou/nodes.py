@@ -342,6 +342,23 @@ class Entry(Expr):
         return {"entry": {"timeline": self.timeline, "index": ast_of(self.index), "key": self.key}}
 
 
+class SeqOp(Expr):
+    """A `seq` expression (contract 0.16): `fresh`, `shared`, `prefix`, `cat`, `seq_len`,
+    `chunk_key`."""
+    __slots__ = ("kind", "args")
+
+    def __init__(self, kind: str, args):
+        self.kind, self.args = kind, args
+
+    def ast(self):
+        a = self.args
+        if self.kind in ("fresh", "seq_len"):
+            return {self.kind: ast_of(a)}
+        if isinstance(a, dict):
+            return {self.kind: {k: ast_of(v) for k, v in a.items()}}
+        return {self.kind: [ast_of(x) for x in a]}
+
+
 class At(Expr):
     __slots__ = ("name", "index")
 

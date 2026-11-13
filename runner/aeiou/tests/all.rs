@@ -30,3 +30,4 @@ mod applications;
 mod trace_tool;
 mod usage;
 mod timeline;
+mod seqcache;

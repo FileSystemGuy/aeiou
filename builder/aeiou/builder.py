@@ -239,7 +239,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.15"
+    AST_VERSION = "0.16"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -882,16 +882,26 @@ class Cursor:
             yield Sub(self, idx)
 
     @contextlib.contextmanager
-    def timeline(self, name: str):
+    def timeline(self, name: str, caches: dict | None = None):
         """Lanes planned together (contract 0.15, rule V30): this body's main line and every
         sub-actor of a `parallel` in it, each with a planned clock that `compute` moves; the
         lane planned soonest takes the next step. Yields the timeline, whose `published` and
-        `entry(n, key)` read what its lanes published before the step being walked."""
+        `entry(n, key)` read what its lanes published before the step being walked. `caches`
+        (contract 0.16, rule V33) maps a cache's name to its tiers (`tier(...)`), walked with
+        the lanes in planned order and read by `lookup`."""
         check_ident(name, "timeline")
         if any(f.kind == "timeline" for f in self._frames):
             raise BuildError(f"timeline {name!r} inside a timeline (V30)")
         body: list = []
-        self._emit({"timeline": {"name": name, "body": body}})
+        node = {"name": name}
+        if caches:
+            for c, tiers in caches.items():
+                check_ident(c, "cache")
+                if not tiers:
+                    raise BuildError(f"cache {c!r} has no tiers (V33)")
+            node["caches"] = [{"name": c, "tiers": list(tiers)} for c, tiers in caches.items()]
+        node["body"] = body
+        self._emit({"timeline": node})
         with self._push(body, "timeline"):
             yield Timeline(name)
 
@@ -902,6 +912,22 @@ class Cursor:
             raise BuildError("publish: no values")
         self._emit({"publish": {"timeline": name, "values": {
             check_ident(k, "entry key"): ast_of(lift(v, f"publish {k}")) for k, v in values.items()}}})
+
+    def lookup(self, cache: str, tier: str, seq, per, bind: str, size=None) -> Ref:
+        """The longest run of `seq`'s leading whole chunks of `per` blocks held in `tier` of
+        `cache` of the enclosing timeline, bound to `bind`; every chunk then touched in order,
+        those not held stored (contract 0.16, rule V33). `size`, one chunk's bytes, exactly when
+        the tier counts bytes. Returns the binding, which `@` and `prev` may not read."""
+        check_ident(bind, "binding")
+        if not any(f.kind == "timeline" for f in self._frames):
+            raise BuildError(f"lookup: no timeline declares cache {cache!r} around it (V33)")
+        node = {"cache": check_ident(cache, "cache"), "tier": check_ident(tier, "tier"),
+                "seq": ast_of(lift(seq, "lookup seq")), "per": ast_of(lift(per, "lookup per")), "bind": bind}
+        if size is not None:
+            node["size"] = ast_of(lift(size, "lookup size"))
+        self._emit({"lookup": node})
+        self._top.bindings[bind] = None
+        return Ref(bind)
 
     def array(self, name: str, count, index: str, value) -> "ArrayRef":
         """`count` values computed once, here, each with `index` bound as a loop index (so its

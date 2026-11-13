@@ -128,6 +128,13 @@ function of the index, returning an array read by `arr[k]` and `arr.len` (V32); 
 `c.ref(x).prev(init)`, the value `x` took in the previous iteration of its loop (V31). The
 builder refuses at construction what it can see (a timeline in a timeline, `join=False`
 outside one, an array in a loop or named as a parameter); `check.py` the rest.
+Since contract 0.16 (the same day, brief item 75, provisional likewise): the `seq` functions
+`fresh(n)`, `shared(id, n)`, `prefix(s, k)`, `cat(a, b)`, `seq_len(s)`, and `chunk_key(s, chunk,
+per)` (a sequence is not a number: `+` on one is refused by V27, use `cat`);
+`c.timeline(name, caches={"lm": [tier("disk", "lru", capacity=..., unit="bytes"), ...]})`, a
+`tier(name, evict="none"|"lru", capacity=None, unit="entries"|"bytes")` checked as it is made;
+and `c.lookup(cache, tier, seq, per, bind, size=None)`, returning the binding of the leading
+chunks held (V33). The builder refuses a `lookup` outside a timeline and a cache without tiers.
 
 **Expressions**: node arithmetic (`+ - * // %`, `ceil_div`, `min_`, `max_`, `-x`), comparisons
 (`== != < <= > >=`), `&`, `|`, `~`, `when(test, a, b)` (arms may be expressions, distributions,

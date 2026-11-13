@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.15";
+pub const AST_VERSION: &str = "0.16";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -333,6 +333,34 @@ pub enum ExprNode {
     /// The value the `let` `ref` took in the previous iteration of its loop, `init` in the
     /// first (contract 0.15, rule V31).
     Prev { #[serde(rename = "ref")] name: String, init: Expr },
+    /// `n` new blocks, their origin the position of this node (contract 0.16, a `seq`).
+    Fresh(Fresh),
+    /// The first `n` blocks of the prefix named `id`, the same in every lane, actor, and run.
+    Shared { id: Expr, n: Expr },
+    /// The first `k` blocks of a `seq`.
+    Prefix([Expr; 2]),
+    /// One `seq` after another.
+    Cat([Expr; 2]),
+    /// The blocks of a `seq`.
+    SeqLen(Expr),
+    /// The key of whole chunk `chunk` of `per` blocks: the chained hash of every block to its end.
+    ChunkKey { seq: Expr, chunk: Expr, per: Expr },
+}
+
+/// `fresh`: new blocks at a position. `site` is the hash of the node's JSON pointer, as a
+/// draw's.
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+pub struct Fresh {
+    pub n: Expr,
+    #[serde(skip)]
+    pub site: Site,
+}
+
+impl Clone for Fresh {
+    fn clone(&self) -> Self {
+        Fresh { n: self.n.clone(), site: self.site.clone() }
+    }
 }
 
 /// A positional draw. `site` is the hash of the node's JSON pointer, filled after loading.
@@ -871,11 +899,14 @@ pub enum Node {
     Phase { name: Expr, body: Body },
     Trace { file: String, sha256: String },
     /// Lanes planned together, taken in planned order (contract 0.15, rule V30).
-    Timeline { name: String, body: Body },
+    Timeline { name: String, #[serde(default)] caches: Vec<CacheDecl>, body: Body },
     /// An entry of the named timeline: these values at this lane's planned time (rule V30).
     Publish { timeline: String, values: std::collections::BTreeMap<String, Expr> },
     /// `count` values computed once, each with `index` bound as a loop's (rule V32).
     Array { name: String, count: Expr, index: String, value: Expr },
+    /// The longest run of `seq`'s leading chunks found in a tier of a cache of the enclosing
+    /// timeline, bound to `bind`; those touched, the rest stored (contract 0.16, rule V33).
+    Lookup { cache: String, tier: String, seq: Expr, per: Expr, bind: String, #[serde(default)] size: Option<Expr> },
 
     Open { file: Handle, flags: Vec<OpenFlag>, #[serde(default)] mode: Option<u32>, #[serde(default)] expect: Expect },
     Close(FileOp),
@@ -918,6 +949,7 @@ impl Node {
             Node::Timeline { .. } => "timeline",
             Node::Publish { .. } => "publish",
             Node::Array { .. } => "array",
+            Node::Lookup { .. } => "lookup",
             Node::Open { .. } => "open",
             Node::Close(_) => "close",
             Node::Read { .. } => "read",
@@ -946,9 +978,50 @@ impl Node {
             Node::Let { .. } | Node::Loop { .. } | Node::Parallel { .. } | Node::Channel { .. } | Node::Put { .. }
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
                 | Node::Cond { .. } | Node::Choose { .. } | Node::Phase { .. } | Node::Trace { .. }
-                | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. }
+                | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. } | Node::Lookup { .. }
         )
     }
+}
+
+/// The definition a `lookup`'s binding stands on, for the walks that keep one a binding: it
+/// has no `let`.
+pub static LOOKUP_DEF: ExprLike = ExprLike::Expr(Expr::Lit(Literal::Int(0)));
+
+/// A cache of a timeline (contract 0.16, rule V33): its tiers, walked in planned order.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheDecl {
+    pub name: String,
+    pub tiers: Vec<TierDecl>,
+}
+
+/// A tier of a cache: what it evicts, and over what capacity.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TierDecl {
+    pub name: String,
+    pub evict: Evict,
+    #[serde(default)]
+    pub capacity: Option<Expr>,
+    #[serde(default)]
+    pub unit: TierUnit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Evict {
+    /// Nothing evicted: every entry kept.
+    None,
+    /// The entry used longest ago evicted first.
+    Lru,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TierUnit {
+    #[default]
+    Entries,
+    Bytes,
 }
 
 /// Load an AST from JSON text: structural checks only. Semantic rules are `validate::check`.

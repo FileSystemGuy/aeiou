@@ -351,6 +351,8 @@ pub enum Value<'a> {
     Dist(&'a Dist),
     Array(&'a [PValue]),
     Handle(HVal),
+    /// A sequence of blocks (contract 0.16).
+    Seq(Arc<crate::seq::Seq>),
 }
 
 /// A resolved handle: what a `consume`, `pick`, `file`, `dir`, or `object` names.
@@ -389,6 +391,7 @@ impl<'a> Value<'a> {
             Value::Dist(_) => "dist",
             Value::Array(_) => "array",
             Value::Handle(_) => "handle",
+            Value::Seq(_) => "seq",
         }
     }
 
@@ -1557,7 +1560,7 @@ pub(crate) mod tests {
     fn dataset(n: i64, spf: i64, format: &str) -> String {
         format!(
             r#"{{
-  "ast": "0.15", "name": "geom_test",
+  "ast": "0.16", "name": "geom_test",
   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": {n}, "samples_per_file": {spf},
      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
   "actors": {{"gpu": {{"body": [
