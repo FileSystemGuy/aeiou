@@ -12057,6 +12057,38 @@ read, write, and unlink, request by request, at two seeds and a G2 near its boun
   is the same tier shared by a domain's engines, each engine's LMCache accounting only its own
   stores (the note of 2026-11-10), which item 72 (5)'s domains decide.
 
+*The user's answers (2026-11-13).*
+- **Every tier has a fixed size.** ~~Without one it only grows between ticks (G3, whose
+  `max_capacity_gb` is a parameter the `when` names).~~ A real G3, G3.5, or G4 may be present or not
+  but is never infinite: the WG fixes every tier's capacity, 0 for a tier absent, for example
+  G1 180 GiB, G2 490 GiB, G3 7.68 TiB, G3.5 0, G4 1 PiB. So every timed tier has a `capacity` the
+  `when` compares against, and `full` answers a store past it between ticks on every tier, G3's
+  included (LMCache's G3 has no bound of its own past `max_capacity_gb`'s trigger; the device's size
+  is the bound).
+- **Q1: expressions**, as recommended.
+- **Q2: the fixed grid**, as recommended, with one addition: an eviction batch's unlinks that run past
+  their tick are not hidden. The eviction lanes are lanes like any other, `launch = plan + L` with L
+  their inherited lag, never shrinking (item 72 (7)); a batch still running at the next tick makes
+  the next batch launch late by the overage, so slow unlinks show as the eviction lanes' L, reported
+  with the run's other lags. (The user recalled "D"; in item 72 (7) D is a request's own storage
+  wait and L a lane's inherited lag, and an eviction lane has no request, so its overage is its L.)
+  Item 72 (7) already makes "an eviction batch past the next trigger a failure"; whether that stays a
+  failure or becomes a reported L is not yet asked.
+- **Q3: as LMCache does**: the eviction lanes are the connector's workers, `lanes` a parameter (4 in
+  0.5.5).
+- **Q4: `probe`, `touch`, and `store` added.**
+- **Q5: a planned drop** is the higher-fidelity model, and the user prefers it: a dropped store is a
+  chunk that never reaches G2 or G3 (LMCache's store loop copies G2 to G3, so a chunk dropped from G2
+  is stored nowhere), so a later request misses it and the GPU recomputes it, costly when the GPU is
+  saturated, a non-linear effect worth having; on the backlog if costly to build. Assessed: cheap.
+  0.18's `full: skip` already plans the drop; what is new is that `store` binds the count of
+  leading chunks it stored, so the abstract stores in G3 only what G2 took, and the recompute is
+  then already modelled: a later request's prefill compute is planned from the tokens past its
+  hits, and the slots' queue (0.18's resource) turns saturation into waiting. The drop is decided
+  in planned time (G2's planned stores against its planned ticks), within the rule that a `skip`
+  is only for a capacity the plan fixes; a real run's drops, which follow real timing, stay a gate
+  failure (item 72 (7)). So G2's `full` is `skip`, not `fail`, in 0.19.
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes
