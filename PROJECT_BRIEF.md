@@ -1684,7 +1684,12 @@ numbers; the order is this note's.
     backlog and the eviction backlog in the series, each eviction batch's duration and overage
     past the next batch's planned start, the lag line with no lane. The user kept a would-be
     drop a gate failure, to revisit if too many systems cannot get a valid run for occasional
-    latency spikes. Next: `lmcache_local_disk` and its four cases retired.
+    latency spikes. ~~Next: `lmcache_local_disk` and its four cases retired.~~ *Retired the same
+    day* (the addendum "The slot model retired", the user's choices): the slot model and its four
+    cases removed, their eight captures kept as the kit's evidence (`kit/captures/`, outside the
+    catalog, the fits as `fitted.json`), the kit whole; the tests that ran it run
+    `lmcache_shared_fs` or hold the tiered abstract's chunk calls to the captures' call shapes.
+    The build order of (7) is done.
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the

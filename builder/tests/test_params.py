@@ -135,18 +135,18 @@ def test_given_values_are_judged_as_the_runner_judges_them(tmp_path):
         "`div files_per_directory` is 0: it needs a positive divisor")
     assert params.check(ast, {**base, "params": v2({"files_per_directory": 7})}) == []
     # V3: a reuse distance whose given arm reaches 0 makes `x @ r - reuse` name the binding being defined
-    ast, sha = _ast("lmcache_local_disk")
+    ast, sha = _ast("lmcache_shared_fs")
     reuse = {"mixture": [{"weight": 0.15, "dist": None}, {"weight": 0.85, "dist": {"const": 0}}]}
-    errs = params.check(ast, {**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": reuse})})
-    assert errs and all(e.startswith("params: invalid with the parameters given: lmcache_local_disk: actors/") for e in errs)
+    errs = params.check(ast, {**base, "abstract": "lmcache_shared_fs", "params": v2({"reuse": reuse})})
+    assert errs and all(e.startswith("params: invalid with the parameters given: lmcache_shared_fs: actors/") for e in errs)
     assert any("`kind @` names a binding of this loop body, so its index must be" in e and "provably >= 1" in e for e in errs)
     # the distance its defaults held until 2026-10-23 (required since; its unsettled case chat-64-slots)
     old = {"mixture": [{"weight": 0.15, "dist": None}, {"weight": 0.85, "dist": {"const": 40}}]}
-    assert params.check(ast, {**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": old})}) == []
+    assert params.check(ast, {**base, "abstract": "lmcache_shared_fs", "params": v2({"reuse": old})}) == []
     # and the command says so, exit 1
     f = tmp_path / "reuse.params.json"
-    f.write_text(json.dumps({**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": reuse})}))
-    r = _run(["check", ast_path("lmcache_local_disk"), f])
+    f.write_text(json.dumps({**base, "abstract": "lmcache_shared_fs", "params": v2({"reuse": reuse})}))
+    r = _run(["check", ast_path("lmcache_shared_fs"), f])
     assert r.returncode == 1 and r.stdout.startswith("FAIL reuse.params.json") and "`kind @`" in r.stdout
 
 

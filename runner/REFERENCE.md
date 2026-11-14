@@ -11,7 +11,7 @@ cargo build --release
 cargo test --release
 ./target/release/aeiou check $(find ../workloads -name '*.ast.json')
 ./target/release/aeiou dry-run --case jpeg-50m --workloads ../workloads --gpus 8 --seed 1
-./target/release/aeiou dry-run ../workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json --gpus 1 \
+./target/release/aeiou dry-run --case chat-64-slots --workloads ../workloads --case-run lmcache_shared_fs --gpus 1 \
     --param concurrency=2 --param requests=20 --gpu 0 --steps 1..2 --limit 50
 ./target/release/aeiou datagen --case jpeg-50m --workloads ../workloads --root /mnt/sut --param samples=4000
 ./target/release/aeiou run --case jpeg-50m --workloads ../workloads --root /mnt/sut --gpus 8 --seed 1 \
@@ -1641,7 +1641,8 @@ the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.m
 - **Refusals.** `--aio-depth` without a `libaio` backend and `--mmap-mode` or
   `--mmap-consume` without `mmap` are refused, like the ring knobs under `sync`. There is no `mmap-direct`.
 - **Tests** (`tests/run.rs`). `file_per_sample` under all nine backends; the
-  `lmcache_local_disk`, `diskann_search`, and `dcp_save` (since 2026-10-01 with `hdr` and
+  ~~`lmcache_local_disk`~~ `lmcache_shared_fs` (since 2026-11-14, its header `meta_bytes` 4096 under
+  the direct backends), `diskann_search`, and `dcp_save` (since 2026-10-01 with `hdr` and
   `trailer` set to 4096, the traced values being unaligned) runs of the `io_uring` test
   under the five new ones (`libaio` on one loop and on three, barriers through the poll,
   write-then-read-back through a mapping made after the write), and the three `mmap`

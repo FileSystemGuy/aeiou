@@ -533,8 +533,10 @@ written in the abstract; rule V35. ~~Not yet written with them: the KV abstract'
 Written with them (2026-11-13, the user's choices): `lmcache_local_disk_tiered`, beside
 `lmcache_local_disk` in its mechanism, the AgentX session generator (`kit/agentx.py sessions`)
 on one engine with G1, G2, and G3 at the WG's example sizes and the in-process connector's traced
-chunk calls, its case `agentx-tiered` unsettled and dry-run only until item 72 (7); the older
-abstract and its four cases stay runnable until then. Its G1 and G2 issue no ops, only G3 does;
+chunk calls, its case `agentx-tiered` unsettled ~~and dry-run only until item 72 (7); the older
+abstract and its four cases stay runnable until then~~, run since item 72 (7); the older
+abstract (the slot model) and its four cases retired 2026-11-14, their captures kept as the
+kit's evidence (`kit/captures/`). Its G1 and G2 issue no ops, only G3 does;
 G3 and G4 active together in one abstract is queued (brief item 78).
 Contract 0.20 (2026-11-13, the first step of item 72 (7)'s run side, `DESIGN_REVIEW.md` §3.99, the
 note "The run side of timelines"): a timeline's store `workers`, `submit`, a body run on a worker
@@ -560,8 +562,9 @@ eviction batches), its peaks and the edge waits in the reports, with each worker
 and each eviction batch's duration and overage past the next batch's planned start;
 `--emit-trace` writes a timeline's ops at their planned times, each executor lane a lane. Not yet
 in the series: the tiers' capacity held. `agentx-tiered` ran on a local disk at one session
-(2026-11-14, valid, its fingerprint dry-run's, no G3 reads at a size a local disk holds); next:
-`lmcache_local_disk` retired.
+(2026-11-14, valid, its fingerprint dry-run's, no G3 reads at a size a local disk holds); ~~next:
+`lmcache_local_disk` retired~~ then `lmcache_local_disk`, the slot model, and its four cases
+retired (2026-11-14), the mechanism's captures kept in its kit, outside the catalog.
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

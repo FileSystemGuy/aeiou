@@ -12498,6 +12498,45 @@ drop reported with the recompute it would have caused, computed after the run fr
 revisited if the cost proves too high, too many storage systems unable to get a valid run because
 latency occasionally spikes.)
 
+*The slot model retired (2026-11-14; the user's "proceed with the retirement" and choices the same
+day).* The build order's last step: `lmcache_local_disk` (the slot model, `keep` and `retain` drawn,
+no timeline; from 2026-09-30, its last AST hash `9b6a8fd0…`, fingerprint at tests/golden.rs's
+configuration `9f7017e7011639d5`) and its four cases, `sharegpt-chat`, `agentx`, `agentx-odirect`,
+and `chat-64-slots`, removed; `lmcache_local_disk_tiered` is the mechanism's one abstract. The last
+commit holding them is `274b578`. Two choices, put to the user with a recommendation each and taken
+as recommended:
+- *The captures kept as the kit's evidence.* The cases held eight captures of vLLM with LMCache (the
+  ShareGPT replay and the AgentX replays at 2 and 6 GiB, buffered and `O_DIRECT`, each under the
+  eBPF source and strace): the evidence for the tiered abstract's chunk calls, and the inputs of
+  the kit's tests. The catalog judges a capture only against an abstract its case runs, and the
+  tiered abstract's planned-time sessions would not match an 8-session replay's counts, so they
+  moved to `kit/captures/<case>/<capture>/`, outside the catalog, no pair judged, each
+  `capture.toml` recording the pair it was judged as. Every fit beside them is `fitted.json` (a
+  case's `params.json` and a capture's `fitted.params.json` renamed), since every `*params.json`
+  under `workloads/` is checked against the abstract it names. Deleting them, git history keeping
+  them, would have left the tiered abstract with no evidence in the tree until item 74's capture.
+- *The kit whole.* `fit.py` and `agentx.py`'s `fit`, `holds`, `simulate`, and `reference` fit the
+  retired abstract and stay with their tests: `simulate` is vLLM's prefix cache, against which the
+  runner's G1 tier was checked (the note "Tiers as general pieces"), and item 74's `fs_native`
+  capture will want `replayed` and the replay scripts. Pruning to `agentx.py sessions` would have
+  rewritten a 947-line file now for parts item 74 may want back.
+
+What moved with it: the runner tests that ran the slot model on a chunked dataset, parallel slots,
+a namespace, endpoints, and every backend (tests/run.rs) run `lmcache_shared_fs`, the same
+structure, its header page-sized under the direct backends (the traced 28 bytes are not aligned);
+tests/layout.rs's chunked progress and tests/golden.rs's V3 check of given parameters the same;
+the golden hash and fingerprint and the metrics walk's row dropped, recorded in their comments; the
+shared store's case is the one `chat-64-slots` (tests/cases.rs), and `aeiou cases four-items` the
+ambiguous name (tests/listing.rs). In builder/tests/test_trace.py the runner-under-strace test
+runs `lmcache_shared_fs`; the ShareGPT and `O_DIRECT` trace tests became one test of the tiered
+abstract's chunk calls against the four captures' call shapes (buffered: an open, fstat, ioctl,
+lseek, and close per data call; `O_DIRECT`: an open and close per data call and an fstat per
+read, no ioctl or lseek), counts not compared (other loads); the corpus-accounting and side-run
+tests, which dry-ran the retired abstract alone, removed (what they checked, the slot model's
+stores and loads against the corpus and its side runs, went with it); the fit and replay-log
+tests read the kit's captures. The tiered and shared-store scripts' docstrings say so; their AST
+hashes are unchanged.
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes

@@ -67,7 +67,9 @@ The reader's namespace is declared `same_run` (contract 0.4): `aeiou run` refuse
 reader unless its `--seed`, `--gpus`, and parameters are the writer's.
 
 The case's `writer.params.json` and `reader.params.json` hold the same values, the ones of
-`../lmcache-local-disk/cases/sharegpt-chat/params.json` plus `meta_bytes` (the buffer is the
+~~`../lmcache-local-disk/cases/sharegpt-chat/params.json`~~
+`../lmcache-local-disk/kit/captures/sharegpt-chat/fitted.json` (since 2026-11-14, when its case was
+retired with the slot model) plus `meta_bytes` (the buffer is the
 store's `st_blksize` since 2026-10-23, contract 0.12, 1 MiB on the traced NFS mount): `fit.py` on the
 writer's two logs gives the serving run's values exactly (the same requests, and the engine
 held the same of each).

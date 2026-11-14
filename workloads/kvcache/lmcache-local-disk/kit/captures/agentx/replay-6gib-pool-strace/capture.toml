@@ -11,5 +11,5 @@ raw_trace = "not retained"   # the metrics and the trace's capture record (trace
 [[pair]]
 trace = "trace"   # trace.metrics.json
 ast = "lmcache_local_disk"
-params = "fitted.params.json"   # in this directory; else the case's run of this AST
+params = "fitted.json"   # in this directory; else the case's run of this AST
 verdict = "accepted"

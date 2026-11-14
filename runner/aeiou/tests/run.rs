@@ -169,8 +169,8 @@ const KV_KEEP: &str = r#"{"empirical": {"values": [0, 50, 100], "weights": [1, 1
 #[test]
 fn kv_cache_chunked_dataset_parallel_slots_and_namespace() {
     let root = tmpdir("kv");
-    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
-    let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(1, 5, &crate::common::lmcache(&params)));
+    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("buf", "65536"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
+    let (loaded, cfg, model) = leaked_model("lmcache_shared_fs", config(1, 5, &crate::common::lmcache(&params)));
     gen(loaded, cfg, model, &root);
     // the chunked files exist: kv/sys/0000/blk_0000 …
     assert!(root.join("kv/sys/0000/blk_0000").exists());
@@ -195,8 +195,8 @@ fn endpoints_place_a_dataset_and_a_namespace_apart_from_the_root() {
     let base = tmpdir("kvplace");
     let (root, sys, kv) = (base.join("root"), base.join("sys"), base.join("kv"));
     std::fs::create_dir_all(&root).unwrap();
-    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
-    let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(1, 5, &crate::common::lmcache(&params)));
+    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("buf", "65536"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
+    let (loaded, cfg, model) = leaked_model("lmcache_shared_fs", config(1, 5, &crate::common::lmcache(&params)));
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &[format!("sysp={}", sys.display()), format!("kv={}", kv.display())]).unwrap();
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let dopts = DatagenOpts { root: root.clone(), endpoints: endpoints.clone(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
@@ -212,7 +212,7 @@ fn endpoints_place_a_dataset_and_a_namespace_apart_from_the_root() {
     let (fp, ops, _) = dry_fingerprint(model);
     let r = go(model, o);
     assert_eq!((r.stats.fingerprint, r.stats.ops), (fp, ops));
-    let chunks = std::fs::read_dir(&kv).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".pt")).count();
+    let chunks = std::fs::read_dir(&kv).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".data")).count();
     assert!(chunks > 0, "the namespace's chunks are written at its endpoint");
     assert!(!root.join("kv").exists());
 }
@@ -440,8 +440,8 @@ fn io_uring_reproduces_the_sync_runs() {
     // dry run's exactly, on one loop and on several.
     for threads in [1usize, 3] {
         let root = tmpdir("uring-kv");
-        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
-        let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(2, 5, &crate::common::lmcache(&params)));
+        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("buf", "65536"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
+        let (loaded, cfg, model) = leaked_model("lmcache_shared_fs", config(2, 5, &crate::common::lmcache(&params)));
         gen(loaded, cfg, model, &root);
         run::check_datasets(loaded, cfg, &root).unwrap();
         run::prepare_namespaces(&loaded.ast, &root, false).unwrap();
@@ -449,7 +449,7 @@ fn io_uring_reproduces_the_sync_runs() {
         let mut o = opts(&root, BackendKind::Uring);
         o.threads = threads;
         let r = go(model, o);
-        assert_eq!(r.stats.fingerprint, fp, "lmcache_local_disk on {threads} loop(s)");
+        assert_eq!(r.stats.fingerprint, fp, "lmcache_shared_fs on {threads} loop(s)");
         assert_eq!(r.stats.ops, ops);
         assert_eq!(r.stats.bytes_read, bytes);
         assert_eq!(r.stats.threads as usize, threads.min(2), "loop threads, not actors");
@@ -505,8 +505,9 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
     let looped = [BackendKind::LibAio, BackendKind::LibAioDirect];
     {
         let root = tmpdir("more-kv");
-        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
-        let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(2, 5, &crate::common::lmcache(&params)));
+        // a header of a page (the traced 28 bytes are not aligned, and a direct backend refuses such writes)
+        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("buf", "65536"), ("meta_bytes", "4096"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
+        let (loaded, cfg, model) = leaked_model("lmcache_shared_fs", config(2, 5, &crate::common::lmcache(&params)));
         gen(loaded, cfg, model, &root);
         let (fp, ops, bytes) = dry_fingerprint(model);
         for backend in blocking.into_iter().chain(looped) {

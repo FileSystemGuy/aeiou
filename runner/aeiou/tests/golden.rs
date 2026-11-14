@@ -64,10 +64,8 @@ fn hashes_match_check_py() {
         // 2026-10-23: the job's and the GPU's values required (its unsettled case four-items), `buf` and `xfer`
         // the st_blksize of its namespace (contract 0.12), DESIGN_REVIEW §3.78
         ("dcp_save", "77f735a67ac9fde41df59a5175bbec9e8a51843e918878f4dfb91468f14342f5"),
-        // 2026-10-23: the model's on its GPU, the deployment's, and the load's values required (its unsettled case
-        // chat-64-slots), DESIGN_REVIEW §3.78; 2026-11-06 for the side runs, `side`, `side_lanes`, `side_kind`, and
-        // `side_turns`, drawn after every other draw and read only where `reuse` is 1, every fingerprint unchanged (§3.64)
-        ("lmcache_local_disk", "9b6a8fd06dc4d739044a3588c84b0f534e4afa4dd4f62fdf402ac53bc95add00"),
+        // lmcache_local_disk, here from 2026-09-30, retired 2026-11-14 with its four cases (DESIGN_REVIEW §3.99, the
+        // addendum "The slot model retired"): its last hash 9b6a8fd06dc4d739044a3588c84b0f534e4afa4dd4f62fdf402ac53bc95add00
         // 2026-10-23: the model's shards and tensor table and the deployment's tp required (its unsettled case
         // five-tensors), DESIGN_REVIEW §3.78
         ("safetensors_load", "cc1adbd3e880cbcdc7f5894dd685d068e1da097c5724ffffd08bcdcdd195e006"),
@@ -161,7 +159,7 @@ fn golden_fingerprints() {
         // before the conversation and system-prompt picks move their sites, so a seed draws other prompts (the fitted
         // files, whose system prompts have one size, keep their counts); re-recorded 2026-10-07 (§3.63): the pick inside
         // `sys_per_slot`'s `when` moves its site again, the same way (with one prompt size the op counts are unchanged)
-        ("lmcache_local_disk", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x9f7017e7011639d5, 1590),
+        // (lmcache_local_disk: 0x9f7017e7011639d5, 1,590 ops, until it was retired 2026-11-14, §3.99)
         // the same request stream on LMCache's fs:// backend, and the cold engine on the store it leaves (2026-10-02, §3.52)
         ("lmcache_shared_fs", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc7d83399ee6948bc, 3417),
         ("lmcache_shared_fs_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x382dba518a89c85f, 2986),
@@ -173,7 +171,7 @@ fn golden_fingerprints() {
     ];
     for (name, gpus, params, fp, ops) in cases {
         let text = std::fs::read_to_string(crate::common::workload_ast(name)).unwrap();
-        // the LMCache abstracts at the values their defaults held until 2026-10-23 (their unsettled cases chat-64-slots)
+        // the LMCache abstracts at the values their defaults held until 2026-10-23 (the shared store's unsettled case chat-64-slots)
         let params = if name.starts_with("lmcache") { crate::common::lmcache(params) } else { params.to_vec() };
         let cfg = config(*gpus, 1, &params);
         let r1 = dry(&text, &cfg, 1);
@@ -673,7 +671,7 @@ fn validator_rejects_what_check_py_rejects() {
 /// parameters in effect are held to the same rule (§3.57), before anything is evaluated.
 #[test]
 fn parameters_given_are_held_to_the_at_rule() {
-    let text = std::fs::read_to_string(crate::common::workload_ast("lmcache_local_disk.ast.json")).unwrap();
+    let text = std::fs::read_to_string(crate::common::workload_ast("lmcache_shared_fs.ast.json")).unwrap();
     let loaded = aeiou::load_str(&text).unwrap();
     let small = [("concurrency", "1"), ("warm", "0"), ("requests", "20")];
     let with = |reuse: &str| {

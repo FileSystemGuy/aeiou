@@ -200,9 +200,9 @@ fn cases_name_shows_one_and_how_to_run_it() {
 /// `mechanism/case`; none with the names near it and the listing that has them all.
 #[test]
 fn cases_name_refuses_none_and_several() {
-    let (code, _, err) = aeiou(&["cases", "chat-64-slots"]);
+    let (code, _, err) = aeiou(&["cases", "four-items"]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("chat-64-slots: 2 cases match (lmcache-local-disk/chat-64-slots, lmcache-shared-fs/chat-64-slots): name it as mechanism/case"), "{err}");
+    assert!(err.contains("four-items: 2 cases match (dcp-load/four-items, dcp-save/four-items): name it as mechanism/case"), "{err}");
     let (code, _, err) = aeiou(&["cases", "sift1m-nocach"]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("sift1m-nocach: no case of that name; near it: diskann-search/sift1m-nocache"), "{err}");

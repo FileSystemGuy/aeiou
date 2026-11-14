@@ -22,12 +22,12 @@ LMCache's own `LRUEvictionPolicy` driven by the walk's planned events (DESIGN_RE
 addendum "Built", seven configurations).
 
 The calls on a chunk file are those traced under LMCache's in-process connector (2026-10-02, the
-`lmcache_local_disk` abstract beside this one): Python's `open` around one `read` or one `write`,
+slot-model abstract `lmcache_local_disk`, retired 2026-11-14, its captures in `kit/captures/`): Python's `open` around one `read` or one `write`,
 or the `O_DIRECT` path; an eviction is one `unlink`. LMCache's multi-process `fs_native` adapter,
 the mechanism's target (brief item 70), is not yet captured (item 74); its calls replace these then.
 
-Not built yet: `aeiou run` refuses a timeline until brief item 72 (7) is built, so this abstract
-is checked and dry-run only; its case is `unsettled`. Sessions arrive uniformly over `window_s`
+`aeiou run` runs it since brief item 72 (7) (2026-11-13/14); its case is `unsettled`. Not built yet:
+sessions arrive uniformly over `window_s`
 (the WG's ramp, item 72 (1), is not yet written); a session's service time is the corpus's
 measured `api_time`, not a model of prefill and decode on an accelerator (item 70).
 """

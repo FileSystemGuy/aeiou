@@ -527,13 +527,13 @@ def _run_cli(args, cwd=BUILDER):
 
 
 def test_hermetic_build_twice(tmp_path):
-    script = ast_path("lmcache_local_disk").parent / "lmcache_local_disk.py"
+    script = ast_path("lmcache_shared_fs").parent / "lmcache_shared_fs.py"
     r = _run_cli(["--hermetic", "--twice", "-o", tmp_path, script])
     assert r.returncode == 0, r.stderr
-    out = emit.load(tmp_path / "lmcache_local_disk.ast.json")
+    out = emit.load(tmp_path / "lmcache_shared_fs.ast.json")
     assert out["provenance"]["built_twice_identical"] is True
     assert out["provenance"]["ast_sha256"] == emit.sha256(out)
-    assert out["provenance"]["generator"]["script"] == "lmcache_local_disk.py"
+    assert out["provenance"]["generator"]["script"] == "lmcache_shared_fs.py"
 
 
 @pytest.mark.parametrize("poison, needle", [

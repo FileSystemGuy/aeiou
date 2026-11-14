@@ -623,18 +623,24 @@ records, `capture.toml`, §8; the reasons are in each pair's tolerance file):
 | `dcp_load`, three traces | accepted | |
 | `diskann_search`, with and without the node cache | accepted | depth not judged (no `--chain-gap-us`) |
 | `diskann_build` | not accepted, 9 rows | run-length histograms (unmodeled small files and headers), write-after-write (a header puts the stream's writes off block boundaries), two reuse distances (cause not isolated) |
-| `lmcache_local_disk` | accepted | fan-out unseen (a thread pool); the reuse distance of the reads was outside until `keep` was drawn once per round of conversations (`DESIGN_REVIEW.md` §3.57; 1 row before, 6 before the ShareGPT replay, §3.56) |
-| `lmcache_local_disk`, AgentX replay at 2 GiB of engine KV | not accepted, 4 rows | each with its reason in the capture's tolerance file (`DESIGN_REVIEW.md` §3.63) |
-| `lmcache_local_disk`, AgentX replay at 6 GiB | accepted | (§3.64) |
-| `lmcache_local_disk`, AgentX replay with LMCache's `use_odirect` | not accepted | the read-after-write distance (the server's admission order) |
+| ~~`lmcache_local_disk`~~ | ~~accepted~~ | ~~fan-out unseen (a thread pool); the reuse distance of the reads was outside until `keep` was drawn once per round of conversations (`DESIGN_REVIEW.md` §3.57; 1 row before, 6 before the ShareGPT replay, §3.56)~~ |
+| ~~`lmcache_local_disk`, AgentX replay at 2 GiB of engine KV~~ | ~~not accepted, 4 rows~~ | ~~each with its reason in the capture's tolerance file (`DESIGN_REVIEW.md` §3.63)~~ |
+| ~~`lmcache_local_disk`, AgentX replay at 6 GiB~~ | ~~accepted~~ | ~~(§3.64)~~ |
+| ~~`lmcache_local_disk`, AgentX replay with LMCache's `use_odirect`~~ | ~~not accepted~~ | ~~the read-after-write distance (the server's admission order)~~ |
 | `lmcache_shared_fs`, writer | not accepted, 1 row | the distance from a file's header write to its chunk write (two store threads); run length and fan-out unseen (a thread pool); 2 rows before §3.57, 7 before the replay |
 | `lmcache_shared_fs`, reader | accepted | run length and fan-out unseen; 1 row before §3.57, 4 before the replay |
 | `safetensors_load`, `faiss_ivf_ondisk` | nothing judged | the application reads through a mapping: every row is unseen. The exact call counts of their tests and `faults.py` are the evidence for these two. |
 
+The four `lmcache_local_disk` rows are struck since that abstract, the slot model, was retired
+with its cases (2026-11-14, `DESIGN_REVIEW.md` §3.99, the addendum "The slot model retired"):
+their captures are the KV kit's evidence, `workloads/kvcache/lmcache-local-disk/kit/captures/`,
+no longer judged; `tests/test_trace.py` holds the tiered abstract's chunk calls to their call
+shapes (buffered and `O_DIRECT`), and the kit's tests read their logs.
+
 **Checked against the runner (2026-10-01).** The runner under `strace` is an application
 whose abstract is known, so the trace's numbers must be the dry run's wherever order does
-not enter. `tests/test_trace.py` runs `file_per_sample`, `lmcache_local_disk`, and
-`diskann_search` (one GPU, `sync` backend) that way: read and write counts, bytes,
+not enter. `tests/test_trace.py` runs `file_per_sample`, ~~`lmcache_local_disk`~~ `lmcache_shared_fs` (since
+2026-11-14), and `diskann_search` (one GPU, `sync` backend) that way: read and write counts, bytes,
 request sizes, run lengths, block and object popularity, and first touches are equal;
 reuse distances differ by the order alone (CDF distance 0.07 to 0.20 on these small
 configurations). Fan-out and depth are `none` on the trace side, as said above: the
@@ -669,7 +675,8 @@ trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, decided 2026-1
 `diskannpy`, one index built in 13 shards and then searched; `hops.py` reads the beam search
 (rounds, batch sizes, sector spread) off the `io_submit` lines (`ABSTRACTS.md` §5 and §7,
 `DESIGN_REVIEW.md` §3.50, decided 2026-10-02).
-`lmcache_local_disk`'s kit is row 8: vLLM with LMCache's local-disk backend on a GPU. A
+`lmcache_local_disk`'s kit (the mechanism's, its slot-model abstract retired 2026-11-14, its fits
+kept as `kit/captures/<case>/fitted.json` and each capture's `fitted.json`) is row 8: vLLM with LMCache's local-disk backend on a GPU. A
 synthetic chat load (`chat.py`) fixed the call sequence (`ABSTRACTS.md` §8,
 `DESIGN_REVIEW.md` §3.51, decided 2026-10-02); the committed trace is a replay of ShareGPT
 (`replay.py`: the dataset's turns and reply lengths, eight conversations open and served

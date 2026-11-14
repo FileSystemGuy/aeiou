@@ -119,6 +119,12 @@ def case_dir(name, case):
     return ast_path(name).parent / "cases" / case
 
 
+# the captures of the slot-model abstract `lmcache_local_disk`'s cases, kept as the KV kit's evidence since it
+# was retired (2026-11-14, DESIGN_REVIEW.md §3.99, the addendum "The slot model retired"): <case>/<capture>/, and
+# each case's fit as <case>/fitted.json, a capture's as its fitted.json
+KIT_CAPTURES = WORKLOADS / "kvcache" / "lmcache-local-disk" / "kit" / "captures"
+
+
 # the dry run's block metrics, which the captures taken before 2026-10-22 (aeiou_metrics 1, 4 KiB
 # blocks) are compared on: they have no extents (DESIGN_REVIEW.md §3.79)
 V1_BLOCKS = ["--metrics-block", "4096"]
@@ -400,7 +406,7 @@ DISKANN_SEARCH_OLD = ["dim=128", "degree=64", "pq_code=32", "beam=4", "node_cach
     "name, seed, params",
     [
         ("file_per_sample", 7, ["samples=600", "batch=4", "workers=2", "prefetch=2", "steps=12", "step_time=105000000", "sample_median=112640"]),
-        ("lmcache_local_disk", 5, LMCACHE_OLD + ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
+        ("lmcache_shared_fs", 5, LMCACHE_OLD + ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
                               'reuse={"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}',
                               'keep={"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}']),
         ("diskann_search", 9, DISKANN_SEARCH_OLD + ["n=24995", "threads=2", "queries=6"]),
@@ -655,34 +661,34 @@ def test_diskann_build_abstract_matches_the_trace(tmp_path):
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
-def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
-    """`workloads/kvcache/lmcache-local-disk`: vLLM with LMCache's local-disk backend under a replay
-    of ShareGPT, 300 requests with 8 conversations open, traced 2026-10-02 and again 2026-11-05 under
-    each source (the same counts). Every chunk is the
-    same six calls around one `read` or `write`. At the parameters `fit.py` takes from the
-    run's two logs the abstract stores 382 chunks where the engine stored 370 (two of them
-    the system prompts', a dataset here) and reads 596 where it read 755 (seed 1; over eight
-    seeds it reads 587 to 781: one `keep` draw per round of conversations, §3.57, makes the
-    loads come in bursts, so the seeds spread wider than with a draw per request)
-    (`ABSTRACTS.md` §8)."""
-    case = case_dir("lmcache_local_disk", "sharegpt-chat")
+@pytest.mark.parametrize("direct, capture", [(False, "sharegpt-chat/2026-11-05"), (False, "sharegpt-chat/2026-11-05-strace"),
+                                             (True, "agentx-odirect/replay-2gib-pool"), (True, "agentx-odirect/replay-2gib-pool-strace")])
+def test_kv_tiered_chunk_calls_are_the_traced_ones(tmp_path, direct, capture):
+    """`lmcache_local_disk_tiered`'s calls on a chunk file are those of vLLM with LMCache's local-disk
+    backend, traced 2026-10-02 and again 2026-11-05 under each source (the captures of the slot-model
+    abstract's cases, kept as the kit's evidence since it was retired, 2026-11-14, DESIGN_REVIEW.md §3.99,
+    the addendum "The slot model retired"). Buffered (ShareGPT): Python's `open` around one `read` or
+    `write`, so one open, fstat, ioctl, lseek, and close per data call. `O_DIRECT` (LMCache's
+    `use_odirect`, the AgentX replay): `openat(O_WRONLY|O_CREAT|O_DIRECT)`, `write`, `close`, and
+    `openat(O_RDONLY|O_DIRECT|O_CLOEXEC)`, `fstat`, `read`, `close`. The counts differ (other loads); the
+    shape of the calls on a chunk is the same. The abstract's evictions are its `unlink`s, which the
+    traces, with stores that never filled, do not have."""
+    case = case_dir("lmcache_local_disk_tiered", "agentx-tiered")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", "1",
-                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk_tiered")), "--gpus", "1", "--seed", "1",
+                        "--params-file", str(case / "params.json"), "--param", "sessions=6", "--param", "slots=6",
+                        "--param", "chunk_bytes=4096", "--param", "g1_bytes=16384000", "--param", "g2_bytes=1228800",
+                        "--param", "g3_bytes=12288000", "--param", f"direct={str(direct).lower()}", "--metrics-json", str(dry)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    traced = [json.loads((case / f"captures/{c}/trace.metrics.json").read_text())["total"] for c in ("2026-11-05", "2026-11-05-strace")]
-    assert traced[0]["counts"] == traced[1]["counts"]     # the eBPF source and strace, the same load
-    t, d = traced[0], json.loads(dry.read_text())["total"]
-    tc, dc = t["counts"], d["counts"]
-    for c in (tc, dc):                                    # one open, fstat, ioctl, lseek and close per data call
-        assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"] == c["read"] + c["write"]
-    assert (tc["write"], dc["write"]) == (370, 382)
-    assert (tc["read"], dc["read"]) == (755, 596)
-    assert t["request_size"] == {k: {**v, "n": t["request_size"][k]["n"], "buckets": [[3145728, t["request_size"][k]["n"]]]} for k, v in t["request_size"].items()}
-    assert d["request_size"]["read"]["buckets"][0][0] == d["request_size"]["write"]["buckets"][0][0] == 3145728
-    assert set(tc) - set(dc) == {"mkdir", "stat"}         # of the cache directory, once at start
-    # no chunk is written twice, in either: a request has one continuation (one `reuse` distance)
-    assert t["reuse_distance_bytes"]["write_after_write"]["n"] == d["reuse_extents"]["write_after_write"]["n"] == 0
+    t, d = json.loads((KIT_CAPTURES / capture / "trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
+    assert d["read"] > 0 and d["write"] > 0 and d.get("unlink", 0) > 0
+    for c in (t, d):
+        if direct:
+            assert c["open"] == c["close"] == c["read"] + c["write"] and c["fstat"] == c["read"] and "ioctl" not in c and "lseek" not in c, c
+        else:
+            assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"] == c["read"] + c["write"], c
+    assert set(t) - set(d) == {"mkdir", "stat"}           # of the cache directory, once at start
 
 
 def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path):
@@ -690,14 +696,13 @@ def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path
     LMCache's line per request from the server's. `keep` is a product-limit estimate: a
     conversation the engine held whole is a lower bound on what it would have kept. Each capture
     of 2026-11-05, under either source, gives the values of 2026-10-02's."""
-    case = case_dir("lmcache_local_disk", "sharegpt-chat")
-    kit = ast_path("lmcache_local_disk").parent / "kit"
-    have = json.loads((case / "params.json").read_text())
+    case, kit = KIT_CAPTURES / "sharegpt-chat", KIT_CAPTURES.parent
+    have = json.loads((case / "fitted.json").read_text())
     # the model's on its GPU, which the replay does not measure, and the system prompts' popularity,
     # which two prompts do not fit: the values the abstract's defaults held until 2026-10-23, not fitted
     unfitted = ["prefill_per_token=40000", "decode_per_token=12000000", "prefill_step=8192", 'sys_pop={"zipf": {"s": 1.1}}']
     for c in ("2026-11-05", "2026-11-05-strace"):
-        cap, out = case / "captures" / c, tmp_path / f"{c}.json"
+        cap, out = case / c, tmp_path / f"{c}.json"
         r = subprocess.run([sys.executable, str(kit / "fit.py"), str(cap / "replay.log"), str(cap / "lmcache.log"), "--set", "chunk_bytes=3145728",
                             *[x for s in unfitted for x in ("--set", s)], "--doc", have["doc"], *[x for k, v in have["provenance"]["conditions"].items() if k != "slots_per_engine"
                                                     for x in ("--condition", f"{k}={json.dumps(v)}")], "-o", str(out)], capture_output=True, text=True)
@@ -715,74 +720,6 @@ def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path
     assert fit.kept([(10, False), (20, True), (30, False), (40, True)], 4, 100)["empirical"]["values"] == [10, 30, 65, 100]
 
 
-@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
-def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_path):
-    """`workloads/kvcache/lmcache-local-disk/kit/agentx.py`: the KV abstract fitted to the AgentX corpus
-    (agentic coding sessions, 2026-10-02) against the corpus's own chunk accounting
-    (`agentx.reference.json`: per request, the whole chunks a store that never evicts would
-    hit and would store). The abstract stores 8 % more (the reply counted whole where the
-    model kept less of it) and, at the default `keep` (91 % of returns hold nothing), loads
-    0.91 of its hits, which are 15 % under the corpus's (10 % before the side runs); the first 10,000 of the 98,827
-    requests, one slot (`DESIGN_REVIEW.md` §3.59), the mean of four seeds: the hits are carried by a few
-    chains of hundreds of turns, so one seed's 10,000 spread by a fifth either way (the side runs of
-    §3.64's note of 2026-11-06 take 40 % of a slot's requests from its main lane)."""
-    kit, case = ast_path("lmcache_local_disk").parent / "kit", case_dir("lmcache_local_disk", "agentx")
-    ref = json.loads((kit / "agentx.reference.json").read_text())
-    n, seeds = 10_000, (1, 2, 3, 4)
-    runs = [subprocess.Popen([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", str(seed),
-                              "--params-file", str(case / "params.json"), "--param", f"requests={n}"],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for seed in seeds]
-    stored = loaded = 0
-    for p in runs:
-        out, err = p.communicate()
-        assert p.returncode == 0, err
-        kinds = dict(re.findall(r"(\w+)=(\d+)", re.search(r"by kind: (.*)", out)[1]))
-        stored, loaded = stored + int(kinds["write"]) / n / len(seeds), loaded + int(kinds["read"]) / n / len(seeds)
-    assert ref["chunks_stored"]["mean"] == 14.46 and ref["chunks_hit"]["mean"] == 840.08 and ref["requests"] == 98827
-    assert 0.95 * ref["chunks_stored"]["mean"] < stored < 1.2 * ref["chunks_stored"]["mean"], stored
-    assert 0.8 * ref["chunks_hit"]["mean"] < loaded / 0.91 < 1.2 * ref["chunks_hit"]["mean"], loaded
-    p = values_of(json.loads((case / "params.json").read_text()))
-    assert p["reuse"]["mixture"][0]["weight"] == 0 and p["turns"]["empirical"]["values"][0] == 1 and len(p["turns"]["empirical"]["values"]) == 100
-    assert p["trim"]["mixture"][0]["dist"] == {"const": 0} and 0.03 < p["trim"]["mixture"][1]["weight"] < 0.05
-
-
-@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
-def test_kv_cache_side_runs_suspend_the_main_lane(tmp_path):
-    """`lmcache_local_disk`'s side runs (DESIGN_REVIEW.md §3.64, note of 2026-11-06): after each request of a
-    slot's main lane, a side run of `side_lanes` chains served in turn, the first of `side` requests and
-    the others of `side_turns`, for `side_lanes` x `side` requests, then the main lane goes on where it
-    was. Chains of no prefix whose every request adds two chunks, nothing kept by `keep`, so a chain
-    that goes on reads all it stored."""
-    case = case_dir("lmcache_local_disk", "agentx")
-    base = json.loads((case / "params.json").read_text())
-    const = lambda v: {"const": v}
-
-    def counts(**over):
-        f = json.loads(json.dumps(base))
-        vals = dict(concurrency=1, warm=0, requests=7, kind=const(2), first_in=const(512), turn_in=const(512), turn_out=const(0),
-                    trim=const(0), turns=const(0), think=const(0), keep=const(0), context=1 << 20, retain=1000, sys_local=True,
-                    side_turns=const(2), side_kind=const(2))
-        vals.update(over)
-        for k, v in vals.items():
-            f["params"][k] = {"default": v}
-        pf = tmp_path / "p.json"
-        pf.write_text(json.dumps(f))
-        r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--params-file", str(pf)],
-                           capture_output=True, text=True)
-        assert r.returncode == 0, r.stderr
-        kinds = dict(re.findall(r"(\w+)=(\d+)", re.search(r"by kind: (.*)", r.stdout)[1]))
-        return int(kinds["write"]), int(kinds.get("read", 0))
-
-    # no side runs: one chain of 7 requests reads 2 + 4 + ... + 12
-    assert counts() == counts(side=const(0)) == (14, 42)
-    # M, S1, S1, M, S2, S2, M: S1 and S2 go on straight (2 each), M after two side requests (2, then 4)
-    assert counts(side=const(2), side_lanes=const(1)) == (14, 10)
-    # M, A, B, A, B, M, A': two side chains in turn, each going on after the other (reads 2 each), then M
-    assert counts(side=const(2), side_lanes=const(2)) == (14, 6)
-    # the leading chain's turns make the run: M, A, A, A, M, A', A' (A reads 2 then 4; M 2; A' 2)
-    assert counts(side=const(3), side_lanes=const(1), side_turns=const(1)) == (14, 10)
-
-
 def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted(monkeypatch):
     """`workloads/kvcache/lmcache-local-disk`: the AgentX replay through vLLM and LMCache (2026-10-07,
     run again 2026-10-08 with each session's own tokens and both prefixes shared, DESIGN_REVIEW.md
@@ -790,16 +727,16 @@ def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted
     context, 2 GiB of engine KV. LMCache logs a lookup
     at every step a request waits for KV memory, the held prefix falling as the running requests
     evict it; a request's is its last lookup before its first load or store. The kit's LMCache
-    log keeps those two lines per request (and the first lookup, and the lines of the fit's conditions). The capture's `fitted.params.json` is `agentx.py fit
+    log keeps those two lines per request (and the first lookup, and the lines of the fit's conditions). The capture's `fitted.json` is `agentx.py fit
     --replay` on these logs and the corpus (not committed; the kit's README has the command)."""
-    monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
+    monkeypatch.syspath_prepend(str(KIT_CAPTURES.parent))
     agentx = importlib.import_module("agentx")
     for c in ("replay-2gib-pool", "replay-2gib-pool-strace"):              # the eBPF source and strace, the same replay
-        cap = case_dir("lmcache_local_disk", "agentx") / "captures" / c
+        cap = KIT_CAPTURES / "agentx" / c
         sessions, sent = agentx.replayed(cap / "replay.log", cap / "lmcache.log")
         assert sessions == 8 and len(sent) == 233
         assert sum(1 for _, held in sent.values() if held == 0) == 48       # the engine held nothing, not even a shared prefix
-        p = values_of(json.loads((cap / "fitted.params.json").read_text()))
+        p = values_of(json.loads((cap / "fitted.json").read_text()))
         assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_prompts"], p["sub_prompts"]) == (8, 29, 131072, False, 1, 1)
         # the main agent's chains opening with its prefix, a sub-agent's, neither (side runs' chains apart, §3.64 note of 2026-11-06)
         assert p["kind"]["empirical"]["weights"] == [8, 0, 8] and p["side_kind"]["empirical"]["weights"] == [0, 7, 19]
@@ -814,18 +751,18 @@ def test_agentx_replay_fits_record_the_engine_they_were_fitted_at(monkeypatch):
     replay at 2 GiB and at 6 GiB of engine KV (3x the tokens), each under the eBPF source and
     strace (2026-11-05): the larger pool held more of every conversation, so fewer requests
     found nothing held."""
-    monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
+    monkeypatch.syspath_prepend(str(KIT_CAPTURES.parent))
     agentx = importlib.import_module("agentx")
     fit = importlib.import_module("fit")
     for which, pool, n, nothing in (("replay-2gib-pool", 174752, 233, 48), ("replay-2gib-pool-strace", 174752, 233, 48),
                                     ("replay-6gib-pool", 524288, 233, 26), ("replay-6gib-pool-strace", 524288, 233, 26)):
-        cap = case_dir("lmcache_local_disk", "agentx") / "captures" / which
+        cap = KIT_CAPTURES / "agentx" / which
         sessions, sent = agentx.replayed(cap / "replay.log", cap / "lmcache.log")
         assert sessions == 8 and len(sent) == n and sum(1 for _, held in sent.values() if held == 0) == nothing
         c = fit.conditions(cap / "lmcache.log", sessions)
         c_in, c_out = agentx.service(cap / "replay.log")
         c.update(latency_s_per_prompt_token=float("%.3g" % c_in), latency_s_per_reply_token=float("%.3g" % c_out))
-        assert json.loads((cap / "fitted.params.json").read_text())["provenance"]["conditions"] == c
+        assert json.loads((cap / "fitted.json").read_text())["provenance"]["conditions"] == c
         assert (c["engine_pool_tokens"], c["cpu_tier_bytes"], c["model"]) == (pool, 0, "Qwen/Qwen2.5-0.5B-Instruct")
 
 
@@ -833,7 +770,7 @@ def test_agentx_hold_simulation_evicts_a_freed_tail_first_and_preempts_the_last_
     """`agentx.simulate`, vLLM's prefix cache as `agentx.py holds` runs it (DESIGN_REVIEW.md §3.64):
     a request's blocks freed tail first, so its head is evicted last; with nothing free to
     evict, the last admitted running request is preempted and its blocks freed."""
-    monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
+    monkeypatch.syspath_prepend(str(KIT_CAPTURES.parent))
     agentx = importlib.import_module("agentx")
     blocks = {"a": ["a1", "a2"], "b": ["b1", "b2", "b3"], "c": ["a1", "a2"]}
     held, preempted = agentx.simulate([(0, 1, "a"), (1, 0, "a"), (2, 1, "b"), (3, 0, "b"), (4, 1, "c")], blocks, dict.fromkeys(blocks, 0), 4)
@@ -849,30 +786,11 @@ def test_agentx_hold_simulation_never_passes_the_pool(monkeypatch):
     (found 2026-11-12 holding the runner's GPU tier to it, DESIGN_REVIEW.md §3.99, the note
     "Tiers as general pieces"). Four blocks: `b` finds a1 and a2 free and adds two, so a3 and a4
     are evicted, and `c` finds none of a3."""
-    monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
+    monkeypatch.syspath_prepend(str(KIT_CAPTURES.parent))
     agentx = importlib.import_module("agentx")
     blocks = {"a": ["a1", "a2", "a3", "a4"], "b": ["a1", "a2", "b1", "b2"], "c": ["a3"]}
     held, preempted = agentx.simulate([(0, 1, "a"), (1, 0, "a"), (2, 1, "b"), (3, 0, "b"), (4, 1, "c")], blocks, dict.fromkeys(blocks, 0), 4)
     assert (held, preempted) == ({"a": 0, "b": 2, "c": 0}, 0)
-
-
-@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
-def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
-    """LMCache's `use_odirect` (2026-10-07, DESIGN_REVIEW.md §3.63; captured again 2026-11-05 under the
-    corrected replay, the buffered capture's requests): a chunk is written by
-    `openat(O_WRONLY|O_CREAT|O_DIRECT)`, `write`, `close`, and read by
-    `openat(O_RDONLY|O_DIRECT|O_CLOEXEC)`, `fstat`, `read`, `close`; the abstract's `direct`
-    issues the same, under the backend it declares (`sync`)."""
-    case = case_dir("lmcache_local_disk", "agentx-odirect")
-    dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", "1",
-                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    t, d = json.loads((case / "captures/replay-2gib-pool/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
-    tc, dc = t["counts"], d["counts"]
-    for c in (tc, dc):
-        assert c["open"] == c["close"] == c["read"] + c["write"] and c["fstat"] == c["read"] and "ioctl" not in c and "lseek" not in c
-    assert (tc["write"], tc["read"]) == (5663, 39406) and (dc["write"], dc["read"]) == (6078, 21209)
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
@@ -943,7 +861,7 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     # buffer is the store's st_blksize (contract 0.12), its fallback 1 MiB in a dry run, the traced NFS mount's
     pw, pr = (values_of(json.loads((case / f).read_text())) for f in ("writer.params.json", "reader.params.json"))
     assert pw == pr
-    assert pw == {**values_of(json.loads((case_dir("lmcache_local_disk", "sharegpt-chat") / "params.json").read_text())), "meta_bytes": 28}
+    assert pw == {**values_of(json.loads((KIT_CAPTURES / "sharegpt-chat" / "fitted.json").read_text())), "meta_bytes": 28}
 
 
 

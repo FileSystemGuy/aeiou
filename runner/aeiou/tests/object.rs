@@ -257,7 +257,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     for p in ["sys_prompts=2", "sys_tokens=2", "chunk_bytes=6291456", "buf=65536", "concurrency=2", "warm=2", "requests=4", reuse, keep, "retain=6", "sys_local=false", "prefill_per_token=0", "decode_per_token=0"] {
         params.extend(["--param", p]);
     }
-    // the values the abstracts' defaults held until 2026-10-23 (their unsettled cases chat-64-slots)
+    // the values the abstracts' defaults held until 2026-10-23 (the shared store's unsettled case chat-64-slots)
     let old = crate::common::lmcache_args(&["chunk_bytes=", "concurrency=", "warm=", "requests=", "reuse=", "keep=", "retain=", "sys_prompts=", "sys_tokens=", "prefill_per_token=", "decode_per_token="]);
     params.extend(old.iter().map(|s| s.as_str()));
     let with = |cmd: &str, ast: &str, extra: &[&str]| {

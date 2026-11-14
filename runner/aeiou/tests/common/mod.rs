@@ -69,7 +69,7 @@ pub fn dcp_load<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
 
 /// The LMCache abstracts' defaults until 2026-10-23, which a case now gives (their unsettled cases
 /// chat-64-slots; DESIGN_REVIEW §3.78, item 38): the model's on its GPU, the deployment's, and the
-/// load's, the same in lmcache_local_disk, lmcache_shared_fs, and its reader. The tests that ran
+/// load's, the same in lmcache_shared_fs and its reader (and lmcache_local_disk, retired 2026-11-14). The tests that ran
 /// the abstracts on them pass them.
 pub const LMCACHE: [(&str, &str); 16] = [
     ("chunk_bytes", "33554432"), ("context", "8192"), ("prefill_per_token", "40000"), ("decode_per_token", "12000000"),

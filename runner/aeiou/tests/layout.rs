@@ -644,7 +644,7 @@ fn the_dataset_manifest_is_flushed_before_and_after_its_rename() {
 #[test]
 fn a_chunked_datasets_progress_counts_the_files_its_summary_does() {
     let dir = crate::common::tmpdir("layout", "chunked-progress");
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("lmcache_local_disk.ast.json")).arg("--root").arg(&*dir)
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("lmcache_shared_fs.ast.json")).arg("--root").arg(&*dir)
         .args(["--param", "chunk_bytes=4096", "--param", "sys_prompts=12", "--param", "sub_prompts=12", "--progress-secs", "0.001"]).args(crate::common::lmcache_args(&["chunk_bytes=", "sys_prompts="])).env_remove("AEIOU_CONFIG").output().unwrap();
     let out = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
     assert!(o.status.success(), "{out}");

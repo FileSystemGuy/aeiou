@@ -50,7 +50,7 @@ def main():
     def one(c, t):
         convs[c].append({"role": "user", "content": "Summarize in one paragraph: " + turns[c][t]})
         body = json.dumps({"model": a.model, "messages": convs[c], "max_tokens": a.max_tokens, "temperature": 0}).encode()
-        t0 = time.time()
+        t0 = time.monotonic()
         req = urllib.request.Request(a.url + "/v1/chat/completions", body, {"Content-Type": "application/json"})
         r = json.load(urllib.request.urlopen(req, timeout=600))
         reply = r["choices"][0]["message"]["content"]
@@ -58,7 +58,7 @@ def main():
         convs[c].append({"role": "assistant", "content": said.get("%d %d" % (c, t), reply)})
         u = r["usage"]
         cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens")
-        return "conv %d turn %d prompt %d cached %s completion %d %.2fs" % (c, t, u["prompt_tokens"], cached, u["completion_tokens"], time.time() - t0)
+        return "conv %d turn %d prompt %d cached %s completion %d %.2fs" % (c, t, u["prompt_tokens"], cached, u["completion_tokens"], time.monotonic() - t0)
 
     with concurrent.futures.ThreadPoolExecutor(a.concurrency) as ex:
         for t in range(a.turns):                       # a conversation's turns are in order; conversations interleave

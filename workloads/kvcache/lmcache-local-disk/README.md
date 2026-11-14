@@ -1,4 +1,17 @@
-# Trace of the real server behind `lmcache_local_disk` (2026-10-02; captured again 2026-11-05)
+# Trace of the real server behind ~~`lmcache_local_disk`~~ this mechanism (2026-10-02; captured again 2026-11-05)
+
+**Retired 2026-11-14** (`DESIGN_REVIEW.md` §3.99, the addendum "The slot model retired"; brief item
+72 (7)): the slot-model abstract `lmcache_local_disk` (`keep` and `retain` drawn, no timeline) and
+its four cases, `sharegpt-chat`, `agentx`, `agentx-odirect`, and `chat-64-slots`, are gone; the
+mechanism's abstract is `lmcache_local_disk_tiered` (below, the last section), now run by `aeiou
+run`. The captures the cases held are kept as the kit's evidence, `kit/captures/<case>/<capture>/`,
+outside the catalog: no pair is judged, and each capture's `capture.toml` records the pair it was
+judged as against the retired abstract. Each fit the cases ran is beside them as `fitted.json` (a
+case's `params.json` was `kit/captures/<case>/fitted.json`, a capture's `fitted.params.json` its
+`fitted.json`; renamed so that no parameter file names an abstract that is gone). The kit is
+whole: `fit.py` and `agentx.py fit` still write parameters of the retired abstract, which
+`git show 274b578:workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json` gives. The
+text below is as it was, its paths moved; a dry run of the retired abstract is struck.
 
 `ABSTRACTS.md` §11, row 8: vLLM with LMCache's local-disk backend on the loopback NFS mount
 of `runner/REFERENCE.md` §7, under a replay of public chat conversations (`replay.py`, ShareGPT).
@@ -11,7 +24,7 @@ token, so a 256-token chunk is 3,145,728 bytes).
 
 ```
 export PYTHONHASHSEED=0 KV_BYTES=100663296     # from this directory; lmcache.yaml's local_disk, /mnt/aeiou-nfs/kv, is the directory under test
-S=ebpf; C=cases/sharegpt-chat/captures/2026-11-05      # or S=strace; C=cases/sharegpt-chat/captures/2026-11-05-strace
+S=ebpf; C=kit/captures/sharegpt-chat/2026-11-05      # or S=strace; C=kit/captures/sharegpt-chat/2026-11-05-strace
 # --accept fault-around: LMCache maps no file of the store (CAPTURE.md, "The eBPF source")
 mkdir /mnt/aeiou-nfs/kv
 aeiou-trace capture --source $S --accept fault-around --root /mnt/aeiou-nfs/kv -o /local/cap -- sh kit/serve.sh > serve.log 2>&1 &
@@ -23,9 +36,9 @@ cp /local/cap/capture.json $C/trace.capture.json
 grep "Inference Engine computed" serve.log > $C/lmcache.log        # the server's output, colors stripped
 python kit/fit.py $C/replay.log $C/lmcache.log --set chunk_bytes=3145728 \
     --set prefill_per_token=40000 --set decode_per_token=12000000 --set prefill_step=8192 \
-    --set 'sys_pop={"zipf": {"s": 1.1}}' -o cases/sharegpt-chat/params.json   # not fitted: the replay does not measure them
-aeiou dry-run lmcache_local_disk.ast.json --gpus 1 \
-    --params-file cases/sharegpt-chat/params.json --metrics-json abstract.metrics.json
+    --set 'sys_pop={"zipf": {"s": 1.1}}' -o kit/captures/sharegpt-chat/fitted.json   # not fitted: the replay does not measure them
+# retired 2026-11-14: aeiou dry-run lmcache_local_disk.ast.json --gpus 1 \
+#    --params-file kit/captures/sharegpt-chat/fitted.json --metrics-json abstract.metrics.json
 ```
 
 - The capture of 2026-11-05 under each source gives the 2026-10-02 strace capture's counts
@@ -83,9 +96,9 @@ the abstracts because of it (`turns`, `prefill_step`, `trim`, `think`).
 curl -L -o traces.jsonl https://huggingface.co/datasets/semianalysisai/cc-traces-weka-062126/resolve/main/traces.jsonl
 python kit/agentx.py fit traces.jsonl --set chunk_bytes=33554432 --set prefill_per_token=40000 \
     --set decode_per_token=12000000 --set prefill_step=8192 --set 'sys_pop={"zipf": {"s": 1.1}}' \
-    --set 'keep={"empirical": {"values": [0, 1000000], "weights": [91, 9]}}' -o cases/agentx/params.json   # the --set values not fitted
+    --set 'keep={"empirical": {"values": [0, 1000000], "weights": [91, 9]}}' -o kit/captures/agentx/fitted.json   # the --set values not fitted
 python kit/agentx.py reference traces.jsonl -o kit/agentx.reference.json      # the corpus's chunk accounting
-aeiou dry-run lmcache_local_disk.ast.json --gpus 1 --seed 1 --params-file cases/agentx/params.json
+# retired 2026-11-14: aeiou dry-run lmcache_local_disk.ast.json --gpus 1 --seed 1 --params-file kit/captures/agentx/fitted.json
 ```
 
 The dry run's `write` count against the reference's `chunks_stored` and its `read` count
@@ -127,7 +140,7 @@ export is a directory on disk, not the 8 GB tmpfs of `runner/REFERENCE.md` §7.
 ```
 export PYTHONHASHSEED=0 KV_BYTES=2147483648 MAX_MODEL_LEN=131072 LMCACHE_CONFIG_FILE=kit/lmcache.agentx.yaml
 export VLLM_ARGS='--hf-overrides {"max_position_embeddings":131072,"rope_parameters":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
-S=ebpf; C=cases/agentx/captures/replay-2gib-pool          # or S=strace; C=cases/agentx/captures/replay-2gib-pool-strace
+S=ebpf; C=kit/captures/agentx/replay-2gib-pool          # or S=strace; C=kit/captures/agentx/replay-2gib-pool-strace
 mkdir /mnt/aeiou-nfs/kv                                   # empty: kit/lmcache.agentx.yaml's local_disk
 aeiou-trace capture --source $S --accept fault-around --root /mnt/aeiou-nfs/kv -o /local/cap -- sh kit/serve.sh > serve.log 2>&1 &
 python kit/replay_agentx.py traces.jsonl --sessions 8 --requests 300 --max-context 131072 > $C/replay.log   # once /health answers
@@ -138,7 +151,7 @@ python kit/agentx.py log serve.log -o $C/lmcache.log      # the lines of the ser
 python kit/agentx.py fit traces.jsonl --replay $C/replay.log $C/lmcache.log --context 131072 \
     --set chunk_bytes=3145728 --set prefill_step=2048 --set sys_local=false \
     --set prefill_per_token=40000 --set decode_per_token=12000000 --set 'sys_pop={"zipf": {"s": 1.1}}' \
-    -o $C/fitted.params.json
+    -o $C/fitted.json
 python kit/agentx.py holds traces.jsonl --replay $C/replay.log $C/lmcache.log [--pool TOKENS] [--timeline engine|paced|serial|rounds]   # and the storage LMCache would see
 ```
 
@@ -158,7 +171,7 @@ python kit/agentx.py holds traces.jsonl --replay $C/replay.log $C/lmcache.log [-
   distances are those at 4 KiB with counts 768 times fewer (checked row by row, 2026-10-07;
   only the top-0.1 % row turns "not judged", as the objects' already was), and the pair's dry
   runs take the trace's block, a fraction of a second against twelve.
-- The capture's pair (`trace.metrics.json`, `fitted.params.json`) is judged in
+- The capture's pair (`trace.metrics.json`, `fitted.json`) is judged in
   `builder/tests/test_trace.py` and ~~accepted~~ not accepted since the corrected run (~~one row outside,
   read-after-read reuse distance~~ four rows outside since the same day, each with its reason in the capture's
   `trace.tolerances.json`; under the replay of 2026-11-05 read after read is within, and the extents' read
@@ -171,7 +184,7 @@ python kit/agentx.py holds traces.jsonl --replay $C/replay.log $C/lmcache.log [-
   `side_kind`, 2026-11-06) are those runs; `agentx.lanes_of` takes them from the session order
   (`DESIGN_REVIEW.md` §3.64, note of 2026-11-06).
 - The same replay with `KV_BYTES=6442450944` (6 GiB, 524,288 tokens, three times the pool;
-  2026-10-08) is the capture `cases/agentx/captures/replay-6gib-pool`, fitted the same way: ~~5,112 chunks written and 6,770 read,
+  2026-10-08) is the capture `kit/captures/agentx/replay-6gib-pool`, fitted the same way: ~~5,112 chunks written and 6,770 read,
   against 5,454 and 33,804 at 2 GiB~~ 5,663 chunks written and 2,321 read, against 5,663 and 38,818
   at 2 GiB (2026-11-05, the same requests at both pools). Its pair ~~is accepted~~ was accepted with only `keep`, `sys_held`, and
   `sub_held` refitted; the 2 GiB values give three to five times its reads (`DESIGN_REVIEW.md`
@@ -202,8 +215,10 @@ abstract's `keep` and `retain` draws with the planned walk of one engine: sessio
 generator fitted to the AgentX corpus, each a lane of one timeline with its sub-agents; the
 engine's slots; G1, vLLM's pool, as a held tier; and LMCache 0.5.5's G2 and G3 with their timed
 eviction, a G3 victim unlinked on the connector's four delete workers. Its chunk calls are the
-ones traced above. `aeiou run` refuses a timeline until item 72 (7) is built, so it is checked
-and dry-run only, and the older abstract and its cases stay until then.
+ones traced above. ~~`aeiou run` refuses a timeline until item 72 (7) is built, so it is checked
+and dry-run only, and the older abstract and its cases stay until then.~~ `aeiou run` runs it since
+item 72 (7) (2026-11-13/14), and the older abstract and its cases were retired 2026-11-14 (the note
+at the top).
 
 ```
 # from this directory; the corpus as in the AgentX section

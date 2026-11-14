@@ -8,7 +8,7 @@ use aeiou::metrics::{self, Opts};
 
 fn dry(name: &str, gpus: i64, params: &[(&str, &str)], threads: usize, opts: Option<Opts>) -> dryrun::Report {
     let text = std::fs::read_to_string(crate::common::workload_ast(name)).unwrap();
-    // the LMCache abstracts at the values their defaults held until 2026-10-23 (their unsettled cases chat-64-slots)
+    // the LMCache abstracts at the values their defaults held until 2026-10-23 (the shared store's unsettled case chat-64-slots)
     let params = if name.starts_with("lmcache") { crate::common::lmcache(params) } else { params.to_vec() };
     let cfg = Config { seed: 1, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![], st_blksize: Default::default() };
     let loaded = aeiou::load_str(&text).expect("valid abstract");
@@ -27,7 +27,6 @@ const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("diskann_search", 1, &[("n", "999999995"), ("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("beam", "4"), ("hops", r#"{"empirical": {"values": [24, 25, 26, 27, 28, 29, 30], "weights": [1, 135, 536, 269, 47, 9, 2]}}"#), ("entry", r#"{"hotset": {"fraction": 2e-7, "weight": 1.0}}"#), ("near", r#"{"hotset": {"fraction": 1e-5, "weight": 1.0}}"#), ("node_cache", "0"), ("rerank", "500000"), ("queries", "100"), ("threads", "2")]),
     ("faiss_ivf_ondisk", 1, &[("threads", "2"), ("calls", "100"), ("batch", "1"), ("nprobe", "64"), ("list_pop", r#"{"zipf": {"s": 0.2}}"#), ("distance", "400000"), ("lists", "1000000"), ("list_bytes", r#"{"lognormal": {"median": 40960, "sigma": 0.4}}"#), ("code_size", "32"), ("index_bytes", "553779476"), ("index_reads", "[8192, 536862720, 8192, 122880, 8192, 16769024, 8192]")]),
     ("diskann_build", 1, &[("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000"), ("pq_train", "60000000000"), ("partition_time", "90000000000"), ("build_time", "1800000000000")]),
-    ("lmcache_local_disk", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("lmcache_shared_fs", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("lmcache_shared_fs_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("tfrecord_stream", 2, &[("samples", "768"), ("samples_per_file", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2"), ("prefetch", "1"), ("step_time", "105000000"), ("decode", "0"), ("sample_median", "112640")]),

@@ -37,9 +37,10 @@ def test_every_capture_pair_is_read_from_its_record():
     pairs = catalog.capture_pairs(WORKLOADS)
     assert len(pairs) == len(list(WORKLOADS.rglob("captures/*/*.metrics.json")))
     assert {v for *_, v in pairs} == {"accepted", "not accepted", "nothing judged"}
-    # a capture's own fit when it has one, the case's set otherwise; the case's GPU count
-    fitted = [p for _, _, _, p, _, _ in pairs if p.name == "fitted.params.json"]
-    assert len(fitted) == 4                   # the AgentX replay at two pools, each under the eBPF source and strace
+    # a capture's own fit when it has one, the case's set otherwise; the case's GPU count. No committed capture
+    # has its own fit since the AgentX replays' four went to the KV kit with their retired abstract (2026-11-14,
+    # DESIGN_REVIEW.md §3.99, the addendum "The slot model retired"; tests/test_trace.py's KIT_CAPTURES)
+    assert {p.name for _, _, _, p, _, _ in pairs} == {"case.lock.json"}
     assert {g for *_, g, _ in pairs} == {1, 2}
 
 

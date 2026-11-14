@@ -3,13 +3,14 @@ engines read, and a cold engine in front of a store that is already filled.
 
 The calls are the traces of vLLM with LMCache's `fs://` remote backend (2026-10-02, vLLM 0.30,
 LMCache 0.5.5, workloads/kvcache/lmcache-shared-fs). Unlike the local-disk backend of
-`lmcache_local_disk`, this one keeps no index: the store is the directory, so a restarted or a
+`lmcache_local_disk` (its slot-model abstract, retired 2026-11-14), this one keeps no index: the store is the directory, so a restarted or a
 second engine finds what the first one wrote. A lookup is a `stat` per whole chunk of the
 prompt, from the first chunk until one is missing. A chunk is a file of `meta_bytes` of
 header and `chunk_bytes`, written under a temporary name and renamed, and read through a
 Python buffered reader: one `read` of the buffer, one of the rest. An engine loads the
 chunks the store has, less the whole chunks it still holds in GPU memory. The lengths and
-the request stream are `lmcache_local_disk`'s (a ShareGPT replay; one `reuse` distance).
+the request stream are the retired `lmcache_local_disk`'s (a ShareGPT replay; one `reuse` distance;
+its fit kept as workloads/kvcache/lmcache-local-disk/kit/captures/sharegpt-chat/fitted.json).
 
 Two workloads from one script, because they are the same request stream on two states of
 the store:

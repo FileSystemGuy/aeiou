@@ -1064,7 +1064,7 @@ aeiou dry-run --case jpeg-50m --gpus 8 --seed 1
 One instance's stream, the first fifty operations of its second step:
 
 ```
-aeiou dry-run --case lmcache-local-disk/chat-64-slots --gpus 1 \
+aeiou dry-run --case chat-64-slots --case-run lmcache_shared_fs --gpus 1 \
     --param concurrency=2 --param requests=20 --gpu 0 --steps 1..2 --limit 50
 ```
 

@@ -870,35 +870,26 @@ fn faiss_prefetch_threads_are_derived_from_the_lists_a_slice_probes() {
     }
 }
 
-/// The LMCache abstracts' unsettled cases (item 38; DESIGN_REVIEW §3.78 points 1 and 4): each
-/// lock runs exactly what its abstract's defaults ran until 2026-10-23 (tests/golden.rs's
-/// fingerprints, 1 GPU, seed 1, 2 slots, 50 requests after 50 warm), the shared store's writer
-/// and its reader as the two runs of one case, whose `buf` is the namespace's st_blksize, its
+/// The LMCache shared store's unsettled case (item 38; DESIGN_REVIEW §3.78 points 1 and 4): its
+/// lock runs exactly what its abstracts' defaults ran until 2026-10-23 (tests/golden.rs's
+/// fingerprints, 1 GPU, seed 1, 2 slots, 50 requests after 50 warm), the writer and its reader as
+/// the two runs of one case, whose `buf` is the namespace's st_blksize, its
 /// fallback in a dry run; each abstract alone is refused, naming every value it now requires.
 #[test]
 fn the_lmcache_cases_are_the_runs_the_old_defaults_made() {
     let w = crate::common::workloads().display().to_string();
     let small = ["--param", "concurrency=2", "--param", "warm=50", "--param", "requests=50"];
     let required = "chunk_bytes, concurrency, context, decode_per_token, keep, prefill_per_token, prefill_step, requests, retain, reuse, sys_pop, sys_prompts, sys_tokens, turn_in, turn_out, warm";
-    for (case, run, fingerprint, ops, buf) in [
-        ("lmcache-local-disk/chat-64-slots", None, "9f7017e7011639d5", 1590, false),
-        ("lmcache-shared-fs/chat-64-slots", Some("lmcache_shared_fs"), "c7d83399ee6948bc", 3417, true),
-        ("lmcache-shared-fs/chat-64-slots", Some("lmcache_shared_fs_reader"), "382dba518a89c85f", 2986, true),
-    ] {
-        let mut a = vec!["dry-run", "--case", case, "--workloads", &w, "--gpus", "1", "--seed", "1"];
-        if let Some(r) = run {
-            a.extend(["--case-run", r]);
-        }
+    // (lmcache-local-disk/chat-64-slots, 9f7017e7011639d5 and 1,590 ops, until its abstract was retired 2026-11-14, §3.99)
+    for (ast, fingerprint, ops) in [("lmcache_shared_fs", "c7d83399ee6948bc", 3417), ("lmcache_shared_fs_reader", "382dba518a89c85f", 2986)] {
+        let mut a = vec!["dry-run", "--case", "lmcache-shared-fs/chat-64-slots", "--workloads", &w, "--gpus", "1", "--seed", "1", "--case-run", ast];
         a.extend(small);
         let (code, out, err) = aeiou(&a);
-        assert_eq!(code, 0, "{case}: {err}");
-        let ast = run.unwrap_or("lmcache_local_disk");
+        assert_eq!(code, 0, "{ast}: {err}");
         assert!(line(&out, "case ").contains(&format!("/chat-64-slots  run {ast}")), "{out}");
         assert_eq!(line(&out, "fingerprint "), format!("fingerprint {fingerprint}"), "{ast}");
         assert!(line(&out, "  ops ").starts_with(&format!("  ops {ops} ")), "{ast}: {out}");
-        if buf {
-            assert_eq!(line(&out, "storage-reported"), "storage-reported: buf=1048576 (st_blksize of `kv`: the fallback, none reported)");
-        }
+        assert_eq!(line(&out, "storage-reported"), "storage-reported: buf=1048576 (st_blksize of `kv`: the fallback, none reported)");
         let file = crate::common::workload_ast(&format!("{ast}.ast.json")).display().to_string();
         let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
         assert!(code == 1 && err.contains(&format!("required parameters with no value: {required}")), "{ast}: {err}");
