@@ -12286,6 +12286,45 @@ timeline's ops to its sink as records, so `dry-run` is driven by the planner (`t
   times faster than a run consumes it).
 - Not yet in the records: a `span`'s entry and exit (step 5's D), and the metrics walk
   (`--metrics`, `--emit-trace`) still walks the VM, a timeline one context.
+*The executor built (2026-11-13, step 3, the user's "go on to step 3").* `exec.rs`: `Exec`, a
+state machine over a clock it is given (`push` the planner's events, `poll` at a time for the
+records due, `complete`), `simulate` on a simulated clock and storage (`tests/exec.rs`, 12 tests,
+`agentx-tiered` among them at 2 sessions, or `AEIOU_TEST_SESSIONS`, the case's 40 its whole), and under `aeiou run` on the `io_uring` and `libaio`
+loops a task an instance holding the planner and the executor and a task an executor lane
+(`uring.rs`; `tests/timeline.rs`). The planner gives the walk's lane events (`vm::TlNote`: fork,
+submission, eviction batch, a body lane's end) before the ops they order. Choices made in the
+build, within the decisions, and one beside them, which the user confirmed:
+- *Worker and eviction lanes are queues* (beside the decision; confirmed by the user the same
+  day, "I confirm the queue rule"): an op
+  there issues at `max(plan, previous completion, gate, edges)`, its L reported, never carried.
+  Carried, the ops of one batch at one planned instant, issued back to back, add their times to
+  L, and every later batch starts that much later, though storage kept up: a store worker would
+  drift without bound and staging fill under any load. As queues, a batch past its tick delays
+  the next by its overage, the note's words: slack in the plan drains a backlog, and the lane
+  is back on plan once it has. Body lanes (sessions) carry L as decided, the user's reason given
+  with the confirmation: a session lane stands for the application driving its own schedule,
+  issuing its next op as soon as it has done what it must after the last, and waiting for each
+  op to complete; that waiting is what accumulates L, and slack later in the plan does not give
+  it back.
+- A fork, submission, or eviction batch is a gate in the starting lane's queue: it opens at the
+  lane's `max(plan + L, previous completion)`, and the lanes it starts begin no earlier; a fork's
+  sub-lanes also take the parent's L. A joined parent resumes at the latest planned end of the
+  fork's sub-lanes plus L, or their last completion if later; a parent's forks are joined one at
+  a time (counting every fork's sub-lanes at once stopped `agentx-tiered`, whose lanes fork
+  sessions one after another; a test holds it).
+- A submission stages its writes' bytes when its gate opens and frees each as it completes;
+  loads are not yet counted (they need the span's marks, step 5). Would-be drops are recorded,
+  not yet reported or failing the gate (step 5).
+- Phase 1 refuses: a blocking backend (step 4), an object namespace, `--time-scale` other than
+  1, and an op outside the timeline of an actor whose body has one. Each executor lane has its
+  own open files, as a session's own descriptors: an op on a file another lane opened fails as
+  not open (none of the committed abstracts does it).
+- Planned time 0 is the loop's start; the planner is pulled 10 s of planned time ahead, its paths
+  retired when they double (at least 1,024); no cap on records held yet.
+- On a simulated 1 ms an op, `agentx-tiered`'s 2,998,578 ops plan and execute in 23.3 s, the
+  planner holding at most 21,980 paths; its storage-bound run ends at 110.5 h of the clock.
+- The executor was written before its tests (the tests-first rule broken, the tests written
+  right after, and the join bug above found by them).
 
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the

@@ -198,7 +198,8 @@ each is a recorded decision and the golden tests pin them.
   when it gives none), which `published` counts and `entry` reads, each within one group; both are refused under an `x @ i` evaluation (V30). The ops' keys and the
   fingerprint are as anywhere: a lane's indices are its frames', a sub-actor's with its
   `parallel` index. The planned clock is not yet in `--emit-trace`'s `t`, which stays the walk's
-  order; `aeiou run` refuses a timeline until its run side is built (brief item 72 (7)).
+  order; `aeiou run` issues a timeline's ops on the event loops (*The executor*, below) and
+  refuses one under a blocking backend until a thread a lane is built (brief item 72 (7) step 4).
 - **`prev {ref, init}`** (contract 0.15). A `let` that some `prev` names (the names are
   collected by `sites::annotate`) keeps its value in the iteration last evaluated and in the
   one before, by its loop's index, under the outer indices; `prev` returns the value at the
@@ -314,8 +315,32 @@ each is a recorded decision and the golden tests pin them.
   `vm::drive`, and so `dry-run`, hands a timeline's ops to its sink as these records (the same
   ops in the same order: the counts and the fingerprint do not move); a dry run completes each
   op as it walks it, so its planner forgets its paths every 65,536. The metrics walk
-  (`--metrics`, `--emit-trace`) still walks the VM itself, a timeline one context. The executor
-  that issues the records is step 3.
+  (`--metrics`, `--emit-trace`) still walks the VM itself, a timeline one context. The planner
+  also gives what the walk does to its lanes (`vm::TlNote`, asked for by `Vm::note_lanes`): a
+  fork with its sub-lanes and whether it is joined, a submission with its worker lane, an
+  eviction batch with its lanes and the lane whose store started it (none at a tick), and each
+  body lane's end, each before the ops it orders.
+- **The executor** (2026-11-13, `exec.rs`; step 3). `Exec` takes the planner's events in planned
+  order and issues each executor lane's records one at a time, a record at `ready = max(plan +
+  L, the lane's previous completion, the completions of its edges)`, then `L := ready − plan`, so
+  a lane's lag L never shrinks and ops at one planned instant go back to back. A fork's
+  sub-lanes start once the parent reaches the fork (`max(plan + L, previous completion)`) with
+  its L; a joined parent goes on at `max(the latest planned end of the fork's sub-lanes + L, their
+  last completions)`, one fork at a time. A submission's body and an eviction batch a store
+  started begin no earlier than their lane reaches them. Worker and eviction lanes are queues:
+  their records issue at `max(plan, previous completion, gate, edges)`, L reported and never
+  carried, so a batch past its tick delays the next by its overage. A submission's write bytes
+  are staged from its gate until each write completes; staging past the workers' `staging` is a
+  would-be drop, recorded with its time (reported, and made a gate failure, with step 5).
+  `exec::simulate` runs it on a simulated clock and storage (`tests/exec.rs`). Under `aeiou run`
+  on the event loops (`uring.rs`, `aio.rs`) an instance whose body has a timeline is one task
+  holding the planner, pulled 10 s of planned time ahead of the wall clock, and the executor,
+  planned time 0 the loop's start; each executor lane is a task, made when it first has a record,
+  with its own open files (an op on a file another lane opened fails as not open), issuing
+  through the loop's engine as an actor's op; a timer wakes the task for the next planned op.
+  Refused: a blocking backend (step 4), an object namespace, `--time-scale` other than 1, and an
+  op outside the timeline. The lag, edge waits, host lateness, and staging are measured and not
+  yet reported (step 5).
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which

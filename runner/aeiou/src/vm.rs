@@ -471,6 +471,28 @@ pub struct TlAt {
     pub plan: i64,
 }
 
+/// An executor lane's key (`Lane::exec`).
+pub type Exec = (u8, i64, i64);
+
+/// Where a walk notes what its timelines do to their lanes (`Vm::note_lanes`).
+pub type Notes = Arc<Mutex<Vec<TlNote>>>;
+
+/// What a timeline's walk did to its lanes, for the planner (`plan.rs`), given only when asked
+/// for (`Vm::note_lanes`): the ops' order across lanes the run must keep beyond path order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TlNote {
+    /// Lane `parent` forked `kids` at `plan`; a joined parent waits for them to end.
+    Fork { parent: Exec, kids: Vec<Exec>, join: bool, plan: i64 },
+    /// Lane `parent` submitted a body to worker lane `worker` of the timeline's workers `workers`
+    /// (by declaration order), whose `staging` is in bytes.
+    Submit { parent: Exec, worker: Exec, workers: usize, staging: i64, plan: i64 },
+    /// An eviction batch started its victims on `lanes` at `plan`: by a store of lane `parent`,
+    /// or at a tick (`None`).
+    Evict { parent: Option<Exec>, lanes: Vec<Exec>, plan: i64 },
+    /// A lane of the timeline's body ended at `plan` (worker and eviction lanes go on).
+    End { lane: Exec, plan: i64 },
+}
+
 /// What a lane's step gave `tl_step`.
 enum LaneEv<'a> {
     Op,
@@ -612,6 +634,8 @@ struct TlRun<'m, 'a> {
     heap: BinaryHeap<Reverse<(i64, u8, Vec<i64>, u64, usize)>>,
     seq: u64,
     cur: Option<usize>,
+    /// What it did to its lanes, when asked for (`Vm::note_lanes`).
+    notes: Option<Notes>,
     /// Its tiers' eviction (contract 0.19), by cache and tier, in declaration order.
     evict: Vec<(Waitable<'a>, EvictLanes<'m, 'a>)>,
     /// A walk that evaluates a timed tier's `when` and `count` (parameters, literals, `tier`).
@@ -631,11 +655,15 @@ impl<'m, 'a> TlRun<'m, 'a> {
 
     /// Each victim's eviction lane (contract 0.19): victim i of the batch on lane i mod `lanes`,
     /// its key (the tier's index, the batch, the lane, its place on the lane), at `at`.
-    fn spawn_evictions(&mut self, w: Waitable<'a>, at: i64, keys: Vec<i64>) {
+    fn spawn_evictions(&mut self, w: Waitable<'a>, at: i64, keys: Vec<i64>, parent: Option<Exec>) {
         let Some((_, e)) = self.evict.iter_mut().find(|(x, _)| *x == w) else { return };
         let Some((snap, lanes)) = &e.body else { return };
         let (idx, batch, lanes, snap) = (e.idx, e.batches, *lanes, snap.clone());
         e.batches += 1;
+        if let Some(n) = &self.notes {
+            let lanes = (0..(keys.len() as i64).min(lanes)).map(|i| (0, idx, i)).collect();
+            n.lock().unwrap().push(TlNote::Evict { parent, lanes, plan: at });
+        }
         for (i, k) in keys.into_iter().enumerate() {
             let i = i as i64;
             let mut kid = Vm::resume(snap.clone());
@@ -693,7 +721,7 @@ impl<'m, 'a> TlRun<'m, 'a> {
             let body = t.on_evict;
             drop(g);
             if body && !gone.is_empty() {
-                self.spawn_evictions(w, at, gone);
+                self.spawn_evictions(w, at, gone, None);
             }
         }
     }
@@ -764,6 +792,8 @@ pub struct Vm<'m, 'a> {
     tier_state: Option<[i64; 2]>,
     /// In an eviction lane: its victim's key, which `victim` reads (contract 0.19).
     victim: Option<i64>,
+    /// Where its timelines note what they do to their lanes (`note_lanes`).
+    notes: Option<Notes>,
     /// What this lane holds, by name (contract 0.18).
     holds: Vec<(&'a str, Hold<'a>)>,
     /// This lane's index in its timeline.
@@ -813,6 +843,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             cached: None,
             tier_state: None,
             victim: None,
+            notes: None,
             holds: Vec::new(),
             lane: 0,
         }
@@ -850,6 +881,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             cached: None,
             tier_state: None,
             victim: None,
+            notes: None,
             holds: Vec::new(),
             lane: 0,
         }
@@ -1045,8 +1077,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 let evicted = std::mem::take(&mut g.evicted);
                 drop(g);
+                let by = run.lanes[cur].exec;
                 for (w, at, keys) in evicted {
-                    run.spawn_evictions(w, at, keys);
+                    run.spawn_evictions(w, at, keys, Some(by));
                 }
             }
             match s {
@@ -1091,6 +1124,11 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     let mut key = lane.key.clone();
                     key.push(lane.forks);
                     lane.forks += 1;
+                    let parent = lane.exec;
+                    if let Some(n) = &run.notes {
+                        let first = run.lanes.len() as i64;
+                        n.lock().unwrap().push(TlNote::Fork { parent, kids: (0..width.max(0)).map(|k| (1, first + k, 0)).collect(), join, plan: clock });
+                    }
                     for k in 0..width {
                         let mut kid = Vm::resume(snap.clone());
                         kid.tl = Some(run.shared.clone());
@@ -1133,6 +1171,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     kid.prev_slots = prevs;
                     kid.start(body);
                     let exec = (2, wi as i64, ord % run.workers[wi].1);
+                    if let Some(n) = &run.notes {
+                        n.lock().unwrap().push(TlNote::Submit { parent: run.lanes[cur].exec, worker: exec, workers: wi, staging: run.workers[wi].2, plan: clock });
+                    }
                     run.lanes.push(Lane { vm: Some(kid), key: vec![wi as i64, ord], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 2, exec });
                     let l = run.lanes.len() - 1;
                     run.ready(l);
@@ -1144,6 +1185,11 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         bail!("timeline `{}`: a lane ended holding `{h}`, which only its own `release` gives back (V34)", g.name);
                     }
                     let end = lane.vm.take().map_or(0, |v| v.clock);
+                    if lane.class == 1 {
+                        if let Some(n) = &run.notes {
+                            n.lock().unwrap().push(TlNote::End { lane: lane.exec, plan: end });
+                        }
+                    }
                     run.cur = None;
                     if let Some(p) = lane.parent {
                         let parent = &mut run.lanes[p];
@@ -1157,6 +1203,13 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
             }
         }
+    }
+
+    /// Have every timeline this walk enters note what it does to its lanes (`TlNote`) in
+    /// `notes`, in the order the walk does it: each before the events of the lanes it names
+    /// that follow it. Call before the walk enters one.
+    pub fn note_lanes(&mut self, notes: Notes) {
+        self.notes = Some(notes);
     }
 
     /// The op of the last `Event::Op`, again: for a driver that parked the walk at it and now
@@ -2470,7 +2523,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 let mut main = Vm::resume(snap);
                 main.tl = Some(shared.clone());
                 main.push_body(body);
-                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 1, exec: (1, 0, 0) }], heap: BinaryHeap::new(), seq: 0, cur: None, evict, eval, workers: wk };
+                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 1, exec: (1, 0, 0) }], heap: BinaryHeap::new(), seq: 0, cur: None, notes: self.notes.clone(), evict, eval, workers: wk };
                 run.ready(0);
                 self.tlrun = Some(Box::new(run));
                 Ok(Some(Next::Timeline))

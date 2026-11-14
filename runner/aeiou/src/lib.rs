@@ -27,6 +27,7 @@ pub mod dryrun;
 pub mod ebpf;
 pub mod ebpf_text;
 pub mod eval;
+pub mod exec;
 pub mod interview;
 pub mod export;
 pub mod limits;

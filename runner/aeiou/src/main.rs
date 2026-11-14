@@ -1547,9 +1547,6 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     let mut cfg = parse_config(&a.run.shape, a.gpus, a.run.seed.unwrap_or(0))?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
-    if loaded.ast.has_timeline() {
-        bail!("{}: a `timeline` is not run yet: issuing its lanes' ops at their planned times comes with brief item 72 (7); `aeiou check` and `aeiou dry-run` walk it", a.abstract_path.display());
-    }
     warn_incomplete(loaded);
     if let Some(c) = &a.case {
         case_layer(c, &mut cfg, loaded)?;
@@ -1613,6 +1610,19 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
         );
     }
     let event_loop = backend.event_loop() || s3.event_loop();
+    // a timeline's lanes are issued at their planned times by the executor (`exec.rs`, brief
+    // item 72 (7)): on the event loops so far; a thread a lane under the blocking backends is step 4
+    if loaded.ast.has_timeline() {
+        if !backend.event_loop() {
+            bail!("{}: a `timeline` under --posix {} (blocking) is not run yet: a thread a live lane comes with brief item 72 (7) step 4; --posix io_uring or libaio runs it, as another workload than the declared API's", a.abstract_path.display(), backend.api.name());
+        }
+        if used.s3 {
+            bail!("{}: a `timeline` with an object namespace is not run yet (brief item 72 (7))", a.abstract_path.display());
+        }
+        if a.time_scale != 1.0 {
+            aeiou::usage!("--time-scale {}: a timeline's planned clock is the workload, so it runs at 1{}", a.time_scale, layers.from(&["time-scale"]));
+        }
+    }
     // the rules froze every identity option: an API the lock does not name is the abstract's
     if let Some(c) = a.case.as_ref().filter(|c| c.lock.identity_frozen) {
         for (name, got, want, on) in [("posix", backend.api.name(), declared.api.name(), used.posix), ("cache", backend.cache.name(), declared.cache.name(), used.posix), ("s3", s3.name(), declared_s3.name(), used.s3)] {

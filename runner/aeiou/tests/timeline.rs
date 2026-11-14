@@ -293,21 +293,68 @@ fn the_validator_holds_timelines_prev_and_arrays_to_their_rules() {
     assert_eq!(refused(ok), Vec::<String>::new());
 }
 
-// ---------------------------------------------------------------- the run side, not built
+// ---------------------------------------------------------------- the run side
 
-/// `aeiou run` refuses a timeline until issuing its lanes' ops at their planned times is built
-/// (brief item 72 (7)); `check` and `dry-run` walk it.
+/// `aeiou run` issues a timeline's ops at their planned times on the event loops (brief item 72
+/// (7) step 3, `exec.rs`): the op multiset dry-run walks (its fingerprint), no sooner than the
+/// plan; under a blocking backend it is refused until step 4, and so is a `--time-scale`.
 #[test]
-fn run_refuses_a_timeline_that_check_and_dry_run_walk() {
+fn run_issues_a_timeline_on_the_event_loops() {
+    let rf = |n: &str| json!({"ref": n});
+    let write = json!([{"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]);
+    let read = json!([{"open": {"file": rf("f"), "flags": ["RDONLY"]}}, {"read": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]);
+    let mut session = vec![json!({"compute": {"ns": {"mul": [{"index": "k"}, 100_000_000]}}}),
+        json!({"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}}),
+        json!({"submit": {"workers": "w", "body": write}}), json!({"compute": {"ns": 50_000_000}})];
+    session.extend(read.as_array().unwrap().iter().cloned());
+    let text = json!({"ast": "0.20", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "workers": [{"name": "w", "lanes": 2, "staging": 1 << 20}],
+            "body": [{"parallel": {"index": "k", "width": 3, "body": session}}]}}]}}}).to_string();
     let dir = crate::common::tmpdir("timeline", "run");
     let ast = dir.join("t.ast.json");
-    std::fs::write(&ast, doc(json!({}), json!([tl(json!([stat(json!(1))]))]))).unwrap();
+    std::fs::write(&ast, text).unwrap();
     let aeiou = env!("CARGO_BIN_EXE_aeiou");
     let out = |args: &[&str]| std::process::Command::new(aeiou).args(args).output().unwrap();
     let a = ast.to_str().unwrap();
-    assert!(out(&["check", a]).status.success());
-    assert!(out(&["dry-run", a, "--gpus", "1"]).status.success());
-    let r = out(&["run", a, "--gpus", "1", "--root", dir.to_str().unwrap()]);
+    let fp = |o: &std::process::Output| String::from_utf8_lossy(&o.stdout).lines().find(|l| l.starts_with("fingerprint ")).map(str::to_string);
+    let dry = out(&["dry-run", a, "--gpus", "1"]);
+    assert!(dry.status.success());
+    for posix in ["io_uring", "libaio"] {
+        let root = dir.join(posix);
+        std::fs::create_dir_all(&root).unwrap();
+        let t0 = std::time::Instant::now();
+        let r = out(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", posix]);
+        let took = t0.elapsed();
+        assert!(r.status.success(), "{posix}: {}", String::from_utf8_lossy(&r.stderr));
+        assert_eq!(fp(&r), fp(&dry), "{posix}: the run's ops are the plan's");
+        assert!(String::from_utf8_lossy(&r.stdout).contains("by kind: open=6 close=6 read=3 write=3"), "{posix}");
+        // session 2 reads at 250 ms of planned time
+        assert!(took >= std::time::Duration::from_millis(250), "{posix}: {took:?}");
+        for k in 0..3 {
+            assert_eq!(std::fs::metadata(root.join(format!("kv/{k}"))).unwrap().len(), 4096);
+        }
+    }
+    let root = dir.join("sync");
+    std::fs::create_dir_all(&root).unwrap();
+    let r = out(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap()]);
     let err = String::from_utf8_lossy(&r.stderr);
-    assert!(!r.status.success() && err.contains("a `timeline` is not run yet"), "{err}");
+    assert!(!r.status.success() && err.contains("a `timeline` under --posix sync (blocking) is not run yet"), "{err}");
+    let r = out(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", "io_uring", "--time-scale", "2"]);
+    let err = String::from_utf8_lossy(&r.stderr);
+    assert_eq!(r.status.code(), Some(2), "{err}");
+    assert!(err.contains("a timeline's planned clock is the workload"), "{err}");
+    // an op outside the timeline of an actor whose body has one is not issued yet
+    let text = json!({"ast": "0.20", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [
+            {"let": {"name": "g", "value": {"object": {"namespace": "kv", "fields": {"key": 9}}}}},
+            {"open": {"file": rf("g"), "flags": ["WRONLY", "CREAT"]}}, {"close": {"file": rf("g")}},
+            {"timeline": {"name": "tl", "body": [{"compute": {"ns": 1}}]}}]}}}).to_string();
+    std::fs::write(&ast, text).unwrap();
+    let root = dir.join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    let r = out(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", "io_uring"]);
+    let err = String::from_utf8_lossy(&r.stderr);
+    assert!(!r.status.success() && err.contains("open kv/9 outside the timeline of an actor whose body has one"), "{err}");
 }

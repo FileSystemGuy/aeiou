@@ -51,19 +51,21 @@ pub struct Ast {
 }
 
 impl Ast {
-    /// Whether a `timeline` is anywhere in the document: `aeiou run` does not run one yet.
+    /// Whether a `timeline` is anywhere in the document.
     pub fn has_timeline(&self) -> bool {
-        fn any(nodes: &[Node]) -> bool {
-            nodes.iter().any(|n| match n {
-                Node::Timeline { .. } => true,
-                Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Submit { body, .. } | Node::Span { body, .. } => any(body),
-                Node::Cond { then, otherwise, .. } => any(then) || otherwise.as_deref().is_some_and(any),
-                Node::Choose { arms, .. } => arms.iter().any(|a| any(&a.body)),
-                _ => false,
-            })
-        }
-        self.actors.values().any(|a| any(&a.body))
+        self.actors.values().any(|a| body_has_timeline(&a.body))
     }
+}
+
+/// Whether a `timeline` is anywhere in `nodes`.
+pub fn body_has_timeline(nodes: &[Node]) -> bool {
+    nodes.iter().any(|n| match n {
+        Node::Timeline { .. } => true,
+        Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Submit { body, .. } | Node::Span { body, .. } => body_has_timeline(body),
+        Node::Cond { then, otherwise, .. } => body_has_timeline(then) || otherwise.as_deref().is_some_and(body_has_timeline),
+        Node::Choose { arms, .. } => arms.iter().any(|a| body_has_timeline(&a.body)),
+        _ => false,
+    })
 }
 
 #[derive(Debug, Deserialize)]

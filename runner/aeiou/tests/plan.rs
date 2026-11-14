@@ -37,7 +37,7 @@ fn planned(body: Value) -> Vec<Planned> {
 fn records(body: Value) -> Vec<Record> {
     planned(body).into_iter().filter_map(|p| match p {
         Planned::Op(r) => Some(r),
-        Planned::Compute { .. } => None,
+        _ => None,
     }).collect()
 }
 
@@ -98,9 +98,10 @@ fn computes_are_planned_with_their_lane() {
         _ => None,
     }).collect();
     assert_eq!(comp, [(0, 0), (0, 10)]);
-    let lanes: Vec<usize> = p.iter().map(|x| match x {
-        Planned::Compute { lane, .. } => *lane,
-        Planned::Op(r) => r.lane,
+    let lanes: Vec<usize> = p.iter().filter_map(|x| match x {
+        Planned::Compute { lane, .. } => Some(*lane),
+        Planned::Op(r) => Some(r.lane),
+        _ => None,
     }).collect();
     assert_eq!(lanes[0], lanes[1], "session 0's compute and stat");
     assert_eq!(lanes[2], lanes[3], "session 1's");
@@ -317,4 +318,46 @@ fn outside_a_timeline_forks_are_inline_and_barriers_are_not_planned() {
     let m = model(json!([{"barrier": {"scope": "global"}}]));
     let e = Plan::new(m, "gpu", 0, 1).next().unwrap_err();
     assert!(format!("{e:#}").contains("a `barrier` is not planned"), "{e:#}");
+}
+
+/// What the walk does to its lanes comes in the plan, each before the ops it orders: a fork with
+/// its sub-lanes, a submission with its worker lane, an eviction batch with its lanes and the
+/// lane whose store started it, and each body lane's end.
+#[test]
+fn lane_events_come_before_the_ops_they_order() {
+    let tiers = json!([{"name": "t", "order": [{"cached": "touched"}, {"neg": {"cached": "pos"}}], "capacity": 2,
+        "on_evict": {"lanes": 1, "body": [stat(json!({"mod": [{"victim": {}}, 1000]}))]}}]);
+    let body = json!([
+        {"parallel": {"index": "k", "width": 2, "body": [compute(json!({"mul": [{"index": "k"}, 10]})), stat(json!({"index": "k"}))]}},
+        {"submit": {"workers": "w", "body": [stat(json!(5))]}},
+        {"let": {"name": "a", "value": {"shared": {"id": 1, "n": 3}}}},
+        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 3}},
+        stat(json!(9))]);
+    let p = planned(json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}],
+        "workers": [{"name": "w", "lanes": 2, "staging": 4096}], "body": body}}]));
+    let words: Vec<String> = p.iter().map(|x| match x {
+        Planned::Op(r) => format!("op {} {}", r.lane, r.path),
+        Planned::Compute { lane, plan, ns } => format!("compute {lane} {plan}+{ns}"),
+        Planned::Fork { parent, kids, join, plan } => format!("fork {parent} {kids:?} {join} {plan}"),
+        Planned::Submit { parent, worker, workers, staging, plan } => format!("submit {parent} {worker} {workers} {staging} {plan}"),
+        Planned::Evict { parent, lanes, plan } => format!("evict {parent:?} {lanes:?} {plan}"),
+        Planned::End { lane, plan } => format!("end {lane} {plan}"),
+    }).collect();
+    // the root (lane 0) forks lanes 1 and 2 and waits; at 10 lane 2's stat; then the root goes on
+    assert_eq!(&words[..3], ["fork 0 [1, 2] true 0", "compute 1 0+0", "op 1 d/0"], "{words:#?}");
+    let at = |w: &str| words.iter().position(|x| x == w).unwrap_or_else(|| panic!("no `{w}` in {words:#?}"));
+    assert!(at("end 1 0") < at("op 2 d/1"));
+    assert!(at("op 2 d/1") < at("end 2 10"));
+    // the root's submission at 10, to worker lane 0 of workers 0, before the worker's op
+    assert!(at("end 2 10") < at("submit 0 3 0 4096 10"));
+    let ev = words.iter().position(|w| w.starts_with("evict Some(0) ")).expect("an eviction by the root's store");
+    assert!(at("submit 0 3 0 4096 10") < ev);
+    let lanes: Vec<&str> = words[ev].split(['[', ']']).collect();
+    let victim_lane = lanes[1];
+    let victim_op = words.iter().position(|w| w.starts_with(&format!("op {victim_lane} d/"))).expect("the victim's stat");
+    assert!(ev < victim_op);
+    assert!(at("op 0 d/9") > ev);
+    assert!(at("op 0 d/9") < at("end 0 10"));
+    // worker lanes go after the body's lanes at an instant: the submitted stat comes last
+    assert!(at("submit 0 3 0 4096 10") < at("op 3 d/5") && at("end 0 10") < at("op 3 d/5"));
 }

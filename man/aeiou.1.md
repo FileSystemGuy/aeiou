@@ -622,6 +622,7 @@ turns it off, and the last one on the line wins.
 - **--time-scale** *X*
 
   Multiply every `compute` sleep by *X*; 0 runs the I/O back to back. Default 1.
+  Refused for an abstract with a `timeline`, whose planned clock is the workload.
   *Layered.*
 
 **io_uring**

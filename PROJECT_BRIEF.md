@@ -1655,8 +1655,14 @@ numbers; the order is this note's.
     writes on 4 store workers, its staging G2's bytes, its reads span `load`, its fingerprint
     unchanged. *Step 2 built the same day* (the note's addendum "The planner built"): `plan.rs`,
     a timeline's walk as owned records (planned order, executor lane, planned time, path-order
-    edges), `dry-run` driven by it, its counts and fingerprint unchanged. Next: the executor on
-    the event loop (step 3).
+    edges), `dry-run` driven by it, its counts and fingerprint unchanged. *Step 3 built the same
+    day* (the addendum "The executor built"): `exec.rs`, each lane's records issued at
+    `max(plan + L, previous completion, edges)`, forks, joins, submissions, eviction batches, and
+    staging, on a simulated clock (`tests/exec.rs`, `agentx-tiered` whole) and under `aeiou run`
+    on the `io_uring` and `libaio` loops; worker and eviction lanes are queues, their L not
+    carried (confirmed by the user the same day; sessions carry L, the application driving its own
+    schedule and waiting on each op). Next: a thread a lane under the blocking
+    backends (step 4).
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the
@@ -1664,7 +1670,8 @@ numbers; the order is this note's.
     *Built 2026-11-12, contract 0.15, plan side only (`DESIGN_REVIEW.md` §3.99, the note "The
     timeline built"):* (1)'s timeline construct as `timeline`, `publish`, `published`, `entry`,
     and `parallel`'s `join: false`, walked in planned order by `check` and `dry-run`; `run`
-    refuses a timeline until (7) is built; the planned clock not yet in `--emit-trace`.
+    refuses a timeline until (7) is built (since 2026-11-13 it runs one on the event loops, (7)
+    step 3); the planned clock not yet in `--emit-trace`.
     *Contract 0.18, the same day (the user's choices; `DESIGN_REVIEW.md` §3.99, the note "Tiers as
     general pieces"):* (1)'s queue with a fixed number of servers as a timeline's `resources`,
     taken by `acquire` and given back by `release`, a lane waiting in planned time, first come

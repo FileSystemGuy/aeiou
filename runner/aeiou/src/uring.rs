@@ -405,7 +405,27 @@ pub(crate) struct TaskIo {
 enum Prog {
     Vm(Vm<'static, 'static>),
     Lane(Lane),
+    /// An instance whose body is a timeline: its planner and executor (`exec.rs`).
+    Tl(Box<TlDrive>),
+    /// One of its executor lanes, and the record it has in flight.
+    XLane { coord: usize, rec: Option<crate::plan::Record> },
     Ended,
+}
+
+/// How far ahead of the wall clock a timeline's planner is pulled (`DESIGN_REVIEW.md` §3.99, the
+/// note "The run side of timelines": a horizon of planned time).
+const HORIZON_NS: i64 = 10_000_000_000;
+
+/// A timeline's run on this loop: the planner, the executor, the planner's next event, the
+/// wall-clock instant of planned time 0, each executor lane's task, and the timer set.
+struct TlDrive {
+    plan: crate::plan::Plan<'static, 'static>,
+    ex: crate::exec::Exec,
+    ahead: Option<crate::plan::Planned>,
+    t0: Instant,
+    lanes: Vec<Option<usize>>,
+    keep: usize,
+    timer: Option<Instant>,
 }
 
 struct Task {
@@ -1198,15 +1218,25 @@ impl<E: Engine> Loop<E> {
                 format!("{}#{} [{}]", ctx.template, ctx.actor, idx.join(","))
             }
             Prog::Lane(l) => l.label(),
+            Prog::Tl(_) => format!("{}#{} timeline", self.tasks[id].io.a.template, self.tasks[id].io.a.actor),
+            Prog::XLane { rec, .. } => format!("{}#{} timeline lane{}", self.tasks[id].io.a.template, self.tasks[id].io.a.actor, rec.as_ref().map_or(String::new(), |r| format!(" {} {}", r.op().kind.name(), r.path))),
             Prog::Ended => format!("ended task {id}"),
         }
     }
 
     pub(crate) fn run(&mut self, model: &'static Model<'static>, insts: Vec<(&'static str, i64, i64)>) -> Result<()> {
         for (template, actor, count) in insts {
-            let mut vm = Vm::new(model, template, actor, count);
-            vm.start(&model.ast.actors[template].body);
             let a = ActorState::new(&self.sh, template, actor, true, None, 0);
+            let body = &model.ast.actors[template].body;
+            if crate::ast::body_has_timeline(body) {
+                let mut plan = crate::plan::Plan::new(model, template, actor, count);
+                let ahead = plan.next()?;
+                let d = TlDrive { plan, ex: crate::exec::Exec::new(), ahead, t0: Instant::now(), lanes: Vec::new(), keep: crate::exec::RETIRE_FLOOR, timer: None };
+                self.add_task(Prog::Tl(Box::new(d)), a, None, Role::Main, true);
+                continue;
+            }
+            let mut vm = Vm::new(model, template, actor, count);
+            vm.start(body);
             self.add_task(Prog::Vm(vm), a, None, Role::Main, true);
         }
         let r = self.serve();
@@ -1345,9 +1375,153 @@ impl<E: Engine> Loop<E> {
                     _ => self.ready(id),
                 }
             }
-            Prog::Ended => unreachable!("a completion for an ended task"),
+            Prog::XLane { coord, rec } => {
+                let coord = *coord;
+                let r = rec.as_ref().expect("an executor lane's completion is of its record");
+                let op = r.op();
+                let res = done(&mut t.io, &op);
+                t.io.a.settle(&op, &r.ctx(), res, ns)?;
+                let seq = r.seq;
+                t.prog = Prog::XLane { coord, rec: None };
+                t.wait = Wait::None;
+                if let Prog::Tl(d) = &mut self.tasks[coord].prog {
+                    let now = d.t0.elapsed().as_nanos() as i64;
+                    d.ex.complete(seq, now);
+                }
+                self.ready(coord);
+            }
+            Prog::Tl(_) | Prog::Ended => unreachable!("a completion for a task with no op"),
         }
         Ok(())
+    }
+
+    /// A timeline's task (`exec.rs`): the planner pulled a horizon ahead, the records due issued
+    /// on their lanes' tasks, a timer for the next one; the end once every lane has ended.
+    fn step_tl(&mut self, id: usize) -> Result<()> {
+        loop {
+            let t = &mut self.tasks[id];
+            let Prog::Tl(d) = &mut t.prog else { unreachable!() };
+            let d = &mut **d;
+            let now = d.t0.elapsed().as_nanos() as i64;
+            if d.timer.is_some_and(|w| w <= Instant::now()) {
+                d.timer = None;
+            }
+            while let Some(p) = d.ahead.take() {
+                if crate::exec::planned_at(&p) > now.saturating_add(HORIZON_NS) {
+                    d.ahead = Some(p);
+                    break;
+                }
+                match &p {
+                    crate::plan::Planned::Op(r) if r.outside => {
+                        bail!("{} {} outside the timeline of an actor whose body has one: not run yet (brief item 72 (7)): only the timeline's ops are issued", r.op().kind.name(), r.path)
+                    }
+                    crate::plan::Planned::Compute { ns, .. } => t.io.a.computed((*ns).max(0) as u64),
+                    _ => {}
+                }
+                d.ex.push(p);
+                d.ahead = d.plan.next()?;
+            }
+            if d.plan.paths() >= d.keep {
+                let (plan, ex) = (&mut d.plan, &d.ex);
+                plan.retire(|s| ex.done(s));
+                d.keep = (2 * d.plan.paths()).max(crate::exec::RETIRE_FLOOR);
+            }
+            let recs = d.ex.poll(now);
+            if recs.is_empty() {
+                if d.ahead.is_none() && d.ex.idle() {
+                    return self.end_tl(id);
+                }
+                let wake = [d.ex.next_wake(), d.ahead.as_ref().map(|p| crate::exec::planned_at(p).saturating_sub(HORIZON_NS))].into_iter().flatten().min();
+                match wake {
+                    Some(w) => {
+                        let at = d.t0 + Duration::from_nanos(w.max(0) as u64);
+                        if d.timer.is_none_or(|x| at < x) {
+                            d.timer = Some(at);
+                            self.timers.push(Reverse((at, id)));
+                        }
+                    }
+                    None if d.ex.in_flight() == 0 => bail!("timeline stopped: {}", d.ex.stuck().unwrap_or_else(|| "no lane able to go on".into())),
+                    None => {}
+                }
+                return Ok(());
+            }
+            let mut inline = false;
+            for r in recs {
+                inline |= self.issue_x(id, r)?;
+            }
+            if !inline {
+                // the next completion steps this task again; a timer may be due before it
+                let t = &mut self.tasks[id];
+                let Prog::Tl(d) = &mut t.prog else { unreachable!() };
+                if let Some(w) = [d.ex.next_wake(), d.ahead.as_ref().map(|p| crate::exec::planned_at(p).saturating_sub(HORIZON_NS))].into_iter().flatten().min() {
+                    let at = d.t0 + Duration::from_nanos(w.max(0) as u64);
+                    if d.timer.is_none_or(|x| at < x) {
+                        d.timer = Some(at);
+                        self.timers.push(Reverse((at, id)));
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    /// Issue record `r` on its executor lane's task (made when the lane first has an op);
+    /// `true` when it completed inline (the executor then has more to give at once).
+    fn issue_x(&mut self, coord: usize, r: crate::plan::Record) -> Result<bool> {
+        let sh = self.sh.clone();
+        let lane = r.lane;
+        let task = {
+            let Prog::Tl(d) = &self.tasks[coord].prog else { unreachable!() };
+            d.lanes.get(lane).copied().flatten()
+        };
+        let task = match task {
+            Some(t) => t,
+            None => {
+                let (template, actor) = (self.tasks[coord].io.a.template, self.tasks[coord].io.a.actor);
+                let a = ActorState::new(&sh, template, actor, false, None, 0);
+                let tid = self.add_task(Prog::XLane { coord, rec: None }, a, Some(coord), Role::Parallel { parent: coord }, true);
+                let Prog::Tl(d) = &mut self.tasks[coord].prog else { unreachable!() };
+                if d.lanes.len() <= lane {
+                    d.lanes.resize(lane + 1, None);
+                }
+                d.lanes[lane] = Some(tid);
+                tid
+            }
+        };
+        let Task { prog, io, wait, .. } = &mut self.tasks[task];
+        *prog = Prog::XLane { coord, rec: Some(r) };
+        let Prog::XLane { rec: Some(r), .. } = &*prog else { unreachable!() };
+        let op = r.op();
+        io.a.check_align(&sh, &op)?;
+        match issue(&mut self.io, &mut self.objects, &sh, io, &op)? {
+            Issued::Done(res, ns) => {
+                io.a.settle(&op, &r.ctx(), res, ns)?;
+                let seq = r.seq;
+                *prog = Prog::XLane { coord, rec: None };
+                let Prog::Tl(d) = &mut self.tasks[coord].prog else { unreachable!() };
+                let now = d.t0.elapsed().as_nanos() as i64;
+                d.ex.complete(seq, now);
+                Ok(true)
+            }
+            Issued::Pending => {
+                *wait = Wait::Io;
+                Ok(false)
+            }
+        }
+    }
+
+    /// A timeline has ended: its lanes' counts go to its task, which ends as a main line does.
+    fn end_tl(&mut self, id: usize) -> Result<()> {
+        let lanes: Vec<usize> = {
+            let Prog::Tl(d) = &self.tasks[id].prog else { unreachable!() };
+            d.lanes.iter().flatten().copied().collect()
+        };
+        let mut r = Ok(());
+        for l in lanes {
+            r = r.and(self.end_child(l, id));
+        }
+        self.tasks[id].active = false;
+        r.and(self.finished(id))
     }
 
     /// A task parked on a channel tries again. `Ok(true)`: it may go on.
@@ -1396,8 +1570,12 @@ impl<E: Engine> Loop<E> {
 
     /// Advance task `id` until it blocks or ends.
     fn step(&mut self, id: usize) -> Result<()> {
-        if matches!(self.tasks[id].prog, Prog::Lane(_)) {
-            return self.step_lane(id);
+        match self.tasks[id].prog {
+            Prog::Lane(_) => return self.step_lane(id),
+            Prog::Tl(_) => return self.step_tl(id),
+            // an executor lane is issued by its timeline's task
+            Prog::XLane { .. } => return Ok(()),
+            _ => {}
         }
         if let Wait::Chan { .. } = self.tasks[id].wait {
             if !self.retry_chan(id)? {
@@ -1669,7 +1847,7 @@ impl Task {
     fn vm(&mut self) -> &mut Vm<'static, 'static> {
         match &mut self.prog {
             Prog::Vm(vm) => vm,
-            Prog::Lane(_) | Prog::Ended => unreachable!("a trace lane has no VM"),
+            Prog::Lane(_) | Prog::Tl(_) | Prog::XLane { .. } | Prog::Ended => unreachable!("a trace lane, a timeline, or an executor lane has no VM"),
         }
     }
 }
@@ -1844,7 +2022,7 @@ impl<E: Engine> Loop<E> {
     fn lane(&mut self, id: usize) -> &mut Lane {
         match &mut self.tasks[id].prog {
             Prog::Lane(l) => l,
-            Prog::Vm(_) | Prog::Ended => unreachable!("a VM task stepped as a lane"),
+            Prog::Vm(_) | Prog::Tl(_) | Prog::XLane { .. } | Prog::Ended => unreachable!("a VM task stepped as a lane"),
         }
     }
 

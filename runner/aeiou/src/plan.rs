@@ -28,7 +28,7 @@ use anyhow::{bail, Result};
 
 use crate::eval::Model;
 use crate::trace::OwnedCtx;
-use crate::vm::{Control, Event, Op, OpCtx, OpKind, TlAt, Vm};
+use crate::vm::{Control, Event, Notes, Op, OpCtx, OpKind, TlAt, TlNote, Vm};
 
 /// The executor lane of ops outside a timeline.
 const LINE: (u8, i64, i64) = (u8::MAX, 0, 0);
@@ -42,6 +42,8 @@ pub struct Record {
     pub lane: usize,
     /// Its planned time, ns from the timeline's start (outside a timeline, 0).
     pub plan: i64,
+    /// Issued outside a timeline.
+    pub outside: bool,
     pub kind: OpKind,
     pub path: Arc<str>,
     pub path2: Option<Arc<str>>,
@@ -68,12 +70,23 @@ impl Record {
     }
 }
 
-/// What the planner gives, in planned order.
+/// What the planner gives, in planned order. Lanes are executor lanes; a lane event comes
+/// before every op of the lanes it names that it orders.
 #[derive(Debug, Clone)]
 pub enum Planned {
     Op(Record),
     /// A `compute` of `ns` on `lane`, starting at planned time `plan`.
     Compute { lane: usize, plan: i64, ns: i64 },
+    /// `parent` forked `kids` at `plan`: they start no earlier than the parent reaches this
+    /// point, with its L; a joined parent goes on once they have ended.
+    Fork { parent: usize, kids: Vec<usize>, join: bool, plan: i64 },
+    /// `parent` submitted a body to worker lane `worker` (of the timeline's workers `workers`,
+    /// `staging` bytes): its ops start no earlier than the parent reaches this point.
+    Submit { parent: usize, worker: usize, workers: usize, staging: i64, plan: i64 },
+    /// An eviction batch on `lanes` at `plan`, started by a store of `parent` or at a tick.
+    Evict { parent: Option<usize>, lanes: Vec<usize>, plan: i64 },
+    /// A lane of the timeline's body ended at `plan`.
+    End { lane: usize, plan: i64 },
 }
 
 /// A path's ops not yet retired: its last change and each lane's latest read since.
@@ -125,6 +138,7 @@ impl Planner {
             seq,
             lane,
             plan,
+            outside: at.is_none(),
             kind: op.kind,
             path,
             path2,
@@ -211,23 +225,64 @@ impl Planner {
 pub struct Plan<'m, 'a> {
     vm: Vm<'m, 'a>,
     planner: Planner,
+    /// Lane events and the event after them, not yet given.
+    ahead: std::collections::VecDeque<Planned>,
+    notes: Notes,
 }
 
 impl<'m, 'a: 'm> Plan<'m, 'a> {
     pub fn new(model: &'m Model<'a>, template: &'a str, actor: i64, count: i64) -> Plan<'m, 'a> {
         let body = &model.ast.actors[template].body;
         let mut vm = Vm::new(model, template, actor, count);
+        let notes = Notes::default();
+        vm.note_lanes(notes.clone());
         vm.start(body);
-        Plan { vm, planner: Planner::default() }
+        Plan { vm, planner: Planner::default(), ahead: Default::default(), notes }
     }
 
     /// The next planned event, `None` once the walk has ended.
     pub fn next(&mut self) -> Result<Option<Planned>> {
+        if let Some(p) = self.ahead.pop_front() {
+            return Ok(Some(p));
+        }
+        let ev = self.step()?;
+        self.ahead.extend(ev);
+        Ok(self.ahead.pop_front())
+    }
+
+    fn note(p: &mut Planner, n: TlNote) -> Planned {
+        match n {
+            // a parent numbered before the lanes it starts
+            TlNote::Fork { parent, kids, join, plan } => {
+                let parent = p.lane(parent);
+                Planned::Fork { parent, kids: kids.into_iter().map(|k| p.lane(k)).collect(), join, plan }
+            }
+            TlNote::Submit { parent, worker, workers, staging, plan } => {
+                let parent = p.lane(parent);
+                Planned::Submit { parent, worker: p.lane(worker), workers, staging, plan }
+            }
+            TlNote::Evict { parent, lanes, plan } => {
+                let parent = parent.map(|x| p.lane(x));
+                Planned::Evict { parent, lanes: lanes.into_iter().map(|k| p.lane(k)).collect(), plan }
+            }
+            TlNote::End { lane, plan } => Planned::End { lane: p.lane(lane), plan },
+        }
+    }
+
+    fn step(&mut self) -> Result<Option<Planned>> {
         loop {
             let (ev, at) = match self.vm.next_at()? {
                 Some((ev, at)) => (Some(ev), at),
                 None => (None, None),
             };
+            // the walk's notes so far go before the event, numbering the lanes they name first
+            {
+                let notes = std::mem::take(&mut *self.notes.lock().unwrap());
+                for n in notes {
+                    let p = Self::note(&mut self.planner, n);
+                    self.ahead.push_back(p);
+                }
+            }
             return Ok(Some(match ev {
                 None => return Ok(None),
                 Some(Event::Op(op, ctx)) => Planned::Op(self.planner.record(at, &op, &ctx)),
