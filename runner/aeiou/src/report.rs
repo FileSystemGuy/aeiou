@@ -166,7 +166,7 @@ fn stats(s: &Stats, secs: f64) -> Map<String, Value> {
 /// without one: each span name's D (count, sum, nearest-rank p50 and p99, maximum, the worst
 /// 5-minute window's p99, and each window by planned start), and the lanes' final L.
 fn timeline(s: &Stats) -> Option<Value> {
-    if s.spans.is_empty() && s.lane_lag.is_empty() && s.staging.is_empty() && s.lateness.count == 0 {
+    if s.spans.is_empty() && s.lane_lag.is_empty() && s.staging.is_empty() && s.lateness.count == 0 && s.evictions.is_empty() {
         return None;
     }
     let staging: Map<String, Value> = s
@@ -174,7 +174,8 @@ fn timeline(s: &Stats) -> Option<Value> {
         .iter()
         .map(|(name, r)| {
             let first = r.drops.iter().min_by_key(|d| d.0).map_or(Value::Null, |(at, held)| json!({"at_ns": at, "held_bytes": held}));
-            (name.clone(), json!({"capacity_bytes": r.capacity, "peak_bytes": r.peak, "drops": r.drops.len(), "first_drop": first}))
+            (name.clone(), json!({"capacity_bytes": r.capacity, "peak_bytes": r.peak, "drops": r.drops.len(), "first_drop": first,
+                "backlog_peak_writes": r.backlog_peak, "backlog_peak_bytes": r.backlog_bytes_peak}))
         })
         .collect();
     let spans: Map<String, Value> = s
@@ -189,14 +190,18 @@ fn timeline(s: &Stats) -> Option<Value> {
     let mut l = s.lane_lag.clone();
     l.sort_unstable();
     let lag = json!({"lanes": l.len(), "p50_ns": crate::exec::quantile(&l, 0.5), "p99_ns": crate::exec::quantile(&l, 0.99), "max_ns": l.last().copied().unwrap_or(0)});
+    let e = crate::exec::summarize_evictions(&s.evictions);
+    let evictions = json!({"batches": e.batches, "duration": {"p50_ns": e.p50, "p99_ns": e.p99, "max_ns": e.max},
+        "overage": {"batches": e.late, "max_ns": e.late_max, "sum_ns": e.late_sum}});
     let lag_ceiling = s.lag_ceiling.map_or(Value::Null, |(at, l)| json!({"at_ns": at, "lag_ns": l}));
     Some(json!({"window_s": crate::exec::WINDOW_NS / 1_000_000_000, "spans": spans, "lag": lag, "staging": staging,
         "lateness": hist(&s.lateness), "lateness_p99_max_ns": crate::exec::LATENESS_P99_MAX_NS,
         "lag_ceiling_crossed": lag_ceiling, "certain_failure": s.certain, "stopped": s.stopped,
-        "edge_waits": {"ops": s.edge_waits, "sum_ns": s.edge_wait_ns},
+        "edge_waits": {"ops": s.edge_waits, "sum_ns": s.edge_wait_ns}, "evictions": evictions,
         "series": s.series.as_ref().map_or(Value::Null, |p| json!({"seconds": p.seconds,
             "peak_read_bytes": {"s": p.read_bytes.0, "bytes": p.read_bytes.1}, "peak_write_bytes": {"s": p.write_bytes.0, "bytes": p.write_bytes.1},
-            "peak_ops": {"s": p.ops.0, "ops": p.ops.1}, "peak_live_lanes": {"s": p.live_lanes.0, "lanes": p.live_lanes.1}}))}))
+            "peak_ops": {"s": p.ops.0, "ops": p.ops.1}, "peak_live_lanes": {"s": p.live_lanes.0, "lanes": p.live_lanes.1},
+            "peak_backlog": {"s": p.backlog.0, "writes": p.backlog.1}, "peak_evict_queued": {"s": p.evict_queued.0, "ops": p.evict_queued.1}}))}))
 }
 
 /// The busy fraction of takes whose `compute` (recorded unscaled) was slept `× time_scale`

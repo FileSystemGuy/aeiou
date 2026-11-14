@@ -650,6 +650,10 @@ pub struct Stats {
     /// With `--series`: the seconds of run time written and their peaks, `(second, value)`.
     #[serde(default)]
     pub series: Option<SeriesPeaks>,
+    /// Each eviction batch's (planned start, duration, overage past the next batch's planned
+    /// start), ns; concatenated over actors and hosts.
+    #[serde(default)]
+    pub evictions: Vec<(i64, i64, i64)>,
 }
 
 /// The summary of a run's `--series` the reports carry: the seconds of run time, and the
@@ -661,6 +665,11 @@ pub struct SeriesPeaks {
     pub write_bytes: (i64, i64),
     pub ops: (i64, u64),
     pub live_lanes: (i64, u64),
+    /// The most writes any workers had submitted and not written, and eviction ops due.
+    #[serde(default)]
+    pub backlog: (i64, i64),
+    #[serde(default)]
+    pub evict_queued: (i64, u64),
 }
 
 impl SeriesPeaks {
@@ -678,6 +687,12 @@ impl SeriesPeaks {
         if o.live_lanes.1 > self.live_lanes.1 {
             self.live_lanes = o.live_lanes;
         }
+        if o.backlog.1 > self.backlog.1 {
+            self.backlog = o.backlog;
+        }
+        if o.evict_queued.1 > self.evict_queued.1 {
+            self.evict_queued = o.evict_queued;
+        }
     }
 }
 
@@ -688,6 +703,11 @@ pub struct StagingRec {
     pub capacity: i64,
     pub peak: i64,
     pub drops: Vec<(i64, i64)>,
+    /// The most writes submitted and not yet written at once, and the most bytes.
+    #[serde(default)]
+    pub backlog_peak: i64,
+    #[serde(default)]
+    pub backlog_bytes_peak: i64,
 }
 
 impl StagingRec {
@@ -695,6 +715,8 @@ impl StagingRec {
         self.capacity = self.capacity.max(o.capacity);
         self.peak = self.peak.max(o.peak);
         self.drops.extend_from_slice(&o.drops);
+        self.backlog_peak = self.backlog_peak.max(o.backlog_peak);
+        self.backlog_bytes_peak = self.backlog_bytes_peak.max(o.backlog_bytes_peak);
     }
 }
 
@@ -733,13 +755,14 @@ impl Stats {
         self.edge_waits += x.edge_waits;
         self.edge_wait_ns += x.edge_wait_ns;
         if let Some(s) = &x.series {
-            let p = SeriesPeaks { seconds: s.seconds, read_bytes: s.peak_read_bytes, write_bytes: s.peak_write_bytes, ops: s.peak_ops, live_lanes: s.peak_live_lanes };
+            let p = SeriesPeaks { seconds: s.seconds, read_bytes: s.peak_read_bytes, write_bytes: s.peak_write_bytes, ops: s.peak_ops, live_lanes: s.peak_live_lanes, backlog: s.peak_backlog, evict_queued: s.peak_evict_queued };
             self.series.get_or_insert_with(Default::default).merge(&p);
         }
         for (k, v) in &x.spans {
             self.spans.entry(k.to_string()).or_default().extend_from_slice(v);
         }
         self.lane_lag.extend_from_slice(&x.body_lag);
+        self.evictions.extend_from_slice(&x.evictions);
         self.lateness.merge(&x.lateness);
         if self.lag_ceiling.is_none() {
             self.lag_ceiling = x.ceiling.map(|(at, _, l)| (at, l));
@@ -749,7 +772,7 @@ impl Stats {
         }
         self.stopped |= x.stopped;
         for st in x.staging.iter().filter(|s| !s.name.is_empty()) {
-            self.staging.entry(st.name.clone()).or_default().merge(&StagingRec { capacity: st.capacity, peak: st.peak, drops: st.drops.clone() });
+            self.staging.entry(st.name.clone()).or_default().merge(&StagingRec { capacity: st.capacity, peak: st.peak, drops: st.drops.clone(), backlog_peak: st.queued_peak, backlog_bytes_peak: st.queued_bytes_peak });
         }
     }
 
@@ -789,6 +812,7 @@ impl Stats {
             self.spans.entry(k.clone()).or_default().extend_from_slice(v);
         }
         self.lane_lag.extend_from_slice(&o.lane_lag);
+        self.evictions.extend_from_slice(&o.evictions);
         for (k, r) in &o.staging {
             self.staging.entry(k.clone()).or_default().merge(r);
         }
@@ -3422,7 +3446,7 @@ fn write_timeline(out: &mut impl Write, s: &Stats) -> std::io::Result<()> {
     if let Some(p) = &s.series {
         writeln!(
             out,
-            "timeline series: {} s of run time; peaks: read {}/s at {} s, written {}/s at {} s, {} ops/s at {} s, {} live lanes at {} s",
+            "timeline series: {} s of run time; peaks: read {}/s at {} s, written {}/s at {} s, {} ops/s at {} s, {} live lanes at {} s, eviction backlog {} ops at {} s",
             p.seconds,
             human_bytes(p.read_bytes.1.max(0) as u64),
             p.read_bytes.0,
@@ -3431,7 +3455,9 @@ fn write_timeline(out: &mut impl Write, s: &Stats) -> std::io::Result<()> {
             p.ops.1,
             p.ops.0,
             p.live_lanes.1,
-            p.live_lanes.0
+            p.live_lanes.0,
+            p.evict_queued.1,
+            p.evict_queued.0
         )?;
     }
     if s.lateness.count > 0 {
@@ -3439,12 +3465,36 @@ fn write_timeline(out: &mut impl Write, s: &Stats) -> std::io::Result<()> {
         writeln!(out, "timeline lateness (issue less ready, the host's; invalid past a p99 of {} ms): p50 {}  p99 {}  max {}  n={}", crate::exec::LATENESS_P99_MAX_NS / 1_000_000, us(h.quantile(0.5)), us(h.quantile(0.99)), us(h.max), h.count)?;
     }
     for (name, r) in &s.staging {
-        writeln!(out, "timeline staging `{name}`: peak {} of {}, {} would-be drop(s)", human_bytes(r.peak.max(0) as u64), human_bytes(r.capacity.max(0) as u64), r.drops.len())?;
+        writeln!(
+            out,
+            "timeline staging `{name}`: peak {} of {}, backlog peak {} writes ({}), {} would-be drop(s)",
+            human_bytes(r.peak.max(0) as u64),
+            human_bytes(r.capacity.max(0) as u64),
+            r.backlog_peak,
+            human_bytes(r.backlog_bytes_peak.max(0) as u64),
+            r.drops.len()
+        )?;
+    }
+    if !s.evictions.is_empty() {
+        let e = crate::exec::summarize_evictions(&s.evictions);
+        writeln!(
+            out,
+            "timeline evictions: {} batch(es), duration p50 {}  p99 {}  max {}; {} past the next batch's planned start, overage max {}, sum {}",
+            e.batches,
+            t(e.p50),
+            t(e.p99),
+            t(e.max),
+            e.late,
+            t(e.late_max),
+            t(e.late_sum)
+        )?;
     }
     if !s.lane_lag.is_empty() {
         let mut l = s.lane_lag.clone();
         l.sort_unstable();
         writeln!(out, "timeline lag (final L of {} lanes): p50 {}  p99 {}  max {}", l.len(), t(crate::exec::quantile(&l, 0.5)), t(crate::exec::quantile(&l, 0.99)), t(*l.last().unwrap()))?;
+    } else if s.lateness.count > 0 {
+        writeln!(out, "timeline lag (final L of 0 lanes): no session lane issued an op; worker and eviction lanes' lateness is their backlog and overage")?;
     }
     Ok(())
 }

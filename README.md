@@ -555,10 +555,13 @@ lateness p99 passes 10 ms; `--lag-ceiling SECS` and `--on-certain-failure stop|c
 (default stop: at a would-be drop, the ceiling, or a case's window constraint already lost, the
 run issues nothing more and reports where it stopped). `--series FILE`, a JSON line a second of
 run time and of planned time for each instance (ops by kind, bytes, write latency, edge waits,
-lateness, live lanes, staging, the planner's lead, eviction batches), its peaks and the edge waits
-in the reports; `--emit-trace` writes a timeline's ops at their planned times, each executor lane
-a lane. Not yet in the series: the tiers' capacity held and an eviction batch's span and
-overage. Next: `agentx-tiered` run at a reduced session count, then `lmcache_local_disk` retired.
+lateness, live lanes, staging, the workers' backlog, the eviction backlog, the planner's lead,
+eviction batches), its peaks and the edge waits in the reports, with each workers' backlog peak
+and each eviction batch's duration and overage past the next batch's planned start;
+`--emit-trace` writes a timeline's ops at their planned times, each executor lane a lane. Not yet
+in the series: the tiers' capacity held. `agentx-tiered` ran on a local disk at one session
+(2026-11-14, valid, its fingerprint dry-run's, no G3 reads at a size a local disk holds); next:
+`lmcache_local_disk` retired.
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

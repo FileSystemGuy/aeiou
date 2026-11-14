@@ -392,18 +392,35 @@ each is a recorded decision and the golden tests pin them.
   by kind, `creates` (opens with `O_CREAT`), `read_bytes`, `write_bytes`, `writes`, `write_ns`,
   `write_max_ns` (each write's issue to completion), `edge_waits`, `edge_wait_ns`,
   `lateness_max_ns`; a run second also `live_lanes` (body lanes that have issued and not ended,
-  the most sampled in it), `staging` (each workers' held bytes, the most sampled), and
-  `planner_lead_ns` (the planner's next event's planned time less the clock, the least); a
-  planned second also `evictions` (eviction batches started). A run second is written once a
+  and worker and eviction lanes with an op in flight or due, the most sampled in it), `staging`
+  (each workers' held bytes, the most sampled), `backlog` (each workers' writes submitted and
+  not yet written, `{writes, bytes}`, the most of each sampled), `evict_queued` (eviction ops of
+  started batches not yet completed, the most sampled), and `planner_lead_ns` (the planner's
+  next event's planned time less the clock, the least); a planned second also `evictions`
+  (eviction batches started) and `eviction_max_ns` (the longest of its batches, once ended). A run second is written once a
   second has passed its end (a lane's thread times its completions), a planned one once every op
   planned in it has completed, so the executor holds only the seconds still open; at the end,
   every one. Each host writes its own file. The reports carry a summary: the seconds of run time
-  and the peak second of read bytes, written bytes, ops, and live lanes (`timeline series: …`,
-  the JSON report's `timeline.series`), and, with or without a series, the edge waits (ops that
-  waited on another lane's op on their path past their own readiness, and the waits summed:
-  `timeline edge waits`, `timeline.edge_waits`). Not yet in the series: the tiers' capacity held
-  (the VM's tier state is not given to the executor) and an eviction batch's issue span and
-  overage.
+  and the peak second of read bytes, written bytes, ops, live lanes, workers' backlog, and
+  eviction backlog (`timeline series: …`, the JSON report's `timeline.series`), and, with or
+  without a series, the edge waits (ops that waited on another lane's op on their path past
+  their own readiness, and the waits summed: `timeline edge waits`, `timeline.edge_waits`).
+  Not yet in the series: the tiers' capacity held (the VM's tier state is not given to the
+  executor).
+- **The worker and eviction lanes, reported** (2026-11-14, after the smoke run, `DESIGN_REVIEW.md`
+  §3.99 "The smoke run, and a would-be drop revisited"). A run whose session lanes issue nothing
+  (every write submitted, every unlink an eviction's) showed no live lanes and no lag. With or
+  without a series: each workers' backlog peak, writes submitted and not yet written and their
+  bytes (`timeline staging `…`: … backlog peak N writes (B)`, `timeline.staging.W.backlog_peak_writes`
+  and `backlog_peak_bytes`); each eviction batch's duration, from its start (its tick, or the
+  storing lane reaching it) to its last victim's completion, and its overage, how far that is
+  past the next batch's planned start on the same lanes (`exec::summarize_evictions`; `timeline
+  evictions: N batch(es), duration p50 … p99 … max …; K past the next batch's planned start,
+  overage max …, sum …`, `timeline.evictions {batches, duration {p50_ns, p99_ns, max_ns}, overage
+  {batches, max_ns, sum_ns}}`); an op pushed to an eviction lane belongs to the latest batch on
+  it planned at or before the op (the planner may push a timed batch before the previous one's
+  ops). The lag line is printed with no lane (`final L of 0 lanes: no session lane issued an
+  op`).
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which
@@ -2011,11 +2028,13 @@ take_summary {per_instance, instances, takes, stall_ns, compute_ns, stall_mean_n
               steps [{from, to, takes, stall_mean_ns, stall_p99_ns, stall_max_ns, busy}]},
 timeline {window_s, spans {name: {count, sum_ns, p50_ns, p99_ns, max_ns, window_p99_ns,
           windows [{window, start_s, count, p99_ns}]}}, lag {lanes, p50_ns, p99_ns, max_ns},
-          staging {workers: {capacity_bytes, peak_bytes, drops, first_drop {at_ns, held_bytes} | null}},
+          staging {workers: {capacity_bytes, peak_bytes, drops, first_drop {at_ns, held_bytes} | null,
+                             backlog_peak_writes, backlog_peak_bytes}},
+          evictions {batches, duration {p50_ns, p99_ns, max_ns}, overage {batches, max_ns, sum_ns}},
           lateness {…a latency histogram…}, lateness_p99_max_ns, lag_ceiling_crossed {at_ns, lag_ns} | null,
           certain_failure, stopped, edge_waits {ops, sum_ns},
           series {seconds, peak_read_bytes {s, bytes}, peak_write_bytes {s, bytes}, peak_ops {s, ops},
-                  peak_live_lanes {s, lanes}} | null}
+                  peak_live_lanes {s, lanes}, peak_backlog {s, writes}, peak_evict_queued {s, ops}} | null}
           (only for a run with a timeline; §2 "D and lag, reported", 2026-11-14),
 instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_records [[stall_ns, compute_ns], …]}]
 ```

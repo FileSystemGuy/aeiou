@@ -773,8 +773,10 @@ turns it off, and the last one on the line wins.
   A timeline's run, a second at a time, as JSON lines to *FILE*: for each instance, each
   second of run time (by when its operations completed) and of planned time (by when they
   were planned), its operations by kind, creates, bytes, write latency, edge waits, and
-  lateness; of run time also live lanes, staging held, and the planner's lead; of planned
-  time eviction batches. A line is written once its second is complete, so memory stays flat;
+  lateness; of run time also live lanes (session lanes, and worker and eviction lanes with
+  work due), staging held, each workers' backlog of writes not yet written, the eviction
+  operations due, and the planner's lead; of planned time eviction batches and the longest
+  of them. A line is written once its second is complete, so memory stays flat;
   the reports carry the peaks. Each host writes its own. For an abstract with no timeline,
   refused on the command line and passed over from a lower layer; a place it cannot be
   written is a usage error before the run. *Layered.*

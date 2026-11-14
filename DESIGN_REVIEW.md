@@ -12464,6 +12464,40 @@ in the build:
 - The series' tests were written after its code (the tests-first rule broken); the planned
   trace's before.
 
+*The smoke run, and a would-be drop revisited (2026-11-14).* `agentx-tiered` run on the local
+disk at one session (seed 4, the case's G1 and G2, G3 12 GiB, `--posix sync`): 1,481 s, valid, its
+fingerprint dry-run's (3378cc27e25c4a5c), the series' totals equal to dry-run's counts on both clocks,
+lateness p99 2.6 ms, staging peak 5.22 of 490 GiB, no edge waits. No configuration small or short
+enough for the disk reads from G3 (a read needs G1 pressure from many sessions and a G3 larger than
+G2; below about 32 to 64 GiB of G1 the abstract waits forever, V34, having no preemption), and
+planned time is real: 2 sessions 7.8 h, 40 sessions 397,620 s. The run showed the reports blind to
+the worker and eviction lanes: every op of a write-only run is theirs, so its live lanes and lag were
+zero. Asked by the user why writes and unlinks are not on the session lanes: the lane is who issues
+an op and who waits for it, not whether it counts; LMCache's forward step waits only for the copy to
+host memory and its delete workers unlink, so on a session lane they would charge the session a
+wait the application never has. Their slowness counts through staging (a would-be drop), write
+latency, and the path edges into a reader's D. ~~To be built~~ Built the same day (the user's
+"build 1-3"): worker and eviction lanes counted live while they have an op in flight or due, each
+workers' backlog (writes submitted and not written, and their bytes) and the eviction lanes'
+backlog in the series, each workers' backlog peak and each eviction batch's duration and overage
+past the next batch's planned start in the reports, and the lag line printed with no lane. Found
+building it: the planner may push a timed eviction batch before the previous batch's ops, so an op
+belongs to the latest batch on its lane planned at or before it, not the latest pushed.
+
+The user then revisited the would-be drop (rule (4) above): could a drop be a recompute, as in the
+real system? The reasons it is not: (i) the op set would follow the run, differing between systems
+under test and between runs of one (rule (8), never learn from the run, names this case); (ii) a
+slower system would get an easier workload, its relief real I/O and its penalty a modelled GPU
+number; (iii) the fingerprint and workload id would no longer say which workload ran; (iv) the
+planner runs ahead with the tiers' state, so a drop known at its gate would need that state fed
+back and the walk rolled back, or the planner held behind every unresolved store. A planned drop
+(G2 full in planned time) is already a recompute (0.19's `taken`, Q5); G1's preemption, a
+recompute in planned time, is not built. A middle way was offered: the op set fixed, a would-be
+drop reported with the recompute it would have caused, computed after the run from the plan.
+(Decided by the user, 2026-11-14: a would-be drop stays a gate failure, the run invalid; to be
+revisited if the cost proves too high, too many storage systems unable to get a valid run because
+latency occasionally spikes.)
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes

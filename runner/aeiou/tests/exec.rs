@@ -448,3 +448,73 @@ fn a_series_counts_eviction_batches_by_planned_second() {
     assert!(ev >= 1, "{:?}", st.rows);
     assert_eq!(st.rows.iter().filter(|r| !r.planned).map(|r| r.evictions).sum::<u64>(), 0);
 }
+
+/// Worker lanes are live while they have work due, and each workers' backlog (writes submitted
+/// and not yet written, and their bytes) is sampled into the run's seconds: a body lane that
+/// issues nothing itself submits two stores to one worker lane, each write taking 1.5 s.
+#[test]
+fn a_series_counts_worker_lanes_live_and_their_backlog() {
+    let s = 1_000_000_000i64;
+    let store = |key: i64| json!({"submit": {"workers": "w", "body": [obj("f", key),
+        {"open": {"file": r("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": r("f"), "len": 4096}}, {"close": {"file": r("f")}}]}});
+    let opts = aeiou::exec::TimelineOpts { series: true, ..Default::default() };
+    let (_, st) = run_with(tl(json!([store(1), store(2), compute(4 * s)])), &opts, |r, _| if r.kind == aeiou::vm::OpKind::Write { 1_500_000_000 } else { 10 });
+    let row = |sec: i64| st.rows.iter().find(|r| !r.planned && r.s == sec).unwrap_or_else(|| panic!("no run second {sec}: {:?}", st.rows));
+    // second 0: both submitted, the worker busy; second 1: the first written at 1.5 s
+    assert_eq!((row(0).live_lanes, row(0).backlog.get("w").copied()), (Some(1), Some((2, 8192))));
+    assert_eq!((row(1).live_lanes, row(1).backlog.get("w").copied()), (Some(1), Some((1, 4096))));
+    // second 3: the second written at 3.0 s; the planner's wake at 3.0 s saw it in flight
+    assert_eq!(row(3).backlog.get("w").copied(), Some((1, 4096)));
+    let sum = st.series.as_ref().unwrap();
+    assert_eq!((sum.peak_live_lanes.1, sum.peak_backlog), (1, (0, 2)));
+    assert_eq!((st.staging[0].queued, st.staging[0].queued_peak, st.staging[0].queued_bytes_peak), (0, 2, 8192));
+}
+
+/// An eviction batch's duration runs from its start (its tick, or the storing lane reaching it)
+/// to its last victim's completion; past the next batch's planned start, its overage. The
+/// eviction lanes are live and their backlog counted while a batch's ops are due.
+#[test]
+fn eviction_batches_report_their_duration_and_overage() {
+    let s = 1_000_000_000i64;
+    let tiers = json!([{"name": "t", "order": [{"cached": "touched"}, {"neg": {"cached": "pos"}}], "capacity": 100,
+        "on_evict": {"lanes": 1, "body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"mod": [{"victim": {}}, 1000]}}}}}]},
+        "evict": {"every": s, "when": {"gt": [{"tier": "entries"}, 0]}, "count": 2}}]);
+    let body = json!([{"let": {"name": "a", "value": {"shared": {"id": 1, "n": 4}}}},
+        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 4}}, compute(5 * s)]);
+    let ast = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
+    let opts = aeiou::exec::TimelineOpts { series: true, ..Default::default() };
+    // each victim's stat takes 0.8 s: the batch at 1 s ends at 2.6 s, 0.6 s past the next's
+    // planned start at 2 s, which starts at 2.6 s and ends at 4.2 s
+    let (ops, st) = run_with(ast, &opts, |_, _| 800_000_000);
+    assert_eq!(ops.iter().map(|o| o.issued).collect::<Vec<_>>(), [s, 1_800_000_000, 2_600_000_000, 3_400_000_000]);
+    let mut ev = st.evictions.clone();
+    ev.sort_unstable();
+    assert_eq!(ev, [(s, 1_600_000_000, 600_000_000), (2 * s, 2_200_000_000, 0)]);
+    let run = |sec: i64| st.rows.iter().find(|r| !r.planned && r.s == sec).unwrap_or_else(|| panic!("no run second {sec}: {:?}", st.rows));
+    assert_eq!((run(1).live_lanes, run(1).evict_queued), (Some(1), 2));
+    assert_eq!(run(2).evict_queued, 2, "the first batch's last op completes at 2.6 s; the second's two are due");
+    assert_eq!(run(3).evict_queued, 1, "the second batch's first op completes at 3.4 s");
+    let planned = |sec: i64| st.rows.iter().find(|r| r.planned && r.s == sec).unwrap();
+    assert_eq!((planned(1).eviction_max_ns, planned(2).eviction_max_ns), (1_600_000_000, 2_200_000_000));
+    assert_eq!(st.series.as_ref().unwrap().peak_evict_queued, (1, 2));
+}
+
+/// Eviction ops planned ahead of their tick are not yet due: neither live nor backlog before it.
+#[test]
+fn eviction_ops_before_their_tick_are_not_due() {
+    let s = 1_000_000_000i64;
+    let tiers = json!([{"name": "t", "order": [{"cached": "touched"}, {"neg": {"cached": "pos"}}], "capacity": 100,
+        "on_evict": {"lanes": 1, "body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"mod": [{"victim": {}}, 1000]}}}}}]},
+        "evict": {"every": 2 * s, "when": {"gt": [{"tier": "entries"}, 0]}, "count": 1}}]);
+    let body = json!([{"let": {"name": "a", "value": {"shared": {"id": 1, "n": 1}}}},
+        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 1}}, compute(s + s / 2), stat(9), compute(s)]);
+    let ast = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
+    let opts = aeiou::exec::TimelineOpts { series: true, ..Default::default() };
+    // the batch at 2 s is pushed by 1.5 s (the horizon 1 s); at 1.5 s the body's stat is the one live lane
+    let (_, st) = run_with(ast, &opts, |_, _| 10);
+    let run = |sec: i64| st.rows.iter().find(|r| !r.planned && r.s == sec).unwrap_or_else(|| panic!("no run second {sec}: {:?}", st.rows));
+    assert_eq!((run(1).live_lanes, run(1).evict_queued), (Some(1), 0));
+    // at 2 s the eviction lane's op; the body lane ended with its stat (its trailing compute
+    // holds nothing)
+    assert_eq!((run(2).live_lanes, run(2).evict_queued), (Some(1), 1));
+}

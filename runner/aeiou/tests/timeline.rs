@@ -636,3 +636,62 @@ fn a_run_writes_its_series() {
     assert_eq!(r.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&r.stderr).contains("--series writes a timeline's seconds; the abstract has no timeline"));
 }
+
+/// A timeline whose session lane issues nothing itself (brief item 72 (7), the smoke run of
+/// 2026-11-14): its stores on worker lanes and its evictions on eviction lanes are live and
+/// counted as backlog in the series, each eviction batch's duration and overage reported, and
+/// the lag line printed with no lane.
+#[test]
+fn a_run_reports_its_worker_and_eviction_lanes() {
+    let rf = |n: &str| json!({"ref": n});
+    let store = |k: i64| json!([{"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": k}}}}},
+        {"submit": {"workers": "store", "body": [{"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]}}]);
+    let victim = json!([{"let": {"name": "v", "value": {"object": {"namespace": "kv", "fields": {"key": {"add": [1000, {"mod": [{"victim": {}}, 1000]}]}}}}}},
+        {"open": {"file": rf("v"), "flags": ["WRONLY", "CREAT"]}}, {"close": {"file": rf("v")}}]);
+    let tiers = json!([{"name": "t", "order": [{"cached": "touched"}, {"neg": {"cached": "pos"}}], "capacity": 100,
+        "on_evict": {"lanes": 1, "body": victim}, "evict": {"every": 200_000_000, "when": {"gt": [{"tier": "entries"}, 0]}, "count": 1}}]);
+    let mut body: Vec<Value> = vec![json!({"let": {"name": "a", "value": {"shared": {"id": 1, "n": 2}}}}),
+        json!({"store": {"cache": "lm", "tier": "t", "seq": rf("a"), "per": 1, "from": 0, "count": 2}})];
+    body.extend(store(1).as_array().unwrap().iter().cloned());
+    body.extend(store(2).as_array().unwrap().iter().cloned());
+    body.push(json!({"compute": {"ns": 1_000_000_000}}));
+    let text = json!({"ast": "0.21", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}],
+            "workers": [{"name": "store", "lanes": 1, "staging": 1 << 20}], "body": body}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "workers");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    for posix in ["io_uring", "sync"] {
+        let root = dir.join(posix);
+        std::fs::create_dir_all(&root).unwrap();
+        let series = dir.join(format!("{posix}.jsonl"));
+        let json_path = dir.join(format!("{posix}.json"));
+        let r = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"))
+            .args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", posix, "--series", series.to_str().unwrap(), "--report-json", json_path.to_str().unwrap()])
+            .output().unwrap();
+        let out = String::from_utf8_lossy(&r.stdout);
+        assert!(r.status.success(), "{posix}: {}", String::from_utf8_lossy(&r.stderr));
+        assert!(out.contains("timeline lag (final L of 0 lanes): no session lane issued an op"), "{posix}: {out}");
+        assert!(out.contains("timeline staging `store`: peak 8.00 KiB of 1.00 MiB, backlog peak 2 writes (8.00 KiB), 0 would-be drop(s)"), "{posix}: {out}");
+        assert!(out.contains("timeline evictions: 2 batch(es), duration p50 "), "{posix}: {out}");
+        assert!(out.contains("0 past the next batch's planned start"), "{posix}: {out}");
+        assert!(out.contains(" live lanes at ") && out.contains("eviction backlog "), "{posix}: {out}");
+        let rows: Vec<Value> = std::fs::read_to_string(&series).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let run = |k: &str| -> i64 { rows.iter().filter(|r| r["clock"] == "run").map(|r| r[k].as_i64().unwrap()).max().unwrap() };
+        assert!(run("live_lanes") >= 1, "{posix}: {rows:?}");
+        assert!(run("evict_queued") >= 1, "{posix}: {rows:?}");
+        let backlog = rows.iter().filter(|r| r["clock"] == "run").map(|r| r["backlog"]["store"]["writes"].as_i64().unwrap_or(0)).max().unwrap();
+        assert_eq!(backlog, 2, "{posix}: {rows:?}");
+        assert!(rows.iter().filter(|r| r["clock"] == "planned").any(|r| r["eviction_max_ns"].as_i64().unwrap_or(0) > 0), "{posix}: {rows:?}");
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+        let t = &doc["result"]["timeline"];
+        assert_eq!(t["lag"]["lanes"], 0, "{posix}");
+        assert_eq!((t["staging"]["store"]["backlog_peak_writes"].as_i64(), t["staging"]["store"]["backlog_peak_bytes"].as_i64()), (Some(2), Some(8192)), "{posix}: {t}");
+        assert_eq!(t["evictions"]["batches"], 2, "{posix}: {t}");
+        assert_eq!(t["evictions"]["overage"]["batches"], 0, "{posix}: {t}");
+        assert!(t["evictions"]["duration"]["max_ns"].as_i64().unwrap() > 0, "{posix}: {t}");
+        assert_eq!(t["series"]["peak_backlog"]["writes"], 2, "{posix}: {t}");
+        assert!(t["series"]["peak_evict_queued"]["ops"].as_i64().unwrap() >= 1, "{posix}: {t}");
+    }
+}

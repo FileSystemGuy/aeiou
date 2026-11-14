@@ -1676,9 +1676,15 @@ numbers; the order is this note's.
     `.max_s <= C` lost once a window closes above C, the user's choice), stopping per host. *The
     series built the same day* (the addendum "The series and the planned trace"): `--series
     FILE`, its own file of JSON lines a second of each clock (the user's choice), the edge waits
-    reported, and `--emit-trace`'s planned `t`; not yet the tiers' capacity held or an eviction
-    batch's span and overage. Next: `agentx-tiered` run at a reduced session count, then
-    `lmcache_local_disk` and its four cases retired.
+    reported, and `--emit-trace`'s planned `t`; not yet the tiers' capacity held. *The smoke run
+    the same day* (the addendum "The smoke run, and a would-be drop revisited"): `agentx-tiered`
+    at one session on a local disk, valid, its fingerprint dry-run's; no G3 read at a size a
+    local disk holds (planned time is real: 40 sessions 397,620 s). It showed the worker and
+    eviction lanes unreported; built: those lanes live while their work is due, each workers'
+    backlog and the eviction backlog in the series, each eviction batch's duration and overage
+    past the next batch's planned start, the lag line with no lane. The user kept a would-be
+    drop a gate failure, to revisit if too many systems cannot get a valid run for occasional
+    latency spikes. Next: `lmcache_local_disk` and its four cases retired.
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the

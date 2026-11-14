@@ -83,6 +83,22 @@ struct Lane {
     spans: Vec<(Arc<str>, i64, i64, Option<usize>)>,
     /// It has issued an op.
     issued: bool,
+    /// An eviction lane: its batches by planned start, not yet past; an op pushed belongs to the
+    /// latest planned at or before it (the planner may push a batch before the previous one's ops).
+    batches: VecDeque<(i64, usize)>,
+}
+
+/// An eviction batch (brief item 72 (7), the smoke run of 2026-11-14): its planned start, when it
+/// started (its tick, or the storing lane reaching it), its ops not yet completed, its last
+/// completion, and the next batch's planned start on the same lanes once pushed. Its duration
+/// is its last completion less its start; past the next batch's planned start, its overage.
+struct Batch {
+    plan: i64,
+    open: Option<i64>,
+    left: usize,
+    end: i64,
+    next_plan: Option<i64>,
+    done: bool,
 }
 
 /// The workers' staging: bytes submitted and not yet written, and the bytes of the loads in
@@ -96,6 +112,11 @@ pub struct Staging {
     pub peak: i64,
     /// (time, bytes held) each time a submission or a load took it past its capacity.
     pub drops: Vec<(i64, i64)>,
+    /// Its backlog: writes submitted and not yet written, and their bytes; and the most of each.
+    pub queued: i64,
+    pub queued_bytes: i64,
+    pub queued_peak: i64,
+    pub queued_bytes_peak: i64,
 }
 
 /// What the run measured of the executor (step 5 reports it).
@@ -129,6 +150,9 @@ pub struct Stats {
     /// With a series: its summary, and (`simulate` alone) its rows.
     pub series: Option<SeriesSummary>,
     pub rows: Vec<SeriesRow>,
+    /// Each eviction batch's (planned start, duration, overage past the next batch's planned
+    /// start), ns, in the order they were known.
+    pub evictions: Vec<(i64, i64, i64)>,
 }
 
 /// One second of a timeline's run, of run time (by when its ops completed) or of planned time
@@ -153,9 +177,17 @@ pub struct SeriesRow {
     pub lateness_max_ns: i64,
     /// Eviction batches started.
     pub evictions: u64,
+    /// The longest of the eviction batches planned in the second, once each has ended.
+    pub eviction_max_ns: i64,
+    /// Lanes live: a body lane that has issued an op and not ended, a worker or eviction lane
+    /// with an op in flight or due; the most in the second.
     pub live_lanes: Option<u64>,
     /// Each workers' staging held, its most in the second.
     pub staging: BTreeMap<String, i64>,
+    /// Each workers' backlog, writes submitted and not yet written and their bytes, the most of
+    /// each in the second; and the eviction lanes' ops due and not completed.
+    pub backlog: BTreeMap<String, (i64, i64)>,
+    pub evict_queued: u64,
     /// The planner's lead over the clock, its least in the second, ns.
     pub lead_ns: Option<i64>,
 }
@@ -171,9 +203,14 @@ impl SeriesRow {
         });
         if self.planned {
             v["evictions"] = serde_json::json!(self.evictions);
+            v["eviction_max_ns"] = serde_json::json!(self.eviction_max_ns);
         } else {
             v["live_lanes"] = serde_json::json!(self.live_lanes.unwrap_or(0));
             v["staging"] = serde_json::json!(self.staging);
+            let backlog: serde_json::Map<String, serde_json::Value> =
+                self.backlog.iter().map(|(k, (n, b))| (k.clone(), serde_json::json!({"writes": n, "bytes": b}))).collect();
+            v["backlog"] = serde_json::Value::Object(backlog);
+            v["evict_queued"] = serde_json::json!(self.evict_queued);
             v["planner_lead_ns"] = serde_json::json!(self.lead_ns);
         }
         v
@@ -188,6 +225,11 @@ struct SeriesAcc {
     planned: BTreeMap<i64, SeriesRow>,
     info: HashMap<u64, (i64, OpKind, i64, bool, i64)>,
     open_planned: BTreeMap<i64, usize>,
+}
+
+/// An op's entry in flight: its lane, and `(bytes held in a staging, whose, a submitted write)`.
+fn held_with(l: usize, h: (i64, Option<usize>, bool)) -> (usize, i64, Option<usize>, bool) {
+    (l, h.0, h.1, h.2)
 }
 
 /// The second of `ns`.
@@ -210,6 +252,9 @@ pub struct SeriesSummary {
     pub peak_write_bytes: (i64, i64),
     pub peak_ops: (i64, u64),
     pub peak_live_lanes: (i64, u64),
+    /// The most writes any workers had submitted and not written, and the most eviction ops due.
+    pub peak_backlog: (i64, i64),
+    pub peak_evict_queued: (i64, u64),
 }
 
 /// A run's host lateness p99 past which it is invalid: 10 ms (`DESIGN_REVIEW.md` §3.99 point 7,
@@ -256,8 +301,9 @@ pub struct Exec {
     lanes: Vec<Lane>,
     /// Pushed and not completed.
     outstanding: HashSet<u64>,
-    /// In flight: lane, and the bytes it holds in a staging and whose.
-    flight: HashMap<u64, (usize, i64, Option<usize>)>,
+    /// In flight: lane, the bytes it holds in a staging and whose, and whether it is a submitted
+    /// write (in its workers' backlog).
+    flight: HashMap<u64, (usize, i64, Option<usize>, bool)>,
     /// Writes staged at their submission, not yet issued.
     staged: HashMap<u64, i64>,
     waiters: HashMap<u64, Vec<usize>>,
@@ -280,13 +326,22 @@ pub struct Exec {
     win_d: BTreeMap<(i64, Arc<str>), Vec<i64>>,
     /// Body lanes that have issued an op and not ended.
     live: u64,
+    /// The worker and eviction lanes, live while an op is in flight or due.
+    queue_lanes: Vec<usize>,
+    /// Eviction batches not yet reported, the batch of each op pushed and not completed, the
+    /// latest batch on each set of eviction lanes (by its first), and the batch a gate starts.
+    batches: HashMap<usize, Batch>,
+    batch_n: usize,
+    batch_of: HashMap<u64, usize>,
+    last_batch: HashMap<usize, usize>,
+    gate_batch: HashMap<usize, usize>,
     series: Option<SeriesAcc>,
     pub stats: Stats,
 }
 
 impl Exec {
     pub fn new() -> Self {
-        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), ended: Vec::new(), ceiling_ns: None, watching: false, pushed_to: 0, open_win: HashMap::new(), win_d: BTreeMap::new(), live: 0, series: None, stats: Stats::default() }
+        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), ended: Vec::new(), ceiling_ns: None, watching: false, pushed_to: 0, open_win: HashMap::new(), win_d: BTreeMap::new(), live: 0, queue_lanes: Vec::new(), batches: HashMap::new(), batch_n: 0, batch_of: HashMap::new(), last_batch: HashMap::new(), gate_batch: HashMap::new(), series: None, stats: Stats::default() }
     }
 
     fn lane(&mut self, l: usize) -> &mut Lane {
@@ -306,6 +361,60 @@ impl Exec {
         if s.name.is_empty() {
             s.name = name.to_string();
         }
+    }
+
+    /// Lane `l` is a worker or eviction lane: a queue.
+    fn queue(&mut self, l: usize) {
+        let lane = self.lane(l);
+        if !lane.queue {
+            lane.queue = true;
+            self.queue_lanes.push(l);
+        }
+    }
+
+    /// A new eviction batch planned at `plan` on `lanes`, started at `open` when known; the
+    /// previous batch on the same lanes learns its successor's planned start.
+    fn batch(&mut self, lanes: &[usize], plan: i64, open: Option<i64>) -> usize {
+        let b = self.batch_n;
+        self.batch_n += 1;
+        self.batches.insert(b, Batch { plan, open, left: 0, end: open.unwrap_or(0), next_plan: None, done: false });
+        for &k in lanes {
+            self.queue(k);
+            self.lane(k).batches.push_back((plan, b));
+        }
+        if let Some(&first) = lanes.first() {
+            if let Some(prev) = self.last_batch.insert(first, b) {
+                if let Some(p) = self.batches.get_mut(&prev) {
+                    p.next_plan = Some(plan);
+                }
+                self.report_batch(prev, false);
+            }
+        }
+        b
+    }
+
+    /// Report batch `b` once it has ended and its successor's planned start is known, or, at
+    /// the timeline's end (`last`), once it has ended.
+    fn report_batch(&mut self, b: usize, last: bool) {
+        let Some(bt) = self.batches.get(&b) else { return };
+        if !bt.done || (bt.next_plan.is_none() && !last) {
+            return;
+        }
+        let bt = self.batches.remove(&b).unwrap();
+        let open = bt.open.unwrap_or(bt.plan);
+        self.stats.evictions.push((bt.plan, bt.end.max(open) - open, bt.next_plan.map_or(0, |n| (bt.end - n).max(0))));
+    }
+
+    /// Batch `b` has ended at `now`: its duration in its planned second's series row.
+    fn batch_done(&mut self, b: usize, now: i64) {
+        let Some(bt) = self.batches.get_mut(&b) else { return };
+        bt.done = true;
+        bt.end = bt.end.max(now);
+        let (plan, d) = (bt.plan, bt.end - bt.open.unwrap_or(bt.plan));
+        if let Some(row) = self.series.as_mut().and_then(|acc| acc.planned.get_mut(&sec(plan))) {
+            row.eviction_max_ns = row.eviction_max_ns.max(d);
+        }
+        self.report_batch(b, false);
     }
 
     fn gate(&mut self, lanes: Vec<usize>) -> usize {
@@ -328,8 +437,16 @@ impl Exec {
                 }
                 let lane = self.lane(l);
                 let stage_now = lane.staging_open && lane.gates_queued == 0 && r.kind == OpKind::Write;
+                while lane.batches.len() > 1 && lane.batches[1].0 <= r.plan {
+                    lane.batches.pop_front();
+                }
+                let batch = lane.batches.front().filter(|x| x.0 <= r.plan).map(|x| x.1);
                 let (seq, len, w) = (r.seq, r.len, lane.workers);
                 lane.q.push_back(Item::Op(r));
+                if let Some(bt) = batch.and_then(|b| self.batches.get_mut(&b)) {
+                    bt.left += 1;
+                    self.batch_of.insert(seq, batch.unwrap());
+                }
                 if stage_now {
                     if let Some(w) = w {
                         self.stage(w, &[(seq, len)], None);
@@ -361,28 +478,28 @@ impl Exec {
                 self.staging(workers, &name, staging);
                 let g = self.gate(vec![worker]);
                 self.lane(parent).q.push_back(Item::Spawn { gate: g, plan });
+                self.queue(worker);
                 let w = self.lane(worker);
                 w.workers = Some(workers);
-                w.queue = true;
                 w.q.push_back(Item::Gate { gate: g, plan, fresh: false, workers: Some(workers) });
                 w.gates_queued += 1;
                 self.dirty.push(parent);
             }
             Planned::Evict { parent: Some(parent), lanes, plan } => {
                 let g = self.gate(lanes.clone());
+                let b = self.batch(&lanes, plan, None);
+                self.gate_batch.insert(g, b);
                 self.lane(parent).q.push_back(Item::Spawn { gate: g, plan });
                 for &k in &lanes {
                     let e = self.lane(k);
-                    e.queue = true;
                     e.q.push_back(Item::Gate { gate: g, plan, fresh: false, workers: None });
                     e.gates_queued += 1;
                 }
                 self.dirty.push(parent);
             }
-            Planned::Evict { parent: None, lanes, .. } => {
-                for k in lanes {
-                    self.lane(k).queue = true;
-                }
+            Planned::Evict { parent: None, lanes, plan } => {
+                // a timed batch starts at its tick
+                self.batch(&lanes, plan, Some(plan));
             }
             Planned::End { lane, plan } => {
                 self.lane(lane).q.push_back(Item::End { plan });
@@ -413,6 +530,10 @@ impl Exec {
         let st = &mut self.stats.staging[w];
         st.held += bytes;
         st.peak = st.peak.max(st.held);
+        st.queued += writes.len() as i64;
+        st.queued_bytes += bytes;
+        st.queued_peak = st.queued_peak.max(st.queued);
+        st.queued_bytes_peak = st.queued_bytes_peak.max(st.queued_bytes);
         if st.held > st.capacity && bytes > 0 {
             st.drops.push((at.unwrap_or(-1), st.held));
         }
@@ -519,11 +640,14 @@ impl Exec {
                             if st.held > st.capacity && r.len > 0 {
                                 st.drops.push((now, st.held));
                             }
-                            (r.len, Some(w))
+                            (r.len, Some(w), false)
                         }
-                        None => (self.staged.remove(&r.seq).unwrap_or(0), lane.workers),
+                        None => match self.staged.remove(&r.seq) {
+                            Some(b) => (b, lane.workers, true),
+                            None => (0, lane.workers, false),
+                        },
                     };
-                    self.flight.insert(r.seq, (l, held.0, held.1));
+                    self.flight.insert(r.seq, held_with(l, held));
                     out.push(r);
                     return;
                 }
@@ -539,6 +663,14 @@ impl Exec {
                     self.gates[gate].0 = Some(fire);
                     let started = self.gates[gate].1.clone();
                     self.dirty.extend(started);
+                    if let Some(b) = self.gate_batch.remove(&gate) {
+                        let bt = self.batches.get_mut(&b).expect("a gate's batch is kept until reported");
+                        bt.open = Some(fire);
+                        bt.end = fire;
+                        if bt.left == 0 {
+                            self.batch_done(b, fire);
+                        }
+                    }
                 }
                 Item::Gate { gate, plan, fresh, workers } => {
                     let Some(t) = self.gates[*gate].0 else { return };
@@ -650,14 +782,30 @@ impl Exec {
                 }
             }
         }
-        if let Some((l, staged, w)) = self.flight.remove(&seq) {
+        if let Some((l, staged, w, write)) = self.flight.remove(&seq) {
             let lane = &mut self.lanes[l];
             lane.busy = None;
             lane.last = lane.last.max(now);
-            if let (true, Some(w)) = (staged > 0, w) {
-                self.stats.staging[w].held -= staged;
+            if let Some(w) = w {
+                let st = &mut self.stats.staging[w];
+                if staged > 0 {
+                    st.held -= staged;
+                }
+                if write {
+                    st.queued -= 1;
+                    st.queued_bytes -= staged;
+                }
             }
             self.dirty.push(l);
+        }
+        if let Some(b) = self.batch_of.remove(&seq) {
+            if let Some(bt) = self.batches.get_mut(&b) {
+                bt.left -= 1;
+                bt.end = bt.end.max(now);
+                if bt.left == 0 && bt.open.is_some() {
+                    self.batch_done(b, now);
+                }
+            }
         }
         if let Some(ws) = self.waiters.remove(&seq) {
             for w in ws {
@@ -691,8 +839,11 @@ impl Exec {
     /// it has completed), or every one when `done`; the planner's lead over the clock `lead_ns`
     /// is sampled into the current run second with the live lanes and the staging held.
     pub fn series_rows(&mut self, now: i64, lead_ns: Option<i64>, done: bool) -> Vec<SeriesRow> {
-        let live = self.live;
+        let due = |l: &Lane| l.busy.is_some() || matches!(l.q.front(), Some(Item::Op(r)) if r.plan <= now);
+        let live = self.live + self.queue_lanes.iter().filter(|&&l| due(&self.lanes[l])).count() as u64;
         let staging: Vec<(String, i64)> = self.stats.staging.iter().filter(|s| !s.name.is_empty()).map(|s| (s.name.clone(), s.held)).collect();
+        let backlog: Vec<(String, i64, i64)> = self.stats.staging.iter().filter(|s| !s.name.is_empty()).map(|s| (s.name.clone(), s.queued, s.queued_bytes)).collect();
+        let evict_queued: u64 = self.batches.values().filter(|b| !b.done && b.open.is_some_and(|t| t <= now)).map(|b| b.left as u64).sum();
         let pushed = sec(self.pushed_to);
         let Some(acc) = &mut self.series else { return Vec::new() };
         if !done {
@@ -702,6 +853,11 @@ impl Exec {
                 let e = r.staging.entry(k).or_default();
                 *e = (*e).max(h);
             }
+            for (k, n, b) in backlog {
+                let e = r.backlog.entry(k).or_default();
+                *e = (e.0.max(n), e.1.max(b));
+            }
+            r.evict_queued = r.evict_queued.max(evict_queued);
             if let Some(l) = lead_ns {
                 r.lead_ns = Some(r.lead_ns.map_or(l, |x| x.min(l)));
             }
@@ -737,6 +893,13 @@ impl Exec {
                 }
                 if r.live_lanes.unwrap_or(0) > sum.peak_live_lanes.1 {
                     sum.peak_live_lanes = (r.s, r.live_lanes.unwrap_or(0));
+                }
+                let backlog = r.backlog.values().map(|x| x.0).max().unwrap_or(0);
+                if backlog > sum.peak_backlog.1 {
+                    sum.peak_backlog = (r.s, backlog);
+                }
+                if r.evict_queued > sum.peak_evict_queued.1 {
+                    sum.peak_evict_queued = (r.s, r.evict_queued);
                 }
             }
         }
@@ -808,6 +971,15 @@ impl Exec {
 
     /// Each lane's L, into `stats.lag`.
     pub fn finish(&mut self) -> Stats {
+        // the batches that ended with no successor, or with no op (started, nothing to do)
+        let mut left: Vec<usize> = self.batches.iter().filter(|(_, b)| b.done || (b.left == 0 && b.open.is_some())).map(|(k, _)| *k).collect();
+        left.sort_unstable();
+        for b in left {
+            if let Some(bt) = self.batches.get_mut(&b) {
+                bt.done = true;
+            }
+            self.report_batch(b, true);
+        }
         self.stats.lag = self.lanes.iter().map(|l| l.l).collect();
         self.stats.body_lag = self.lanes.iter().filter(|l| !l.queue && l.issued).map(|l| l.l).collect();
         self.stats.clone()
@@ -874,6 +1046,35 @@ pub struct SpanSummary {
     pub max: i64,
     pub windows: Vec<(i64, u64, i64)>,
     pub window_p99: i64,
+}
+
+/// Eviction batches summarized: their count, their durations' nearest-rank p50 and p99 and
+/// maximum, and those past the next batch's planned start, the most and the sum of the overage.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct EvictionSummary {
+    pub batches: usize,
+    pub p50: i64,
+    pub p99: i64,
+    pub max: i64,
+    pub late: usize,
+    pub late_max: i64,
+    pub late_sum: i64,
+}
+
+/// `batches`, each (planned start, duration, overage), summarized.
+pub fn summarize_evictions(batches: &[(i64, i64, i64)]) -> EvictionSummary {
+    let mut d: Vec<i64> = batches.iter().map(|b| b.1).collect();
+    d.sort_unstable();
+    let late: Vec<i64> = batches.iter().map(|b| b.2).filter(|&o| o > 0).collect();
+    EvictionSummary {
+        batches: d.len(),
+        p50: quantile(&d, 0.5),
+        p99: quantile(&d, 0.99),
+        max: d.last().copied().unwrap_or(0),
+        late: late.len(),
+        late_max: late.iter().copied().max().unwrap_or(0),
+        late_sum: late.iter().sum(),
+    }
 }
 
 /// The nearest-rank quantile `q` of `sorted` (ascending); 0 when empty.
