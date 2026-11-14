@@ -1519,7 +1519,9 @@ impl<E: Engine> Loop<E> {
     /// A timeline has ended: its lanes' counts go to its task, which ends as a main line does.
     fn end_tl(&mut self, id: usize) -> Result<()> {
         let lanes: Vec<usize> = {
-            let Prog::Tl(d) = &self.tasks[id].prog else { unreachable!() };
+            let t = &mut self.tasks[id];
+            let Prog::Tl(d) = &mut t.prog else { unreachable!() };
+            t.io.a.st.add_timeline(&d.ex.finish());
             d.lanes.iter().flatten().copied().collect()
         };
         let mut r = Ok(());

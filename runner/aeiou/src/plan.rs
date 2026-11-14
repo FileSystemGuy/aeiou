@@ -87,6 +87,9 @@ pub enum Planned {
     Evict { parent: Option<usize>, lanes: Vec<usize>, plan: i64 },
     /// A lane of the timeline's body ended at `plan`.
     End { lane: usize, plan: i64 },
+    /// `lane` entered span `name` at `plan`, or left the span it entered last.
+    SpanBegin { lane: usize, name: Arc<str>, plan: i64 },
+    SpanEnd { lane: usize, plan: i64 },
 }
 
 /// A path's ops not yet retired: its last change and each lane's latest read since.
@@ -266,6 +269,8 @@ impl<'m, 'a: 'm> Plan<'m, 'a> {
                 Planned::Evict { parent, lanes: lanes.into_iter().map(|k| p.lane(k)).collect(), plan }
             }
             TlNote::End { lane, plan } => Planned::End { lane: p.lane(lane), plan },
+            TlNote::SpanBegin { lane, name, plan } => Planned::SpanBegin { lane: p.lane(lane), name, plan },
+            TlNote::SpanEnd { lane, plan } => Planned::SpanEnd { lane: p.lane(lane), plan },
         }
     }
 

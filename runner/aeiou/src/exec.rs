@@ -23,7 +23,8 @@
 //! loops drive it on the wall clock.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use anyhow::Result;
 
@@ -44,6 +45,9 @@ enum Item {
     /// is behind this join in its queue, so its sub-lanes end after it.
     Join { plan: i64, kids: usize },
     End { plan: i64 },
+    /// The lane enters span `name` (planned at `plan`), or leaves the one it entered last.
+    SpanBegin { name: Arc<str>, plan: i64 },
+    SpanEnd,
 }
 
 #[derive(Default)]
@@ -73,6 +77,10 @@ struct Lane {
     staging_open: bool,
     timer: Option<i64>,
     ended: bool,
+    /// The spans it is in, innermost last: name, planned start, launch.
+    spans: Vec<(Arc<str>, i64, i64)>,
+    /// It has issued an op.
+    issued: bool,
 }
 
 /// The workers' staging: bytes submitted and not yet written, its peak, and the would-be drops.
@@ -100,6 +108,11 @@ pub struct Stats {
     pub staging: Vec<Staging>,
     /// The most paths the planner held (`Plan::paths`), sampled as it retires them.
     pub paths_peak: usize,
+    /// Each span's (planned start, D) by name, ns, in the order they ended.
+    pub spans: BTreeMap<Arc<str>, Vec<(i64, i64)>>,
+    /// The final L of each lane of the timeline's body that issued an op (a session's; worker
+    /// and eviction lanes' L is reported, never carried, so not here).
+    pub body_lag: Vec<i64>,
 }
 
 pub struct Exec {
@@ -208,6 +221,14 @@ impl Exec {
                 self.lane(lane).q.push_back(Item::End { plan });
                 self.dirty.push(lane);
             }
+            Planned::SpanBegin { lane, name, plan } => {
+                self.lane(lane).q.push_back(Item::SpanBegin { name, plan });
+                self.dirty.push(lane);
+            }
+            Planned::SpanEnd { lane, .. } => {
+                self.lane(lane).q.push_back(Item::SpanEnd);
+                self.dirty.push(lane);
+            }
         }
     }
 
@@ -294,6 +315,7 @@ impl Exec {
                         self.stats.late_max_ns = self.stats.late_max_ns.max(now - ready);
                     }
                     self.stats.issued += 1;
+                    lane.issued = true;
                     let staged = self.staged.remove(&r.seq).unwrap_or(0);
                     self.flight.insert(r.seq, (l, staged));
                     out.push(r);
@@ -352,6 +374,18 @@ impl Exec {
                     lane.kids_done -= kids;
                     lane.kids_end = 0;
                     lane.kids_plan = 0;
+                }
+                Item::SpanBegin { plan, .. } => {
+                    // launched when the lane reaches it: its plan plus L, or its previous completion
+                    let launch = (plan + if lane.queue { 0 } else { lane.l }).max(lane.last);
+                    let Some(Item::SpanBegin { name, plan }) = lane.q.pop_front() else { unreachable!() };
+                    lane.spans.push((name, plan, launch));
+                }
+                Item::SpanEnd => {
+                    lane.q.pop_front();
+                    let (name, plan, launch) = lane.spans.pop().expect("a span's end follows its begin");
+                    let d = lane.last.max(launch) - launch;
+                    self.stats.spans.entry(name).or_default().push((plan, d));
                 }
                 Item::End { plan } => {
                     let plan = *plan;
@@ -420,6 +454,7 @@ impl Exec {
     /// Each lane's L, into `stats.lag`.
     pub fn finish(&mut self) -> Stats {
         self.stats.lag = self.lanes.iter().map(|l| l.l).collect();
+        self.stats.body_lag = self.lanes.iter().filter(|l| !l.queue && l.issued).map(|l| l.l).collect();
         self.stats.clone()
     }
 
@@ -434,6 +469,7 @@ impl Exec {
             Item::Gate { gate, .. } => format!("gate {gate}, never opened"),
             Item::Join { kids, .. } => format!("its {} sub-lanes, {} ended", kids, l.kids_done),
             Item::End { .. } => "its end".into(),
+            Item::SpanBegin { .. } | Item::SpanEnd => "a span's mark".into(),
         };
         let mut out = format!("lane {i} waits on {what}");
         // an outstanding edge: the lane that holds it, and what that lane waits on
@@ -464,6 +500,59 @@ pub fn planned_at(p: &Planned) -> i64 {
     match p {
         Planned::Op(r) => r.plan,
         Planned::Compute { plan, .. } | Planned::Fork { plan, .. } | Planned::Submit { plan, .. } | Planned::Evict { plan, .. } | Planned::End { plan, .. } => *plan,
+        Planned::SpanBegin { plan, .. } | Planned::SpanEnd { plan, .. } => *plan,
+    }
+}
+
+/// The window D is judged by, a span assigned to one by its planned start (`DESIGN_REVIEW.md`
+/// §3.99, the note "The run side of timelines", point 3): 5 minutes.
+pub const WINDOW_NS: i64 = 300_000_000_000;
+
+/// A span name's D, summarized: count, sum, nearest-rank p50 and p99, maximum; each window's
+/// (index, count, p99), by planned start; and the worst window's p99.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SpanSummary {
+    pub count: u64,
+    pub sum: i64,
+    pub p50: i64,
+    pub p99: i64,
+    pub max: i64,
+    pub windows: Vec<(i64, u64, i64)>,
+    pub window_p99: i64,
+}
+
+/// The nearest-rank quantile `q` of `sorted` (ascending); 0 when empty.
+pub fn quantile(sorted: &[i64], q: f64) -> i64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let rank = ((q * sorted.len() as f64).ceil() as usize).clamp(1, sorted.len());
+    sorted[rank - 1]
+}
+
+/// Summarize spans given as (planned start, D).
+pub fn summarize(ds: &[(i64, i64)]) -> SpanSummary {
+    let mut all: Vec<i64> = ds.iter().map(|(_, d)| *d).collect();
+    all.sort_unstable();
+    let mut by: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    for (p, d) in ds {
+        by.entry(p.div_euclid(WINDOW_NS)).or_default().push(*d);
+    }
+    let windows: Vec<(i64, u64, i64)> = by
+        .into_iter()
+        .map(|(w, mut v)| {
+            v.sort_unstable();
+            (w, v.len() as u64, quantile(&v, 0.99))
+        })
+        .collect();
+    SpanSummary {
+        count: all.len() as u64,
+        sum: all.iter().sum(),
+        p50: quantile(&all, 0.5),
+        p99: quantile(&all, 0.99),
+        max: all.last().copied().unwrap_or(0),
+        window_p99: windows.iter().map(|w| w.2).max().unwrap_or(0),
+        windows,
     }
 }
 

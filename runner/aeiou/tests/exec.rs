@@ -239,3 +239,53 @@ fn agentx_tiered_through_the_executor() {
     assert_eq!(ops.len(), planned);
     assert!(ops.iter().all(|o| o.completed >= o.issued && o.issued >= o.record.plan));
 }
+
+fn span(name: &str, body: Value) -> Value {
+    json!({"span": {"name": name, "body": body}})
+}
+
+/// A span's D runs from its launch (its plan at entry plus the lane's L, or the lane's previous
+/// completion if later) to its last op's completion: the lag before it is not in D, the wait
+/// behind its own ops is (brief item 72 (7) step 5, `DESIGN_REVIEW.md` §3.99 point 3).
+#[test]
+fn a_span_measures_from_its_launch_to_its_last_completion() {
+    // d/1 at 0 done at 50, planned gap 10: the lane is 40 behind when the span starts at 10
+    let body = tl(json!([stat(1), compute(10), span("load", json!([stat(2), stat(3)])), compute(1000), span("load", json!([stat(4)]))]));
+    let (ops, st) = run(body, |r, _| if &*r.path == "d/1" { 50 } else { 20 });
+    // d/2 at 50 (L 40), d/3 at 70 (L 60)
+    assert_eq!(when(&ops), pairs(&[("d/1", 0), ("d/2", 50), ("d/3", 70), ("d/4", 1070)]));
+    let load = &st.spans["load"];
+    // (planned start, D): launch at 50, done at 90; launch at 1010 + 60, done at 1090
+    assert_eq!(load, &[(10, 40), (1010, 20)]);
+    assert_eq!(st.body_lag, [60]);
+}
+
+/// A span's op that waits on another lane's change (an edge) has the wait in its D: the reader
+/// launched at its plan, its open issued once the writer's close completed.
+#[test]
+fn a_span_includes_its_edge_waits() {
+    let wr = json!([obj("f", 1), {"open": {"file": r("f"), "flags": ["WRONLY", "CREAT"]}}, {"close": {"file": r("f")}}]);
+    let rd = json!([compute(10), obj("f", 1), span("load", json!([{"open": {"file": r("f"), "flags": ["RDONLY"]}}, {"close": {"file": r("f")}}]))]);
+    // lane 1 writes (its open 30, its close 5 more); lane 2 reads in a span planned at 10
+    let body = tl(json!([{"parallel": {"index": "k", "width": 2, "body": [{"cond": {"if": {"eq": [{"index": "k"}, 0]}, "then": wr, "else": rd}}]}}]));
+    let (ops, st) = run(body, |r, _| if r.lane == 1 && r.kind == aeiou::vm::OpKind::Open { 30 } else { 5 });
+    assert_eq!(when(&ops), pairs(&[("kv/1", 0), ("kv/1", 30), ("kv/1", 35), ("kv/1", 40)]));
+    assert_eq!(st.spans["load"], [(10, 35)]);
+    assert_eq!(st.edge_waits, 1);
+}
+
+/// The summary of a span's D: count, sum, nearest-rank p50 and p99, maximum, and each
+/// 5-minute window's count and p99 by planned start, the worst window's p99 the result.
+#[test]
+fn span_summaries_are_by_window_of_planned_start() {
+    use aeiou::exec::{summarize, WINDOW_NS};
+    let mut ds: Vec<(i64, i64)> = (0..100).map(|i| (i, i + 1)).collect();
+    ds.push((WINDOW_NS, 500));
+    ds.push((WINDOW_NS + 5, 7));
+    let s = summarize(&ds);
+    assert_eq!((s.count, s.sum, s.p50, s.p99, s.max), (102, 5050 + 507, 50, 100, 500));
+    assert_eq!(s.windows, [(0, 100, 99), (1, 2, 500)]);
+    assert_eq!(s.window_p99, 500);
+    let e = summarize(&[]);
+    assert_eq!((e.count, e.p99, e.window_p99), (0, 0, 0));
+}

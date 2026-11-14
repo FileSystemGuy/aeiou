@@ -55,6 +55,34 @@ impl Ast {
     pub fn has_timeline(&self) -> bool {
         self.actors.values().any(|a| body_has_timeline(&a.body))
     }
+
+    /// The names of the `span`s anywhere in the document (contract 0.20).
+    pub fn span_names(&self) -> std::collections::BTreeSet<String> {
+        fn walk(nodes: &[Node], out: &mut std::collections::BTreeSet<String>) {
+            for n in nodes {
+                match n {
+                    Node::Span { name, body } => {
+                        out.insert(name.clone());
+                        walk(body, out);
+                    }
+                    Node::Timeline { body, .. } | Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Submit { body, .. } => walk(body, out),
+                    Node::Cond { then, otherwise, .. } => {
+                        walk(then, out);
+                        if let Some(o) = otherwise {
+                            walk(o, out);
+                        }
+                    }
+                    Node::Choose { arms, .. } => arms.iter().for_each(|a| walk(&a.body, out)),
+                    _ => {}
+                }
+            }
+        }
+        let mut out = std::collections::BTreeSet::new();
+        for a in self.actors.values() {
+            walk(&a.body, &mut out);
+        }
+        out
+    }
 }
 
 /// Whether a `timeline` is anywhere in `nodes`.

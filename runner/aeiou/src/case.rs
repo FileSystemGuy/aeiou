@@ -289,8 +289,58 @@ pub const NAMES: &[(&str, When, &str)] = &[
     ("result.min_gpu_busy_fraction", When::After, "the least, over the instances that take, of the busy fraction of that instance's takes but its first"),
 ];
 
+/// A timeline span's statistics, `result.span.<span>.<stat>` (brief item 72 (7) step 5): D's
+/// count, sum, nearest-rank p50 and p99, and maximum, and the worst 5-minute window's p99 by
+/// planned start, in seconds.
+pub const SPAN_STATS: &[(&str, &str)] = &[
+    ("count", "the spans of that name that ended"),
+    ("sum_s", "their D summed"),
+    ("p50_s", "D's nearest-rank median"),
+    ("p99_s", "D's nearest-rank 99th percentile"),
+    ("max_s", "D's largest"),
+    ("window_p99_s", "the largest, over the 5-minute windows of planned start, of a window's p99"),
+];
+
+/// The lag of a timeline's body lanes that issued ops, `result.lag.<stat>`: their final L, in
+/// seconds (worker and eviction lanes' L is never carried, so not among them).
+pub const LAG_STATS: &[(&str, &str)] = &[("p50_s", "the lanes' final L, nearest-rank median"), ("p99_s", "nearest-rank 99th percentile"), ("max_s", "largest")];
+
+fn is_ident(s: &str) -> bool {
+    let mut c = s.chars();
+    c.next().is_some_and(|f| f.is_ascii_alphabetic() || f == '_') && c.all(|x| x.is_ascii_alphanumeric() || x == '_')
+}
+
+/// The span a `result.span.<span>.<stat>` name reads, with the statistic.
+fn span_name(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix("result.span.")?;
+    let (span, stat) = rest.split_once('.')?;
+    (is_ident(span) && SPAN_STATS.iter().any(|(s, _)| *s == stat)).then_some((span, stat))
+}
+
 pub fn when_of(name: &str) -> Option<When> {
-    NAMES.iter().find(|(n, _, _)| *n == name).map(|(_, w, _)| *w)
+    if let Some((_, w, _)) = NAMES.iter().find(|(n, _, _)| *n == name) {
+        return Some(*w);
+    }
+    if span_name(name).is_some() || name.strip_prefix("result.lag.").is_some_and(|s| LAG_STATS.iter().any(|(x, _)| *x == s)) {
+        return Some(When::After);
+    }
+    None
+}
+
+/// Every constraint's `result.span.<span>.` names a span the abstract declares (`spans`):
+/// checked when the lock is read, so a misspelled span fails before the run, not after it.
+pub fn check_span_names(lock: &Lock, spans: &BTreeSet<String>) -> Result<()> {
+    for c in &lock.constraints {
+        for n in names_in(&c.expr) {
+            if let Some((span, _)) = span_name(&n) {
+                if !spans.contains(span) {
+                    let have = if spans.is_empty() { "none".to_string() } else { spans.iter().cloned().collect::<Vec<_>>().join(", ") };
+                    bail!("constraint `{}`: the abstract declares no span `{span}` (its spans: {have})", c.text);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Constraint {
@@ -299,7 +349,11 @@ impl Constraint {
     pub fn when(&self) -> Result<When> {
         let mut w = When::Resolve;
         for n in names_in(&self.expr) {
-            w = w.max(when_of(&n).ok_or_else(|| anyhow!("constraint `{}`: `{n}` is not a name of the runner ({})", self.text, NAMES.iter().map(|(n, _, _)| *n).collect::<Vec<_>>().join(", ")))?);
+            w = w.max(when_of(&n).ok_or_else(|| {
+                let span: Vec<&str> = SPAN_STATS.iter().map(|(s, _)| *s).collect();
+                let lag: Vec<&str> = LAG_STATS.iter().map(|(s, _)| *s).collect();
+                anyhow!("constraint `{}`: `{n}` is not a name of the runner ({}, result.span.SPAN.{{{}}}, result.lag.{{{}}})", self.text, NAMES.iter().map(|(n, _, _)| *n).collect::<Vec<_>>().join(", "), span.join(","), lag.join(","))
+            })?);
         }
         Ok(w)
     }
@@ -524,5 +578,77 @@ pub fn results(report: &crate::run::Report) -> BTreeMap<String, Num> {
         let least = per.iter().map(|(c, s)| crate::report::busy(*c, *s, report.time_scale)).fold(f64::INFINITY, f64::min);
         out.insert("result.min_gpu_busy_fraction".into(), Num::F(least));
     }
+    // a timeline's spans and its lanes' lag (brief item 72 (7) step 5)
+    let s = |ns: i64| Num::F(ns as f64 / 1e9);
+    for (name, ds) in &report.stats.spans {
+        let m = crate::exec::summarize(ds);
+        out.insert(format!("result.span.{name}.count"), Num::I(m.count as i64));
+        out.insert(format!("result.span.{name}.sum_s"), s(m.sum));
+        out.insert(format!("result.span.{name}.p50_s"), s(m.p50));
+        out.insert(format!("result.span.{name}.p99_s"), s(m.p99));
+        out.insert(format!("result.span.{name}.max_s"), s(m.max));
+        out.insert(format!("result.span.{name}.window_p99_s"), s(m.window_p99));
+    }
+    if !report.stats.lane_lag.is_empty() {
+        let mut l = report.stats.lane_lag.clone();
+        l.sort_unstable();
+        out.insert("result.lag.p50_s".into(), s(crate::exec::quantile(&l, 0.5)));
+        out.insert("result.lag.p99_s".into(), s(crate::exec::quantile(&l, 0.99)));
+        out.insert("result.lag.max_s".into(), s(*l.last().unwrap()));
+    }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A span's and the lanes' lag names are known after the run, a span's for each statistic
+    /// the runner defines; any other is not a name of the runner (brief item 72 (7) step 5).
+    #[test]
+    fn span_and_lag_names_are_results() {
+        for n in ["result.span.load.count", "result.span.load.sum_s", "result.span.load.p50_s", "result.span.load.p99_s", "result.span.load.max_s", "result.span.load.window_p99_s", "result.lag.p50_s", "result.lag.p99_s", "result.lag.max_s"] {
+            assert_eq!(when_of(n), Some(When::After), "{n}");
+        }
+        for n in ["result.span.load", "result.span.load.p98_s", "result.span..p99_s", "result.lag.mean_s", "result.span.a.b.p99_s"] {
+            assert_eq!(when_of(n), None, "{n}");
+        }
+    }
+
+    /// The results of a run with spans: each span name's statistics in seconds, the worst
+    /// window's p99, and the body lanes' final L; none of them in a run without a timeline.
+    #[test]
+    fn a_runs_spans_and_lag_are_results() {
+        let mut r = crate::run::Report::merge_all(vec![]);
+        assert!(!results(&r).keys().any(|k| k.starts_with("result.span.") || k.starts_with("result.lag.")));
+        r.stats.spans.insert("load".into(), vec![(0, 1_000_000_000), (crate::exec::WINDOW_NS, 3_000_000_000)]);
+        r.stats.lane_lag = vec![0, 2_000_000_000];
+        let got = results(&r);
+        let f = |n: &str| match got[n] {
+            Num::F(x) => x,
+            Num::I(x) => x as f64,
+        };
+        assert_eq!(f("result.span.load.count"), 2.0);
+        assert_eq!(f("result.span.load.sum_s"), 4.0);
+        assert_eq!(f("result.span.load.p50_s"), 1.0);
+        assert_eq!(f("result.span.load.p99_s"), 3.0);
+        assert_eq!(f("result.span.load.max_s"), 3.0);
+        assert_eq!(f("result.span.load.window_p99_s"), 3.0);
+        assert_eq!(f("result.lag.p50_s"), 0.0);
+        assert_eq!(f("result.lag.max_s"), 2.0);
+    }
+
+    /// A constraint over a span the abstract does not declare is refused when the lock is read,
+    /// never after a long run.
+    #[test]
+    fn a_constraint_over_an_undeclared_span_is_refused() {
+        let c = |t: &str, n: &str| Constraint { text: t.into(), expr: json!({"le": [{"result": n}, 2]}), names: vec![format!("result.{n}")], doc: None };
+        let lock = Lock { path: String::new(), sha256: String::new(), name: "c".into(), runs: vec![], identity_frozen: false,
+            constraints: vec![c("result.span.load.p99_s <= 2", "span.load.p99_s"), c("result.elapsed_s <= 2", "elapsed_s")], doc: Value::Null };
+        let mut spans = BTreeSet::new();
+        spans.insert("load".to_string());
+        check_span_names(&lock, &spans).unwrap();
+        let e = check_span_names(&lock, &BTreeSet::from(["store".to_string()])).unwrap_err().to_string();
+        assert!(e.contains("constraint `result.span.load.p99_s <= 2`: the abstract declares no span `load` (its spans: store)"), "{e}");
+    }
 }

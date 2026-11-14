@@ -12350,6 +12350,35 @@ sends back each completion's time; the actor's thread waits for a completion or 
   stopping on the abort, and 1,500 paths retired by the planner as they complete; `exec.rs`'s
   `take_ended` unit test.
 
+*D and lag reported (2026-11-14, step 5's first part, the user's "go on to step 5").* A `span`
+in a timeline's lane is marked for the planner (`vm::TlNote::SpanBegin`, `SpanEnd`, emitted only
+in a lane, so `dry-run`'s walk and fingerprint are unchanged); the executor launches it when the
+lane reaches it and ends it when the lane has done what precedes its end, D the difference,
+recorded with the span's planned start; reported a span name (count, sum, nearest-rank p50 and
+p99, maximum, each 5-minute window's p99 by planned start and the worst of them), with the final
+L of the body lanes that issued ops; `result.span.SPAN.{count, sum_s, p50_s, p99_s, max_s,
+window_p99_s}` and `result.lag.{p50_s, p99_s, max_s}` for a case's constraints, a constraint over
+a span the abstract lacks refused when the lock is read; the builder's constraint parser reads
+the dotted names. Choices made in the build:
+- *D ends at the lane's previous completion when it reaches the span's end*, so a span's D
+  includes its edge waits, as decided, and nothing planned after it. V36 already keeps a span from
+  holding a `compute`, a `parallel`, or another span, so no planned time is inside one.
+- *Kept whole, not as histograms:* each span is two numbers, concatenated over actors and hosts,
+  so a merged report's quantiles and windows are exact; `agentx-tiered`'s spans, no more than its
+  379,000 G3 reads, are at most 6 MB. A histogram is the change if a case's spans grow past what a report should carry.
+- *Nearest-rank quantiles*, as `exec::quantile`, the same for a span and for the lags.
+- *A blocking lane's first ops paid its buffers' faults:* measured on a run of three sessions, each
+  lane thread's first write and first read spent 2.2 ms faulting in its 8 MiB buffer before the
+  call, inside the lane's L and its span's D (D 3 ms for three ops of 10 µs). Now a lane takes its
+  thread 250 ms before its first planned op (`BIND_LEAD_NS`), a new thread faults its buffers in
+  before it takes work, and planned time 0 starts once the first lanes' threads have; D fell to
+  0.3 ms, the same as on the event loops. Taking the thread a whole horizon (10 s) ahead was tried
+  first and held a thread for every lane planned in the next 10 s, breaking reuse; 250 ms is far
+  more than the 4 ms the faults take.
+- What is left in D on this host (0.25 to 0.5 ms for three ops of 10 to 20 µs on ext4 under
+  WSL2) is the hand-off between threads and timer wake-ups, the host's lateness, which step 5's
+  second part reports and judges.
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes

@@ -460,6 +460,9 @@ enum Next<'a> {
     Block,
     /// A `submit` (contract 0.20): its workers and body.
     Submit(&'a str, &'a [Node]),
+    /// A `span` of a timeline's lane was entered, by name, or its body ended (contract 0.20).
+    SpanBegin(&'a str),
+    SpanEnd,
 }
 
 /// Where a timeline's event came from (`Vm::timeline_at`).
@@ -491,6 +494,10 @@ pub enum TlNote {
     Evict { parent: Option<Exec>, lanes: Vec<Exec>, plan: i64 },
     /// A lane of the timeline's body ended at `plan` (worker and eviction lanes go on).
     End { lane: Exec, plan: i64 },
+    /// Lane `lane` entered span `name` at `plan`, or left the span it entered last (contract
+    /// 0.20): what a run measures D over (`exec.rs`).
+    SpanBegin { lane: Exec, name: Arc<str>, plan: i64 },
+    SpanEnd { lane: Exec, plan: i64 },
 }
 
 /// What a lane's step gave `tl_step`.
@@ -502,6 +509,8 @@ enum LaneEv<'a> {
     Block,
     End,
     Submit(&'a str, &'a [Node]),
+    SpanBegin(&'a str),
+    SpanEnd,
 }
 
 /// The op the last `Next::Op` describes; `next` lends it out as an `Op`. A `path` of `None`
@@ -558,6 +567,8 @@ enum Cont<'a> {
     Fork { body: &'a [Node], iters: i64, k: i64, open: HashMap<Arc<str>, FileState>, written: HashMap<Arc<str>, i64> },
     /// Pop the phase label when the phase body ends.
     PhaseEnd,
+    /// A timeline lane's `span` body ended.
+    SpanEnd,
     Io(IoSeq<'a>),
 }
 
@@ -1003,6 +1014,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Some(Next::Trace(t)) => Some((Event::Trace(t, self.ctx()), None)),
                 Some(Next::Block) => return Err(anyhow!("a lane waited outside a timeline (V34)")),
                 Some(Next::Submit(..)) => unreachable!("a `submit` outside a timeline is refused when walked"),
+                Some(Next::SpanBegin(_) | Next::SpanEnd) => continue,
             });
         }
     }
@@ -1022,6 +1034,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             Some(Next::Trace(_)) => LaneEv::Trace,
             Some(Next::Block) => LaneEv::Block,
             Some(Next::Submit(w, b)) => LaneEv::Submit(w, b),
+            Some(Next::SpanBegin(n)) => LaneEv::SpanBegin(n),
+            Some(Next::SpanEnd) => LaneEv::SpanEnd,
             Some(Next::Timeline) => unreachable!("a timeline inside a timeline is refused when entered"),
         })
     }
@@ -1177,6 +1191,18 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     run.lanes.push(Lane { vm: Some(kid), key: vec![wi as i64, ord], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 2, exec });
                     let l = run.lanes.len() - 1;
                     run.ready(l);
+                }
+                S::SpanBegin(name) => {
+                    if let Some(n) = &run.notes {
+                        let lane = &run.lanes[cur];
+                        n.lock().unwrap().push(TlNote::SpanBegin { lane: lane.exec, name: Arc::from(name), plan: lane.vm.as_ref().unwrap().clock });
+                    }
+                }
+                S::SpanEnd => {
+                    if let Some(n) = &run.notes {
+                        let lane = &run.lanes[cur];
+                        n.lock().unwrap().push(TlNote::SpanEnd { lane: lane.exec, plan: lane.vm.as_ref().unwrap().clock });
+                    }
                 }
                 S::End => {
                     let lane = &mut run.lanes[cur];
@@ -2417,6 +2443,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     self.stack.pop();
                     self.phases.pop();
                 }
+                Cont::SpanEnd => {
+                    self.stack.pop();
+                    return Ok(Some(Next::SpanEnd));
+                }
                 Cont::Io(_) => {
                     if let Some(n) = self.io_step()? {
                         return Ok(Some(n));
@@ -2970,10 +3000,16 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 Ok(Some(Next::Submit(workers, body)))
             }
-            Node::Span { body, .. } => {
-                // the run measures it; the plan walks its body where it stands
+            Node::Span { name, body } => {
+                // the plan walks its body where it stands; in a timeline's lane its begin and
+                // end are marked for the run, which measures D over it
+                if self.tl.is_none() {
+                    self.push_body(body);
+                    return Ok(None);
+                }
+                self.stack.push(Cont::SpanEnd);
                 self.push_body(body);
-                Ok(None)
+                Ok(Some(Next::SpanBegin(name)))
             }
             Node::Phase { name, body } => {
                 let label: Arc<str> = match self.expr(name)? {

@@ -340,13 +340,28 @@ each is a recorded decision and the golden tests pin them.
   fails as not open), issuing through the loop's engine as an actor's op; a timer wakes the task
   for the next planned op. Under a blocking backend (`sync`, `posix-aio`, `mmap`; step 4,
   `run.rs`, `Runner::timeline`) the actor's thread holds the planner and the executor, and each
-  live executor lane holds a thread: a lane takes a free thread, or a new one, at its first record
-  and gives it back when it ends, its open files checked and dropped, so a blocking call holds
-  its own lane alone and the threads are the most lanes live at once; a lane thread reports each
-  completion's time to the actor's thread, which waits for one or the next planned record. The
-  report's `threads` counts them. Refused: an object namespace, `--time-scale` other than 1, and
-  an op outside the timeline. The lag, edge waits, host lateness, and staging are measured and not
-  yet reported (step 5).
+  live executor lane holds a thread: a lane takes a free thread, or a new one, 250 ms before its
+  first record is planned and gives it back when it ends, its open files checked and dropped, so
+  a blocking call holds its own lane alone and the threads are the most lanes live, or about to
+  be, at once. A new thread allocates and faults in its buffers before it takes work, and planned
+  time 0 starts once the threads of the first lanes have (step 5: a lane's first write and first
+  read had paid 2 ms each, the buffers' faults, inside its L and its span's D). A lane thread
+  reports each completion's time, taken when the call returns, to the actor's thread, which
+  waits for one or the next planned record. The report's `threads` counts them. Refused: an
+  object namespace, `--time-scale` other than 1, and an op outside the timeline.
+- **D and lag, reported** (2026-11-14, step 5). A `span` in a timeline's lane marks its begin
+  and end for the planner (`Planned::SpanBegin`, `SpanEnd`); the executor launches it when the
+  lane reaches it (`max(plan + L, previous completion)`, so the lag before it is not in it) and
+  ends it when the lane has finished what precedes its end (its last op's completion, its edge
+  waits included): **D**, recorded with the span's planned start. The report gives, a span name,
+  D's count, sum, nearest-rank p50 and p99, and maximum, and its p99 in each 5-minute window of
+  planned start, the worst of them the window p99; and the final L of the timeline's body lanes
+  that issued ops (a worker's or eviction lane's L is never carried, so not among them). Spans
+  and lags are kept whole (each span's two numbers) and concatenated over actors and hosts, so a
+  merged report's quantiles are exact. In the text report `timeline spans (D: …)` and `timeline
+  lag (final L of N lanes)`; in the JSON report `timeline` (§12); for a case's constraints
+  `result.span.SPAN.*` and `result.lag.*` (§17). The edge waits, host lateness, and staging are
+  measured and reported with the rest of step 5.
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which
@@ -1952,6 +1967,9 @@ counters {…§4…}, io_uring, libaio, mmap (null unless that backend ran), col
 object {retries, retries_by_cause {cause: n}} (null without an object endpoint; §16, 2026-10-15),
 take_summary {per_instance, instances, takes, stall_ns, compute_ns, stall_mean_ns, stall_p99_ns, stall_max_ns, busy,
               steps [{from, to, takes, stall_mean_ns, stall_p99_ns, stall_max_ns, busy}]},
+timeline {window_s, spans {name: {count, sum_ns, p50_ns, p99_ns, max_ns, window_p99_ns,
+          windows [{window, start_s, count, p99_ns}]}}, lag {lanes, p50_ns, p99_ns, max_ns}}
+          (only for a run with a timeline; §2 "D and lag, reported", 2026-11-14),
 instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_records [[stall_ns, compute_ns], …]}]
 ```
 
@@ -2869,6 +2887,10 @@ defined once here; a change of a definition is a recorded decision:
 | `result.elapsed_s` | after | seconds from the start gate to the end of the run |
 | `result.busy_fraction` | after | compute × time-scale / (compute × time-scale + stall) over every take of every instance but each instance's first, which waits on the pipeline filling |
 | `result.min_gpu_busy_fraction` | after | the least, over the instances that take, of that busy fraction |
+| `result.span.SPAN.count` | after | the spans named SPAN that ended, in a timeline's lanes (contract 0.20; §2 "D and lag, reported"); SPAN must be a span of the abstract, checked when the lock is read |
+| `result.span.SPAN.sum_s`, `.p50_s`, `.p99_s`, `.max_s` | after | their D, from launch to last completion, summed, nearest-rank median and 99th percentile, and largest, in seconds |
+| `result.span.SPAN.window_p99_s` | after | the largest, over the 5-minute windows of planned start, of a window's nearest-rank p99 of D |
+| `result.lag.p50_s`, `.p99_s`, `.max_s` | after | the final L of a timeline's body lanes that issued ops, nearest-rank median and 99th percentile, and largest, in seconds |
 
 A constraint is checked at the latest time of the names it reads, with integer arithmetic and
 comparison where both operands are integers (`div` and `mod` Euclidean; exact past 2^53, where

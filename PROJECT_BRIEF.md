@@ -1664,8 +1664,12 @@ numbers; the order is this note's.
     schedule and waiting on each op). *Step 4 built the same day* (the addendum "A thread a live
     lane built"): under `sync`, `posix-aio`, and `mmap` each live executor lane holds a thread,
     taken at its first op and given back at its end, so the tiered abstract runs under its
-    declared API. Next: the report, the `result.` names, the flags, and staging's would-be drop
-    as a gate failure (step 5).
+    declared API. *Step 5's first part built 2026-11-14* (the addendum "D and lag reported"):
+    each span's D and the body lanes' final L, in the reports and as `result.span.SPAN.*` and
+    `result.lag.*`; a blocking lane's thread taken 250 ms ahead with its buffers faulted in, so
+    they are not in L or D. Next, step 5's second part: staging (loads included) and the
+    would-be drop as a gate failure, `--on-certain-failure`, `--lag-ceiling`, host lateness,
+    the per-second report, and `--emit-trace`'s planned `t`.
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the

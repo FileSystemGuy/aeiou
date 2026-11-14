@@ -545,8 +545,11 @@ The planner (2026-11-13, step 2, `runner/REFERENCE.md` §2): a timeline's walk a
 each with its executor lane, planned time, and path-order edges, `dry-run` driven by it. The
 executor (step 3, `runner/REFERENCE.md` §2): `aeiou run` issues a timeline's ops at their planned
 times plus each lane's lag under `--posix io_uring` and `libaio`, and (step 4) under the blocking
-backends, the tiered abstract's declared API included, a thread each live lane; the lag, edge
-waits, and staging are measured, not yet reported (step 5).
+backends, the tiered abstract's declared API included, a thread each live lane. Step 5's first
+part (2026-11-14): each `span`'s D, from its launch to its last op's completion, and the body
+lanes' final lag, in the text and JSON reports and as `result.span.SPAN.*` and `result.lag.*`
+for a case's constraints; the edge waits, host lateness, and staging are measured, not yet
+reported, and the flags and the would-be drop's gate failure come with the second part.
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

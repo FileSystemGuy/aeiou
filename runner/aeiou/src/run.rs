@@ -618,9 +618,23 @@ pub struct Stats {
     pub warm_opens: u64,
     #[serde(default)]
     pub steps: StepTimes,
+    /// A timeline's spans' (planned start, D) by name, and its body lanes' final L, ns (brief
+    /// item 72 (7) step 5, `exec.rs`); concatenated over actors and hosts.
+    #[serde(default)]
+    pub spans: BTreeMap<String, Vec<(i64, i64)>>,
+    #[serde(default)]
+    pub lane_lag: Vec<i64>,
 }
 
 impl Stats {
+    /// What a timeline's executor measured, this actor's.
+    pub(crate) fn add_timeline(&mut self, x: &crate::exec::Stats) {
+        for (k, v) in &x.spans {
+            self.spans.entry(k.to_string()).or_default().extend_from_slice(v);
+        }
+        self.lane_lag.extend_from_slice(&x.body_lag);
+    }
+
     pub fn merge(&mut self, o: &Stats) {
         self.ops += o.ops;
         for (k, v) in &o.counts {
@@ -653,6 +667,10 @@ impl Stats {
         self.input_opens += o.input_opens;
         self.warm_opens += o.warm_opens;
         self.steps.merge(&o.steps);
+        for (k, v) in &o.spans {
+            self.spans.entry(k.clone()).or_default().extend_from_slice(v);
+        }
+        self.lane_lag.extend_from_slice(&o.lane_lag);
     }
 }
 
@@ -3227,6 +3245,25 @@ fn us(ns: u64) -> String {
     }
 }
 
+/// A timeline's spans and lag (brief item 72 (7) step 5): each span name's D, from its launch to
+/// its last op's completion, and the final L of the body lanes that issued ops.
+fn write_timeline(out: &mut impl Write, s: &Stats) -> std::io::Result<()> {
+    let t = |ns: i64| us(ns.max(0) as u64);
+    if !s.spans.is_empty() {
+        writeln!(out, "timeline spans (D: sum/p50/p99/max; the worst {}-minute window's p99 by planned start):", crate::exec::WINDOW_NS / 60_000_000_000)?;
+        for (name, ds) in &s.spans {
+            let m = crate::exec::summarize(ds);
+            writeln!(out, "  {:<10} {:>9} {:>9} {:>9} {:>9}   window p99 {} of {} window(s)   n={}", name, t(m.sum), t(m.p50), t(m.p99), t(m.max), t(m.window_p99), m.windows.len(), m.count)?;
+        }
+    }
+    if !s.lane_lag.is_empty() {
+        let mut l = s.lane_lag.clone();
+        l.sort_unstable();
+        writeln!(out, "timeline lag (final L of {} lanes): p50 {}  p99 {}  max {}", l.len(), t(crate::exec::quantile(&l, 0.5)), t(crate::exec::quantile(&l, 0.99)), t(*l.last().unwrap()))?;
+    }
+    Ok(())
+}
+
 pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
     let s = &r.stats;
     let secs = r.elapsed.as_secs_f64().max(1e-9);
@@ -3255,6 +3292,7 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
     )?;
     let counts: Vec<String> = OpKind::ALL.iter().filter_map(|k| s.counts.get(k).map(|n| format!("{}={}", k.name(), n))).collect();
     writeln!(out, "by kind: {}", counts.join(" "))?;
+    write_timeline(out, s)?;
     writeln!(out, "latency (mean/p50/p99/max):")?;
     for k in OpKind::ALL {
         if let Some(h) = s.lat.get(&k) {
@@ -3685,6 +3723,11 @@ impl Runner {
     }
 }
 
+/// How long before its first op is planned a timeline's lane takes a thread under a blocking
+/// backend: time for a new thread to allocate and fault in its buffers (4 ms for the default two
+/// of 8 MiB, measured 2026-11-14) before the op, so that is never in the lane's L.
+const BIND_LEAD_NS: i64 = 250_000_000;
+
 /// What a timeline's driver hands a lane thread (`Runner::timeline`).
 enum LaneJob {
     Op(crate::plan::Record),
@@ -3693,22 +3736,33 @@ enum LaneJob {
     Quit,
 }
 
-/// What a lane thread tells the driver: a record completed at `at` (ns from the timeline's
-/// start), or the error that ends the run.
+/// What a lane thread tells the driver: its buffers are ready, a record completed at `at`, or
+/// the error that ends the run.
 enum LaneMsg {
-    Done { seq: u64, at: i64 },
+    Ready,
+    Done { seq: u64, at: Instant },
     Failed(anyhow::Error),
 }
 
 /// A thread an executor lane holds while it lives, under a blocking backend: its ops issued one
 /// at a time, as the lane's task issues them on the event loops (`uring.rs`, `Prog::XLane`), on
 /// an actor state of its own that a new lane starts afresh.
-fn lane_thread(mut sink: Runner, jobs: mpsc::Receiver<LaneJob>, tx: mpsc::Sender<LaneMsg>, t0: Instant) -> Stats {
+fn lane_thread(mut sink: Runner, jobs: mpsc::Receiver<LaneJob>, tx: mpsc::Sender<LaneMsg>) -> Stats {
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // the buffers allocated and faulted in now, ahead of the lane's first op (a thread is
+        // taken a horizon ahead of it), not by that op inside its lane's L and its span's D
+        // (2 ms for the default 8 MiB each, measured 2026-11-14)
+        if let Err(e) = sink.rbuf.ensure(1).and_then(|_| sink.wbuf.ensure(1)) {
+            let _ = tx.send(LaneMsg::Failed(anyhow!(e).context("a timeline lane's buffers")));
+            return;
+        }
+        if tx.send(LaneMsg::Ready).is_err() {
+            return;
+        }
         while let Ok(job) = jobs.recv() {
             match job {
                 LaneJob::Op(r) => {
-                    let mut at = 0;
+                    let mut at = Instant::now();
                     let res = (|| {
                         if sink.sh.aborted.load(Ordering::Relaxed) {
                             return Err(sink.sh.abort_error());
@@ -3716,7 +3770,7 @@ fn lane_thread(mut sink: Runner, jobs: mpsc::Receiver<LaneJob>, tx: mpsc::Sender
                         let op = r.op();
                         sink.a.check_align(&sink.sh, &op)?;
                         let (res, ns) = issue_timed(&mut *sink.be, &sink.sh, &mut sink.a, &mut sink.rbuf, &mut sink.wbuf, &op);
-                        at = t0.elapsed().as_nanos() as i64;
+                        at = Instant::now();
                         sink.a.settle(&op, &r.ctx(), res, ns)
                     })();
                     let msg = match res {
@@ -3757,10 +3811,13 @@ impl Runner {
     /// blocking call holds its own lane alone. A lane takes a free thread, or a new one, at its
     /// first op and gives it back when it ends; the threads are the most lanes live at once.
     fn timeline(&mut self, model: &'static Model<'static>, template: &'static str, actor: i64, count: i64) -> Result<()> {
-        let t0 = Instant::now();
         let (tx, rx) = mpsc::channel::<LaneMsg>();
         let mut threads: Vec<(mpsc::Sender<LaneJob>, JoinHandle<Stats>)> = Vec::new();
-        let r = self.timeline_loop(model, template, actor, count, t0, &tx, &rx, &mut threads);
+        let mut ex = crate::exec::Exec::new();
+        let r = self.timeline_loop(model, template, actor, count, &tx, &rx, &mut threads, &mut ex);
+        if r.is_ok() {
+            self.a.st.add_timeline(&ex.finish());
+        }
         if r.is_err() {
             self.sh.aborted.store(true, Ordering::Relaxed);
         }
@@ -3787,21 +3844,25 @@ impl Runner {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn timeline_loop(&mut self, model: &'static Model<'static>, template: &'static str, actor: i64, count: i64, t0: Instant, tx: &mpsc::Sender<LaneMsg>, rx: &mpsc::Receiver<LaneMsg>, threads: &mut Vec<(mpsc::Sender<LaneJob>, JoinHandle<Stats>)>) -> Result<()> {
-        use crate::exec::{planned_at, Exec, HORIZON_NS, RETIRE_FLOOR};
+    fn timeline_loop(&mut self, model: &'static Model<'static>, template: &'static str, actor: i64, count: i64, tx: &mpsc::Sender<LaneMsg>, rx: &mpsc::Receiver<LaneMsg>, threads: &mut Vec<(mpsc::Sender<LaneJob>, JoinHandle<Stats>)>, ex: &mut crate::exec::Exec) -> Result<()> {
+        use crate::exec::{planned_at, HORIZON_NS, RETIRE_FLOOR};
         use crate::plan::{Plan, Planned};
         let mut plan = Plan::new(model, template, actor, count);
-        let mut ex = Exec::new();
         let mut ahead = plan.next()?;
         let mut keep = RETIRE_FLOOR;
         // each executor lane's thread, and the threads no lane holds
         let mut held: Vec<Option<usize>> = Vec::new();
         let mut free: Vec<usize> = Vec::new();
+        // the lanes planned and not yet given a thread, by their first op's planned time
+        let mut pending: BTreeSet<(i64, usize)> = BTreeSet::new();
+        let mut seen: Vec<bool> = Vec::new();
+        // planned time 0, once the threads of the lanes in the first horizon have their buffers
+        let mut start: Option<Instant> = None;
         loop {
             if self.sh.aborted.load(Ordering::Relaxed) {
                 return Err(self.sh.abort_error());
             }
-            let now = t0.elapsed().as_nanos() as i64;
+            let now = start.map_or(0, |t0| t0.elapsed().as_nanos() as i64);
             while let Some(p) = ahead.take() {
                 if planned_at(&p) > now.saturating_add(HORIZON_NS) {
                     ahead = Some(p);
@@ -3810,6 +3871,17 @@ impl Runner {
                 match &p {
                     Planned::Op(r) if r.outside => {
                         bail!("{} {} outside the timeline of an actor whose body has one: not run yet (brief item 72 (7)): only the timeline's ops are issued", r.op().kind.name(), r.path)
+                    }
+                    // a lane takes its thread `BIND_LEAD_NS` before its first op is planned
+                    Planned::Op(r) => {
+                        if held.len() <= r.lane {
+                            held.resize(r.lane + 1, None);
+                            seen.resize(r.lane + 1, false);
+                        }
+                        if !seen[r.lane] {
+                            seen[r.lane] = true;
+                            pending.insert((r.plan, r.lane));
+                        }
                     }
                     Planned::Compute { ns, .. } => self.a.computed((*ns).max(0) as u64),
                     _ => {}
@@ -3821,6 +3893,36 @@ impl Runner {
                 plan.retire(|s| ex.done(s));
                 keep = (2 * plan.paths()).max(RETIRE_FLOOR);
             }
+            while let Some(&(at, lane)) = pending.first() {
+                if at > now.saturating_add(BIND_LEAD_NS) {
+                    break;
+                }
+                pending.pop_first();
+                let w = match free.pop() {
+                    Some(w) => w,
+                    None => {
+                        let (jobs, rx_jobs) = mpsc::channel();
+                        let sink = Runner::new(self.sh.clone(), self.inst.clone(), template, actor, false, None);
+                        let tx = tx.clone();
+                        let h = std::thread::Builder::new().name(format!("{template}#{actor} timeline lane")).spawn(move || lane_thread(sink, rx_jobs, tx)).expect("spawn");
+                        threads.push((jobs, h));
+                        threads.len() - 1
+                    }
+                };
+                held[lane] = Some(w);
+            }
+            let Some(t0) = start else {
+                let mut ready = 0;
+                while ready < threads.len() {
+                    match rx.recv().expect("the driver holds a sender") {
+                        LaneMsg::Ready => ready += 1,
+                        LaneMsg::Failed(e) => return Err(e),
+                        LaneMsg::Done { .. } => unreachable!("nothing issued before the start"),
+                    }
+                }
+                start = Some(Instant::now());
+                continue;
+            };
             let recs = ex.poll(now);
             for l in ex.take_ended() {
                 if let Some(w) = held.get_mut(l).and_then(Option::take) {
@@ -3829,34 +3931,13 @@ impl Runner {
                 }
             }
             for r in recs {
-                let lane = r.lane;
-                if held.len() <= lane {
-                    held.resize(lane + 1, None);
-                }
-                let w = match held[lane] {
-                    Some(w) => w,
-                    None => {
-                        let w = match free.pop() {
-                            Some(w) => w,
-                            None => {
-                                let (jobs, rx_jobs) = mpsc::channel();
-                                let sink = Runner::new(self.sh.clone(), self.inst.clone(), template, actor, false, None);
-                                let tx = tx.clone();
-                                let h = std::thread::Builder::new().name(format!("{template}#{actor} timeline lane")).spawn(move || lane_thread(sink, rx_jobs, tx, t0)).expect("spawn");
-                                threads.push((jobs, h));
-                                threads.len() - 1
-                            }
-                        };
-                        held[lane] = Some(w);
-                        w
-                    }
-                };
+                let w = held[r.lane].expect("a lane has its thread from when its first op was planned");
                 threads[w].0.send(LaneJob::Op(r)).map_err(|_| anyhow!("a timeline lane's thread ended"))?;
             }
             if ahead.is_none() && ex.idle() {
                 return Ok(());
             }
-            let wake = [ex.next_wake(), ahead.as_ref().map(|p| planned_at(p).saturating_sub(HORIZON_NS))].into_iter().flatten().min();
+            let wake = [ex.next_wake(), ahead.as_ref().map(|p| planned_at(p).saturating_sub(HORIZON_NS)), pending.first().map(|(at, _)| at.saturating_sub(BIND_LEAD_NS))].into_iter().flatten().min();
             if wake.is_none() && ex.in_flight() == 0 {
                 bail!("timeline stopped: {}", ex.stuck().unwrap_or_else(|| "no lane able to go on".into()));
             }
@@ -3870,7 +3951,8 @@ impl Runner {
             };
             for m in first.into_iter().chain(std::iter::from_fn(|| rx.try_recv().ok())) {
                 match m {
-                    LaneMsg::Done { seq, at } => ex.complete(seq, at),
+                    LaneMsg::Ready => {}
+                    LaneMsg::Done { seq, at } => ex.complete(seq, at.saturating_duration_since(t0).as_nanos() as i64),
                     LaneMsg::Failed(e) => return Err(e),
                 }
             }

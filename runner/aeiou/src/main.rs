@@ -1789,6 +1789,7 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
         }
         // the constraints known at resolve, before anything else: one that fails is an invalid run
         known = resolve_facts_of(c, model, cfg)?;
+        aeiou::case::check_span_names(&c.lock, &loaded.ast.span_names())?;
         judge_case(c, aeiou::case::When::Resolve, &known, &mut out, doc)?;
     }
     let apis = |b: BackendKind, s: S3Api| -> String {
@@ -2483,6 +2484,7 @@ fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         }
         expect_id(&a.run.shape, &view)?;
         let known = aeiou::case::resolve_facts(&loaded.ast, &projections, cfg.gpus);
+        aeiou::case::check_span_names(&c.lock, &loaded.ast.span_names())?;
         judge_case(c, aeiou::case::When::Resolve, &known, &mut out, &mut verdicts)?;
     }
     for line in report.total.take_lines() {

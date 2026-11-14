@@ -156,7 +156,32 @@ fn stats(s: &Stats, secs: f64) -> Map<String, Value> {
     m.insert("threads".into(), json!(s.threads));
     m.insert("input_opens".into(), json!(s.input_opens));
     m.insert("warm_opens".into(), json!(s.warm_opens));
+    if let Some(t) = timeline(s) {
+        m.insert("timeline".into(), t);
+    }
     m
+}
+
+/// A timeline's spans and its body lanes' lag (brief item 72 (7) step 5), `None` for a run
+/// without one: each span name's D (count, sum, nearest-rank p50 and p99, maximum, the worst
+/// 5-minute window's p99, and each window by planned start), and the lanes' final L.
+fn timeline(s: &Stats) -> Option<Value> {
+    if s.spans.is_empty() && s.lane_lag.is_empty() {
+        return None;
+    }
+    let spans: Map<String, Value> = s
+        .spans
+        .iter()
+        .map(|(name, ds)| {
+            let m = crate::exec::summarize(ds);
+            let windows: Vec<Value> = m.windows.iter().map(|(w, n, p99)| json!({"window": w, "start_s": w * (crate::exec::WINDOW_NS / 1_000_000_000), "count": n, "p99_ns": p99})).collect();
+            (name.clone(), json!({"count": m.count, "sum_ns": m.sum, "p50_ns": m.p50, "p99_ns": m.p99, "max_ns": m.max, "window_p99_ns": m.window_p99, "windows": windows}))
+        })
+        .collect();
+    let mut l = s.lane_lag.clone();
+    l.sort_unstable();
+    let lag = json!({"lanes": l.len(), "p50_ns": crate::exec::quantile(&l, 0.5), "p99_ns": crate::exec::quantile(&l, 0.99), "max_ns": l.last().copied().unwrap_or(0)});
+    Some(json!({"window_s": crate::exec::WINDOW_NS / 1_000_000_000, "spans": spans, "lag": lag}))
 }
 
 /// The busy fraction of takes whose `compute` (recorded unscaled) was slept `× time_scale`

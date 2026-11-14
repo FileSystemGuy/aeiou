@@ -332,7 +332,7 @@ fn lane_events_come_before_the_ops_they_order() {
         {"submit": {"workers": "w", "body": [stat(json!(5))]}},
         {"let": {"name": "a", "value": {"shared": {"id": 1, "n": 3}}}},
         {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 3}},
-        stat(json!(9))]);
+        {"span": {"name": "s", "body": [stat(json!(9))]}}]);
     let p = planned(json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}],
         "workers": [{"name": "w", "lanes": 2, "staging": 4096}], "body": body}}]));
     let words: Vec<String> = p.iter().map(|x| match x {
@@ -342,6 +342,8 @@ fn lane_events_come_before_the_ops_they_order() {
         Planned::Submit { parent, worker, workers, staging, plan } => format!("submit {parent} {worker} {workers} {staging} {plan}"),
         Planned::Evict { parent, lanes, plan } => format!("evict {parent:?} {lanes:?} {plan}"),
         Planned::End { lane, plan } => format!("end {lane} {plan}"),
+        Planned::SpanBegin { lane, name, plan } => format!("span {lane} {name} {plan}"),
+        Planned::SpanEnd { lane, plan } => format!("span end {lane} {plan}"),
     }).collect();
     // the root (lane 0) forks lanes 1 and 2 and waits; at 10 lane 2's stat; then the root goes on
     assert_eq!(&words[..3], ["fork 0 [1, 2] true 0", "compute 1 0+0", "op 1 d/0"], "{words:#?}");
@@ -358,6 +360,8 @@ fn lane_events_come_before_the_ops_they_order() {
     assert!(ev < victim_op);
     assert!(at("op 0 d/9") > ev);
     assert!(at("op 0 d/9") < at("end 0 10"));
+    // a span's marks around its ops, on its lane
+    assert!(at("span 0 s 10") < at("op 0 d/9") && at("op 0 d/9") < at("span end 0 10") && at("span end 0 10") < at("end 0 10"));
     // worker lanes go after the body's lanes at an instant: the submitted stat comes last
     assert!(at("submit 0 3 0 4096 10") < at("op 3 d/5") && at("end 0 10") < at("op 3 d/5"));
 }

@@ -34,7 +34,7 @@ FREEZE = {"defaults": "locked", "scale": "required", "identity_options": "locked
 
 # ---------------------------------------------------------------------------- constraints
 
-_TOKEN = re.compile(r"\s*(?:(?P<num>\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][-+]?\d+)?)|(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)"
+_TOKEN = re.compile(r"\s*(?:(?P<num>\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][-+]?\d+)?)|(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
                     r"|(?P<op>>=|<=|==|!=|[-+*()<>,]))")
 _CMP = {">=": "ge", "<=": "le", ">": "gt", "<": "lt", "==": "eq", "!=": "ne"}
 _FUNCS = {"min", "max"}
@@ -46,7 +46,8 @@ def parse_constraint(text: str) -> tuple[dict, list[str]]:
     The grammar: `or`, `and`, `not`; one comparison (`>=`, `<=`, `>`, `<`, `==`, `!=`); `+`,
     `-`; `*`, `div`, `mod` (integer division and remainder, as the AST's); unary `-`; numbers;
     `min(a, b)`, `max(a, b)`; parentheses; and the names `fact.NAME` and `result.NAME`, as
-    `{"fact": NAME}` and `{"result": NAME}`. Nothing else is a name: a rules file names no
+    `{"fact": NAME}` and `{"result": NAME}`, a NAME dotted where the runner's is (a timeline
+    span's `result.span.SPAN.STAT`). Nothing else is a name: a rules file names no
     parameter (§3.78 point 6)."""
     toks, pos = [], 0
     while pos < len(text):

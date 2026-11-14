@@ -66,6 +66,10 @@ def test_a_constraint_is_parsed_into_the_ast_expression_form():
     assert expr == {"or": [{"and": [{"not": {"lt": [{"result": "min_gpu_busy_fraction"}, 0.9]}}, {"ge": [{"fact": "min_samples_per_gpu"}, 2000]}]},
                            {"eq": [{"neg": 1}, {"sub": [{"min": [{"div": [{"fact": "a"}, 2]}, {"mod": [{"fact": "b"}, 3]}]}, 4]}]}]}
     assert names == ["fact.a", "fact.b", "fact.min_samples_per_gpu", "result.min_gpu_busy_fraction"]
+    # a timeline span's results name the span (brief item 72 (7) step 5)
+    expr, names = lock.parse_constraint("result.span.load.p99_s <= 2 and result.lag.max_s < 30")
+    assert expr == {"and": [{"le": [{"result": "span.load.p99_s"}, 2]}, {"lt": [{"result": "lag.max_s"}, 30]}]}
+    assert names == ["result.lag.max_s", "result.span.load.p99_s"]
     for bad, needle in [("samples >= 4", "`samples` is not a number, a `fact.` or `result.` name"),
                         ("params.batch >= 4", "`params.batch` is not"),
                         ("fact.a <= fact.b <= fact.c", "one comparison at a time"),

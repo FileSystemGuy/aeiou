@@ -361,14 +361,15 @@ fn run_issues_a_timeline_on_every_backend() {
 
 /// Under a blocking backend a timeline's executor lanes take a thread while they live (brief
 /// item 72 (7) step 4): a lane gives its thread back when it ends, so sub-lanes one after
-/// another share one, and the run's threads are the actor's and the most lanes live at once.
+/// another share one, and the run's threads are the actor's and the most lanes live at once
+/// (a lane takes its thread 250 ms before its first op, so they are 300 ms apart).
 #[test]
 fn blocking_timeline_lanes_reuse_their_threads() {
     let rf = |n: &str| json!({"ref": n});
     let session = json!([
         {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
         {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}},
-        {"compute": {"ns": 10_000_000}}]);
+        {"compute": {"ns": 300_000_000}}]);
     let text = json!({"ast": "0.20", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl",
@@ -428,4 +429,63 @@ fn a_blocking_timeline_over_many_paths_retires_them() {
     assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
     assert!(stdout.contains("by kind: open=1500 close=1500"), "{stdout}");
     assert_eq!(std::fs::read_dir(dir.join("kv")).unwrap().filter(|e| !e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".aeiou")).count(), 1500);
+}
+
+/// A run reports each span's D and the body lanes' lag, in the text report and under
+/// `--report-json` (brief item 72 (7) step 5): three sessions each read in a span `load`, on the
+/// event loop and under a blocking backend alike.
+#[test]
+fn a_run_reports_its_spans_and_lag() {
+    let rf = |n: &str| json!({"ref": n});
+    let session = json!([
+        {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
+        {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}},
+        {"compute": {"ns": 20_000_000}},
+        {"span": {"name": "load", "body": [{"open": {"file": rf("f"), "flags": ["RDONLY"]}}, {"read": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]}}]);
+    let text = json!({"ast": "0.20", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 3, "body": session}}]}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "spans");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    for posix in ["io_uring", "sync"] {
+        let root = dir.join(posix);
+        std::fs::create_dir_all(&root).unwrap();
+        let json_path = dir.join(format!("{posix}.json"));
+        let r = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"))
+            .args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", posix, "--report-json", json_path.to_str().unwrap()])
+            .output().unwrap();
+        let stdout = String::from_utf8_lossy(&r.stdout);
+        assert!(r.status.success(), "{posix}: {}", String::from_utf8_lossy(&r.stderr));
+        assert!(stdout.contains("timeline spans (D:"), "{posix}: {stdout}");
+        assert!(stdout.lines().any(|l| l.trim_start().starts_with("load ") && l.contains("n=3")), "{posix}: {stdout}");
+        assert!(stdout.contains("timeline lag (final L of 3 lanes)"), "{posix}: {stdout}");
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+        let tl = &doc["result"]["timeline"];
+        assert_eq!(tl["spans"]["load"]["count"], 3, "{posix}: {tl}");
+        let p99 = tl["spans"]["load"]["p99_ns"].as_i64().unwrap();
+        assert!(p99 > 0 && p99 <= tl["spans"]["load"]["max_ns"].as_i64().unwrap(), "{posix}: {tl}");
+        assert_eq!(tl["spans"]["load"]["windows"][0]["window"], 0, "{posix}: {tl}");
+        assert_eq!(tl["spans"]["load"]["windows"][0]["count"], 3, "{posix}: {tl}");
+        assert_eq!(tl["lag"]["lanes"], 3, "{posix}: {tl}");
+    }
+}
+
+/// The spans an abstract declares, wherever its timelines' lanes hold them: in a loop, a branch of
+/// a `cond` or a `choose`, a `parallel`, or a `phase` (what a constraint's `result.span.SPAN.` is
+/// checked against when the lock is read).
+#[test]
+fn an_abstracts_span_names_are_found_anywhere_in_its_timelines() {
+    let st = json!({"stat": {"file": {"file": {"dataset": "d", "id": 1}}}});
+    let sp = |n: &str| json!({"span": {"name": n, "body": [st.clone()]}});
+    let text = json!({"ast": "0.20", "name": "t",
+        "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [
+            {"loop": {"index": "i", "to": 2, "body": [sp("a")]}},
+            {"cond": {"if": {"eq": [1, 1]}, "then": [sp("b")], "else": [sp("c")]}},
+            {"cond": {"if": {"eq": [1, 1]}, "then": [st.clone()]}},
+            {"choose": {"arms": [{"weight": 1, "body": [sp("d")]}]}},
+            {"parallel": {"index": "k", "width": 1, "body": [{"phase": {"name": "p", "body": [sp("e")]}}]}}]}}]}}}).to_string();
+    let loaded = aeiou::load_str(&text).unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(loaded.ast.span_names().into_iter().collect::<Vec<_>>(), ["a", "b", "c", "d", "e"]);
 }
