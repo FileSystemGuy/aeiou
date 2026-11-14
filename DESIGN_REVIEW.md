@@ -12168,6 +12168,77 @@ and G2 (4M tokens) hold far less than the sessions' live contexts, so nearly eve
 from G3: 11.6 TiB read against 3.7 TiB written. The session count is the scratch port's, not the
 WG's operating point (items 72 (1) and 74).
 
+**The run side of timelines (brief item 72 (7)): proposed and decided (2026-11-13; the user chose
+(a) on every question; nothing built).** The proposal is scratch
+(`limit500k/port/run-side-proposal.md`). Scope: phase 1 of item 72 (5), a domain of one engine on
+one host; events between hosts (item 72 (6)) stay queued. Measured first: the plan walk of
+`agentx-tiered` (3.0M ops, 11.6 TiB read, 598 h of planned compute) takes 15.0 s and 104 MB on one
+thread, about 200 times faster than the run consumes it (about 830 ops a second). Decided:
+1. *A planner ahead of an executor.* The planner is the walk `dry-run` makes (`tl_step`), each op
+   turned into an owned record (lane, planned time from `t0`, the op, the edges it waits on), held
+   at most a horizon of planned time ahead of the wall clock (proposed 10 s, with a cap on records
+   held), so memory follows the horizon, not the run. The executor keeps a queue a live lane and
+   issues a lane's ops one at a time at `max(plan + L, the previous completion, its edges)`. Not
+   chosen: each lane a VM parked on the event loop, which would evaluate the tiers, resources, and
+   ticks in completion order, learning from the run. Planned waits (slots, G1's `full: wait`, a
+   joined `parallel`) stay planned; the run adds only the lag storage causes. Eviction lanes run as
+   one persistent executor lane a tier and lane number, so a batch past its tick delays the next by
+   its overage, the eviction lanes' L (the user, 2026-11-13).
+2. *L.* `ready = max(plan + L, previous completion, edges)`, then `L := ready − plan`, never
+   shrinking; ops at one planned instant issue back to back, each adding its time. A forked lane
+   starts with its parent's L; a joined parent resumes at the latest of its planned instant plus L
+   and its sub-lanes' last completions. The timeline's root lane issues no ops, so a session forked
+   from it starts at L = 0, on absolute time.
+3. *D by a `span NAME { body }` node* (contract 0.20): from the span's launch (plan at entry plus L
+   at entry) to its last op's completion, its edge waits included, the lag before it not. Reported
+   a span name: count, sum, p50, p99, maximum, and p99 a 5-minute window assigned by the span's
+   planned start, each window's count known once the planner has passed its end; exposed as
+   `result.span.<name>.*` and `result.lag.*` for a case's constraints, never runner-wide (item 72
+   (8)). Not chosen: a request implied between two `compute`s (a decode and an idle gap are both
+   `compute`), or D over every op (op latency, rejected by item 13).
+4. *Validity edges by path in planned order*, the `trace` node's path order (`runner/REFERENCE.md`
+   §13) across a timeline's lanes: a changing op waits for every earlier op on its path, a reading
+   op for every earlier changing op, reads never for reads. The planner computes them from a map of
+   the paths the timeline has touched and not unlinked, pruned once what it names has completed:
+   bounded by the tiers' capacity for a cache. A wait goes into the waiter's L, and its D inside a
+   span, counted and summed by kind. Not chosen: edges written in the abstract.
+5. *Store lanes and staging in this build* (item 72 (3)), as contract 0.20's `workers NAME {lanes,
+   staging}` on a timeline and `submit NAME { body }` in a lane: the body planned at the submitting
+   lane's instant and run on worker lane (submission ordinal mod `lanes`), positional as
+   `on_evict`'s lanes, never the first free worker. Bytes submitted and not completed, loads'
+   included, above `staging` are a would-be drop, a gate failure; the plan never drops a submitted
+   store (G2's `full: skip` is a planned drop, another thing). The tiered abstract's G3 writes move
+   onto workers; inline, every write's time would have gone into the users' L, which LMCache 0.5.5
+   does not do (item 13 (4)).
+6. *Blocking backends: a thread per live lane*, as the `trace` node, created when a lane first has
+   an op and reused when one ends. The question put by the user: what would block. A blocking call
+   holds its thread until storage answers, so lanes sharing a thread would wait on one another's
+   ops, a lag the benchmark's own queue caused, charged to storage; a fixed pool smaller than the
+   lanes in flight would do the same. Not chosen: timelines on the event-loop backends only, which
+   would leave `agentx-tiered` (Python's blocking calls) unrunnable under its own API, as CLOSED
+   requires. The event-loop backends run a timeline's lanes as tasks of one loop, its path-order
+   and lane tables loop-local; their inline ops (`lseek` and `ioctl` under `io_uring`, `open`,
+   `close`, `stat` under `libaio`) hold the loop as they hold such an application. `--time-scale`
+   other than 1 is refused for a timeline (the planned clock is the workload).
+7. *Stopping*: `--on-certain-failure stop|continue` (default `stop`; certain: a window's violations
+   past its allowance, the ceiling crossed, a would-be drop) and `--lag-ceiling SECS` for a tuning
+   run, past which it stops and says when and how much. Host lateness (an op later than its
+   `max(...)` with its lane idle, and the planner behind the wall clock) is reported, a run whose
+   lateness p99 passes a runner-defined threshold (proposed 10 ms) invalid.
+8. *GPU idle as modelled* comes later, its report field absent until then.
+The report adds, a second of planned and of run time: bandwidth, ops by kind (creates, renames,
+unlinks), live lanes, the tiers' capacity held (from the plan), eviction batches (tick, size, issue
+span, overage), each main lane's final L, edge waits, write latency, staging backlog peak and
+would-be drops, host lateness and the planner's lead; `--emit-trace` gains the planned clock as
+`t`. Build order, each tests first: contract 0.20 (`span`, `workers`, `submit`) and the tiered
+abstract rewritten with them; the planner as an iterator of records with edges, `dry-run` driven
+by it; the executor on the event loop (mock clock, a store finishing after its reader's launch, a
+batch overrunning a tick, staging overflow); the blocking backends' thread a lane; report,
+`result.` names, flags; `agentx-tiered` run at a reduced session count; then `lmcache_local_disk`
+and its four cases retired. Left for item 74's capture: whether vLLM's in-process connector loads
+requests one after another, which would need a run-time order across lanes fixed by the abstract
+(only when ops issue changes, so within "never learn from the run").
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes

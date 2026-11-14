@@ -1642,6 +1642,14 @@ numbers; the order is this note's.
     write bandwidth, capacity held, creates, renames, and unlinks a second, eviction bursts, each
     session's L, the sum of D, edge waits and messaging latency, write latency, backlog peak,
     would-be drops, and GPU idle time as modelled.
+    *Decided 2026-11-13, not built (`DESIGN_REVIEW.md` §3.99, the note "The run side of
+    timelines"; the user chose each recommendation):* a planner (the walk `dry-run` makes) a
+    bounded horizon ahead of an executor issuing a lane's ops one at a time at
+    `max(plan + L, previous completion, edges)`; D measured by a `span` node; validity edges by
+    path in planned order, the `trace` node's rule; (3)'s store lanes and staging built with it,
+    as `workers` and `submit` (contract 0.20, with `span`); a thread a live lane under the
+    blocking backends; `--on-certain-failure stop|continue` and `--lag-ceiling`; GPU idle as
+    modelled later.
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the
