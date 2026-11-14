@@ -12238,6 +12238,30 @@ batch overrunning a tick, staging overflow); the blocking backends' thread a lan
 and its four cases retired. Left for item 74's capture: whether vLLM's in-process connector loads
 requests one after another, which would need a run-time order across lanes fixed by the abstract
 (only when ops issue changes, so within "never learn from the run").
+*Contract 0.20 built (2026-11-13, step 1, the user's "build step 1").* Both checkers, the schema,
+the runner's plan walk, the builder, the describer, and the documents; rule V36, 12 refusal cases
+shared by the checkers; `tests/workers.rs`. Choices made in the build, within the decisions:
+- A worker lane's key is (the workers' index, the submission's ordinal), not (lane, place) as an
+  eviction lane's: worker lanes at one instant then go in the order submitted. Its worker lane,
+  the ordinal mod `lanes`, is the run's to compute. At one instant worker lanes go after every
+  other lane (eviction lanes first, as in 0.19), so a submitting lane's step to its next
+  `compute` comes before its submitted bodies.
+- A submitted body starts from the submitting lane's frames, bindings, open files, and the values
+  its `prev`s read, with no frame of its own, so its ops carry the indices they would inline (a
+  `prev` in the body first read `init`, found by a test written for it, and fixed the same day): the fingerprint of a body
+  moved into a `submit` is unchanged, which the tests hold. Its bans are V35's for an eviction
+  body plus `submit` and `span`; a span's are `compute`, `parallel`, `acquire`, and `lookup`
+  (what moves or waits on the planned clock), not looking into a `submit`'s body.
+- A draw's site is its node's path, so wrapping a body that draws in `span` or `submit` moves its
+  draws. The tiered abstract's wrapped bodies (a request's chunk reads, a chunk's write) draw
+  nothing, and its fingerprint is unchanged: `f032df08b3594acd`, 379,121 reads, 120,642 writes.
+- The tiered abstract: `store_lanes` 4 (item 13 (4)'s reading of 0.5.5's local-disk path) and
+  staging G2's bytes, an assumption: LMCache pins a chunk whose write has not landed in its L1
+  pool, which is G2 here (item 13 (4): staging and loads draw on one pool). Both to be confirmed
+  by item 74's capture of the multi-process adapter, whose staging may differ.
+- The plan walk of `agentx-tiered` takes 23 s instead of 15 s: each of the 120,642 submissions
+  copies the submitting lane's scope (bindings, open files) for its body. Still about 130 times
+  faster than a run consumes it; the planner (step 2) can share the scope instead if it matters.
 
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the

@@ -1,5 +1,6 @@
-"""ABSTRACTS.md §8: KV-cache serving, the cache hierarchy modelled (contract 0.19; brief items 71, 72,
-75; DESIGN_REVIEW.md §3.99, the notes "Tier names", "Contract 0.19 proposed" and its addendum "Built").
+"""ABSTRACTS.md §8: KV-cache serving, the cache hierarchy modelled (contract 0.20; brief items 71, 72,
+75; DESIGN_REVIEW.md §3.99, the notes "Tier names", "Contract 0.19 proposed" and its addendum "Built",
+"The run side of timelines").
 
 One engine (vLLM with LMCache 0.5.5) serving agentic-coding sessions, each a timeline lane of its
 main agent and its sub-agents, from the session generator fitted to the AgentX corpus
@@ -10,7 +11,10 @@ and a request's tail first, `full: wait`). LMCache then looks the prompt up in G
 its start and in G3 (node-local NVMe, the directory under test) past G2's hit; it reads G3's hits
 from the chunk holding the tokens the GPU held, stores the chunks past both hits in G2 (a planned
 drop when G2 is full), and in G3 the chunks G2 newly took, writing a file for each (rewriting one G3
-already holds); at a request's end every chunk of its prompt is touched in G2. G2 and G3 evict as
+already holds) on one of `store_lanes` store workers, never on the request's lane (contract 0.20's
+`submit`; the unfinished writes' bytes held in G2, the workers' staging); a request's G3 reads are
+its span `load`, the storage wait a run judges it by; at a request's end every chunk of its prompt
+is touched in G2. G2 and G3 evict as
 LMCache 0.5.5 does: every second, at 0.8 of the capacity, 20 % of the keys (at least one), least
 recently touched first and a request's tail first; a G3 victim's file is unlinked on `evict_lanes`
 eviction lanes (the connector's delete workers). Held request by request and unlink by unlink to
@@ -78,6 +82,8 @@ w.param("g1_bytes", kind=int, unit="bytes", doc="G1: vLLM's KV pool in HBM, the 
 w.param("g2_bytes", kind=int, unit="bytes", doc="G2: LMCache's L1 in host DRAM (--l1-size-gb) [WG]")
 w.param("g3_bytes", kind=int, unit="bytes", doc="G3: LMCache's L2 on node-local NVMe, the directory under test [WG]")
 w.param("evict_lanes", 4, unit="count", doc="LMCache's delete workers (the connector's num_workers, 4 in 0.5.5)")
+w.param("store_lanes", 4, unit="count", doc="LMCache's store workers: a chunk's write queued to them, the forward step waiting only "
+        "for its copy to host memory (0.5.5's local-disk path, read 2026-11-09, DESIGN_REVIEW.md §3.99 item 13 (4))")
 w.param("direct", False, doc="[config] LMCache's `use_odirect`: every chunk opened with `O_DIRECT` by `os.open` and read or "
         "written in one call (traced 2026-10-07, §3.63); LMCache takes this path only when chunk_bytes is a multiple of the "
         "file system's block size")
@@ -278,13 +284,15 @@ def chunk_ops(c, tag, sq, gh):
     h3 = c.probe("lm", "g3", sq, P.per, h2, tag + "h3")
     hit = c.let(tag + "hit", h2 + h3)
     first = c.let(tag + "first", max_(h2, min_(gh * BL, seq_len(sq) * BL - 1) // (BL * P.per)))
-    with c.loop(tag + "r", hit, start=first) as j:
-        chunk_read(c, c.let(tag + "rf", kv.object(key=chunk_key(sq, j, P.per))))
+    with c.span("load"):                                            # D: the request's own storage wait
+        with c.loop(tag + "r", hit, start=first) as j:
+            chunk_read(c, c.let(tag + "rf", kv.object(key=chunk_key(sq, j, P.per))))
     c.touch("lm", "g3", sq, P.per, first, max_(0, hit - first))
     t2 = c.store("lm", "g2", sq, P.per, hit, n - hit, taken=tag + "t2")        # what G2 newly took
     t3 = c.store("lm", "g3", sq, P.per, chunks=t2, present="renew", taken=tag + "t3")
     with c.loop(tag + "w", t3.len) as j:
-        chunk_write(c, c.let(tag + "wf", kv.object(key=chunk_key(sq, t3[j], P.per))))
+        with c.submit("store"):                                     # on a store worker, never the request's lane
+            chunk_write(c, c.let(tag + "wf", kv.object(key=chunk_key(sq, t3[j], P.per))))
 
 
 def sub_agents(bt, tl, s, cls, spl, psub, join):
@@ -317,7 +325,10 @@ with w.actor("gpu", count=1) as gpu:
     g3 = tier("g3", lmc_order, capacity=G3_CHUNKS, evict=lmc_rule(G3_CHUNKS),
               on_evict=(P.evict_lanes, lambda b: b.unlink(kv.object(key=victim()))))
     with gpu.timeline("tl", caches={"lm": [g2, g3], "gpu": [tier("g1", vllm, capacity=G1_BLOCKS, full="wait")]},
-                      resources={"slots": P.slots}) as tl_all:
+                      resources={"slots": P.slots},
+                      # a chunk whose write has not landed stays pinned in LMCache's L1 (G2), so G2's bytes are
+                      # what a run's unfinished stores may hold before one would have been dropped
+                      workers={"store": (P.store_lanes, P.g2_bytes)}) as tl_all:
         with gpu.parallel("sess", P.sessions) as s:
             s.compute(s.draw("arrive", uniform(0, P.window_s * 1000)) * 1_000_000)
             cls = s.let("cls", draw(P.cls))

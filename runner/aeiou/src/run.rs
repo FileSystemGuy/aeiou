@@ -2813,7 +2813,8 @@ fn barrier_scopes(ast: &Ast) -> Result<HashMap<String, Vec<String>>> {
                     }
                     out.insert(scope.clone());
                 }
-                Node::Loop { body, .. } | Node::Phase { body, .. } => walk(body, nested, out)?,
+                Node::Loop { body, .. } | Node::Phase { body, .. } | Node::Span { body, .. } => walk(body, nested, out)?,
+                Node::Submit { body, .. } => walk(body, true, out)?,
                 Node::Parallel { body, .. } | Node::Loader { body, .. } => walk(body, true, out)?,
                 Node::Cond { then, otherwise, .. } => {
                     walk(then, nested, out)?;

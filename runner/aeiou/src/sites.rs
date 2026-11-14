@@ -296,7 +296,7 @@ fn node(n: &Node, p: &mut Path) {
             p.with(&[k, "body"], |p| body(b, p));
         }
         Node::Compute { ns } => p.with(&[k, "ns"], |p| expr(ns, p)),
-        Node::Timeline { caches, resources, body: b, .. } => {
+        Node::Timeline { caches, resources, workers, body: b, .. } => {
             for (i, c) in caches.iter().enumerate() {
                 for (j, t) in c.tiers.iter().enumerate() {
                     if let Some(e) = &t.capacity {
@@ -319,8 +319,13 @@ fn node(n: &Node, p: &mut Path) {
             for (i, r) in resources.iter().enumerate() {
                 p.with(&[k, "resources", &i.to_string(), "capacity"], |p| expr(&r.capacity, p));
             }
+            for (i, w) in workers.iter().enumerate() {
+                p.with(&[k, "workers", &i.to_string(), "lanes"], |p| expr(&w.lanes, p));
+                p.with(&[k, "workers", &i.to_string(), "staging"], |p| expr(&w.staging, p));
+            }
             p.with(&[k, "body"], |p| body(b, p))
         }
+        Node::Submit { body: b, .. } | Node::Span { body: b, .. } => p.with(&[k, "body"], |p| body(b, p)),
         Node::Acquire { n, .. } => p.with(&[k, "n"], |p| expr(n, p)),
         Node::Release { .. } => {}
         Node::Probe { seq, per, from, .. } => {

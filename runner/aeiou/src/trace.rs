@@ -613,7 +613,7 @@ pub fn refs(ast: &Ast) -> Vec<(&str, &str, &str)> {
         for n in nodes {
             match n {
                 Node::Trace { file, sha256 } => out.push((file, sha256, template)),
-                Node::Loop { body: b, .. } | Node::Parallel { body: b, .. } | Node::Loader { body: b, .. } | Node::Phase { body: b, .. } => body(b, template, out),
+                Node::Loop { body: b, .. } | Node::Parallel { body: b, .. } | Node::Loader { body: b, .. } | Node::Phase { body: b, .. } | Node::Submit { body: b, .. } | Node::Span { body: b, .. } => body(b, template, out),
                 Node::Cond { then, otherwise, .. } => {
                     body(then, template, out);
                     if let Some(o) = otherwise {

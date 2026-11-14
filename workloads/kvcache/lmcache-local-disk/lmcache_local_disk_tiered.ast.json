@@ -1,5 +1,5 @@
 {
-  "ast": "0.19",
+  "ast": "0.20",
   "name": "lmcache_local_disk_tiered",
   "doc": "One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2 and G3 (LMCache's), G3 the directory under test.",
   "params": {
@@ -47,6 +47,11 @@
       "default": 4,
       "unit": "count",
       "doc": "LMCache's delete workers (the connector's num_workers, 4 in 0.5.5)"
+    },
+    "store_lanes": {
+      "default": 4,
+      "unit": "count",
+      "doc": "LMCache's store workers: a chunk's write queued to them, the forward step waiting only for its copy to host memory (0.5.5's local-disk path, read 2026-11-09, DESIGN_REVIEW.md §3.99 item 13 (4))"
     },
     "direct": {
       "default": false,
@@ -6458,6 +6463,17 @@
                 "name": "slots",
                 "capacity": {
                   "param": "slots"
+                }
+              }
+            ],
+            "workers": [
+              {
+                "name": "store",
+                "lanes": {
+                  "param": "store_lanes"
+                },
+                "staging": {
+                  "param": "g2_bytes"
                 }
               }
             ],
@@ -15089,154 +15105,161 @@
                             }
                           },
                           {
-                            "loop": {
-                              "index": "m_r",
-                              "from": {
-                                "ref": "m_first"
-                              },
-                              "to": {
-                                "ref": "m_hit"
-                              },
+                            "span": {
+                              "name": "load",
                               "body": [
                                 {
-                                  "let": {
-                                    "name": "m_rf",
-                                    "value": {
-                                      "object": {
-                                        "namespace": "kv",
-                                        "fields": {
-                                          "key": {
-                                            "chunk_key": {
-                                              "seq": {
-                                                "ref": "m_seq"
-                                              },
-                                              "chunk": {
-                                                "index": "m_r"
-                                              },
-                                              "per": {
-                                                "param": "per"
+                                  "loop": {
+                                    "index": "m_r",
+                                    "from": {
+                                      "ref": "m_first"
+                                    },
+                                    "to": {
+                                      "ref": "m_hit"
+                                    },
+                                    "body": [
+                                      {
+                                        "let": {
+                                          "name": "m_rf",
+                                          "value": {
+                                            "object": {
+                                              "namespace": "kv",
+                                              "fields": {
+                                                "key": {
+                                                  "chunk_key": {
+                                                    "seq": {
+                                                      "ref": "m_seq"
+                                                    },
+                                                    "chunk": {
+                                                      "index": "m_r"
+                                                    },
+                                                    "per": {
+                                                      "param": "per"
+                                                    }
+                                                  }
+                                                }
                                               }
                                             }
                                           }
                                         }
-                                      }
-                                    }
-                                  }
-                                },
-                                {
-                                  "cond": {
-                                    "if": {
-                                      "eq": [
-                                        {
-                                          "param": "direct"
-                                        },
-                                        false
-                                      ]
-                                    },
-                                    "then": [
+                                      },
                                       {
-                                        "open": {
-                                          "file": {
-                                            "ref": "m_rf"
+                                        "cond": {
+                                          "if": {
+                                            "eq": [
+                                              {
+                                                "param": "direct"
+                                              },
+                                              false
+                                            ]
                                           },
-                                          "flags": [
-                                            "RDONLY",
-                                            "CLOEXEC"
+                                          "then": [
+                                            {
+                                              "open": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                },
+                                                "flags": [
+                                                  "RDONLY",
+                                                  "CLOEXEC"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "fstat": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "ioctl": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                },
+                                                "request": "TCGETS",
+                                                "expect": [
+                                                  "ENOTTY"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "lseek": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                },
+                                                "offset": 0,
+                                                "whence": "CUR"
+                                              }
+                                            },
+                                            {
+                                              "read": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                },
+                                                "len": {
+                                                  "param": "chunk_bytes"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "close": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                }
+                                              }
+                                            }
                                           ]
                                         }
                                       },
                                       {
-                                        "fstat": {
-                                          "file": {
-                                            "ref": "m_rf"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "ioctl": {
-                                          "file": {
-                                            "ref": "m_rf"
+                                        "cond": {
+                                          "if": {
+                                            "eq": [
+                                              {
+                                                "param": "direct"
+                                              },
+                                              true
+                                            ]
                                           },
-                                          "request": "TCGETS",
-                                          "expect": [
-                                            "ENOTTY"
+                                          "then": [
+                                            {
+                                              "open": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                },
+                                                "flags": [
+                                                  "RDONLY",
+                                                  "DIRECT",
+                                                  "CLOEXEC"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "fstat": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "read": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                },
+                                                "len": {
+                                                  "param": "chunk_bytes"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "close": {
+                                                "file": {
+                                                  "ref": "m_rf"
+                                                }
+                                              }
+                                            }
                                           ]
-                                        }
-                                      },
-                                      {
-                                        "lseek": {
-                                          "file": {
-                                            "ref": "m_rf"
-                                          },
-                                          "offset": 0,
-                                          "whence": "CUR"
-                                        }
-                                      },
-                                      {
-                                        "read": {
-                                          "file": {
-                                            "ref": "m_rf"
-                                          },
-                                          "len": {
-                                            "param": "chunk_bytes"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "close": {
-                                          "file": {
-                                            "ref": "m_rf"
-                                          }
-                                        }
-                                      }
-                                    ]
-                                  }
-                                },
-                                {
-                                  "cond": {
-                                    "if": {
-                                      "eq": [
-                                        {
-                                          "param": "direct"
-                                        },
-                                        true
-                                      ]
-                                    },
-                                    "then": [
-                                      {
-                                        "open": {
-                                          "file": {
-                                            "ref": "m_rf"
-                                          },
-                                          "flags": [
-                                            "RDONLY",
-                                            "DIRECT",
-                                            "CLOEXEC"
-                                          ]
-                                        }
-                                      },
-                                      {
-                                        "fstat": {
-                                          "file": {
-                                            "ref": "m_rf"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "read": {
-                                          "file": {
-                                            "ref": "m_rf"
-                                          },
-                                          "len": {
-                                            "param": "chunk_bytes"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "close": {
-                                          "file": {
-                                            "ref": "m_rf"
-                                          }
                                         }
                                       }
                                     ]
@@ -15324,145 +15347,152 @@
                               },
                               "body": [
                                 {
-                                  "let": {
-                                    "name": "m_wf",
-                                    "value": {
-                                      "object": {
-                                        "namespace": "kv",
-                                        "fields": {
-                                          "key": {
-                                            "chunk_key": {
-                                              "seq": {
-                                                "ref": "m_seq"
-                                              },
-                                              "chunk": {
-                                                "elem": {
-                                                  "array": "m_t3",
-                                                  "index": {
-                                                    "index": "m_w"
+                                  "submit": {
+                                    "workers": "store",
+                                    "body": [
+                                      {
+                                        "let": {
+                                          "name": "m_wf",
+                                          "value": {
+                                            "object": {
+                                              "namespace": "kv",
+                                              "fields": {
+                                                "key": {
+                                                  "chunk_key": {
+                                                    "seq": {
+                                                      "ref": "m_seq"
+                                                    },
+                                                    "chunk": {
+                                                      "elem": {
+                                                        "array": "m_t3",
+                                                        "index": {
+                                                          "index": "m_w"
+                                                        }
+                                                      }
+                                                    },
+                                                    "per": {
+                                                      "param": "per"
+                                                    }
                                                   }
                                                 }
-                                              },
-                                              "per": {
-                                                "param": "per"
                                               }
                                             }
                                           }
                                         }
-                                      }
-                                    }
-                                  }
-                                },
-                                {
-                                  "cond": {
-                                    "if": {
-                                      "eq": [
-                                        {
-                                          "param": "direct"
-                                        },
-                                        false
-                                      ]
-                                    },
-                                    "then": [
+                                      },
                                       {
-                                        "open": {
-                                          "file": {
-                                            "ref": "m_wf"
+                                        "cond": {
+                                          "if": {
+                                            "eq": [
+                                              {
+                                                "param": "direct"
+                                              },
+                                              false
+                                            ]
                                           },
-                                          "flags": [
-                                            "WRONLY",
-                                            "CREAT",
-                                            "TRUNC",
-                                            "CLOEXEC"
+                                          "then": [
+                                            {
+                                              "open": {
+                                                "file": {
+                                                  "ref": "m_wf"
+                                                },
+                                                "flags": [
+                                                  "WRONLY",
+                                                  "CREAT",
+                                                  "TRUNC",
+                                                  "CLOEXEC"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "fstat": {
+                                                "file": {
+                                                  "ref": "m_wf"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "ioctl": {
+                                                "file": {
+                                                  "ref": "m_wf"
+                                                },
+                                                "request": "TCGETS",
+                                                "expect": [
+                                                  "ENOTTY"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "lseek": {
+                                                "file": {
+                                                  "ref": "m_wf"
+                                                },
+                                                "offset": 0,
+                                                "whence": "CUR"
+                                              }
+                                            },
+                                            {
+                                              "write": {
+                                                "file": {
+                                                  "ref": "m_wf"
+                                                },
+                                                "len": {
+                                                  "param": "chunk_bytes"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "close": {
+                                                "file": {
+                                                  "ref": "m_wf"
+                                                }
+                                              }
+                                            }
                                           ]
                                         }
                                       },
                                       {
-                                        "fstat": {
-                                          "file": {
-                                            "ref": "m_wf"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "ioctl": {
-                                          "file": {
-                                            "ref": "m_wf"
+                                        "cond": {
+                                          "if": {
+                                            "eq": [
+                                              {
+                                                "param": "direct"
+                                              },
+                                              true
+                                            ]
                                           },
-                                          "request": "TCGETS",
-                                          "expect": [
-                                            "ENOTTY"
+                                          "then": [
+                                            {
+                                              "open": {
+                                                "file": {
+                                                  "ref": "m_wf"
+                                                },
+                                                "flags": [
+                                                  "WRONLY",
+                                                  "CREAT",
+                                                  "DIRECT",
+                                                  "CLOEXEC"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "write": {
+                                                "file": {
+                                                  "ref": "m_wf"
+                                                },
+                                                "len": {
+                                                  "param": "chunk_bytes"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "close": {
+                                                "file": {
+                                                  "ref": "m_wf"
+                                                }
+                                              }
+                                            }
                                           ]
-                                        }
-                                      },
-                                      {
-                                        "lseek": {
-                                          "file": {
-                                            "ref": "m_wf"
-                                          },
-                                          "offset": 0,
-                                          "whence": "CUR"
-                                        }
-                                      },
-                                      {
-                                        "write": {
-                                          "file": {
-                                            "ref": "m_wf"
-                                          },
-                                          "len": {
-                                            "param": "chunk_bytes"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "close": {
-                                          "file": {
-                                            "ref": "m_wf"
-                                          }
-                                        }
-                                      }
-                                    ]
-                                  }
-                                },
-                                {
-                                  "cond": {
-                                    "if": {
-                                      "eq": [
-                                        {
-                                          "param": "direct"
-                                        },
-                                        true
-                                      ]
-                                    },
-                                    "then": [
-                                      {
-                                        "open": {
-                                          "file": {
-                                            "ref": "m_wf"
-                                          },
-                                          "flags": [
-                                            "WRONLY",
-                                            "CREAT",
-                                            "DIRECT",
-                                            "CLOEXEC"
-                                          ]
-                                        }
-                                      },
-                                      {
-                                        "write": {
-                                          "file": {
-                                            "ref": "m_wf"
-                                          },
-                                          "len": {
-                                            "param": "chunk_bytes"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "close": {
-                                          "file": {
-                                            "ref": "m_wf"
-                                          }
                                         }
                                       }
                                     ]
@@ -22394,154 +22424,161 @@
                                                     }
                                                   },
                                                   {
-                                                    "loop": {
-                                                      "index": "s_r",
-                                                      "from": {
-                                                        "ref": "s_first"
-                                                      },
-                                                      "to": {
-                                                        "ref": "s_hit"
-                                                      },
+                                                    "span": {
+                                                      "name": "load",
                                                       "body": [
                                                         {
-                                                          "let": {
-                                                            "name": "s_rf",
-                                                            "value": {
-                                                              "object": {
-                                                                "namespace": "kv",
-                                                                "fields": {
-                                                                  "key": {
-                                                                    "chunk_key": {
-                                                                      "seq": {
-                                                                        "ref": "s_seq"
-                                                                      },
-                                                                      "chunk": {
-                                                                        "index": "s_r"
-                                                                      },
-                                                                      "per": {
-                                                                        "param": "per"
+                                                          "loop": {
+                                                            "index": "s_r",
+                                                            "from": {
+                                                              "ref": "s_first"
+                                                            },
+                                                            "to": {
+                                                              "ref": "s_hit"
+                                                            },
+                                                            "body": [
+                                                              {
+                                                                "let": {
+                                                                  "name": "s_rf",
+                                                                  "value": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "index": "s_r"
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        }
                                                                       }
                                                                     }
                                                                   }
                                                                 }
-                                                              }
-                                                            }
-                                                          }
-                                                        },
-                                                        {
-                                                          "cond": {
-                                                            "if": {
-                                                              "eq": [
-                                                                {
-                                                                  "param": "direct"
-                                                                },
-                                                                false
-                                                              ]
-                                                            },
-                                                            "then": [
+                                                              },
                                                               {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
+                                                                "cond": {
+                                                                  "if": {
+                                                                    "eq": [
+                                                                      {
+                                                                        "param": "direct"
+                                                                      },
+                                                                      false
+                                                                    ]
                                                                   },
-                                                                  "flags": [
-                                                                    "RDONLY",
-                                                                    "CLOEXEC"
+                                                                  "then": [
+                                                                    {
+                                                                      "open": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "flags": [
+                                                                          "RDONLY",
+                                                                          "CLOEXEC"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "fstat": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "ioctl": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "request": "TCGETS",
+                                                                        "expect": [
+                                                                          "ENOTTY"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "lseek": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "offset": 0,
+                                                                        "whence": "CUR"
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "read": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "len": {
+                                                                          "param": "chunk_bytes"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "close": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        }
+                                                                      }
+                                                                    }
                                                                   ]
                                                                 }
                                                               },
                                                               {
-                                                                "fstat": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "ioctl": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
+                                                                "cond": {
+                                                                  "if": {
+                                                                    "eq": [
+                                                                      {
+                                                                        "param": "direct"
+                                                                      },
+                                                                      true
+                                                                    ]
                                                                   },
-                                                                  "request": "TCGETS",
-                                                                  "expect": [
-                                                                    "ENOTTY"
+                                                                  "then": [
+                                                                    {
+                                                                      "open": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "flags": [
+                                                                          "RDONLY",
+                                                                          "DIRECT",
+                                                                          "CLOEXEC"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "fstat": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "read": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "len": {
+                                                                          "param": "chunk_bytes"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "close": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        }
+                                                                      }
+                                                                    }
                                                                   ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "lseek": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  },
-                                                                  "offset": 0,
-                                                                  "whence": "CUR"
-                                                                }
-                                                              },
-                                                              {
-                                                                "read": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  }
-                                                                }
-                                                              }
-                                                            ]
-                                                          }
-                                                        },
-                                                        {
-                                                          "cond": {
-                                                            "if": {
-                                                              "eq": [
-                                                                {
-                                                                  "param": "direct"
-                                                                },
-                                                                true
-                                                              ]
-                                                            },
-                                                            "then": [
-                                                              {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  },
-                                                                  "flags": [
-                                                                    "RDONLY",
-                                                                    "DIRECT",
-                                                                    "CLOEXEC"
-                                                                  ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "fstat": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "read": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -22629,145 +22666,152 @@
                                                       },
                                                       "body": [
                                                         {
-                                                          "let": {
-                                                            "name": "s_wf",
-                                                            "value": {
-                                                              "object": {
-                                                                "namespace": "kv",
-                                                                "fields": {
-                                                                  "key": {
-                                                                    "chunk_key": {
-                                                                      "seq": {
-                                                                        "ref": "s_seq"
-                                                                      },
-                                                                      "chunk": {
-                                                                        "elem": {
-                                                                          "array": "s_t3",
-                                                                          "index": {
-                                                                            "index": "s_w"
+                                                          "submit": {
+                                                            "workers": "store",
+                                                            "body": [
+                                                              {
+                                                                "let": {
+                                                                  "name": "s_wf",
+                                                                  "value": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t3",
+                                                                                "index": {
+                                                                                  "index": "s_w"
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
                                                                           }
                                                                         }
-                                                                      },
-                                                                      "per": {
-                                                                        "param": "per"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
-                                                              }
-                                                            }
-                                                          }
-                                                        },
-                                                        {
-                                                          "cond": {
-                                                            "if": {
-                                                              "eq": [
-                                                                {
-                                                                  "param": "direct"
-                                                                },
-                                                                false
-                                                              ]
-                                                            },
-                                                            "then": [
+                                                              },
                                                               {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
+                                                                "cond": {
+                                                                  "if": {
+                                                                    "eq": [
+                                                                      {
+                                                                        "param": "direct"
+                                                                      },
+                                                                      false
+                                                                    ]
                                                                   },
-                                                                  "flags": [
-                                                                    "WRONLY",
-                                                                    "CREAT",
-                                                                    "TRUNC",
-                                                                    "CLOEXEC"
+                                                                  "then": [
+                                                                    {
+                                                                      "open": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "flags": [
+                                                                          "WRONLY",
+                                                                          "CREAT",
+                                                                          "TRUNC",
+                                                                          "CLOEXEC"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "fstat": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "ioctl": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "request": "TCGETS",
+                                                                        "expect": [
+                                                                          "ENOTTY"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "lseek": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "offset": 0,
+                                                                        "whence": "CUR"
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "write": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "len": {
+                                                                          "param": "chunk_bytes"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "close": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        }
+                                                                      }
+                                                                    }
                                                                   ]
                                                                 }
                                                               },
                                                               {
-                                                                "fstat": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "ioctl": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
+                                                                "cond": {
+                                                                  "if": {
+                                                                    "eq": [
+                                                                      {
+                                                                        "param": "direct"
+                                                                      },
+                                                                      true
+                                                                    ]
                                                                   },
-                                                                  "request": "TCGETS",
-                                                                  "expect": [
-                                                                    "ENOTTY"
+                                                                  "then": [
+                                                                    {
+                                                                      "open": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "flags": [
+                                                                          "WRONLY",
+                                                                          "CREAT",
+                                                                          "DIRECT",
+                                                                          "CLOEXEC"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "write": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "len": {
+                                                                          "param": "chunk_bytes"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "close": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        }
+                                                                      }
+                                                                    }
                                                                   ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "lseek": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  },
-                                                                  "offset": 0,
-                                                                  "whence": "CUR"
-                                                                }
-                                                              },
-                                                              {
-                                                                "write": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  }
-                                                                }
-                                                              }
-                                                            ]
-                                                          }
-                                                        },
-                                                        {
-                                                          "cond": {
-                                                            "if": {
-                                                              "eq": [
-                                                                {
-                                                                  "param": "direct"
-                                                                },
-                                                                true
-                                                              ]
-                                                            },
-                                                            "then": [
-                                                              {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  },
-                                                                  "flags": [
-                                                                    "WRONLY",
-                                                                    "CREAT",
-                                                                    "DIRECT",
-                                                                    "CLOEXEC"
-                                                                  ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "write": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -29679,154 +29723,161 @@
                                                     }
                                                   },
                                                   {
-                                                    "loop": {
-                                                      "index": "s_r",
-                                                      "from": {
-                                                        "ref": "s_first"
-                                                      },
-                                                      "to": {
-                                                        "ref": "s_hit"
-                                                      },
+                                                    "span": {
+                                                      "name": "load",
                                                       "body": [
                                                         {
-                                                          "let": {
-                                                            "name": "s_rf",
-                                                            "value": {
-                                                              "object": {
-                                                                "namespace": "kv",
-                                                                "fields": {
-                                                                  "key": {
-                                                                    "chunk_key": {
-                                                                      "seq": {
-                                                                        "ref": "s_seq"
-                                                                      },
-                                                                      "chunk": {
-                                                                        "index": "s_r"
-                                                                      },
-                                                                      "per": {
-                                                                        "param": "per"
+                                                          "loop": {
+                                                            "index": "s_r",
+                                                            "from": {
+                                                              "ref": "s_first"
+                                                            },
+                                                            "to": {
+                                                              "ref": "s_hit"
+                                                            },
+                                                            "body": [
+                                                              {
+                                                                "let": {
+                                                                  "name": "s_rf",
+                                                                  "value": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "index": "s_r"
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        }
                                                                       }
                                                                     }
                                                                   }
                                                                 }
-                                                              }
-                                                            }
-                                                          }
-                                                        },
-                                                        {
-                                                          "cond": {
-                                                            "if": {
-                                                              "eq": [
-                                                                {
-                                                                  "param": "direct"
-                                                                },
-                                                                false
-                                                              ]
-                                                            },
-                                                            "then": [
+                                                              },
                                                               {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
+                                                                "cond": {
+                                                                  "if": {
+                                                                    "eq": [
+                                                                      {
+                                                                        "param": "direct"
+                                                                      },
+                                                                      false
+                                                                    ]
                                                                   },
-                                                                  "flags": [
-                                                                    "RDONLY",
-                                                                    "CLOEXEC"
+                                                                  "then": [
+                                                                    {
+                                                                      "open": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "flags": [
+                                                                          "RDONLY",
+                                                                          "CLOEXEC"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "fstat": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "ioctl": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "request": "TCGETS",
+                                                                        "expect": [
+                                                                          "ENOTTY"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "lseek": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "offset": 0,
+                                                                        "whence": "CUR"
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "read": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "len": {
+                                                                          "param": "chunk_bytes"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "close": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        }
+                                                                      }
+                                                                    }
                                                                   ]
                                                                 }
                                                               },
                                                               {
-                                                                "fstat": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "ioctl": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
+                                                                "cond": {
+                                                                  "if": {
+                                                                    "eq": [
+                                                                      {
+                                                                        "param": "direct"
+                                                                      },
+                                                                      true
+                                                                    ]
                                                                   },
-                                                                  "request": "TCGETS",
-                                                                  "expect": [
-                                                                    "ENOTTY"
+                                                                  "then": [
+                                                                    {
+                                                                      "open": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "flags": [
+                                                                          "RDONLY",
+                                                                          "DIRECT",
+                                                                          "CLOEXEC"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "fstat": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "read": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        },
+                                                                        "len": {
+                                                                          "param": "chunk_bytes"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "close": {
+                                                                        "file": {
+                                                                          "ref": "s_rf"
+                                                                        }
+                                                                      }
+                                                                    }
                                                                   ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "lseek": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  },
-                                                                  "offset": 0,
-                                                                  "whence": "CUR"
-                                                                }
-                                                              },
-                                                              {
-                                                                "read": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  }
-                                                                }
-                                                              }
-                                                            ]
-                                                          }
-                                                        },
-                                                        {
-                                                          "cond": {
-                                                            "if": {
-                                                              "eq": [
-                                                                {
-                                                                  "param": "direct"
-                                                                },
-                                                                true
-                                                              ]
-                                                            },
-                                                            "then": [
-                                                              {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  },
-                                                                  "flags": [
-                                                                    "RDONLY",
-                                                                    "DIRECT",
-                                                                    "CLOEXEC"
-                                                                  ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "fstat": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "read": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_rf"
-                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -29914,145 +29965,152 @@
                                                       },
                                                       "body": [
                                                         {
-                                                          "let": {
-                                                            "name": "s_wf",
-                                                            "value": {
-                                                              "object": {
-                                                                "namespace": "kv",
-                                                                "fields": {
-                                                                  "key": {
-                                                                    "chunk_key": {
-                                                                      "seq": {
-                                                                        "ref": "s_seq"
-                                                                      },
-                                                                      "chunk": {
-                                                                        "elem": {
-                                                                          "array": "s_t3",
-                                                                          "index": {
-                                                                            "index": "s_w"
+                                                          "submit": {
+                                                            "workers": "store",
+                                                            "body": [
+                                                              {
+                                                                "let": {
+                                                                  "name": "s_wf",
+                                                                  "value": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t3",
+                                                                                "index": {
+                                                                                  "index": "s_w"
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
                                                                           }
                                                                         }
-                                                                      },
-                                                                      "per": {
-                                                                        "param": "per"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
-                                                              }
-                                                            }
-                                                          }
-                                                        },
-                                                        {
-                                                          "cond": {
-                                                            "if": {
-                                                              "eq": [
-                                                                {
-                                                                  "param": "direct"
-                                                                },
-                                                                false
-                                                              ]
-                                                            },
-                                                            "then": [
+                                                              },
                                                               {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
+                                                                "cond": {
+                                                                  "if": {
+                                                                    "eq": [
+                                                                      {
+                                                                        "param": "direct"
+                                                                      },
+                                                                      false
+                                                                    ]
                                                                   },
-                                                                  "flags": [
-                                                                    "WRONLY",
-                                                                    "CREAT",
-                                                                    "TRUNC",
-                                                                    "CLOEXEC"
+                                                                  "then": [
+                                                                    {
+                                                                      "open": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "flags": [
+                                                                          "WRONLY",
+                                                                          "CREAT",
+                                                                          "TRUNC",
+                                                                          "CLOEXEC"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "fstat": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "ioctl": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "request": "TCGETS",
+                                                                        "expect": [
+                                                                          "ENOTTY"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "lseek": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "offset": 0,
+                                                                        "whence": "CUR"
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "write": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "len": {
+                                                                          "param": "chunk_bytes"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "close": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        }
+                                                                      }
+                                                                    }
                                                                   ]
                                                                 }
                                                               },
                                                               {
-                                                                "fstat": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "ioctl": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
+                                                                "cond": {
+                                                                  "if": {
+                                                                    "eq": [
+                                                                      {
+                                                                        "param": "direct"
+                                                                      },
+                                                                      true
+                                                                    ]
                                                                   },
-                                                                  "request": "TCGETS",
-                                                                  "expect": [
-                                                                    "ENOTTY"
+                                                                  "then": [
+                                                                    {
+                                                                      "open": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "flags": [
+                                                                          "WRONLY",
+                                                                          "CREAT",
+                                                                          "DIRECT",
+                                                                          "CLOEXEC"
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "write": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        },
+                                                                        "len": {
+                                                                          "param": "chunk_bytes"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "close": {
+                                                                        "file": {
+                                                                          "ref": "s_wf"
+                                                                        }
+                                                                      }
+                                                                    }
                                                                   ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "lseek": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  },
-                                                                  "offset": 0,
-                                                                  "whence": "CUR"
-                                                                }
-                                                              },
-                                                              {
-                                                                "write": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  }
-                                                                }
-                                                              }
-                                                            ]
-                                                          }
-                                                        },
-                                                        {
-                                                          "cond": {
-                                                            "if": {
-                                                              "eq": [
-                                                                {
-                                                                  "param": "direct"
-                                                                },
-                                                                true
-                                                              ]
-                                                            },
-                                                            "then": [
-                                                              {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  },
-                                                                  "flags": [
-                                                                    "WRONLY",
-                                                                    "CREAT",
-                                                                    "DIRECT",
-                                                                    "CLOEXEC"
-                                                                  ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "write": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_wf"
-                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -30159,12 +30217,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk_tiered.py",
-      "sha256": "fd550d0b86582df6d671130319244bf91ed80cdcd9354af06fb049465341a34d",
+      "sha256": "b2168a6da429ee69d69acc5f918cd4f2e8c7bc2e1006d1565819c7af3f720780",
       "builder_version": "0.4.0",
-      "git": "e88136d3ceab-dirty"
+      "git": "db5d785dcd3c-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "eda25caba110f360d60adb673796f0aaa2d7710d48d2ae2d7bd7b694bc495dac"
+    "ast_sha256": "ed42b159bfc61cda41af111f052b64598cda9d2727fe170f901fac973514f830"
   }
 }

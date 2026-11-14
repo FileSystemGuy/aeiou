@@ -239,7 +239,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.19"
+    AST_VERSION = "0.20"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -692,11 +692,20 @@ def _lint(ast):
 # ----------------------------------------------------------------------------------------------
 
 class _Frame:
-    __slots__ = ("body", "indices", "bindings", "channels", "written", "kind")
+    __slots__ = ("body", "indices", "bindings", "channels", "written", "kind", "label")
 
-    def __init__(self, body, indices, bindings, channels, written, kind):
+    def __init__(self, body, indices, bindings, channels, written, kind, label=None):
         self.body, self.indices, self.bindings = body, indices, bindings
         self.channels, self.written, self.kind = channels, written, kind
+        # a timeline's (name, worker names); a span's name (contract 0.20)
+        self.label = label
+
+
+# V36 (contract 0.20): what a `submit` body may not hold (it only issues its ops on a worker
+# lane), and what a `span` may not (what moves or waits on the planned clock), as check.py
+SUBMIT_BANS = {"compute", "lookup", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
+               "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
+SPAN_BANS = {"compute", "parallel", "acquire", "lookup"}
 
 
 class Cursor:
@@ -726,16 +735,28 @@ class Cursor:
         return self._top.indices[-1]
 
     def _emit(self, node: dict):
+        kind = next(iter(node))
+        for f in reversed(self._frames):
+            if f.kind == "submit":
+                if kind in SUBMIT_BANS:
+                    raise BuildError(f"a `{kind}` in a `submit` body, which only issues its ops on a worker lane (V36)")
+                break
+            if f.kind == "span":
+                if kind in SPAN_BANS:
+                    raise BuildError(f"a `{kind}` in span `{f.label}`: a span measures storage waits, never planned time (V36)")
+                break
+            if f.kind in ("timeline", "on_evict"):
+                break
         self._top.body.append(node)
 
     @contextlib.contextmanager
-    def _push(self, body: list, kind: str, index: Index | None = None):
+    def _push(self, body: list, kind: str, index: Index | None = None, label=None):
         top = self._top
         indices = top.indices + ((index,) if index is not None else ())
         # bindings are lexically scoped (V11); channels and the written set are per actor,
         # as in schema/check.py
         self._frames.append(_Frame(body, indices, dict(top.bindings), top.channels,
-                                   top.written, kind))
+                                   top.written, kind, label))
         try:
             yield
         finally:
@@ -882,14 +903,17 @@ class Cursor:
             yield Sub(self, idx)
 
     @contextlib.contextmanager
-    def timeline(self, name: str, caches: dict | None = None, resources: dict | None = None):
+    def timeline(self, name: str, caches: dict | None = None, resources: dict | None = None,
+                 workers: dict | None = None):
         """Lanes planned together (contract 0.15, rule V30): this body's main line and every
         sub-actor of a `parallel` in it, each with a planned clock that `compute` moves; the
         lane planned soonest takes the next step. Yields the timeline, whose `published` and
         `entry(n, key)` read what its lanes published before the step being walked. `caches`
         (contract 0.16, rule V33) maps a cache's name to its tiers (`tier(...)`), walked with
         the lanes in planned order and read by `lookup`; `resources` (contract 0.18, rule V34)
-        a counted resource's name to its capacity, held by `acquire`."""
+        a counted resource's name to its capacity, held by `acquire`; `workers` (contract 0.20,
+        rule V36) a workers' name to `(lanes, staging)`, the worker lanes `submit` puts bodies
+        on and the bytes a run may hold staged for them, both of parameters and literals."""
         check_ident(name, "timeline")
         if any(f.kind == "timeline" for f in self._frames):
             raise BuildError(f"timeline {name!r} inside a timeline (V30)")
@@ -904,6 +928,9 @@ class Cursor:
         if resources:
             node["resources"] = [{"name": check_ident(r, "resource"), "capacity": ast_of(lift(n, f"resource {r} capacity"))}
                                  for r, n in resources.items()]
+        if workers:
+            node["workers"] = [{"name": check_ident(n, "workers"), "lanes": ast_of(lift(ls, f"workers {n} lanes")),
+                                "staging": ast_of(lift(st, f"workers {n} staging"))} for n, (ls, st) in workers.items()]
         node["body"] = body
         self._emit({"timeline": node})
         # an eviction body (contract 0.19): its statements written where the timeline stands
@@ -914,8 +941,47 @@ class Cursor:
                     t["on_evict"] = {"lanes": t["on_evict"]["lanes"], "body": ebody}
                     with self._push(ebody, "on_evict"):
                         fn(self)
-        with self._push(body, "timeline"):
+        with self._push(body, "timeline", label=(name, set(workers or ()))):
             yield Timeline(name)
+
+    def _timeline_frame(self):
+        return next((f for f in reversed(self._frames) if f.kind == "timeline"), None)
+
+    @contextlib.contextmanager
+    def submit(self, workers: str):
+        """A body run on a worker lane of the enclosing timeline's `workers`, at this lane's
+        planned instant: worker lane (submission ordinal mod `lanes`) (contract 0.20, rule V36).
+        Its ops are those it would issue here, with the same indices, so the fingerprint is the
+        body's written inline; in a run they wait on the worker lane, never on this lane. It
+        only issues ops: no `compute`, cache or timeline statement, `acquire`, `release`,
+        `parallel`, `submit`, or `span`."""
+        tl = self._timeline_frame()
+        if tl is None:
+            raise BuildError("submit: outside a timeline, where nothing is planned (V36)")
+        if workers not in tl.label[1]:
+            raise BuildError(f"submit: timeline `{tl.label[0]}` declares no workers `{workers}` (V36)")
+        body: list = []
+        self._emit({"submit": {"workers": workers, "body": body}})
+        with self._push(body, "submit"):
+            yield
+
+    @contextlib.contextmanager
+    def span(self, name: str):
+        """A measured part of this lane (contract 0.20, rule V36): a run reports its D by
+        `name`, from its launch (planned time plus the lane's lag on entry) to its last op's
+        completion, a request's own storage wait. Nothing in the plan or the fingerprint. Never
+        in another span or a `submit` body; never a `compute`, `parallel`, `acquire`, or
+        `lookup` in it."""
+        check_ident(name, "span")
+        if self._timeline_frame() is None:
+            raise BuildError("span: outside a timeline, where no request is measured (V36)")
+        body: list = []
+        self._emit({"span": {"name": name, "body": body}})
+        outer = next((f for f in reversed(self._frames) if f.kind in ("span", "submit")), None)
+        if outer is not None and outer.kind == "span":
+            raise BuildError(f"a span inside span `{outer.label}`: a lane's wait is measured once (V36)")
+        with self._push(body, "span", label=name):
+            yield
 
     def publish(self, timeline, **values):
         """An entry of the enclosing timeline: these values at this lane's planned time; in a

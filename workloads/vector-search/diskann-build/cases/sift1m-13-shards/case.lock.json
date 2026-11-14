@@ -5,7 +5,7 @@
     {
       "name": "diskann_build",
       "abstract": "vector-search/diskann-build/diskann_build.ast.json",
-      "ast_sha256": "35c131ea16780ae36b639e6824a9186daef3edbe7bdf90bbbb08422be017ee13",
+      "ast_sha256": "69e25d7902382c97766b0ea9c8a7176b103a31ed8a06f7efae262b79c426bfc0",
       "params": {
         "big": {"default": 2147479552},
         "build_time": {"default": 20000000000},

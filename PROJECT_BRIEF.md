@@ -1650,6 +1650,10 @@ numbers; the order is this note's.
     as `workers` and `submit` (contract 0.20, with `span`); a thread a live lane under the
     blocking backends; `--on-certain-failure stop|continue` and `--lag-ceiling`; GPU idle as
     modelled later.
+    *Step 1 built the same day, contract 0.20 (plan side; the note's addendum "Contract 0.20
+    built"):* `workers`, `submit`, and `span` (rule V36), and `lmcache_local_disk_tiered`'s G3
+    writes on 4 store workers, its staging G2's bytes, its reads span `load`, its fingerprint
+    unchanged. Next: the planner (step 2).
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the

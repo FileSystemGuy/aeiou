@@ -286,6 +286,18 @@ each is a recorded decision and the golden tests pin them.
   body runs for it) and stores it as if absent, in the same event; with `taken`, it binds in its
   scope level an array of the indices of the chunks it stored, renewed ones included, in the
   order acted on. Bindings of a probe and a store are refused under `x @ i` (V33).
+- **Workers, submit, and span** (contract 0.20, V36; `vm.rs`'s `tl_step`). A timeline's
+  `workers` `lanes` and `staging` are evaluated when it starts (positive). A `submit` makes a
+  lane of the timeline at the submitting lane's planned time, whose key is (the workers' index
+  among the timeline's workers in declaration order, the submission's ordinal among those
+  workers' submissions in the walk's order); at one planned time such a lane goes after every
+  other lane, eviction lanes first and the timeline's own lanes next, so worker lanes at one
+  instant go in the order submitted. Its body starts from the submitting lane's frames,
+  bindings, phases, open files, and the values its `prev`s read as they stand, with no frame of its own, so its ops carry the
+  indices they would carry inline and hash as the body written there would; the submitting lane
+  goes on at once. Its worker lane, which the run issues it on (brief item 72 (7)), is the
+  ordinal mod `lanes`. A `span` walks its body where it stands (a body with its own scope level,
+  as a `phase`'s) and changes nothing in the plan; the run measures it.
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which
@@ -762,7 +774,9 @@ as root). The same runs on the loopback NFS mount are §7.
   nothing), rewrites each manifest once with `progress` (`unfinished` id ranges,
   `files_written`, `bytes_written`, `updated`), and prints one line (files, bytes, rate,
   time left). Each rank sends a last note before `Done`, rank 0's window runs until every
-  part is in, and the last write is `state: complete` with no `progress`. Since a note is
+  part is in, and the last write is `state: complete` with no `progress`. Once every part is
+  in, rank 0 prints a last line whatever the window, every file counted and the line ending
+  `, done`, so a datagen shorter than one window still shows its rate (2026-11-13). Since a note is
   taken before the flush it reports, an id outside `unfinished` is a whole file on stable
   storage; a datagen killed at any point leaves a manifest that is true
   (`tests/coord.rs`, on one host and two). `run` refuses any state but `complete`, naming

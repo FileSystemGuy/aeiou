@@ -21,7 +21,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.19", "name": "t", "params": {"cap": {"default": 10}},
+    json!({"ast": "0.20", "name": "t", "params": {"cap": {"default": 10}},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -368,7 +368,7 @@ fn a_store_binds_the_chunks_it_took_and_a_store_of_chunks_acts_on_those() {
         probe_in("u", r("a"), 0, "h0"), probe_in("u", r("a"), 2, "h2"), stat(r("h0")), stat(r("h2"))]))]);
     assert_eq!(walk(body), ["d/1", "d/1"]);
     // a parameter array names chunks too
-    let doc_ = json!({"ast": "0.19", "name": "t", "params": {"some": {"default": [1, 3]}},
+    let doc_ = json!({"ast": "0.20", "name": "t", "params": {"some": {"default": [1, 3]}},
         "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000000, "size": {"const": 1}, "seed": 1}},
         "actors": {"gpu": {"body": [tl(tiers_tu(9), json!([
             let_("a", shared(1, 4)), store_in("u", r("a"), json!({"chunks": "some", "taken": "tk"})),

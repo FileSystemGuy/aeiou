@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.19";
+pub const AST_VERSION: &str = "0.20";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,7 +56,7 @@ impl Ast {
         fn any(nodes: &[Node]) -> bool {
             nodes.iter().any(|n| match n {
                 Node::Timeline { .. } => true,
-                Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } => any(body),
+                Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Submit { body, .. } | Node::Span { body, .. } => any(body),
                 Node::Cond { then, otherwise, .. } => any(then) || otherwise.as_deref().is_some_and(any),
                 Node::Choose { arms, .. } => arms.iter().any(|a| any(&a.body)),
                 _ => false,
@@ -990,7 +990,23 @@ pub enum Node {
     Phase { name: Expr, body: Body },
     Trace { file: String, sha256: String },
     /// Lanes planned together, taken in planned order (contract 0.15, rule V30).
-    Timeline { name: String, #[serde(default)] caches: Vec<CacheDecl>, #[serde(default)] resources: Vec<ResourceDecl>, body: Body },
+    Timeline {
+        name: String,
+        #[serde(default)]
+        caches: Vec<CacheDecl>,
+        #[serde(default)]
+        resources: Vec<ResourceDecl>,
+        /// Its store workers (contract 0.20, rule V36).
+        #[serde(default)]
+        workers: Vec<WorkersDecl>,
+        body: Body,
+    },
+    /// `body` run on a worker lane of `workers` at this lane's planned instant: lane (submission
+    /// ordinal mod `lanes`), its ops this lane's ops as written (contract 0.20, rule V36).
+    Submit { workers: String, body: Body },
+    /// A measured part of a lane: the run measures its D, a request's own storage wait, from its
+    /// launch to its last op's completion (contract 0.20, rule V36). Nothing in the plan.
+    Span { name: String, body: Body },
     /// An entry of the named timeline: these values at this lane's planned time (rule V30).
     /// In `group` (contract 0.17; 0 when none is given).
     Publish { timeline: String, #[serde(default)] group: Option<Expr>, values: std::collections::BTreeMap<String, Expr> },
@@ -1076,6 +1092,8 @@ impl Node {
             Node::Phase { .. } => "phase",
             Node::Trace { .. } => "trace",
             Node::Timeline { .. } => "timeline",
+            Node::Submit { .. } => "submit",
+            Node::Span { .. } => "span",
             Node::Publish { .. } => "publish",
             Node::Array { .. } => "array",
             Node::Lookup { .. } => "lookup",
@@ -1114,6 +1132,7 @@ impl Node {
                 | Node::Cond { .. } | Node::Choose { .. } | Node::Phase { .. } | Node::Trace { .. }
                 | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. } | Node::Lookup { .. }
                 | Node::Acquire { .. } | Node::Release { .. } | Node::Probe { .. } | Node::Touch { .. } | Node::Store { .. }
+                | Node::Submit { .. } | Node::Span { .. }
         )
     }
 }
@@ -1216,6 +1235,17 @@ impl Full {
 pub struct ResourceDecl {
     pub name: String,
     pub capacity: Expr,
+}
+
+/// A timeline's store workers (contract 0.20, rule V36): `lanes` worker lanes the `submit`s
+/// naming it go to, by submission ordinal, and `staging`, the bytes their bodies may have issued
+/// or queued and not completed in a run before a store would have been dropped.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkersDecl {
+    pub name: String,
+    pub lanes: Expr,
+    pub staging: Expr,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]

@@ -6,7 +6,7 @@ mechanism's README) or what a storage system should do about it.
 
 ## In brief
 
-One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2 and G3 (LMCache's), G3 the directory under test. In the catalog it is `kvcache/lmcache-local-disk`: application `vllm-lmcache`, format `lmcache-chunks`, phase inference, domain ai. Not yet decided between the two; the case's README says why (`agentx-tiered`: agentic data, a llm model), its parameters holding at 1 GPU. Not traced yet. It writes the objects of `kv`, each 32 MiB. The one `gpu` actor: lanes planned together: 40 in parallel, each: compute for `arrive × 1000000`; for each `i` below `nm`: when `i ≥ 1`, nothing; for each `m_r` below `m_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `m_w` below `len(m_t3)`: open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `m_api × 1000000`; `nb` in parallel, each: when `pos = i and bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_r` below `s_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s_w` below `len(s_t3)`: open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; when `pos = i and not bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_r` below `s_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s_w` below `len(s_t3)`: open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; compute for `m_idle × 1000000`. Measured by dry run at 1 GPU (1,208,100 ops: 201,350 close, 201,350 fstat, 201,350 ioctl, 201,350 lseek, 201,350 open, 115,491 read, 85,859 write; 3.5 TiB read, 2.6 TiB written): read runs: large (32 MiB); write runs: large (32 MiB); read requests: large (32 MiB); write requests: large (32 MiB); share of bytes read: mixed (74.4%); metadata ops per data op: high (3); reads its own writes: yes; share of bytes read that are re-reads: repeated (88.4%); share of accessed bytes on the most accessed 1% of bytes: uniform (8.99%).
+One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2 and G3 (LMCache's), G3 the directory under test. In the catalog it is `kvcache/lmcache-local-disk`: application `vllm-lmcache`, format `lmcache-chunks`, phase inference, domain ai. Not yet decided between the two; the case's README says why (`agentx-tiered`: agentic data, a llm model), its parameters holding at 1 GPU. Not traced yet. It writes the objects of `kv`, each 32 MiB. The one `gpu` actor: lanes planned together: 40 in parallel, each: compute for `arrive × 1000000`; for each `i` below `nm`: when `i ≥ 1`, nothing; for each `m_r` below `m_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `m_w` below `len(m_t3)`: on a worker lane, open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `m_api × 1000000`; `nb` in parallel, each: when `pos = i and bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_r` below `s_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s_w` below `len(s_t3)`: on a worker lane, open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; when `pos = i and not bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_r` below `s_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s_w` below `len(s_t3)`: on a worker lane, open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; compute for `m_idle × 1000000`. Measured by dry run at 1 GPU (1,208,100 ops: 201,350 close, 201,350 fstat, 201,350 ioctl, 201,350 lseek, 201,350 open, 115,491 read, 85,859 write; 3.5 TiB read, 2.6 TiB written): read runs: large (32 MiB); write runs: large (32 MiB); read requests: large (32 MiB); write requests: large (32 MiB); share of bytes read: mixed (74.4%); metadata ops per data op: high (3); reads its own writes: yes; share of bytes read that are re-reads: repeated (88.4%); share of accessed bytes on the most accessed 1% of bytes: uniform (8.99%).
 
 ## The account
 
@@ -23,6 +23,7 @@ One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2 and G3 (LMCache
 | `g2_bytes` | 490 GiB | none | bytes | G2: LMCache's L1 in host DRAM (--l1-size-gb) [WG] |
 | `g3_bytes` | 7.0 TiB | none | bytes | G3: LMCache's L2 on node-local NVMe, the directory under test [WG] |
 | `evict_lanes` | 4 | same | count | LMCache's delete workers (the connector's num_workers, 4 in 0.5.5) |
+| `store_lanes` | 4 | same | count | LMCache's store workers: a chunk's write queued to them, the forward step waiting only for its copy to host memory (0.5.5's local-disk path, read 2026-11-09, DESIGN_REVIEW.md §3.99 item 13 (4)) |
 | `direct` | false | same | — | [config] LMCache's `use_odirect`: every chunk opened with `O_DIRECT` by `os.open` and read or written in one call (traced 2026-10-07, §3.63); LMCache takes this path only when chunk_bytes is a multiple of the file system's block size |
 | `tab` | [0, 55,000,000, 94,000,000, 120,000,000, 147,000,000, 182,000,000, 225,000,000, 274,000,000, …] (5655 values) | same | — | [load, fitted] the fit's quantile tables, fixed point × 1e6, one row a table on the fit's grid |
 | `prof` | [1,561,000, 1,040,000, 1,032,000, 953,000, 951,000, 913,000, 917,000, 893,000, …] (10 values) | same | — | [load, fitted] the main agent's growth by tenth of its session |
@@ -66,7 +67,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
 
 ### The `gpu` actor (1 instances)
 
-- A timeline `tl`: its lanes, this one and every parallel sub-actor in it, planned together and taken in planned order. Its cache `lm`: tier `g2`, evicting, every 1 s of planned time, when `tier.used × 10 ≥ (g2_bytes div chunk_bytes) × 8`, `max(1, tier.entries × 2 div 10)` entries least by (cached.touched, −cached.pos), holding at most 15,680 entries; a store past it is dropped; tier `g3`, evicting, every 1 s of planned time, when `tier.used × 10 ≥ (g3_bytes div chunk_bytes) × 8`, `max(1, tier.entries × 2 div 10)` entries least by (cached.touched, −cached.pos), holding at most 228,881 entries; a store past it is dropped. Its cache `gpu`: tier `g1`, evicting past 21,125 entries the entry least by (cached.freed, −cached.pos); a lookup that finds no room waits for a release. Its resource `slots` of 16 (`slots`) units.
+- A timeline `tl`: its lanes, this one and every parallel sub-actor in it, planned together and taken in planned order. Its cache `lm`: tier `g2`, evicting, every 1 s of planned time, when `tier.used × 10 ≥ (g2_bytes div chunk_bytes) × 8`, `max(1, tier.entries × 2 div 10)` entries least by (cached.touched, −cached.pos), holding at most 15,680 entries; a store past it is dropped; tier `g3`, evicting, every 1 s of planned time, when `tier.used × 10 ≥ (g3_bytes div chunk_bytes) × 8`, `max(1, tier.entries × 2 div 10)` entries least by (cached.touched, −cached.pos), holding at most 228,881 entries; a store past it is dropped. Its cache `gpu`: tier `g1`, evicting past 21,125 entries the entry least by (cached.freed, −cached.pos); a lookup that finds no room waits for a release. Its resource `slots` of 16 (`slots`) units. Its workers `store`: 4 (`store_lanes`) worker lanes, staging 490 GiB (`g2_bytes`).
   - Each victim of tier `g3`, on 4 (`evict_lanes`) eviction lanes at its eviction's planned time:
     - `unlink` the object of `kv` named by key = `victim`.
   - 40 (`sessions`) in parallel, `sess` = 0 onward, joined at the end:
@@ -245,36 +246,38 @@ The API the traced application used: `posix` sync (none declared); a run under a
       - Probes `m_seq` from chunk `m_h2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks: `m_h3` is the leading chunks held, nothing changed.
       - `m_hit` = `m_h2 + m_h3`.
       - `m_first` = `max(m_h2, min(m_gh × 64, seq_len(m_seq) × 64 − 1) div (64 × per))`.
-      - For `m_r` from `m_first` while below `m_hit`:
-        - `m_rf` is the object of `kv` named by key = `chunk_key(m_seq, m_r, per)`.
-        - If `direct = false` (true here):
-          - `open` `m_rf` (RDONLY|CLOEXEC).
-          - `fstat` `m_rf`.
-          - `ioctl` `m_rf` `TCGETS` (may fail with ENOTTY).
-          - `lseek` `m_rf` to 0 from the current position.
-          - `read` `m_rf`: 32 MiB (`chunk_bytes`) at the file position.
-          - `close` `m_rf`.
-        - If `direct = true` (false here: skipped):
-          - `open` `m_rf` (RDONLY|DIRECT|CLOEXEC).
-          - `fstat` `m_rf`.
-          - `read` `m_rf`: 32 MiB (`chunk_bytes`) at the file position.
-          - `close` `m_rf`.
+      - Measured as span `load`, a request's own storage wait:
+        - For `m_r` from `m_first` while below `m_hit`:
+          - `m_rf` is the object of `kv` named by key = `chunk_key(m_seq, m_r, per)`.
+          - If `direct = false` (true here):
+            - `open` `m_rf` (RDONLY|CLOEXEC).
+            - `fstat` `m_rf`.
+            - `ioctl` `m_rf` `TCGETS` (may fail with ENOTTY).
+            - `lseek` `m_rf` to 0 from the current position.
+            - `read` `m_rf`: 32 MiB (`chunk_bytes`) at the file position.
+            - `close` `m_rf`.
+          - If `direct = true` (false here: skipped):
+            - `open` `m_rf` (RDONLY|DIRECT|CLOEXEC).
+            - `fstat` `m_rf`.
+            - `read` `m_rf`: 32 MiB (`chunk_bytes`) at the file position.
+            - `close` `m_rf`.
       - Touches `m_seq`'s chunks `m_first` to `m_first` + `max(0, m_hit − m_first)` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
       - Stores `m_seq`'s chunks `m_hit` to `m_hit` + `m_nch − m_hit` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it lacks, as one event; `m_t2` is the indices of the chunks it stored.
       - Stores `m_seq`'s chunks in `m_t2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks, those it lacks and those held stored again, as one event; `m_t3` is the indices of the chunks it stored.
       - For `m_w` from 0 while below `len(m_t3)`:
-        - `m_wf` is the object of `kv` named by key = `chunk_key(m_seq, m_t3[m_w], per)`.
-        - If `direct = false` (true here):
-          - `open` `m_wf` (WRONLY|CREAT|TRUNC|CLOEXEC).
-          - `fstat` `m_wf`.
-          - `ioctl` `m_wf` `TCGETS` (may fail with ENOTTY).
-          - `lseek` `m_wf` to 0 from the current position.
-          - `write` `m_wf`: 32 MiB (`chunk_bytes`) at the file position.
-          - `close` `m_wf`.
-        - If `direct = true` (false here: skipped):
-          - `open` `m_wf` (WRONLY|CREAT|DIRECT|CLOEXEC).
-          - `write` `m_wf`: 32 MiB (`chunk_bytes`) at the file position.
-          - `close` `m_wf`.
+        - On a worker lane of `store`, at this lane's planned time:
+          - `m_wf` is the object of `kv` named by key = `chunk_key(m_seq, m_t3[m_w], per)`.
+          - If `direct = false` (true here):
+            - `open` `m_wf` (WRONLY|CREAT|TRUNC|CLOEXEC).
+            - `fstat` `m_wf`.
+            - `ioctl` `m_wf` `TCGETS` (may fail with ENOTTY).
+            - `lseek` `m_wf` to 0 from the current position.
+            - `write` `m_wf`: 32 MiB (`chunk_bytes`) at the file position.
+            - `close` `m_wf`.
+          - If `direct = true` (false here: skipped):
+            - `open` `m_wf` (WRONLY|CREAT|DIRECT|CLOEXEC).
+            - `write` `m_wf`: 32 MiB (`chunk_bytes`) at the file position.
+            - `close` `m_wf`.
       - Computes for `m_api × 1000000`, no I/O.
       - Touches `m_seq`'s chunks `0` to `0` + `seq_len(m_seq) div per` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
       - Releases `kv`.
@@ -447,36 +450,38 @@ The API the traced application used: `posix` sync (none declared); a run under a
               - Probes `s_seq` from chunk `s_h2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks: `s_h3` is the leading chunks held, nothing changed.
               - `s_hit` = `s_h2 + s_h3`.
               - `s_first` = `max(s_h2, min(s_gh × 64, seq_len(s_seq) × 64 − 1) div (64 × per))`.
-              - For `s_r` from `s_first` while below `s_hit`:
-                - `s_rf` is the object of `kv` named by key = `chunk_key(s_seq, s_r, per)`.
-                - If `direct = false` (true here):
-                  - `open` `s_rf` (RDONLY|CLOEXEC).
-                  - `fstat` `s_rf`.
-                  - `ioctl` `s_rf` `TCGETS` (may fail with ENOTTY).
-                  - `lseek` `s_rf` to 0 from the current position.
-                  - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
-                  - `close` `s_rf`.
-                - If `direct = true` (false here: skipped):
-                  - `open` `s_rf` (RDONLY|DIRECT|CLOEXEC).
-                  - `fstat` `s_rf`.
-                  - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
-                  - `close` `s_rf`.
+              - Measured as span `load`, a request's own storage wait:
+                - For `s_r` from `s_first` while below `s_hit`:
+                  - `s_rf` is the object of `kv` named by key = `chunk_key(s_seq, s_r, per)`.
+                  - If `direct = false` (true here):
+                    - `open` `s_rf` (RDONLY|CLOEXEC).
+                    - `fstat` `s_rf`.
+                    - `ioctl` `s_rf` `TCGETS` (may fail with ENOTTY).
+                    - `lseek` `s_rf` to 0 from the current position.
+                    - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
+                    - `close` `s_rf`.
+                  - If `direct = true` (false here: skipped):
+                    - `open` `s_rf` (RDONLY|DIRECT|CLOEXEC).
+                    - `fstat` `s_rf`.
+                    - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
+                    - `close` `s_rf`.
               - Touches `s_seq`'s chunks `s_first` to `s_first` + `max(0, s_hit − s_first)` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
               - Stores `s_seq`'s chunks `s_hit` to `s_hit` + `s_nch − s_hit` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it lacks, as one event; `s_t2` is the indices of the chunks it stored.
               - Stores `s_seq`'s chunks in `s_t2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks, those it lacks and those held stored again, as one event; `s_t3` is the indices of the chunks it stored.
               - For `s_w` from 0 while below `len(s_t3)`:
-                - `s_wf` is the object of `kv` named by key = `chunk_key(s_seq, s_t3[s_w], per)`.
-                - If `direct = false` (true here):
-                  - `open` `s_wf` (WRONLY|CREAT|TRUNC|CLOEXEC).
-                  - `fstat` `s_wf`.
-                  - `ioctl` `s_wf` `TCGETS` (may fail with ENOTTY).
-                  - `lseek` `s_wf` to 0 from the current position.
-                  - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
-                  - `close` `s_wf`.
-                - If `direct = true` (false here: skipped):
-                  - `open` `s_wf` (WRONLY|CREAT|DIRECT|CLOEXEC).
-                  - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
-                  - `close` `s_wf`.
+                - On a worker lane of `store`, at this lane's planned time:
+                  - `s_wf` is the object of `kv` named by key = `chunk_key(s_seq, s_t3[s_w], per)`.
+                  - If `direct = false` (true here):
+                    - `open` `s_wf` (WRONLY|CREAT|TRUNC|CLOEXEC).
+                    - `fstat` `s_wf`.
+                    - `ioctl` `s_wf` `TCGETS` (may fail with ENOTTY).
+                    - `lseek` `s_wf` to 0 from the current position.
+                    - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
+                    - `close` `s_wf`.
+                  - If `direct = true` (false here: skipped):
+                    - `open` `s_wf` (WRONLY|CREAT|DIRECT|CLOEXEC).
+                    - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
+                    - `close` `s_wf`.
               - Computes for `s_api × 1000000`, no I/O.
               - Touches `s_seq`'s chunks `0` to `0` + `seq_len(s_seq) div per` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
               - Releases `kv`.
@@ -648,36 +653,38 @@ The API the traced application used: `posix` sync (none declared); a run under a
               - Probes `s_seq` from chunk `s_h2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks: `s_h3` is the leading chunks held, nothing changed.
               - `s_hit` = `s_h2 + s_h3`.
               - `s_first` = `max(s_h2, min(s_gh × 64, seq_len(s_seq) × 64 − 1) div (64 × per))`.
-              - For `s_r` from `s_first` while below `s_hit`:
-                - `s_rf` is the object of `kv` named by key = `chunk_key(s_seq, s_r, per)`.
-                - If `direct = false` (true here):
-                  - `open` `s_rf` (RDONLY|CLOEXEC).
-                  - `fstat` `s_rf`.
-                  - `ioctl` `s_rf` `TCGETS` (may fail with ENOTTY).
-                  - `lseek` `s_rf` to 0 from the current position.
-                  - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
-                  - `close` `s_rf`.
-                - If `direct = true` (false here: skipped):
-                  - `open` `s_rf` (RDONLY|DIRECT|CLOEXEC).
-                  - `fstat` `s_rf`.
-                  - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
-                  - `close` `s_rf`.
+              - Measured as span `load`, a request's own storage wait:
+                - For `s_r` from `s_first` while below `s_hit`:
+                  - `s_rf` is the object of `kv` named by key = `chunk_key(s_seq, s_r, per)`.
+                  - If `direct = false` (true here):
+                    - `open` `s_rf` (RDONLY|CLOEXEC).
+                    - `fstat` `s_rf`.
+                    - `ioctl` `s_rf` `TCGETS` (may fail with ENOTTY).
+                    - `lseek` `s_rf` to 0 from the current position.
+                    - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
+                    - `close` `s_rf`.
+                  - If `direct = true` (false here: skipped):
+                    - `open` `s_rf` (RDONLY|DIRECT|CLOEXEC).
+                    - `fstat` `s_rf`.
+                    - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
+                    - `close` `s_rf`.
               - Touches `s_seq`'s chunks `s_first` to `s_first` + `max(0, s_hit − s_first)` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
               - Stores `s_seq`'s chunks `s_hit` to `s_hit` + `s_nch − s_hit` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it lacks, as one event; `s_t2` is the indices of the chunks it stored.
               - Stores `s_seq`'s chunks in `s_t2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks, those it lacks and those held stored again, as one event; `s_t3` is the indices of the chunks it stored.
               - For `s_w` from 0 while below `len(s_t3)`:
-                - `s_wf` is the object of `kv` named by key = `chunk_key(s_seq, s_t3[s_w], per)`.
-                - If `direct = false` (true here):
-                  - `open` `s_wf` (WRONLY|CREAT|TRUNC|CLOEXEC).
-                  - `fstat` `s_wf`.
-                  - `ioctl` `s_wf` `TCGETS` (may fail with ENOTTY).
-                  - `lseek` `s_wf` to 0 from the current position.
-                  - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
-                  - `close` `s_wf`.
-                - If `direct = true` (false here: skipped):
-                  - `open` `s_wf` (WRONLY|CREAT|DIRECT|CLOEXEC).
-                  - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
-                  - `close` `s_wf`.
+                - On a worker lane of `store`, at this lane's planned time:
+                  - `s_wf` is the object of `kv` named by key = `chunk_key(s_seq, s_t3[s_w], per)`.
+                  - If `direct = false` (true here):
+                    - `open` `s_wf` (WRONLY|CREAT|TRUNC|CLOEXEC).
+                    - `fstat` `s_wf`.
+                    - `ioctl` `s_wf` `TCGETS` (may fail with ENOTTY).
+                    - `lseek` `s_wf` to 0 from the current position.
+                    - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
+                    - `close` `s_wf`.
+                  - If `direct = true` (false here: skipped):
+                    - `open` `s_wf` (WRONLY|CREAT|DIRECT|CLOEXEC).
+                    - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
+                    - `close` `s_wf`.
               - Computes for `s_api × 1000000`, no I/O.
               - Touches `s_seq`'s chunks `0` to `0` + `seq_len(s_seq) div per` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
               - Releases `kv`.

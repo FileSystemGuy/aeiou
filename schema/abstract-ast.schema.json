@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.19",
+      "const": "0.20",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -64,7 +64,7 @@
     },
     "params": {
       "type": "object",
-      "description": "Named parameters, overridable from the CLI. `gpus` is reserved: the runner sets it from --gpus. A name has no dot (`ident`), so no parameter takes the name of a runner fact or result (`fact.…`, `result.…`; contract 0.11).",
+      "description": "Named parameters, overridable from the CLI. `gpus` is reserved: the runner sets it from --gpus. A name has no dot (`ident`), so no parameter takes the name of a runner fact or result (`fact.\u2026`, `result.\u2026`; contract 0.11).",
       "propertyNames": {
         "$ref": "#/$defs/ident"
       },
@@ -757,7 +757,7 @@
                   "$ref": "#/$defs/expr"
                 }
               },
-              "description": "The key of whole chunk `chunk` (from 0) of `per` blocks of a `seq`, a non-negative integer: the chained hash of every block to the chunk's end (runner/REFERENCE.md §2), so two sequences give one key exactly when they hold the same blocks up to it (contract 0.16)."
+              "description": "The key of whole chunk `chunk` (from 0) of `per` blocks of a `seq`, a non-negative integer: the chained hash of every block to the chunk's end (runner/REFERENCE.md \u00a72), so two sequences give one key exactly when they hold the same blocks up to it (contract 0.16)."
             },
             "now": {
               "type": "object",
@@ -904,7 +904,7 @@
         },
         "inventory": {
           "$ref": "#/$defs/ident",
-          "description": "The inventory of the named dataset (contract 0.9): the one file its `inventory` declares in its root, of size `count × entry`."
+          "description": "The inventory of the named dataset (contract 0.9): the one file its `inventory` declares in its root, of size `count \u00d7 entry`."
         },
         "consume": {
           "$ref": "#/$defs/ident",
@@ -1046,7 +1046,7 @@
             "framing": {
               "type": "object",
               "additionalProperties": false,
-              "description": "The container framing (v0.2; `layout` until 0.8): file = file_header ‖ units ‖ file_footer, aligned; unit = unit_header ‖ column chunks ‖ unit_footer, aligned; column chunk = header ‖ rows, aligned; row = row_header ‖ fixed ‖ share of the sample ‖ row_footer, aligned. Every field is an expression over parameters; absent means 0 (alignments 1). No framing is the packed framing: samples back to back.",
+              "description": "The container framing (v0.2; `layout` until 0.8): file = file_header \u2016 units \u2016 file_footer, aligned; unit = unit_header \u2016 column chunks \u2016 unit_footer, aligned; column chunk = header \u2016 rows, aligned; row = row_header \u2016 fixed \u2016 share of the sample \u2016 row_footer, aligned. Every field is an expression over parameters; absent means 0 (alignments 1). No framing is the packed framing: samples back to back.",
               "properties": {
                 "unit": {
                   "$ref": "#/$defs/expr",
@@ -1151,7 +1151,7 @@
             },
             "entry": {
               "$ref": "#/$defs/expr",
-              "description": "Bytes per item of `count`: the inventory's size is `count × entry`."
+              "description": "Bytes per item of `count`: the inventory's size is `count \u00d7 entry`."
             }
           },
           "description": "A file list of the dataset (contract 0.9), written by datagen as payload and read through the `inventory` handle in place of a walk. Only a consumed dataset (`map` or `stream`) has one (V22). Under `run --subset` its reads are issued no further than its size at the run's count."
@@ -1885,7 +1885,7 @@
         },
         "truncate": {
           "type": "object",
-          "description": "`truncate(2)` of a path, open or not (contract 0.14, DESIGN_REVIEW.md §3.92): the file's size set to `len`. A changing op: never on a dataset (V12) or an input namespace (V14), never on a namespace in an object store (V18).",
+          "description": "`truncate(2)` of a path, open or not (contract 0.14, DESIGN_REVIEW.md \u00a73.92): the file's size set to `len`. A changing op: never on a dataset (V12) or an input namespace (V14), never on a namespace in an object store (V18).",
           "required": [
             "file",
             "len"
@@ -1955,7 +1955,7 @@
                   "WRITE_ZEROES"
                 ]
               },
-              "description": "`fallocate(2)`'s mode flags (contract 0.14, DESIGN_REVIEW.md §3.92). Absent or empty: mode 0, allocate and extend. `KEEP_SIZE` allocates past the end without extending; `PUNCH_HOLE` (only with `KEEP_SIZE`) frees the range; `ZERO_RANGE`, `COLLAPSE_RANGE`, `INSERT_RANGE`, `UNSHARE_RANGE`, `WRITE_ZEROES` as Linux defines them. At most one operation besides `KEEP_SIZE`, which `COLLAPSE_RANGE`, `INSERT_RANGE`, and `WRITE_ZEROES` do not take (V29). Part of the op and of the fingerprint."
+              "description": "`fallocate(2)`'s mode flags (contract 0.14, DESIGN_REVIEW.md \u00a73.92). Absent or empty: mode 0, allocate and extend. `KEEP_SIZE` allocates past the end without extending; `PUNCH_HOLE` (only with `KEEP_SIZE`) frees the range; `ZERO_RANGE`, `COLLAPSE_RANGE`, `INSERT_RANGE`, `UNSHARE_RANGE`, `WRITE_ZEROES` as Linux defines them. At most one operation besides `KEEP_SIZE`, which `COLLAPSE_RANGE`, `INSERT_RANGE`, and `WRITE_ZEROES` do not take (V29). Part of the op and of the fingerprint."
             },
             "expect": {
               "$ref": "#/$defs/expect"
@@ -2061,11 +2061,18 @@
               },
               "description": "The timeline's counted resources (contract 0.18, rule V34), none held when it starts."
             },
+            "workers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/workers"
+              },
+              "description": "The timeline's store workers (contract 0.20, rule V36): the lanes `submit` puts bodies on, and the staging their unfinished bytes may hold in a run."
+            },
             "body": {
               "$ref": "#/$defs/body"
             }
           },
-          "description": "Lanes planned together (contract 0.15, DESIGN_REVIEW.md §3.99, rule V30): the body's main line and every sub-actor of a `parallel` in it is a lane with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. Never a `timeline`, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside. Its `caches` (contract 0.16, rule V33) and `resources` (contract 0.18, rule V34) are walked with its lanes, in planned order; a lane that must wait for one is parked until a release, and resumes at the release's planned time. `aeiou run` does not run one yet."
+          "description": "Lanes planned together (contract 0.15, DESIGN_REVIEW.md \u00a73.99, rule V30): the body's main line and every sub-actor of a `parallel` in it is a lane with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. Never a `timeline`, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside. Its `caches` (contract 0.16, rule V33) and `resources` (contract 0.18, rule V34) are walked with its lanes, in planned order; a lane that must wait for one is parked until a release, and resumes at the release's planned time. Its `workers` (contract 0.20, rule V36) take the bodies of its lanes' `submit`s. `aeiou run` does not run one yet."
         },
         "publish": {
           "type": "object",
@@ -2186,6 +2193,40 @@
             }
           },
           "description": "What this lane holds under `hold`, given back (contract 0.18, rule V34): a resource's units, or a tier's entries, which become victims again with `freed` the release. A lane ends holding nothing."
+        },
+        "submit": {
+          "type": "object",
+          "required": [
+            "workers",
+            "body"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "workers": {
+              "$ref": "#/$defs/ident"
+            },
+            "body": {
+              "$ref": "#/$defs/body"
+            }
+          },
+          "description": "`body` run on a worker lane of the enclosing timeline's `workers`, at this lane's planned instant (contract 0.20, rule V36): worker lane (submission ordinal mod `lanes`), never the first free one. Its ops are those it would issue where it stands, with the same enclosing indices, so the op set and fingerprint are the body's written inline; in a run its ops wait on its worker lane, not on this lane. The body only issues ops: no `compute`, cache or timeline statement, `acquire`, `release`, `parallel`, `submit`, or `span`."
+        },
+        "span": {
+          "type": "object",
+          "required": [
+            "name",
+            "body"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/ident"
+            },
+            "body": {
+              "$ref": "#/$defs/body"
+            }
+          },
+          "description": "A measured part of a timeline's lane (contract 0.20, rule V36): in a run, its D, from its launch (planned time plus the lane's lag on entry) to its last op's completion, is reported by `name`, a request's own storage wait. No effect on the plan or the fingerprint. Never in another span or a `submit` body, and never holding a `compute`, `parallel`, `acquire`, or `lookup`, which move or wait on the planned clock."
         },
         "probe": {
           "type": "object",
@@ -2376,7 +2417,7 @@
     },
     "source": {
       "type": "object",
-      "description": "A value the storage reports (contract 0.11, DESIGN_REVIEW.md §3.78 point 11): `st_blksize`, read before the gate by `stat` of the first file of dataset `of` or (contract 0.12) of namespace `of`: the first object its manifest lists for an input namespace (the manifest where it lists none), a probe file created and removed in its root for an output one (`aeiou dry-run --st-blksize` in place of the storage), `fallback` where the storage reports none (an object store). The system under test's by the interposition test: the workload id covers the rule, the report the number. Rule V28.",
+      "description": "A value the storage reports (contract 0.11, DESIGN_REVIEW.md \u00a73.78 point 11): `st_blksize`, read before the gate by `stat` of the first file of dataset `of` or (contract 0.12) of namespace `of`: the first object its manifest lists for an input namespace (the manifest where it lists none), a probe file created and removed in its root for an output one (`aeiou dry-run --st-blksize` in place of the storage), `fallback` where the storage reports none (an object store). The system under test's by the interposition test: the workload id covers the rule, the report the number. Rule V28.",
       "required": [
         "from",
         "of",
@@ -2469,7 +2510,7 @@
               "$ref": "#/$defs/expr"
             }
           },
-          "description": "Timed eviction (contract 0.19, rule V33): at every planned instant k × `every` ns from the timeline's start, while lanes remain and before any lane's step at that instant, if `when` holds, the `count` entries least in `order` that no lane holds are evicted; never at store. `when` and `count` read parameters, literals, and `tier`; `every` parameters and literals. Needs a `capacity` and an `order`; not with `full` `wait`."
+          "description": "Timed eviction (contract 0.19, rule V33): at every planned instant k \u00d7 `every` ns from the timeline's start, while lanes remain and before any lane's step at that instant, if `when` holds, the `count` entries least in `order` that no lane holds are evicted; never at store. `when` and `count` read parameters, literals, and `tier`; `every` parameters and literals. Needs a `capacity` and an `order`; not with `full` `wait`."
         },
         "on_evict": {
           "type": "object",
@@ -2507,6 +2548,27 @@
         }
       },
       "description": "A counted resource of a timeline (contract 0.18, rule V34): `capacity` units, held by `acquire` and given back by `release`; a queue with `capacity` servers."
+    },
+    "workers": {
+      "type": "object",
+      "required": [
+        "name",
+        "lanes",
+        "staging"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ident"
+        },
+        "lanes": {
+          "$ref": "#/$defs/expr"
+        },
+        "staging": {
+          "$ref": "#/$defs/expr"
+        }
+      },
+      "description": "A timeline's store workers (contract 0.20, rule V36): `lanes` worker lanes (positive; parameters and literals only) the `submit`s naming it go to, by submission ordinal, and `staging` (positive bytes; parameters and literals only), what their bodies may have issued or queued and not completed in a run before a store would have been dropped, a gate failure."
     }
   }
 }

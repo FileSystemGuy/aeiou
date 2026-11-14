@@ -5,7 +5,7 @@
     {
       "name": "lmcache_local_disk",
       "abstract": "kvcache/lmcache-local-disk/lmcache_local_disk.ast.json",
-      "ast_sha256": "95790baed3290c5c5b33890830d6b79c97f1744dee3e4ac60ac19698e919bf61",
+      "ast_sha256": "c4ed45ed576db3dae036e88d1096816e63fa8a0f2df92c27960ccc4e0a897225",
       "params": {
         "chunk_bytes": {"default": 3145728},
         "chunk_tokens": {"default": 256},

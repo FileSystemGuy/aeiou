@@ -33,7 +33,7 @@ OPS = ("open", "close", "read", "write", "lseek", "ioctl", "fadvise", "fstat", "
        "unlink", "truncate", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
 STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond", "choose",
               "phase", "trace", "timeline", "publish", "array", "lookup", "acquire", "release", "probe", "touch",
-              "store") + OPS
+              "store", "submit", "span") + OPS
 DISTS = ("const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture")
 EXPRS = ("param", "index", "ref", "at", "actor", "draw", "elem", "len", "sum", "size", "offset", "unit_index", "units",
          "chunks", "count", "dirs", "add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "neg", "eq", "ne", "lt",
@@ -671,6 +671,8 @@ class Describer:
                 f" Its cache `{c['name']}`: " + "; ".join(self.tier(t) for t in c["tiers"]) + "."
                 for c in a.get("caches", []))
             res = "".join(f" Its resource `{r['name']}` of {self.value(r['capacity'], 'count')} units." for r in a.get("resources", []))
+            res += "".join(f" Its workers `{w['name']}`: {self.value(w['lanes'], 'count')} worker lanes, staging "
+                           f"{self.value(w['staging'], 'bytes')}." for w in a.get("workers", []))
             out = [pad + f"A timeline `{a['name']}`: its lanes, this one and every parallel sub-actor in it, "
                    "planned together and taken in planned order." + caches + res]
             for c in a.get("caches", []):
@@ -708,6 +710,10 @@ class Describer:
                     "waiting in planned time while they are not free, first come first."]
         if k == "release":
             return [pad + f"Releases `{a['hold']}`."]
+        if k == "submit":
+            return [pad + f"On a worker lane of `{a['workers']}`, at this lane's planned time:"] + self.body(a["body"], depth + 1)
+        if k == "span":
+            return [pad + f"Measured as span `{a['name']}`, a request's own storage wait:"] + self.body(a["body"], depth + 1)
         if k == "publish":
             vals = ", ".join(f"{n} = `{self.sym(v)}`" for n, v in a["values"].items())
             g = f", group `{self.sym(a['group'])}`" if "group" in a else ""
@@ -894,6 +900,11 @@ class Describer:
         if k == "phase":
             inner = self.gist(a["body"])
             return f"in phase {self.label(a['name'])}, {inner}" if inner else ""
+        if k == "submit":
+            inner = self.gist(a["body"])
+            return f"on a worker lane, {inner}" if inner else ""
+        if k == "span":
+            return self.gist(a["body"])
         if k == "cond":
             t = self.fold(a["if"])
             if isinstance(t, K):

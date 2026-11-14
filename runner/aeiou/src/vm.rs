@@ -458,6 +458,8 @@ enum Next<'a> {
     Trace(Arc<crate::trace::TraceFile>),
     /// A lane cannot go on until a release (contract 0.18): the statement runs again then.
     Block,
+    /// A `submit` (contract 0.20): its workers and body.
+    Submit(&'a str, &'a [Node]),
 }
 
 /// What a lane's step gave `tl_step`.
@@ -468,6 +470,7 @@ enum LaneEv<'a> {
     Trace,
     Block,
     End,
+    Submit(&'a str, &'a [Node]),
 }
 
 /// The op the last `Next::Op` describes; `next` lends it out as an `Op`. A `path` of `None`
@@ -580,8 +583,10 @@ struct Lane<'m, 'a> {
     until: i64,
     /// Waiting on a tier or a resource (contract 0.18), out of the heap until woken.
     parked: bool,
-    /// An eviction lane (contract 0.19): at the same planned time, it goes before the others.
-    evict: bool,
+    /// At the same planned time, the order of the lane's kind: 0 an eviction lane (contract
+    /// 0.19), before the others; 1 a lane of the timeline's body; 2 a worker lane (contract
+    /// 0.20), after them.
+    class: u8,
 }
 
 /// A timeline being walked: its lanes, a heap of (planned time, lane key, order put, lane)
@@ -597,6 +602,9 @@ struct TlRun<'m, 'a> {
     evict: Vec<(Waitable<'a>, EvictLanes<'m, 'a>)>,
     /// A walk that evaluates a timed tier's `when` and `count` (parameters, literals, `tier`).
     eval: Option<Box<Vm<'m, 'a>>>,
+    /// Its workers (contract 0.20), in declaration order: name, lanes, staging bytes, and the
+    /// submissions so far.
+    workers: Vec<(&'a str, i64, i64, i64)>,
 }
 
 impl<'m, 'a> TlRun<'m, 'a> {
@@ -604,7 +612,7 @@ impl<'m, 'a> TlRun<'m, 'a> {
         let lane = &self.lanes[l];
         let t = lane.vm.as_ref().map_or(0, |v| v.clock);
         self.seq += 1;
-        self.heap.push(Reverse((t, u8::from(!lane.evict), lane.key.clone(), self.seq, l)));
+        self.heap.push(Reverse((t, lane.class, lane.key.clone(), self.seq, l)));
     }
 
     /// Each victim's eviction lane (contract 0.19): victim i of the batch on lane i mod `lanes`,
@@ -622,7 +630,7 @@ impl<'m, 'a> TlRun<'m, 'a> {
             kid.lane = self.lanes.len();
             kid.victim = Some(k);
             kid.start(snap.body);
-            self.lanes.push(Lane { vm: Some(kid), key: vec![idx, batch, i % lanes, i / lanes], parent: None, forks: 0, wait: 0, until: 0, parked: false, evict: true });
+            self.lanes.push(Lane { vm: Some(kid), key: vec![idx, batch, i % lanes, i / lanes], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 0 });
             let l = self.lanes.len() - 1;
             self.ready(l);
         }
@@ -685,6 +693,7 @@ enum TlOut<'a> {
 
 /// A `let` that a `prev` reads: its value in the latest iteration evaluated and in the one
 /// before, by loop index, under the outer indices they were evaluated at.
+#[derive(Clone)]
 struct PrevSlot<'a> {
     outer: Vec<i64>,
     cur: (i64, Value<'a>),
@@ -939,6 +948,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Some(Next::Fork(k)) => Some(Event::Fork(k)),
                 Some(Next::Trace(t)) => Some(Event::Trace(t, self.ctx())),
                 Some(Next::Block) => return Err(anyhow!("a lane waited outside a timeline (V34)")),
+                Some(Next::Submit(..)) => unreachable!("a `submit` outside a timeline is refused when walked"),
             });
         }
     }
@@ -957,6 +967,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             Some(Next::Fork(k)) => LaneEv::Fork(k),
             Some(Next::Trace(_)) => LaneEv::Trace,
             Some(Next::Block) => LaneEv::Block,
+            Some(Next::Submit(w, b)) => LaneEv::Submit(w, b),
             Some(Next::Timeline) => unreachable!("a timeline inside a timeline is refused when entered"),
         })
     }
@@ -1006,7 +1017,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                             let v = lane.vm.as_mut().unwrap();
                             v.clock = v.clock.max(t);
                             run.seq += 1;
-                            run.heap.push(Reverse((v.clock, u8::from(!lane.evict), lane.key.clone(), run.seq, l)));
+                            run.heap.push(Reverse((v.clock, lane.class, lane.key.clone(), run.seq, l)));
                         }
                     }
                 }
@@ -1066,7 +1077,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         kid.start_sub(k);
                         let mut kkey = key.clone();
                         kkey.push(k);
-                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0, parked: false, evict: false });
+                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0, parked: false, class: 1 });
                         let l = run.lanes.len() - 1;
                         run.ready(l);
                     }
@@ -1076,6 +1087,31 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         run.lanes[cur].until = clock;
                         run.cur = None;
                     }
+                }
+                S::Submit(name, body) => {
+                    let Some(wi) = run.workers.iter().position(|w| w.0 == name) else {
+                        let g = run.shared.lock().unwrap();
+                        let vm = run.lanes[cur].vm.as_ref().unwrap();
+                        return Err(vm.wrap(EvalError::Other(anyhow!("submit: timeline `{}` declares no workers `{name}` (V36)", g.name))));
+                    };
+                    // its key is its submission: at one instant the worker lanes go in the order
+                    // submitted, and its worker lane is the ordinal mod `lanes`
+                    let ord = run.workers[wi].3;
+                    run.workers[wi].3 += 1;
+                    let vm = run.lanes[cur].vm.as_ref().unwrap();
+                    // the lane's frames as they stand: the body's ops carry the indices they would inline
+                    let snap = Self::snapshot_of(vm.model, vm.template, vm.actor, vm.actor_count, &vm.frames, &vm.scopes, &vm.phases, &vm.open, &vm.written, body);
+                    let (clock, prevs) = (vm.clock, vm.prev_slots.clone());
+                    let mut kid = Vm::resume(snap);
+                    kid.tl = Some(run.shared.clone());
+                    kid.clock = clock;
+                    kid.lane = run.lanes.len();
+                    // and the values a `prev` reads, as the lane holds them here
+                    kid.prev_slots = prevs;
+                    kid.start(body);
+                    run.lanes.push(Lane { vm: Some(kid), key: vec![wi as i64, ord], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 2 });
+                    let l = run.lanes.len() - 1;
+                    run.ready(l);
                 }
                 S::End => {
                     let lane = &mut run.lanes[cur];
@@ -2324,7 +2360,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 level.bindings.insert(name.as_str(), Binding { value: v, body: level.body, def: value, walked: false });
                 Ok(None)
             }
-            Node::Timeline { name, caches, resources, body } => {
+            Node::Timeline { name, caches, resources, workers, body } => {
                 if self.tl.is_some() {
                     return other(format!("timeline `{name}` inside a timeline (V30)"));
                 }
@@ -2392,13 +2428,25 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     }
                     res.insert(r.name.as_str(), Res { capacity: n, used: 0 });
                 }
+                let mut wk = Vec::with_capacity(workers.len());
+                for w in workers {
+                    let lanes = self.expr(&w.lanes)?.as_int()?;
+                    if lanes <= 0 {
+                        return other(format!("workers `{}`: lanes {lanes}, not positive", w.name));
+                    }
+                    let staging = self.expr(&w.staging)?.as_int()?;
+                    if staging <= 0 {
+                        return other(format!("workers `{}`: staging {staging}, not positive", w.name));
+                    }
+                    wk.push((w.name.as_str(), lanes, staging, 0));
+                }
                 let shared = Arc::new(Mutex::new(TlShared { name, entries: HashMap::new(), tiers, resources: res, waiters: HashMap::new(), wake: Vec::new(), evicted: Vec::new() }));
                 let snap = Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &self.frames, &self.scopes, &self.phases, &self.open, &self.written, body);
                 let eval = evict.iter().any(|(_, e)| e.timed.is_some()).then(|| Box::new(Vm::resume(snap.clone())));
                 let mut main = Vm::resume(snap);
                 main.tl = Some(shared.clone());
                 main.push_body(body);
-                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false, evict: false }], heap: BinaryHeap::new(), seq: 0, cur: None, evict, eval };
+                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 1 }], heap: BinaryHeap::new(), seq: 0, cur: None, evict, eval, workers: wk };
                 run.ready(0);
                 self.tlrun = Some(Box::new(run));
                 Ok(Some(Next::Timeline))
@@ -2837,6 +2885,17 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     }
                 }
                 self.push_body(&arms[chosen].body);
+                Ok(None)
+            }
+            Node::Submit { workers, body } => {
+                if self.tl.is_none() {
+                    return other("submit: outside a timeline (V36)");
+                }
+                Ok(Some(Next::Submit(workers, body)))
+            }
+            Node::Span { body, .. } => {
+                // the run measures it; the plan walks its body where it stands
+                self.push_body(body);
                 Ok(None)
             }
             Node::Phase { name, body } => {
@@ -3315,7 +3374,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.19", "name": "t",
+                r#"{{"ast": "0.20", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

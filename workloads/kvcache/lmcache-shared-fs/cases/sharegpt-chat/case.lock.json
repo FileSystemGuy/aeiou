@@ -5,7 +5,7 @@
     {
       "name": "lmcache_shared_fs",
       "abstract": "kvcache/lmcache-shared-fs/lmcache_shared_fs.ast.json",
-      "ast_sha256": "b087944cb6f1c694d44e83c49ec56a17c53542ebe01a2c1f7b46b2206a8204da",
+      "ast_sha256": "7bdfe0b3faa99689df32bd0cbe2bb17d8c29f93065e24003d573e5a98ce5a014",
       "params": {
         "buf": {"default": {"from": "st_blksize", "of": "kv", "fallback": 1048576}},
         "chunk_bytes": {"default": 3145728},
@@ -86,7 +86,7 @@
     {
       "name": "lmcache_shared_fs_reader",
       "abstract": "kvcache/lmcache-shared-fs/lmcache_shared_fs_reader.ast.json",
-      "ast_sha256": "377a6619223c842ba6bd9eb1d17d5fd60ee48a69b96512572a87bc210379361c",
+      "ast_sha256": "dd162930313802c27b582e709c3f3f71b6062d4fa231d758a2d8782cc5d1a9c6",
       "params": {
         "buf": {"default": {"from": "st_blksize", "of": "kv", "fallback": 1048576}},
         "chunk_bytes": {"default": 3145728},

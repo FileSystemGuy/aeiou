@@ -21,7 +21,7 @@ SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "choose", "phase", "trace", "timeline", "publish", "array", "lookup",
-           "acquire", "release", "probe", "touch", "store"}
+           "acquire", "release", "probe", "touch", "store", "submit", "span"}
 # V30: what a timeline's lanes may not hold: they are planned, never waiting on one another
 NOT_IN_TIMELINE = {"loader", "channel", "put", "take", "barrier", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
@@ -285,7 +285,7 @@ def publishes(nodes, name, out):
         kind, a = next(iter(node.items()))
         if kind == "publish" and a["timeline"] == name:
             out.update(a["values"])
-        elif kind in ("loop", "parallel", "loader", "phase", "timeline"):
+        elif kind in ("loop", "parallel", "loader", "phase", "timeline", "span"):
             publishes(a["body"], name, out)
         elif kind == "cond":
             publishes(a["then"], name, out)
@@ -301,7 +301,7 @@ def holds(nodes, out):
         kind, a = next(iter(node.items()))
         if kind == "acquire" or (kind == "lookup" and "hold" in a):
             out.add(a["hold"])
-        elif kind in ("loop", "parallel", "loader", "phase"):
+        elif kind in ("loop", "parallel", "loader", "phase", "span"):
             holds(a["body"], out)
         elif kind == "cond":
             holds(a["then"], out)
@@ -344,7 +344,7 @@ def plan_reads(e, also):
 # V35: what an `on_evict` body may not hold: anything that plans time, holds, or changes a cache
 # or a timeline (a body issues its victim's ops at its tick)
 EVICT_BANS = {"compute", "lookup", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
-              "loader", "channel", "put", "take", "barrier", "timeline", "trace"}
+              "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
 
 
 def evict_bans(nodes, p, out):
@@ -363,6 +363,29 @@ def evict_bans(nodes, p, out):
         elif kind == "choose":
             for j, arm in enumerate(a["arms"]):
                 evict_bans(arm["body"], np + ["choose", "arms", j, "body"], out)
+
+
+# V36: what a `span` may not hold: what moves the lane's planned clock or waits in planned time,
+# which D, a storage wait, must not include (a `submit`'s body is a worker's, not the span's)
+SPAN_BANS = {"compute", "parallel", "acquire", "lookup"}
+
+
+def span_bans(nodes, p, out):
+    """V36: the statements of a `span` it may not hold, with their paths. As the runner's
+    `span_bans`."""
+    for i, node in enumerate(nodes):
+        kind, a = next(iter(node.items()))
+        np = p + [i]
+        if kind in SPAN_BANS:
+            out.append((np, kind))
+        elif kind in ("loop", "phase"):
+            span_bans(a["body"], np + [kind, "body"], out)
+        elif kind == "cond":
+            span_bans(a["then"], np + ["cond", "then"], out)
+            span_bans(a.get("else", []), np + ["cond", "else"], out)
+        elif kind == "choose":
+            for j, arm in enumerate(a["arms"]):
+                span_bans(arm["body"], np + ["choose", "arms", j, "body"], out)
 
 
 def param_refs(x, out: set):
@@ -418,6 +441,9 @@ class Check:
         # V34: the enclosing timeline's resources, and the holds its `acquire`s and `lookup`s name
         self.resources = set()
         self.holds = set()
+        # V36: the enclosing timeline's workers, and the span being checked
+        self.workers = set()
+        self.span = None
         # V32: the loops enclosing the node being checked
         self.loops = 0
         # V31: the next `body` is a `loop`'s
@@ -918,7 +944,7 @@ class Check:
             elif kind == "choose":
                 for j, arm in enumerate(a["arms"]):
                     self.channel_sites(arm["body"], p + ["arms", j, "body"], in_loop)
-            elif kind in ("loop", "parallel", "loader", "phase"):
+            elif kind in ("loop", "parallel", "loader", "phase", "submit", "span"):
                 self.channel_sites(a["body"], p + ["body"], in_loop or kind == "loop")
 
     # V26: a loader's workers run beside the actor, so a channel they put or take on that the
@@ -1031,6 +1057,34 @@ class Check:
         self.expr(a["name"], p + ["name"], scope)
         self.body(a["body"], p + ["body"], scope)
 
+    def n_submit(self, a, p, scope):
+        """V36: a `submit` names workers of its timeline; its body only issues ops."""
+        if self.timeline is None:
+            self.err(p, "submit: outside a timeline, where nothing is planned (V36)")
+        elif a["workers"] not in self.workers:
+            self.err(p, f"submit: timeline `{self.timeline[0]}` declares no workers `{a['workers']}` (V36)")
+        bans = []
+        evict_bans(a["body"], p + ["body"], bans)
+        for bp, what in bans:
+            self.err(bp, f"a `{what}` in a `submit` body, which only issues its ops on a worker lane (V36)")
+        outer, self.span = self.span, None
+        self.body(a["body"], p + ["body"], scope)
+        self.span = outer
+
+    def n_span(self, a, p, scope):
+        """V36: a `span` in a timeline, not in another, holding nothing planned."""
+        if self.timeline is None:
+            self.err(p, "span: outside a timeline, where no request is measured (V36)")
+        if self.span is not None:
+            self.err(p, f"a span inside span `{self.span}`: a lane's wait is measured once (V36)")
+        bans = []
+        span_bans(a["body"], p + ["body"], bans)
+        for bp, what in bans:
+            self.err(bp, f"a `{what}` in span `{a['name']}`: a span measures storage waits, never planned time (V36)")
+        outer, self.span = self.span, a["name"]
+        self.body(a["body"], p + ["body"], scope)
+        self.span = outer
+
     def n_trace(self, a, p, scope):
         self.traces = True
 
@@ -1116,6 +1170,19 @@ class Check:
             self.resources.add(r["name"])
             self.expr(r["capacity"], rp + ["capacity"], scope)
             self.typed(r["capacity"], rp + ["capacity"], scope)
+        self.workers = set()
+        for i, w in enumerate(a.get("workers", [])):
+            wp = p + ["workers", i]
+            if w["name"] in self.workers:
+                self.err(wp, f"workers `{w['name']}` declared twice (V36)")
+            self.workers.add(w["name"])
+            for k in ("lanes", "staging"):
+                bad = plan_reads(w[k], None)
+                if bad:
+                    self.err(wp + [k], f"workers `{w['name']}`: its `{k}` reads `{bad}`; it reads only parameters and literals (V36)")
+                    continue
+                self.expr(w[k], wp + [k], scope)
+                self.typed(w[k], wp + [k], scope)
         keys = set()
         publishes(a["body"], a["name"], keys)
         self.holds = set()
@@ -1131,6 +1198,7 @@ class Check:
         self.caches = {}
         self.resources = set()
         self.holds = set()
+        self.workers = set()
 
     def n_acquire(self, a, p, scope):
         """V34: an `acquire` names a resource its timeline declares, `n` an integer."""

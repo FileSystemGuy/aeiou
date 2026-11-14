@@ -160,6 +160,14 @@ of chunks, or over the chunks whose indices an array holds (`chunks`, an `ArrayR
 the store stored, returned as an `ArrayRef` (a pair `(Ref, ArrayRef)` with `bind`) (V33). The builder refuses them outside a
 timeline, an `evict` with no capacity or order, an `on_evict` with no order, and an unknown
 `tier_attr`.
+Since contract 0.20 (2026-11-13, `DESIGN_REVIEW.md` §3.99, the note "The run side of
+timelines"): `c.timeline(..., workers={"store": (lanes, staging)})`, a timeline's store workers;
+`with c.submit("store"):`, a body run on a worker lane at this lane's planned time (its ops
+those it would issue here, so the fingerprint does not move); and `with c.span("load"):`, the
+part of a lane whose D a run measures (V36). The builder refuses a `submit` or `span` outside a
+timeline, a `submit` naming workers its timeline does not declare, a span inside a span, a
+`compute`, `parallel`, `acquire`, or `lookup` in a span, and in a `submit` body anything but ops
+and the statements around them (what V35 bans in an eviction body, and `submit` and `span`).
 
 **Expressions**: node arithmetic (`+ - * // %`, `ceil_div`, `min_`, `max_`, `-x`), comparisons
 (`== != < <= > >=`), `&`, `|`, `~`, `when(test, a, b)` (arms may be expressions, distributions,

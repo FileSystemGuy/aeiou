@@ -233,6 +233,9 @@ struct ActorState<'a> {
     /// V34: the enclosing timeline's resources, and the holds its `acquire`s and `lookup`s name.
     resources: HashSet<&'a str>,
     holds: BTreeSet<&'a str>,
+    /// V36: the enclosing timeline's workers, and the span being checked.
+    workers: HashSet<&'a str>,
+    span: Option<&'a str>,
 }
 
 impl<'a> Scope<'a> {
@@ -446,7 +449,7 @@ fn evict_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
         match n {
             Node::Compute { .. } | Node::Lookup { .. } | Node::Probe { .. } | Node::Touch { .. } | Node::Store { .. } | Node::Acquire { .. }
             | Node::Release { .. } | Node::Publish { .. } | Node::Parallel { .. } | Node::Loader { .. } | Node::Channel { .. } | Node::Put { .. }
-            | Node::Take { .. } | Node::Barrier { .. } | Node::Timeline { .. } | Node::Trace { .. } => out.push((np, n.kind())),
+            | Node::Take { .. } | Node::Barrier { .. } | Node::Timeline { .. } | Node::Trace { .. } | Node::Submit { .. } | Node::Span { .. } => out.push((np, n.kind())),
             Node::Loop { body, .. } | Node::Phase { body, .. } => evict_bans(body, &p(&np, &[n.kind(), "body"]), out),
             Node::Cond { then, otherwise, .. } => {
                 evict_bans(then, &p(&np, &["cond", "then"]), out);
@@ -460,6 +463,27 @@ fn evict_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
     }
 }
 
+/// V36: the statements a `span` may not hold, with their paths: those that move the lane's
+/// planned clock or wait in planned time, which D, a storage wait, must not include. A
+/// `submit`'s body is a worker's, not the span's.
+fn span_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
+    for (i, n) in nodes.iter().enumerate() {
+        let np = p(pp, &[&i.to_string()]);
+        match n {
+            Node::Compute { .. } | Node::Parallel { .. } | Node::Acquire { .. } | Node::Lookup { .. } => out.push((np, n.kind())),
+            Node::Loop { body, .. } | Node::Phase { body, .. } => span_bans(body, &p(&np, &[n.kind(), "body"]), out),
+            Node::Cond { then, otherwise, .. } => {
+                span_bans(then, &p(&np, &["cond", "then"]), out);
+                if let Some(b) = otherwise {
+                    span_bans(b, &p(&np, &["cond", "else"]), out);
+                }
+            }
+            Node::Choose { arms, .. } => arms.iter().enumerate().for_each(|(j, a)| span_bans(&a.body, &p(&np, &["choose", "arms", &j.to_string(), "body"]), out)),
+            _ => {}
+        }
+    }
+}
+
 /// V34: the holds the `acquire`s and `lookup`s of a timeline's body name, anywhere in it.
 fn holds<'a>(nodes: &'a [Node], out: &mut BTreeSet<&'a str>) {
     for n in nodes {
@@ -467,7 +491,7 @@ fn holds<'a>(nodes: &'a [Node], out: &mut BTreeSet<&'a str>) {
             Node::Acquire { hold, .. } | Node::Lookup { hold: Some(hold), .. } => {
                 out.insert(hold.as_str());
             }
-            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } => holds(body, out),
+            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Span { body, .. } => holds(body, out),
             Node::Cond { then, otherwise, .. } => {
                 holds(then, out);
                 if let Some(b) = otherwise {
@@ -539,7 +563,7 @@ fn publishes<'a>(nodes: &'a [Node], name: &str, out: &mut BTreeSet<&'a str>) {
     for n in nodes {
         match n {
             Node::Publish { timeline, values, .. } if timeline == name => out.extend(values.keys().map(String::as_str)),
-            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. } => publishes(body, name, out),
+            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. } | Node::Span { body, .. } => publishes(body, name, out),
             Node::Cond { then, otherwise, .. } => {
                 publishes(then, name, out);
                 if let Some(b) = otherwise {
@@ -624,7 +648,7 @@ fn channel_sites<'a>(nodes: &'a [Node], path: &P, in_loop: bool, out: &mut HashM
                 channel_sites(body, &p(&pp, &["body"]), in_loop, out);
             }
             Node::Loop { body, .. } => channel_sites(body, &p(&pp, &["body"]), true, out),
-            Node::Parallel { body, .. } | Node::Phase { body, .. } => channel_sites(body, &p(&pp, &["body"]), in_loop, out),
+            Node::Parallel { body, .. } | Node::Phase { body, .. } | Node::Submit { body, .. } | Node::Span { body, .. } => channel_sites(body, &p(&pp, &["body"]), in_loop, out),
             Node::Cond { then, otherwise, .. } => {
                 channel_sites(then, &p(&pp, &["then"]), in_loop, out);
                 if let Some(b) = otherwise {
@@ -1284,13 +1308,51 @@ impl<'a> Checker<'a> {
                 self.expr(name, &p(pp, &["name"]), scope, st, None);
                 self.body(body, &p(pp, &["body"]), scope, st);
             }
+            Node::Submit { workers, body } => {
+                match &st.timeline {
+                    None => self.err(pp, "submit: outside a timeline, where nothing is planned (V36)"),
+                    Some((t, _)) if !st.workers.contains(workers.as_str()) => {
+                        self.err(pp, format!("submit: timeline `{t}` declares no workers `{workers}` (V36)"));
+                    }
+                    _ => {}
+                }
+                let bp = p(pp, &["body"]);
+                let mut bans = Vec::new();
+                evict_bans(body, &bp, &mut bans);
+                for (bp2, what) in bans {
+                    self.err(&bp2, format!("a `{what}` in a `submit` body, which only issues its ops on a worker lane (V36)"));
+                }
+                let outer = st.span.take();
+                self.body(body, &bp, scope, st);
+                st.span = outer;
+            }
+            Node::Span { name, body } => {
+                if !is_ident(name) {
+                    self.err(&p(pp, &["name"]), "not an identifier");
+                }
+                if st.timeline.is_none() {
+                    self.err(pp, "span: outside a timeline, where no request is measured (V36)");
+                }
+                if let Some(outer) = st.span {
+                    self.err(pp, format!("a span inside span `{outer}`: a lane's wait is measured once (V36)"));
+                }
+                let bp = p(pp, &["body"]);
+                let mut bans = Vec::new();
+                span_bans(body, &bp, &mut bans);
+                for (bp2, what) in bans {
+                    self.err(&bp2, format!("a `{what}` in span `{name}`: a span measures storage waits, never planned time (V36)"));
+                }
+                let outer = st.span.replace(name.as_str());
+                self.body(body, &bp, scope, st);
+                st.span = outer;
+            }
             Node::Trace { sha256, .. } => {
                 self.traces = true;
                 if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
                     self.err(&p(pp, &["sha256"]), "not a lowercase hex sha256");
                 }
             }
-            Node::Timeline { name, caches, resources, body } => {
+            Node::Timeline { name, caches, resources, workers, body } => {
                 if !is_ident(name) {
                     self.err(&p(pp, &["name"]), "not an identifier");
                 }
@@ -1409,6 +1471,25 @@ impl<'a> Checker<'a> {
                     self.expr(&r.capacity, &p(&rp, &["capacity"]), scope, st, None);
                     self.int(&r.capacity, &p(&rp, &["capacity"]), scope);
                 }
+                st.workers.clear();
+                for (i, w) in workers.iter().enumerate() {
+                    let wp = p(pp, &["workers", &i.to_string()]);
+                    if !is_ident(&w.name) {
+                        self.err(&p(&wp, &["name"]), "not an identifier");
+                    }
+                    if !st.workers.insert(w.name.as_str()) {
+                        self.err(&wp, format!("workers `{}` declared twice (V36)", w.name));
+                    }
+                    for (k, e) in [("lanes", &w.lanes), ("staging", &w.staging)] {
+                        let fp = p(&wp, &[k]);
+                        if let Some(r) = plan_reads(e, None) {
+                            self.err(&fp, format!("workers `{}`: its `{k}` reads `{r}`; it reads only parameters and literals (V36)", w.name));
+                            continue;
+                        }
+                        self.expr(e, &fp, scope, st, None);
+                        self.int(e, &fp, scope);
+                    }
+                }
                 let mut keys = BTreeSet::new();
                 publishes(body, name, &mut keys);
                 st.holds.clear();
@@ -1426,6 +1507,7 @@ impl<'a> Checker<'a> {
                 st.caches.clear();
                 st.resources.clear();
                 st.holds.clear();
+                st.workers.clear();
             }
             Node::Lookup { cache, tier, seq, per, bind, size, hold } => {
                 if !is_ident(bind) {

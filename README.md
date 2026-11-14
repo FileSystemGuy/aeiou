@@ -536,6 +536,11 @@ on one engine with G1, G2, and G3 at the WG's example sizes and the in-process c
 chunk calls, its case `agentx-tiered` unsettled and dry-run only until item 72 (7); the older
 abstract and its four cases stay runnable until then. Its G1 and G2 issue no ops, only G3 does;
 G3 and G4 active together in one abstract is queued (brief item 78).
+Contract 0.20 (2026-11-13, the first step of item 72 (7)'s run side, `DESIGN_REVIEW.md` §3.99, the
+note "The run side of timelines"): a timeline's store `workers`, `submit`, a body run on a worker
+lane at the submitting lane's planned time, and `span`, the part of a lane whose storage wait D a
+run will measure; rule V36. The plan only: `aeiou run` still refuses a timeline. The tiered
+abstract's G3 writes are on store workers and its reads a span, its fingerprint unchanged.
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

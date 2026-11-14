@@ -90,3 +90,16 @@ def test_timed_eviction_eviction_bodies_and_ranges_are_described():
     assert any("`t2` is the indices of the chunks it stored" in l for l in lines), lines
     assert any("Stores `fresh(4)`'s chunks in `t2` in tier `g3`" in l and "those held stored again" in l for l in lines), lines
     assert any("Touches `fresh(4)`'s chunks in `t3`" in l for l in lines), lines
+
+
+def test_workers_submit_and_span_are_described():
+    """Contract 0.20: a timeline's `workers`, a `submit`'s body on a worker lane, a `span`."""
+    d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)
+    st = {"stat": {"file": {"file": {"dataset": "d", "id": 1}}}}
+    tl = {"timeline": {"name": "tl", "workers": [{"name": "store", "lanes": 4, "staging": 2147483648}], "body": [
+        {"span": {"name": "load", "body": [st]}}, {"submit": {"workers": "store", "body": [st]}}]}}
+    lines = d.body([tl], 0)
+    assert "Its workers `store`: 4 worker lanes, staging" in lines[0], lines
+    assert lines[1].strip() == "- Measured as span `load`, a request's own storage wait:", lines
+    assert lines[3].strip() == "- On a worker lane of `store`, at this lane's planned time:", lines
+    assert d.gist([{"submit": {"workers": "store", "body": [st]}}]).startswith("on a worker lane, "), d.gist([{"submit": {"workers": "store", "body": [st]}}])
