@@ -295,11 +295,12 @@ fn the_validator_holds_timelines_prev_and_arrays_to_their_rules() {
 
 // ---------------------------------------------------------------- the run side
 
-/// `aeiou run` issues a timeline's ops at their planned times on the event loops (brief item 72
-/// (7) step 3, `exec.rs`): the op multiset dry-run walks (its fingerprint), no sooner than the
-/// plan; under a blocking backend it is refused until step 4, and so is a `--time-scale`.
+/// `aeiou run` issues a timeline's ops at their planned times (brief item 72 (7), `exec.rs`), on
+/// the event loops (step 3) and on a thread a live lane under the blocking backends (step 4):
+/// the op multiset dry-run walks (its fingerprint), no sooner than the plan; a `--time-scale`
+/// is refused.
 #[test]
-fn run_issues_a_timeline_on_the_event_loops() {
+fn run_issues_a_timeline_on_every_backend() {
     let rf = |n: &str| json!({"ref": n});
     let write = json!([{"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]);
     let read = json!([{"open": {"file": rf("f"), "flags": ["RDONLY"]}}, {"read": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]);
@@ -320,7 +321,7 @@ fn run_issues_a_timeline_on_the_event_loops() {
     let fp = |o: &std::process::Output| String::from_utf8_lossy(&o.stdout).lines().find(|l| l.starts_with("fingerprint ")).map(str::to_string);
     let dry = out(&["dry-run", a, "--gpus", "1"]);
     assert!(dry.status.success());
-    for posix in ["io_uring", "libaio"] {
+    for posix in ["io_uring", "libaio", "sync", "posix-aio", "mmap"] {
         let root = dir.join(posix);
         std::fs::create_dir_all(&root).unwrap();
         let t0 = std::time::Instant::now();
@@ -335,11 +336,8 @@ fn run_issues_a_timeline_on_the_event_loops() {
             assert_eq!(std::fs::metadata(root.join(format!("kv/{k}"))).unwrap().len(), 4096);
         }
     }
-    let root = dir.join("sync");
+    let root = dir.join("scaled");
     std::fs::create_dir_all(&root).unwrap();
-    let r = out(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap()]);
-    let err = String::from_utf8_lossy(&r.stderr);
-    assert!(!r.status.success() && err.contains("a `timeline` under --posix sync (blocking) is not run yet"), "{err}");
     let r = out(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", "io_uring", "--time-scale", "2"]);
     let err = String::from_utf8_lossy(&r.stderr);
     assert_eq!(r.status.code(), Some(2), "{err}");
@@ -354,7 +352,80 @@ fn run_issues_a_timeline_on_the_event_loops() {
     std::fs::write(&ast, text).unwrap();
     let root = dir.join("outside");
     std::fs::create_dir_all(&root).unwrap();
-    let r = out(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", "io_uring"]);
+    for posix in ["io_uring", "sync"] {
+        let r = out(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", posix]);
+        let err = String::from_utf8_lossy(&r.stderr);
+        assert!(!r.status.success() && err.contains("open kv/9 outside the timeline of an actor whose body has one"), "{posix}: {err}");
+    }
+}
+
+/// Under a blocking backend a timeline's executor lanes take a thread while they live (brief
+/// item 72 (7) step 4): a lane gives its thread back when it ends, so sub-lanes one after
+/// another share one, and the run's threads are the actor's and the most lanes live at once.
+#[test]
+fn blocking_timeline_lanes_reuse_their_threads() {
+    let rf = |n: &str| json!({"ref": n});
+    let session = json!([
+        {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
+        {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}},
+        {"compute": {"ns": 10_000_000}}]);
+    let text = json!({"ast": "0.20", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl",
+            "body": [{"loop": {"index": "k", "to": 5, "body": [{"parallel": {"index": "j", "width": 1, "body": session}}]}}]}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "reuse");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    let a = ast.to_str().unwrap();
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["run", a, "--gpus", "1", "--root", dir.to_str().unwrap(), "--posix", "sync"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&r.stdout);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert!(stdout.contains("by kind: open=5 close=5 write=5"), "{stdout}");
+    let threads = stdout.lines().filter(|l| l.starts_with("elapsed ")).find_map(|l| l.split("threads ").nth(1)).and_then(|t| t.split_whitespace().next()).unwrap();
+    assert_eq!(threads, "2", "the actor's thread and one lane thread: {stdout}");
+}
+
+/// A lane's op that fails under a blocking backend ends the run with the op's error, naming the
+/// op and its lane, and the driver's other lanes stop (brief item 72 (7) step 4).
+#[test]
+fn a_failing_op_on_a_blocking_timeline_lane_ends_the_run() {
+    let rf = |n: &str| json!({"ref": n});
+    let text = json!({"ast": "0.20", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 2, "body": [
+            {"compute": {"ns": {"mul": [{"index": "k"}, 50_000_000]}}},
+            {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
+            {"open": {"file": rf("f"), "flags": ["RDONLY"]}}, {"close": {"file": rf("f")}}]}}]}}]},
+            // another actor's timeline, still waiting on its plan, stops on the abort
+            "host": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"compute": {"ns": 400_000_000}},
+                {"let": {"name": "g", "value": {"object": {"namespace": "kv", "fields": {"key": 7}}}}},
+                {"open": {"file": rf("g"), "flags": ["WRONLY", "CREAT"]}}, {"close": {"file": rf("g")}}]}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "fail");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.to_str().unwrap(), "--posix", "sync"]).output().unwrap();
     let err = String::from_utf8_lossy(&r.stderr);
-    assert!(!r.status.success() && err.contains("open kv/9 outside the timeline of an actor whose body has one"), "{err}");
+    assert!(!r.status.success(), "{err}");
+    assert!(err.contains("open kv/0 on timeline lane"), "{err}");
+    assert!(!dir.join("kv/7").exists(), "the other actor stopped before its op");
+}
+
+/// A blocking timeline over more paths than the planner holds before it first retires them
+/// (`exec::RETIRE_FLOOR`) issues every op, the planner forgetting the paths completed.
+#[test]
+fn a_blocking_timeline_over_many_paths_retires_them() {
+    let rf = |n: &str| json!({"ref": n});
+    let text = json!({"ast": "0.20", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 0, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"loop": {"index": "k", "to": 1500, "body": [
+            {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
+            {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"close": {"file": rf("f")}}]}}]}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "many");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.to_str().unwrap(), "--posix", "sync"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&r.stdout);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert!(stdout.contains("by kind: open=1500 close=1500"), "{stdout}");
+    assert_eq!(std::fs::read_dir(dir.join("kv")).unwrap().filter(|e| !e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".aeiou")).count(), 1500);
 }

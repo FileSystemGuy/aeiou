@@ -3075,6 +3075,9 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
                     let mut sink = Runner::new(sh.clone(), inst, template, actor, true, None);
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let body = &model.ast.actors[template].body;
+                        if crate::ast::body_has_timeline(body) {
+                            return sink.timeline(model, template, actor, count);
+                        }
                         let mut vm = Vm::new(model, template, actor, count);
                         vm.start(body);
                         drive(&mut vm, &mut sink)
@@ -3678,6 +3681,199 @@ impl Runner {
         match errs.into_iter().nth(cause) {
             Some((lane, e)) => Err(e.context(format!("trace `{}` lane {lane}", tf.name))),
             None => Ok(()),
+        }
+    }
+}
+
+/// What a timeline's driver hands a lane thread (`Runner::timeline`).
+enum LaneJob {
+    Op(crate::plan::Record),
+    /// Its lane ended: its files are checked and dropped, and the thread is free for another.
+    End,
+    Quit,
+}
+
+/// What a lane thread tells the driver: a record completed at `at` (ns from the timeline's
+/// start), or the error that ends the run.
+enum LaneMsg {
+    Done { seq: u64, at: i64 },
+    Failed(anyhow::Error),
+}
+
+/// A thread an executor lane holds while it lives, under a blocking backend: its ops issued one
+/// at a time, as the lane's task issues them on the event loops (`uring.rs`, `Prog::XLane`), on
+/// an actor state of its own that a new lane starts afresh.
+fn lane_thread(mut sink: Runner, jobs: mpsc::Receiver<LaneJob>, tx: mpsc::Sender<LaneMsg>, t0: Instant) -> Stats {
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        while let Ok(job) = jobs.recv() {
+            match job {
+                LaneJob::Op(r) => {
+                    let mut at = 0;
+                    let res = (|| {
+                        if sink.sh.aborted.load(Ordering::Relaxed) {
+                            return Err(sink.sh.abort_error());
+                        }
+                        let op = r.op();
+                        sink.a.check_align(&sink.sh, &op)?;
+                        let (res, ns) = issue_timed(&mut *sink.be, &sink.sh, &mut sink.a, &mut sink.rbuf, &mut sink.wbuf, &op);
+                        at = t0.elapsed().as_nanos() as i64;
+                        sink.a.settle(&op, &r.ctx(), res, ns)
+                    })();
+                    let msg = match res {
+                        Ok(()) => LaneMsg::Done { seq: r.seq, at },
+                        Err(e) => LaneMsg::Failed(e.context(format!("{} {} on timeline lane {}", r.op().kind.name(), r.path, r.lane))),
+                    };
+                    if tx.send(msg).is_err() {
+                        return;
+                    }
+                }
+                LaneJob::End => {
+                    let r = sink.a.unclosed();
+                    sink.a.finish_shared(&sink.sh);
+                    let st = std::mem::take(&mut sink.a.st);
+                    sink.a = ActorState::new(&sink.sh, sink.a.template, sink.a.actor, false, None, 0);
+                    sink.a.st = st;
+                    if let Err(e) = r {
+                        let _ = tx.send(LaneMsg::Failed(e));
+                    }
+                }
+                LaneJob::Quit => return,
+            }
+        }
+    }));
+    if let Err(p) = r {
+        sink.sh.aborted.store(true, Ordering::Relaxed);
+        let _ = tx.send(LaneMsg::Failed(panicked(p).context("a timeline lane")));
+    }
+    sink.a.finish_shared(&sink.sh);
+    std::mem::take(&mut sink.a.st)
+}
+
+impl Runner {
+    /// An actor whose body is a timeline, under a blocking backend (brief item 72 (7) step 4,
+    /// `DESIGN_REVIEW.md` §3.99, the note "The run side of timelines"): the planner pulled a
+    /// horizon ahead of the wall clock, the executor (`exec.rs`) saying which records issue
+    /// when, and each record issued on the thread its executor lane holds while it lives, so a
+    /// blocking call holds its own lane alone. A lane takes a free thread, or a new one, at its
+    /// first op and gives it back when it ends; the threads are the most lanes live at once.
+    fn timeline(&mut self, model: &'static Model<'static>, template: &'static str, actor: i64, count: i64) -> Result<()> {
+        let t0 = Instant::now();
+        let (tx, rx) = mpsc::channel::<LaneMsg>();
+        let mut threads: Vec<(mpsc::Sender<LaneJob>, JoinHandle<Stats>)> = Vec::new();
+        let r = self.timeline_loop(model, template, actor, count, t0, &tx, &rx, &mut threads);
+        if r.is_err() {
+            self.sh.aborted.store(true, Ordering::Relaxed);
+        }
+        for (jobs, _) in &threads {
+            let _ = jobs.send(LaneJob::Quit);
+        }
+        let mut r = r;
+        for (_, h) in threads {
+            match h.join() {
+                Ok(st) => self.a.st.merge(&st),
+                Err(_) => r = r.and(Err(anyhow!("a timeline lane panicked"))),
+            }
+        }
+        // a lane's error that came after the driver stopped is the cause when the driver's was
+        // only the abort it raised
+        if let Err(e) = &r {
+            if echoes_abort(&format!("{e:#}")) {
+                if let Some(LaneMsg::Failed(c)) = rx.try_iter().find(|m| matches!(m, LaneMsg::Failed(c) if !echoes_abort(&format!("{c:#}")))) {
+                    return Err(c);
+                }
+            }
+        }
+        r
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn timeline_loop(&mut self, model: &'static Model<'static>, template: &'static str, actor: i64, count: i64, t0: Instant, tx: &mpsc::Sender<LaneMsg>, rx: &mpsc::Receiver<LaneMsg>, threads: &mut Vec<(mpsc::Sender<LaneJob>, JoinHandle<Stats>)>) -> Result<()> {
+        use crate::exec::{planned_at, Exec, HORIZON_NS, RETIRE_FLOOR};
+        use crate::plan::{Plan, Planned};
+        let mut plan = Plan::new(model, template, actor, count);
+        let mut ex = Exec::new();
+        let mut ahead = plan.next()?;
+        let mut keep = RETIRE_FLOOR;
+        // each executor lane's thread, and the threads no lane holds
+        let mut held: Vec<Option<usize>> = Vec::new();
+        let mut free: Vec<usize> = Vec::new();
+        loop {
+            if self.sh.aborted.load(Ordering::Relaxed) {
+                return Err(self.sh.abort_error());
+            }
+            let now = t0.elapsed().as_nanos() as i64;
+            while let Some(p) = ahead.take() {
+                if planned_at(&p) > now.saturating_add(HORIZON_NS) {
+                    ahead = Some(p);
+                    break;
+                }
+                match &p {
+                    Planned::Op(r) if r.outside => {
+                        bail!("{} {} outside the timeline of an actor whose body has one: not run yet (brief item 72 (7)): only the timeline's ops are issued", r.op().kind.name(), r.path)
+                    }
+                    Planned::Compute { ns, .. } => self.a.computed((*ns).max(0) as u64),
+                    _ => {}
+                }
+                ex.push(p);
+                ahead = plan.next()?;
+            }
+            if plan.paths() >= keep {
+                plan.retire(|s| ex.done(s));
+                keep = (2 * plan.paths()).max(RETIRE_FLOOR);
+            }
+            let recs = ex.poll(now);
+            for l in ex.take_ended() {
+                if let Some(w) = held.get_mut(l).and_then(Option::take) {
+                    let _ = threads[w].0.send(LaneJob::End);
+                    free.push(w);
+                }
+            }
+            for r in recs {
+                let lane = r.lane;
+                if held.len() <= lane {
+                    held.resize(lane + 1, None);
+                }
+                let w = match held[lane] {
+                    Some(w) => w,
+                    None => {
+                        let w = match free.pop() {
+                            Some(w) => w,
+                            None => {
+                                let (jobs, rx_jobs) = mpsc::channel();
+                                let sink = Runner::new(self.sh.clone(), self.inst.clone(), template, actor, false, None);
+                                let tx = tx.clone();
+                                let h = std::thread::Builder::new().name(format!("{template}#{actor} timeline lane")).spawn(move || lane_thread(sink, rx_jobs, tx, t0)).expect("spawn");
+                                threads.push((jobs, h));
+                                threads.len() - 1
+                            }
+                        };
+                        held[lane] = Some(w);
+                        w
+                    }
+                };
+                threads[w].0.send(LaneJob::Op(r)).map_err(|_| anyhow!("a timeline lane's thread ended"))?;
+            }
+            if ahead.is_none() && ex.idle() {
+                return Ok(());
+            }
+            let wake = [ex.next_wake(), ahead.as_ref().map(|p| planned_at(p).saturating_sub(HORIZON_NS))].into_iter().flatten().min();
+            if wake.is_none() && ex.in_flight() == 0 {
+                bail!("timeline stopped: {}", ex.stuck().unwrap_or_else(|| "no lane able to go on".into()));
+            }
+            // a completion, or the next wake; the abort is looked at every 100 ms
+            let cap = Duration::from_millis(100);
+            let wait = wake.map_or(cap, |w| Duration::from_nanos((w - t0.elapsed().as_nanos() as i64).max(0) as u64).min(cap));
+            let first = match rx.recv_timeout(wait) {
+                Ok(m) => Some(m),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => unreachable!("the driver holds a sender"),
+            };
+            for m in first.into_iter().chain(std::iter::from_fn(|| rx.try_recv().ok())) {
+                match m {
+                    LaneMsg::Done { seq, at } => ex.complete(seq, at),
+                    LaneMsg::Failed(e) => return Err(e),
+                }
+            }
         }
     }
 }

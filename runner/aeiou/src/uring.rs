@@ -412,9 +412,7 @@ enum Prog {
     Ended,
 }
 
-/// How far ahead of the wall clock a timeline's planner is pulled (`DESIGN_REVIEW.md` §3.99, the
-/// note "The run side of timelines": a horizon of planned time).
-const HORIZON_NS: i64 = 10_000_000_000;
+use crate::exec::HORIZON_NS;
 
 /// A timeline's run on this loop: the planner, the executor, the planner's next event, the
 /// wall-clock instant of planned time 0, each executor lane's task, and the timer set.
@@ -1427,6 +1425,14 @@ impl<E: Engine> Loop<E> {
                 d.keep = (2 * d.plan.paths()).max(crate::exec::RETIRE_FLOOR);
             }
             let recs = d.ex.poll(now);
+            // a lane that ended gives back its task (its files checked, its counts the timeline's)
+            let ended: Vec<usize> = d.ex.take_ended().into_iter().filter_map(|l| d.lanes.get_mut(l).and_then(Option::take)).collect();
+            for tid in ended {
+                self.end_child(tid, id)?;
+            }
+            let t = &mut self.tasks[id];
+            let Prog::Tl(d) = &mut t.prog else { unreachable!() };
+            let d = &mut **d;
             if recs.is_empty() {
                 if d.ahead.is_none() && d.ex.idle() {
                     return self.end_tl(id);

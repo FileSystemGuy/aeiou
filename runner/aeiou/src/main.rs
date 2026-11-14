@@ -1611,11 +1611,8 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     }
     let event_loop = backend.event_loop() || s3.event_loop();
     // a timeline's lanes are issued at their planned times by the executor (`exec.rs`, brief
-    // item 72 (7)): on the event loops so far; a thread a lane under the blocking backends is step 4
+    // item 72 (7)): a task a lane on the event loops, a thread a live lane under the blocking backends
     if loaded.ast.has_timeline() {
-        if !backend.event_loop() {
-            bail!("{}: a `timeline` under --posix {} (blocking) is not run yet: a thread a live lane comes with brief item 72 (7) step 4; --posix io_uring or libaio runs it, as another workload than the declared API's", a.abstract_path.display(), backend.api.name());
-        }
         if used.s3 {
             bail!("{}: a `timeline` with an object namespace is not run yet (brief item 72 (7))", a.abstract_path.display());
         }

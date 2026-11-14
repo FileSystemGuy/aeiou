@@ -12326,6 +12326,30 @@ build, within the decisions, and one beside them, which the user confirmed:
 - The executor was written before its tests (the tests-first rule broken, the tests written
   right after, and the join bug above found by them).
 
+*A thread a live lane built (2026-11-13, step 4, the user's "go on to step 4").* Under a blocking
+backend (`sync`, `posix-aio`, `mmap`) an actor whose body has a timeline runs the planner and the
+executor on its own thread (`run.rs`, `Runner::timeline`), as the event loop's timeline task does,
+and each executor lane, while it lives, holds a thread that issues its records one at a time and
+sends back each completion's time; the actor's thread waits for a completion or the next wake
+(at most 100 ms, to see an abort). Choices made in the build, within the decision (Q5 (a)):
+- *A thread a live lane, not a lane:* `agentx-tiered` has 7,109 executor lanes over its run (a
+  sub-lane each session), tens live at once. A lane takes a free thread, or spawns one, at its
+  first record and gives it back when it ends (`Exec::take_ended`, the executor saying which
+  lanes ended), its actor state made afresh with its open files checked (`unclosed`) and dropped,
+  as the event loop ends a lane's task. The threads are the most lanes live at once; worker and
+  eviction lanes never end, so theirs are held to the timeline's end. A blocking call still holds
+  its own lane alone, which is what the decision asked.
+- The completion time is the lane thread's, taken when the call returns, not when the actor's
+  thread hears of it, so a lane's L and its edges' waiters are not charged the hand-off; the
+  hand-off shows as the host's lateness (`Stats::late`), as it should.
+- The event loops now free an ended lane's task too (`end_child` when it ends, not at the
+  timeline's end), the same rule.
+- Tests first: `tests/timeline.rs` runs one timeline under all five POSIX APIs with dry-run's
+  fingerprint, sequential sub-lanes under `sync` on one lane thread (`threads 2`), a lane's
+  failing op ending the run with the op and its lane named and another actor's timeline
+  stopping on the abort, and 1,500 paths retired by the planner as they complete; `exec.rs`'s
+  `take_ended` unit test.
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes

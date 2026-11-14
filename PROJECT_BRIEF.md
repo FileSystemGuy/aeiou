@@ -1661,8 +1661,11 @@ numbers; the order is this note's.
     staging, on a simulated clock (`tests/exec.rs`, `agentx-tiered` whole) and under `aeiou run`
     on the `io_uring` and `libaio` loops; worker and eviction lanes are queues, their L not
     carried (confirmed by the user the same day; sessions carry L, the application driving its own
-    schedule and waiting on each op). Next: a thread a lane under the blocking
-    backends (step 4).
+    schedule and waiting on each op). *Step 4 built the same day* (the addendum "A thread a live
+    lane built"): under `sync`, `posix-aio`, and `mmap` each live executor lane holds a thread,
+    taken at its first op and given back at its end, so the tiered abstract runs under its
+    declared API. Next: the report, the `result.` names, the flags, and staging's would-be drop
+    as a gate failure (step 5).
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the

@@ -544,9 +544,9 @@ abstract's G3 writes are on store workers and its reads a span, its fingerprint 
 The planner (2026-11-13, step 2, `runner/REFERENCE.md` §2): a timeline's walk as owned records,
 each with its executor lane, planned time, and path-order edges, `dry-run` driven by it. The
 executor (step 3, `runner/REFERENCE.md` §2): `aeiou run` issues a timeline's ops at their planned
-times plus each lane's lag under `--posix io_uring` and `libaio`; under a blocking backend, the
-tiered abstract's declared API included, a timeline is refused until a thread a lane (step 4);
-the lag, edge waits, and staging are measured, not yet reported (step 5).
+times plus each lane's lag under `--posix io_uring` and `libaio`, and (step 4) under the blocking
+backends, the tiered abstract's declared API included, a thread each live lane; the lag, edge
+waits, and staging are measured, not yet reported (step 5).
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

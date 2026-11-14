@@ -115,12 +115,14 @@ pub struct Exec {
     gates: Vec<(Option<i64>, Vec<usize>)>,
     timers: BinaryHeap<Reverse<(i64, usize)>>,
     dirty: Vec<usize>,
+    /// Lanes that have ended since `take_ended`.
+    ended: Vec<usize>,
     pub stats: Stats,
 }
 
 impl Exec {
     pub fn new() -> Self {
-        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), stats: Stats::default() }
+        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), ended: Vec::new(), stats: Stats::default() }
     }
 
     fn lane(&mut self, l: usize) -> &mut Lane {
@@ -355,6 +357,7 @@ impl Exec {
                     let plan = *plan;
                     lane.q.pop_front();
                     lane.ended = true;
+                    self.ended.push(l);
                     let (parent, last) = (lane.parent, lane.last);
                     if let Some(p) = parent {
                         let p = &mut self.lanes[p];
@@ -390,6 +393,13 @@ impl Exec {
                 self.dirty.push(w);
             }
         }
+    }
+
+    /// The lanes that have ended since the last call: a driver frees what it holds for them (a
+    /// lane's task on the event loops, its thread under a blocking backend). Worker and eviction
+    /// lanes never end; they go on until the timeline does.
+    pub fn take_ended(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.ended)
     }
 
     /// Whether `seq` has completed (or was never pushed): for the planner's `retire`.
@@ -441,6 +451,10 @@ impl Exec {
         Some(out)
     }
 }
+
+/// How far ahead of the wall clock a driver pulls the planner (`DESIGN_REVIEW.md` §3.99, the note
+/// "The run side of timelines": a horizon of planned time).
+pub const HORIZON_NS: i64 = 10_000_000_000;
 
 /// The paths a driver lets the planner hold before it first retires them.
 pub const RETIRE_FLOOR: usize = 1024;
@@ -548,6 +562,32 @@ mod tests {
         assert_eq!(ex.in_flight(), 0);
         assert!(!ex.idle());
         assert_eq!(ex.stuck().unwrap(), "lane 0 waits on op 0 on `p0`, its edges [1] of which outstanding [1]; op 1 is queued on lane 1, which waits on gate 0, never opened");
+    }
+
+    /// A lane's end is said once, after its last op completed; a lane with no end (a worker
+    /// lane) is never said to have ended.
+    #[test]
+    fn ended_lanes_are_taken_once() {
+        let mut ex = Exec::new();
+        ex.push(Planned::Fork { parent: 0, kids: vec![1], join: true, plan: 0 });
+        ex.push(rec(0, 1, 0, OpKind::Stat, &[]));
+        ex.push(Planned::End { lane: 1, plan: 0 });
+        ex.push(Planned::Submit { parent: 0, worker: 2, workers: 0, staging: 1 << 20, plan: 0 });
+        ex.push(rec(1, 2, 0, OpKind::Stat, &[]));
+        ex.push(Planned::End { lane: 0, plan: 0 });
+        let r = ex.poll(0);
+        assert_eq!(r.len(), 1);
+        assert!(ex.take_ended().is_empty(), "lane 1 has an op in flight");
+        ex.complete(r[0].seq, 1);
+        // lane 1 ends; its parent joins it, submits, and ends; the worker lane does not
+        let r = ex.poll(1);
+        assert_eq!(r.len(), 1);
+        assert_eq!(ex.take_ended(), [1, 0]);
+        assert!(ex.take_ended().is_empty());
+        ex.complete(r[0].seq, 2);
+        assert!(ex.poll(2).is_empty());
+        assert!(ex.take_ended().is_empty());
+        assert!(ex.idle());
     }
 
     /// A write that reaches its worker lane after its submission's gate has opened (a planner
