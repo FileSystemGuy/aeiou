@@ -2132,6 +2132,26 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
     }
 
+    // the last progress line, whatever the window (a datagen shorter than one printed none):
+    // rank 0's, every rank's part in, every file done
+    if wrote_manifest {
+        let secs = ticker.t0.elapsed().as_secs_f64();
+        let mut total = 0i64;
+        let mut bytes = 0u64;
+        for p in plans.iter() {
+            total += match p.objects {
+                Some(n) => n as i64,
+                // a shrink's ids reach past its count, as `tick` counts them
+                None => match p.meta {
+                    DsMeta::Files { .. } => p.meta.files().max(p.work.last().map_or(0, |r| r.1)),
+                    DsMeta::Array { .. } => 1,
+                },
+            };
+            bytes += parts.values().map(|d| d["datasets"][p.name]["bytes_written"].as_u64().unwrap_or(0)).sum::<u64>();
+        }
+        writeln!(log, "progress {secs:.1} s: {total}/{total} files, {} written, {}/s, done", crate::dryrun::human_bytes(bytes), crate::dryrun::human_bytes((bytes as f64 / secs.max(1e-9)) as u64))?;
+    }
+
     // the manifests, `complete`: rank 0's, once every rank's part is in
     let mut results = Vec::new();
     let mut manifest_error = None;

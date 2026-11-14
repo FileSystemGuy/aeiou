@@ -450,7 +450,8 @@ turns it off, and the last one on the line wins.
 
   Seconds between progress notes: each rank flushes what it has written and reports it,
   and rank 0 rewrites each manifest with the ids not yet written and prints one line
-  (files, bytes, rate, time left). Default 30. *Layered.*
+  (files, bytes, rate, time left); at the end rank 0 prints a last line, marked `done`,
+  whatever the window. Default 30. *Layered.*
 
 **Checks**
 

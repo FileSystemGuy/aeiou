@@ -674,7 +674,7 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
         let mut lines = std::io::BufReader::new(children[0].stdout.take().unwrap()).lines();
         let mut seen = 0;
         while let Some(Ok(l)) = lines.next() {
-            if l.starts_with("progress ") && !l.contains(" 0/") {
+            if l.starts_with("progress ") && !l.contains(" 0/") && !l.ends_with(", done") {
                 seen += 1;
                 if seen == 3 {
                     break;
@@ -1461,6 +1461,23 @@ fn the_merged_report_counts_every_hosts_event_loops() {
 fn datagen_cli(args: &[&std::ffi::OsStr]) -> (bool, String, String) {
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").args(args).output().unwrap();
     (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+}
+
+/// A datagen that ends prints one last progress line, marked `done`, whatever its window: one
+/// shorter than the window printed none, and a test that waited for a line at a 10 ms window
+/// failed on a host that wrote the corpus in 7 ms (CI, 2026-11-13).
+#[test]
+fn a_datagen_ends_with_a_last_progress_line() {
+    let root = tmpdir("dg-last-progress");
+    let a = crate::common::file_per_sample_as_it_was();
+    let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--param".as_ref(), "samples=40".as_ref(), "--progress-secs".as_ref(), "3600".as_ref()]);
+    assert!(o.0, "{o:?}");
+    let progress: Vec<&str> = o.1.lines().filter(|l| l.starts_with("progress ")).collect();
+    assert_eq!(progress.len(), 1, "{}", o.1);
+    assert!(progress[0].contains(": 40/40 files, ") && progress[0].ends_with(", done"), "{}", progress[0]);
+    // it comes before the summary
+    let at = |needle: &str| o.1.find(needle).unwrap_or_else(|| panic!("no `{needle}` in {}", o.1));
+    assert!(at("progress ") < at("dataset train: "), "{}", o.1);
 }
 
 /// What `O_DIRECT` and unaligned tails are learned per dataset root (RC1 review): an
