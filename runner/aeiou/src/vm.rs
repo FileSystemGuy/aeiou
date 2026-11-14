@@ -462,6 +462,15 @@ enum Next<'a> {
     Submit(&'a str, &'a [Node]),
 }
 
+/// Where a timeline's event came from (`Vm::timeline_at`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TlAt {
+    /// The executor lane's key: lanes of one key issue one after another (`Lane::exec`).
+    pub exec: (u8, i64, i64),
+    /// The lane's planned time, in ns from the timeline's start.
+    pub plan: i64,
+}
+
 /// What a lane's step gave `tl_step`.
 enum LaneEv<'a> {
     Op,
@@ -587,6 +596,11 @@ struct Lane<'m, 'a> {
     /// 0.19), before the others; 1 a lane of the timeline's body; 2 a worker lane (contract
     /// 0.20), after them.
     class: u8,
+    /// The executor lane it runs on (`plan.rs`): (its class, then a lane of the body by its
+    /// number, a worker lane by its workers' index and the submission's ordinal mod `lanes`, an
+    /// eviction lane by its tier's index and its victim's place mod `lanes`): lanes of one key
+    /// issue their ops one after another, in planned order.
+    exec: (u8, i64, i64),
 }
 
 /// A timeline being walked: its lanes, a heap of (planned time, lane key, order put, lane)
@@ -630,7 +644,7 @@ impl<'m, 'a> TlRun<'m, 'a> {
             kid.lane = self.lanes.len();
             kid.victim = Some(k);
             kid.start(snap.body);
-            self.lanes.push(Lane { vm: Some(kid), key: vec![idx, batch, i % lanes, i / lanes], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 0 });
+            self.lanes.push(Lane { vm: Some(kid), key: vec![idx, batch, i % lanes, i / lanes], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 0, exec: (0, idx, i % lanes) });
             let l = self.lanes.len() - 1;
             self.ready(l);
         }
@@ -917,18 +931,26 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     /// Between two calls the VM holds no borrowed state, so a driver may hold the walk at any
     /// event for as long as it likes (an outstanding I/O, a channel, a barrier, a timer).
     pub fn next(&mut self) -> Result<Option<Event<'_, 'a>>> {
+        Ok(self.next_at()?.map(|(e, _)| e))
+    }
+
+    /// `next`, with where in a timeline the event came from: its lane's executor lane and
+    /// planned time (after a `compute`, the time it ends at); `None` outside a timeline.
+    pub fn next_at(&mut self) -> Result<Option<(Event<'_, 'a>, Option<TlAt>)>> {
         loop {
             if self.tlrun.is_some() {
                 match self.tl_step()? {
                     Some((l, out)) => {
-                        let lane = self.tlrun.as_ref().unwrap().lanes[l].vm.as_ref().unwrap();
-                        return Ok(Some(match out {
+                        let tl = self.tlrun.as_ref().unwrap();
+                        let lane = tl.lanes[l].vm.as_ref().unwrap();
+                        let at = Some(TlAt { exec: tl.lanes[l].exec, plan: lane.clock });
+                        return Ok(Some((match out {
                             TlOut::Op => {
                                 let (op, ctx) = lane.current();
                                 Event::Op(op, ctx)
                             }
                             TlOut::Control(c) => Event::Control(c, lane.ctx()),
-                        }));
+                        }, at)));
                     }
                     None => self.tlrun = None,
                 }
@@ -942,11 +964,11 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Some(Next::Timeline) => continue,
                 Some(Next::Op) => {
                     let (op, ctx) = self.current();
-                    Some(Event::Op(op, ctx))
+                    Some((Event::Op(op, ctx), None))
                 }
-                Some(Next::Control(c)) => Some(Event::Control(c, self.ctx())),
-                Some(Next::Fork(k)) => Some(Event::Fork(k)),
-                Some(Next::Trace(t)) => Some(Event::Trace(t, self.ctx())),
+                Some(Next::Control(c)) => Some((Event::Control(c, self.ctx()), None)),
+                Some(Next::Fork(k)) => Some((Event::Fork(k), None)),
+                Some(Next::Trace(t)) => Some((Event::Trace(t, self.ctx()), None)),
                 Some(Next::Block) => return Err(anyhow!("a lane waited outside a timeline (V34)")),
                 Some(Next::Submit(..)) => unreachable!("a `submit` outside a timeline is refused when walked"),
             });
@@ -1077,7 +1099,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         kid.start_sub(k);
                         let mut kkey = key.clone();
                         kkey.push(k);
-                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0, parked: false, class: 1 });
+                        let exec = (1, run.lanes.len() as i64, 0);
+                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0, parked: false, class: 1, exec });
                         let l = run.lanes.len() - 1;
                         run.ready(l);
                     }
@@ -1109,7 +1132,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     // and the values a `prev` reads, as the lane holds them here
                     kid.prev_slots = prevs;
                     kid.start(body);
-                    run.lanes.push(Lane { vm: Some(kid), key: vec![wi as i64, ord], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 2 });
+                    let exec = (2, wi as i64, ord % run.workers[wi].1);
+                    run.lanes.push(Lane { vm: Some(kid), key: vec![wi as i64, ord], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 2, exec });
                     let l = run.lanes.len() - 1;
                     run.ready(l);
                 }
@@ -2446,7 +2470,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 let mut main = Vm::resume(snap);
                 main.tl = Some(shared.clone());
                 main.push_body(body);
-                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 1 }], heap: BinaryHeap::new(), seq: 0, cur: None, evict, eval, workers: wk };
+                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 1, exec: (1, 0, 0) }], heap: BinaryHeap::new(), seq: 0, cur: None, evict, eval, workers: wk };
                 run.ready(0);
                 self.tlrun = Some(Box::new(run));
                 Ok(Some(Next::Timeline))
@@ -3254,16 +3278,30 @@ fn expected(size: Option<i64>, off: i64, len: i64) -> i64 {
     }
 }
 
+/// Paths the planner of a dry run holds before it forgets them all (`drive`).
+const DRY_PATHS: usize = 1 << 16;
+
 /// Feed a VM's events to a `Sink` until the walk it has started ends. A `Fork` the sink
-/// declines is walked inline. The sink's `finish` is the caller's to call.
+/// declines is walked inline. The sink's `finish` is the caller's to call. A timeline's ops
+/// reach the sink as the planner's records (`plan.rs`), as a run's executor gets them; a dry
+/// run completes each op as it is walked, so the planner's paths are forgotten from time to time.
 pub fn drive<'m, 'a: 'm, S: Sink<'m, 'a>>(vm: &mut Vm<'m, 'a>, sink: &mut S) -> Result<()> {
+    let mut planner: Option<crate::plan::Planner> = None;
     loop {
-        match vm.next()? {
+        match vm.next_at()? {
             None => return Ok(()),
-            Some(Event::Op(op, ctx)) => sink.op(&op, &ctx)?,
-            Some(Event::Control(c, ctx)) => sink.control(c, &ctx)?,
-            Some(Event::Trace(t, ctx)) => sink.trace(&t, &ctx)?,
-            Some(Event::Fork(kind)) => {
+            Some((Event::Op(op, ctx), Some(at))) => {
+                let p = planner.get_or_insert_with(Default::default);
+                let rec = p.record(Some(at), &op, &ctx);
+                if p.paths() >= DRY_PATHS {
+                    p.retire(|_| true);
+                }
+                sink.op(&rec.op(), &ctx)?
+            }
+            Some((Event::Op(op, ctx), None)) => sink.op(&op, &ctx)?,
+            Some((Event::Control(c, ctx), _)) => sink.control(c, &ctx)?,
+            Some((Event::Trace(t, ctx), _)) => sink.trace(&t, &ctx)?,
+            Some((Event::Fork(kind), _)) => {
                 let forked = {
                     let snap = || vm.snapshot();
                     sink.fork(&kind, &snap)?

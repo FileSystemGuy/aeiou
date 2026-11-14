@@ -36,6 +36,7 @@ pub mod object;
 pub mod objectlog;
 pub mod options;
 pub mod pattern;
+pub mod plan;
 pub mod project;
 pub mod payload;
 pub mod report;

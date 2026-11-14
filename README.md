@@ -541,6 +541,9 @@ note "The run side of timelines"): a timeline's store `workers`, `submit`, a bod
 lane at the submitting lane's planned time, and `span`, the part of a lane whose storage wait D a
 run will measure; rule V36. The plan only: `aeiou run` still refuses a timeline. The tiered
 abstract's G3 writes are on store workers and its reads a span, its fingerprint unchanged.
+The planner (2026-11-13, step 2, `runner/REFERENCE.md` §2): a timeline's walk as owned records,
+each with its executor lane, planned time, and path-order edges, `dry-run` driven by it; the
+executor that issues them (step 3) is not built.
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

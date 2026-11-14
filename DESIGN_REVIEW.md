@@ -12262,6 +12262,30 @@ shared by the checkers; `tests/workers.rs`. Choices made in the build, within th
 - The plan walk of `agentx-tiered` takes 23 s instead of 15 s: each of the 120,642 submissions
   copies the submitting lane's scope (bindings, open files) for its body. Still about 130 times
   faster than a run consumes it; the planner (step 2) can share the scope instead if it matters.
+*The planner built (2026-11-13, step 2, the user's "go").* `plan.rs`: a `Planner` turns each op
+of a timeline into a `Record` (its number in planned order, executor lane, planned time, the op
+and its context owned, its edges), and `Plan` is an actor instance's walk as records and planned
+`compute`s; `Vm::next_at` gives each event's lane key and planned time; `vm::drive` hands a
+timeline's ops to its sink as records, so `dry-run` is driven by the planner (`tests/plan.rs`,
+12 tests). Choices made in the build, within the decisions:
+- An executor lane is keyed (class, a, b): a body lane by its number, a worker lane by (workers'
+  index, ordinal mod `lanes`), an eviction lane by (tier's index, victim's place mod `lanes`);
+  lanes are numbered as first planned. Lanes of one key are planned one after another, so the
+  executor's one-op-at-a-time issue keeps their planned order.
+- An op's edges name only the path's last change and, for a change, each other lane's latest
+  read since: a change issues only after the path's earlier ops complete, and a lane's ops
+  complete in order, so these imply the rest. Never an op of the waiter's own lane.
+- A `close`, `fsync`, or `fdatasync` changes its path when the latest open of the path on its
+  lane (else on any lane: a submitted body closes what its submitter opened) was `WRONLY` or
+  `RDWR`; the `trace` node knows the open by its id, the plan by the path.
+- A path's entry is kept until the executor retires what it names (`retire`), the map bounded by
+  the paths in flight. A dry run, which completes each op as it walks it, forgets them all every
+  65,536 paths, so its edges are not reported; nothing reads them yet.
+- Measured on `agentx-tiered`: 21.2 s and 282 MB before, 22.8 s and 301 MB after, fingerprint
+  `f032df08b3594acd` and 2,998,578 ops both times. The submit's scope copy stays (still about 130
+  times faster than a run consumes it).
+- Not yet in the records: a `span`'s entry and exit (step 5's D), and the metrics walk
+  (`--metrics`, `--emit-trace`) still walks the VM, a timeline one context.
 
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the

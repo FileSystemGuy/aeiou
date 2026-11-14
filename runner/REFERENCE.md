@@ -298,6 +298,24 @@ each is a recorded decision and the golden tests pin them.
   goes on at once. Its worker lane, which the run issues it on (brief item 72 (7)), is the
   ordinal mod `lanes`. A `span` walks its body where it stands (a body with its own scope level,
   as a `phase`'s) and changes nothing in the plan; the run measures it.
+- **The planner** (2026-11-13, `plan.rs`; `DESIGN_REVIEW.md` §3.99, the note "The run side of
+  timelines", step 2). A timeline's walk, each op an owned record: its number in planned order,
+  its executor lane, its planned time, and its edges. An executor lane issues its ops one after
+  another: a lane of the timeline's body (the main line, each `parallel` sub-actor), a worker
+  lane (submission i of a `workers` on lane i mod `lanes`), or an eviction lane (victim i of a
+  batch on lane i mod `lanes`, the same lanes batch after batch); ops outside a timeline have a
+  lane of their own; lanes are numbered as first planned. The edges are the `trace` node's path
+  order (§13) across executor lanes in planned order: a changing op (a creating or truncating
+  open, a write, `ftruncate`, `fallocate`, an `fsync`, `fdatasync`, or `close` whose lane's latest
+  open of the path, else any lane's, was `WRONLY` or `RDWR`, a rename on both its paths, an
+  unlink, `truncate`, `mkdir`, `rmdir`) waits for the path's last change and each other lane's
+  latest read since; any other op waits for the last change; an op never waits for its own
+  lane. A path's entry is kept until the run says what it names has completed (`retire`).
+  `vm::drive`, and so `dry-run`, hands a timeline's ops to its sink as these records (the same
+  ops in the same order: the counts and the fingerprint do not move); a dry run completes each
+  op as it walks it, so its planner forgets its paths every 65,536. The metrics walk
+  (`--metrics`, `--emit-trace`) still walks the VM itself, a timeline one context. The executor
+  that issues the records is step 3.
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which

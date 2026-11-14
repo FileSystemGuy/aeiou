@@ -1653,7 +1653,10 @@ numbers; the order is this note's.
     *Step 1 built the same day, contract 0.20 (plan side; the note's addendum "Contract 0.20
     built"):* `workers`, `submit`, and `span` (rule V36), and `lmcache_local_disk_tiered`'s G3
     writes on 4 store workers, its staging G2's bytes, its reads span `load`, its fingerprint
-    unchanged. Next: the planner (step 2).
+    unchanged. *Step 2 built the same day* (the note's addendum "The planner built"): `plan.rs`,
+    a timeline's walk as owned records (planned order, executor lane, planned time, path-order
+    edges), `dry-run` driven by it, its counts and fingerprint unchanged. Next: the executor on
+    the event loop (step 3).
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the
