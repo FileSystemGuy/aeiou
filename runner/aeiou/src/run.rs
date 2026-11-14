@@ -641,6 +641,44 @@ pub struct Stats {
     pub certain: Option<String>,
     #[serde(default)]
     pub stopped: bool,
+    /// A timeline's ops that waited on an edge (another lane's op on their path) past their own
+    /// lane's readiness, and the waits summed, ns.
+    #[serde(default)]
+    pub edge_waits: u64,
+    #[serde(default)]
+    pub edge_wait_ns: i64,
+    /// With `--series`: the seconds of run time written and their peaks, `(second, value)`.
+    #[serde(default)]
+    pub series: Option<SeriesPeaks>,
+}
+
+/// The summary of a run's `--series` the reports carry: the seconds of run time, and the
+/// second (of the timeline's run clock) and value of each peak, the most of any one instance.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SeriesPeaks {
+    pub seconds: u64,
+    pub read_bytes: (i64, i64),
+    pub write_bytes: (i64, i64),
+    pub ops: (i64, u64),
+    pub live_lanes: (i64, u64),
+}
+
+impl SeriesPeaks {
+    fn merge(&mut self, o: &SeriesPeaks) {
+        self.seconds = self.seconds.max(o.seconds);
+        if o.read_bytes.1 > self.read_bytes.1 {
+            self.read_bytes = o.read_bytes;
+        }
+        if o.write_bytes.1 > self.write_bytes.1 {
+            self.write_bytes = o.write_bytes;
+        }
+        if o.ops.1 > self.ops.1 {
+            self.ops = o.ops;
+        }
+        if o.live_lanes.1 > self.live_lanes.1 {
+            self.live_lanes = o.live_lanes;
+        }
+    }
 }
 
 /// A timeline's workers' staging over the run: its size, the most it held, and each would-be
@@ -692,6 +730,12 @@ pub fn lateness_failure(s: &Stats) -> Option<String> {
 impl Stats {
     /// What a timeline's executor measured, this actor's.
     pub(crate) fn add_timeline(&mut self, x: &crate::exec::Stats) {
+        self.edge_waits += x.edge_waits;
+        self.edge_wait_ns += x.edge_wait_ns;
+        if let Some(s) = &x.series {
+            let p = SeriesPeaks { seconds: s.seconds, read_bytes: s.peak_read_bytes, write_bytes: s.peak_write_bytes, ops: s.peak_ops, live_lanes: s.peak_live_lanes };
+            self.series.get_or_insert_with(Default::default).merge(&p);
+        }
         for (k, v) in &x.spans {
             self.spans.entry(k.to_string()).or_default().extend_from_slice(v);
         }
@@ -749,6 +793,11 @@ impl Stats {
             self.staging.entry(k.clone()).or_default().merge(r);
         }
         self.lateness.merge(&o.lateness);
+        self.edge_waits += o.edge_waits;
+        self.edge_wait_ns += o.edge_wait_ns;
+        if let Some(p) = &o.series {
+            self.series.get_or_insert_with(Default::default).merge(p);
+        }
         if self.lag_ceiling.is_none() {
             self.lag_ceiling = o.lag_ceiling;
         }
@@ -1153,6 +1202,24 @@ pub(crate) struct Shared {
     pub(crate) removed: Mutex<Vec<(String, u64)>>,
     /// What the `mmap` backends count (zero under the others).
     pub(crate) mmap_stats: Arc<MmapStats>,
+    /// `--series FILE`: a timeline's seconds, a JSON line each, from every actor of this host.
+    pub(crate) series: Option<Mutex<std::io::BufWriter<std::fs::File>>>,
+}
+
+impl Shared {
+    /// Write a timeline's complete seconds to the series, the instance's name in each line.
+    pub(crate) fn put_series(&self, actor: &str, rows: Vec<crate::exec::SeriesRow>) -> Result<()> {
+        let Some(w) = &self.series else { return Ok(()) };
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut w = w.lock().unwrap();
+        for r in rows {
+            serde_json::to_writer(&mut *w, &r.json(actor))?;
+            w.write_all(b"\n")?;
+        }
+        Ok(())
+    }
 }
 
 impl Shared {
@@ -3113,6 +3180,7 @@ pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap
 /// coordinator is told to stop the other hosts.
 pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>, coord: Arc<dyn Coordinator>, aborted: Arc<AtomicBool>) -> Result<Report> {
     tight_timers();
+    let opts_series = opts.timeline.series_file.clone();
     let counts: Vec<(&'static str, i64)> = actor_counts(model)?;
     let ranges: Vec<(i64, i64)> = counts.iter().map(|(_, c)| gpu_range(*c, opts.ranks, opts.rank, opts.rank_rotate)).collect();
     let scopes = barrier_scopes(model.ast)?;
@@ -3132,6 +3200,10 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
         created: Mutex::new(Vec::new()),
         removed: Mutex::new(Vec::new()),
         mmap_stats: Arc::new(MmapStats::default()),
+        series: match &opts_series {
+            Some(p) => Some(Mutex::new(std::io::BufWriter::new(std::fs::File::create(p).with_context(|| format!("--series {}", p.display()))?))),
+            None => None,
+        },
     });
 
     crate::backend::open_files_reset();
@@ -3221,6 +3293,9 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
 fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: RankRecord, elapsed: Duration, counters: HostCounters, uring: Option<UringReport>, aio: Option<AioReport>) -> Result<Report> {
     if sh.aborted.load(Ordering::Relaxed) {
         bail!("run aborted: {}", sh.coord.abort_reason().unwrap_or_else(|| "an actor failed".into()));
+    }
+    if let Some(w) = &sh.series {
+        w.lock().unwrap().flush().context("--series")?;
     }
     let stats = std::mem::take(&mut *sh.stats.lock().unwrap());
     let mut actors = std::mem::take(&mut *sh.actors.lock().unwrap());
@@ -3340,6 +3415,24 @@ fn write_timeline(out: &mut impl Write, s: &Stats) -> std::io::Result<()> {
             let m = crate::exec::summarize(ds);
             writeln!(out, "  {:<10} {:>9} {:>9} {:>9} {:>9}   window p99 {} of {} window(s)   n={}", name, t(m.sum), t(m.p50), t(m.p99), t(m.max), t(m.window_p99), m.windows.len(), m.count)?;
         }
+    }
+    if s.lateness.count > 0 {
+        writeln!(out, "timeline edge waits (an op waiting on another lane's op on its path): {} ops, {} in all", s.edge_waits, us(s.edge_wait_ns.max(0) as u64))?;
+    }
+    if let Some(p) = &s.series {
+        writeln!(
+            out,
+            "timeline series: {} s of run time; peaks: read {}/s at {} s, written {}/s at {} s, {} ops/s at {} s, {} live lanes at {} s",
+            p.seconds,
+            human_bytes(p.read_bytes.1.max(0) as u64),
+            p.read_bytes.0,
+            human_bytes(p.write_bytes.1.max(0) as u64),
+            p.write_bytes.0,
+            p.ops.1,
+            p.ops.0,
+            p.live_lanes.1,
+            p.live_lanes.0
+        )?;
     }
     if s.lateness.count > 0 {
         let h = &s.lateness;
@@ -3955,6 +4048,7 @@ impl Runner {
         // flight completes
         let topts = self.sh.opts.timeline.clone();
         let mut stopping = false;
+        let label = format!("{template}#{actor}");
         loop {
             if self.sh.aborted.load(Ordering::Relaxed) {
                 return Err(self.sh.abort_error());
@@ -4037,13 +4131,17 @@ impl Runner {
                 ahead = None;
                 pending.clear();
             }
+            let lead = ahead.as_ref().map(|p| planned_at(p) - now);
+            self.sh.put_series(&label, ex.series_rows(now, lead, false))?;
             if stopping {
                 if ex.in_flight() == 0 {
+                    self.sh.put_series(&label, ex.series_rows(now, None, true))?;
                     return Ok(());
                 }
             } else if ahead.is_none() && ex.idle() {
                 // the last windows close with the plan
                 ex.certain_failure(&topts.watches, true);
+                self.sh.put_series(&label, ex.series_rows(now, None, true))?;
                 return Ok(());
             }
             let wake = [ex.next_wake(), ahead.as_ref().map(|p| planned_at(p).saturating_sub(HORIZON_NS)), pending.first().map(|(at, _)| at.saturating_sub(BIND_LEAD_NS))].into_iter().flatten().min();

@@ -153,3 +153,46 @@ fn a_file_that_cannot_be_written_is_named_and_nothing_is_left_beside_it() {
         assert_eq!(std::fs::read_dir(&ro).unwrap().count(), 1, "only the file that was there");
     }
 }
+
+/// A timeline's ops are emitted at their planned times (brief item 72 (7) step 5): `t` is the
+/// planned clock in ns, a `compute` a gap a digest reads as think time, and each executor lane a
+/// lane of the file, so the file runs as a `trace` node as the executor would issue it; the
+/// header says so.
+#[test]
+fn a_timelines_ops_are_emitted_at_their_planned_times() {
+    let rf = |n: &str| serde_json::json!({"ref": n});
+    let session = serde_json::json!([
+        {"compute": {"ns": {"mul": [{"index": "k"}, 1_000_000]}}},
+        {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
+        {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"compute": {"ns": 5000}}, {"close": {"file": rf("f")}}]);
+    let text = serde_json::json!({"ast": "0.21", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 0, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 2, "body": session}}]}}]}}}).to_string();
+    let d = crate::common::tmpdir("emit", "timeline");
+    let ast = d.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    let out = d.join("t.trace.jsonl");
+    aeiou(&["dry-run", s(&ast), "--gpus", "1", "--emit-trace", s(&out)]);
+    let text = std::fs::read_to_string(&out).unwrap();
+    let mut lines = text.lines();
+    let header: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    assert!(header["clock"].as_str().unwrap().starts_with("a timeline's planned time"), "{header}");
+    let ops: Vec<Value> = lines.map(|l| serde_json::from_str(l).unwrap()).collect();
+    let at: Vec<(String, i64, i64)> = ops.iter().map(|o| (o["op"].as_str().unwrap().to_string(), o["lane"].as_i64().unwrap(), o["t"].as_i64().unwrap())).collect();
+    // sub-lane 0 opens at 0 and closes at 5 µs; sub-lane 1 at 1 ms and 1.005 ms, on a lane of its own
+    let lane0 = at[0].1;
+    let lane1 = at.iter().find(|x| x.1 != lane0).unwrap().1;
+    let mut want = vec![("open".to_string(), lane0, 0), ("close".to_string(), lane0, 5000), ("open".to_string(), lane1, 1_000_000), ("close".to_string(), lane1, 1_005_000)];
+    let mut got = at.clone();
+    got.sort_by_key(|x| x.2);
+    want.sort_by_key(|x| x.2);
+    assert_eq!(got, want);
+    // the file loads and runs as a trace node: its two lanes, their four ops
+    let sha: String = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    let node = format!(r#"{{"ast": "0.21", "name": "n", "params": {{}}, "datasets": {{}}, "namespaces": {{"kv": {{"pattern": "kv/{{key}}", "fields": {{"key": "int"}}, "size": 0, "seed": 1}}}},
+        "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "t.trace.jsonl", "sha256": "{sha}"}}}}]}}}}}}"#);
+    let nast = d.join("n.ast.json");
+    std::fs::write(&nast, node).unwrap();
+    let ndry = aeiou(&["dry-run", s(&nast), "--gpus", "1"]);
+    assert!(ndry.contains("open=2") && ndry.contains("close=2"), "{ndry}");
+}

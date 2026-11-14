@@ -648,6 +648,12 @@ struct RunCmd {
     /// merged report, every other rank its own.
     #[arg(long, value_name = "FILE", help_heading = "Report")]
     report_json: Option<PathBuf>,
+    /// A timeline's run, a second at a time, as JSON lines to FILE: for each instance, each second
+    /// of run time and of planned time, its ops by kind, creates, bytes, write latency, edge waits,
+    /// and lateness; of run time also live lanes, staging held, and the planner's lead; of planned
+    /// time eviction batches (runner/REFERENCE.md §2). Each host writes its own.
+    #[arg(long, value_name = "FILE", help_heading = "Report")]
+    series: Option<PathBuf>,
     /// With --report-json: every take of every instance (stall and compute), not only the sums.
     #[arg(long = "[no-]report-takes", alias = "report-takes", overrides_with_all = ["report_takes", "no_report_takes"], help_heading = "Report")]
     report_takes: bool,
@@ -696,6 +702,7 @@ struct RunOptions {
     report_takes: bool,
     on_certain_failure: String,
     lag_ceiling: Option<f64>,
+    series: Option<PathBuf>,
     /// The use case's lock, when the run names one (`--case`, `--case-file`).
     case: Option<Case>,
 }
@@ -780,6 +787,7 @@ fn resolve_run(mut a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Laye
         report_takes: l.flag("report-takes", neg(a.report_takes, a.no_report_takes), false)?,
         on_certain_failure: l.layered("on-certain-failure", a.on_certain_failure, Some("stop".to_string()))?.unwrap_or_else(|| "stop".into()),
         lag_ceiling: l.layered("lag-ceiling", a.lag_ceiling, None)?,
+        series: l.layered("series", a.series, None)?,
         run: a.run,
         posix: a.posix,
         cache: a.cache,
@@ -1637,6 +1645,16 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     if a.lag_ceiling.is_some() && !loaded.ast.has_timeline() {
         aeiou::usage!("--lag-ceiling bounds a timeline's lanes' lag; the abstract has no timeline{}", layers.from(&["lag-ceiling"]));
     }
+    pass_over(layers, "series", &mut a.series, loaded.ast.has_timeline(), "the abstract has no timeline");
+    if let Some(p) = &a.series {
+        if !loaded.ast.has_timeline() {
+            aeiou::usage!("--series writes a timeline's seconds; the abstract has no timeline{}", layers.from(&["series"]));
+        }
+        // a place the series cannot be written is found before the run, as --report-json's
+        if let Err(e) = std::fs::File::create(p) {
+            aeiou::usage!("--series {}: cannot write the series there: {e}{}", p.display(), layers.from(&["series"]));
+        }
+    }
     if loaded.ast.has_timeline() {
         if used.s3 {
             bail!("{}: a `timeline` with an object namespace is not run yet (brief item 72 (7))", a.abstract_path.display());
@@ -1914,6 +1932,8 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
             keep_going: a.on_certain_failure == "continue",
             lag_ceiling_ns: a.lag_ceiling.map(|s| (s * 1e9).round() as i64),
             watches: a.case.as_ref().map(|c| aeiou::case::watches(&c.lock)).unwrap_or_default(),
+            series: a.series.is_some(),
+            series_file: a.series.clone(),
         },
     };
     let (lo, hi) = run::gpu_range(cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);

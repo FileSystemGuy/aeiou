@@ -77,6 +77,10 @@ pub struct DryRun {
     next_lane: usize,
     /// Under `--emit-trace`: the ops walked since the emitter last took them, with their lanes.
     pub emitted: Option<Vec<crate::emit::Walked>>,
+    /// The planned time of the op that comes next, when it is a timeline's (`metrics.rs` sets
+    /// it), and each executor lane's context lane.
+    pub plan: Option<i64>,
+    tl_lanes: std::collections::HashMap<crate::vm::Exec, usize>,
 }
 
 impl DryRun {
@@ -117,6 +121,16 @@ impl DryRun {
         self.next_lane - 1
     }
 
+    /// The context lane of a timeline's executor lane, given out when first met.
+    pub fn tl_lane(&mut self, exec: crate::vm::Exec) -> usize {
+        if let Some(&l) = self.tl_lanes.get(&exec) {
+            return l;
+        }
+        let l = self.new_lane();
+        self.tl_lanes.insert(exec, l);
+        l
+    }
+
     pub fn take_lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.lines)
     }
@@ -140,7 +154,9 @@ impl<'m, 'a> Sink<'m, 'a> for DryRun {
     fn op(&mut self, op: &Op, ctx: &OpCtx) -> Result<()> {
         self.total.add(op);
         if let Some(e) = &mut self.emitted {
-            e.push(crate::emit::Walked::of(self.lane, op));
+            let mut w = crate::emit::Walked::of(self.lane, op);
+            w.plan = self.plan;
+            e.push(w);
         }
         if let Some(p) = ctx.phase {
             self.phases.entry(p.to_string()).or_default().add(op);

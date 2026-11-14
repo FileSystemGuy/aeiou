@@ -583,3 +583,56 @@ fn the_lag_ceiling_stops_a_run_that_then_did_not_pass() {
     assert_eq!(o.status.code(), Some(0), "{out}{err}");
     assert!(format!("{out}{err}").contains("--lag-ceiling from env AEIOU_LAG_CEILING is not used: the abstract has no timeline"), "{out}{err}");
 }
+
+/// `--series FILE` (brief item 72 (7) step 5, the user's choice of 2026-11-14): a JSON line a
+/// second of each clock for each instance, every op in one line of each; the reports carry its
+/// summary; refused for an abstract with no timeline, and a place it cannot be written is a usage
+/// error before the run.
+#[test]
+fn a_run_writes_its_series() {
+    let rf = |n: &str| json!({"ref": n});
+    let session = json!([
+        {"compute": {"ns": {"mul": [{"index": "k"}, 400_000_000]}}},
+        {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
+        {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]);
+    let text = json!({"ast": "0.21", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 4, "body": session}}]}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "series");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    for posix in ["io_uring", "sync"] {
+        let root = dir.join(posix);
+        std::fs::create_dir_all(&root).unwrap();
+        let series = dir.join(format!("{posix}.jsonl"));
+        let json_path = dir.join(format!("{posix}.json"));
+        let r = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"))
+            .args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", posix, "--series", series.to_str().unwrap(), "--report-json", json_path.to_str().unwrap()])
+            .output().unwrap();
+        let out = String::from_utf8_lossy(&r.stdout);
+        assert!(r.status.success(), "{posix}: {}", String::from_utf8_lossy(&r.stderr));
+        let rows: Vec<Value> = std::fs::read_to_string(&series).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let ops = |clock: &str| -> u64 { rows.iter().filter(|r| r["clock"] == clock).map(|r| r["ops"].as_object().unwrap().values().map(|v| v.as_u64().unwrap()).sum::<u64>()).sum() };
+        assert_eq!((ops("run"), ops("planned")), (12, 12), "{posix}: {rows:?}");
+        assert!(rows.iter().all(|r| r["actor"] == "gpu#0"), "{posix}");
+        // sessions planned at 0, 0.4, 0.8, 1.2 s: two planned seconds
+        let planned: Vec<i64> = rows.iter().filter(|r| r["clock"] == "planned").map(|r| r["s"].as_i64().unwrap()).collect();
+        assert_eq!(planned, [0, 1], "{posix}");
+        assert!(out.contains("timeline series: ") && out.contains("peaks: read"), "{posix}: {out}");
+        assert!(out.contains("timeline edge waits"), "{posix}: {out}");
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+        assert_eq!(doc["result"]["timeline"]["series"]["peak_write_bytes"]["bytes"].as_i64().unwrap() >= 4096, true, "{posix}");
+    }
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"))
+        .args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("x").to_str().unwrap(), "--series", dir.join("no/such/dir/s.jsonl").to_str().unwrap()]).output().unwrap();
+    assert_eq!(r.status.code(), Some(2), "{}", String::from_utf8_lossy(&r.stderr));
+    assert!(String::from_utf8_lossy(&r.stderr).contains("cannot write the series there"));
+    let plain = json!({"ast": "0.21", "name": "t", "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": 1}}}}},
+            {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"close": {"file": rf("f")}}]}}}).to_string();
+    std::fs::write(&ast, plain).unwrap();
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"))
+        .args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("y").to_str().unwrap(), "--series", dir.join("p.jsonl").to_str().unwrap()]).output().unwrap();
+    assert_eq!(r.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&r.stderr).contains("--series writes a timeline's seconds; the abstract has no timeline"));
+}

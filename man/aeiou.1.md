@@ -342,7 +342,9 @@ turns it off, and the last one on the line wins.
   sub-actor (carried over to the next fork, as a pool thread is), each `loader` worker, each
   lane of a `trace` node. The instances are walked in turn, one operation of each per round,
   so they interleave as instances that run at once would; the clock is that order, one
-  microsecond per line, every `dur` 0, compute not in it. The header names the dry run
+  microsecond per line, every `dur` 0, compute not in it, but for a timeline's operations,
+  which are written at their planned times in ns, each executor lane a lane, so compute is
+  their gaps. The header names the dry run
   (`source: dry-run`, `abstract`, `sha256`, `seed`, `gpus`, `fingerprint`), which the digest's
   `metrics` carry. At one instance the digest's numbers are `--metrics-json`'s but fan-out and
   depth (a file has no forks) and a run that the end of a `parallel` closes in the walk and the
@@ -766,6 +768,16 @@ turns it off, and the last one on the line wins.
 
   With `--report-json`: every take of every instance (stall and compute), not only the
   sums. *Layered.*
+- **--series** *FILE*
+
+  A timeline's run, a second at a time, as JSON lines to *FILE*: for each instance, each
+  second of run time (by when its operations completed) and of planned time (by when they
+  were planned), its operations by kind, creates, bytes, write latency, edge waits, and
+  lateness; of run time also live lanes, staging held, and the planner's lead; of planned
+  time eviction batches. A line is written once its second is complete, so memory stays flat;
+  the reports carry the peaks. Each host writes its own. For an abstract with no timeline,
+  refused on the command line and passed over from a lower layer; a place it cannot be
+  written is a usage error before the run. *Layered.*
 
 ### aeiou cases
 

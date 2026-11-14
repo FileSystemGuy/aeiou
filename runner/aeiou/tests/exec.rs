@@ -399,3 +399,52 @@ fn a_would_be_drop_stops_the_run() {
     assert!(st.certain.unwrap().starts_with("staging of workers `w` held 12000 bytes, past its 8192"));
     assert!(!ops.iter().any(|o| &*o.record.path == "d/9"), "nothing issues after the stop");
 }
+
+/// A run's series (brief item 72 (7) step 5, `--series`): a row a second of run time, by when its
+/// ops completed, and a row a second of planned time, by when they were planned; every op in
+/// one of each, writes with their latency, a lagging op in a later run second than its planned
+/// one, live lanes and the planner's lead sampled on the run clock, eviction batches on the
+/// planned one.
+#[test]
+fn a_series_puts_each_op_in_its_second_of_each_clock() {
+    let s = 1_000_000_000i64;
+    let wr = |k: i64| json!([obj("f", k), {"open": {"file": r("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": r("f"), "len": 4096}}, {"close": {"file": r("f")}}]);
+    // second 0: a stat; second 1: a file written (its write takes 1.5 s); second 2: a stat
+    let mut body = vec![stat(1), compute(s)];
+    body.extend(wr(1).as_array().unwrap().iter().cloned());
+    body.extend([compute(s), stat(2)]);
+    let opts = aeiou::exec::TimelineOpts { series: true, ..Default::default() };
+    let (ops, st) = run_with(tl(json!(body)), &opts, |r, _| if r.kind == aeiou::vm::OpKind::Write { 1_500_000_000 } else { 10 });
+    let rows = &st.rows;
+    let total = |planned: bool| -> u64 { rows.iter().filter(|r| r.planned == planned).map(|r| r.ops.values().sum::<u64>()).sum() };
+    assert_eq!(total(true), ops.len() as u64);
+    assert_eq!(total(false), ops.len() as u64);
+    let planned: Vec<(i64, u64)> = rows.iter().filter(|r| r.planned).map(|r| (r.s, r.ops.values().sum())).collect();
+    assert_eq!(planned, [(0, 1), (1, 3), (2, 1)]);
+    // the write planned in second 1 completes in second 2, and the close and stat after it later
+    let w = rows.iter().find(|r| !r.planned && r.writes == 1).unwrap();
+    assert_eq!((w.s, w.write_ns, w.write_bytes), (2, 1_500_000_000, 4096));
+    let p1 = rows.iter().find(|r| r.planned && r.s == 1).unwrap();
+    assert_eq!((p1.creates, p1.writes, p1.write_bytes), (1, 1, 4096));
+    assert!(rows.iter().filter(|r| !r.planned).all(|r| r.live_lanes.is_some()));
+    assert!(rows.iter().any(|r| !r.planned && r.lead_ns.is_some()));
+    let sum = st.series.unwrap();
+    assert_eq!(sum.peak_write_bytes.1, 4096);
+    assert!(sum.seconds >= 3);
+}
+
+/// A series counts eviction batches on the planned clock: a tier evicting at every tick.
+#[test]
+fn a_series_counts_eviction_batches_by_planned_second() {
+    let s = 1_000_000_000i64;
+    let tiers = json!([{"name": "t", "order": [{"cached": "stored"}], "capacity": 1, "evict": {"every": s, "when": {"gt": [{"tier": "entries"}, 0]}, "count": 1},
+        "on_evict": {"lanes": 1, "body": [stat(7)]}}]);
+    let body = json!([{"let": {"name": "a", "value": {"shared": {"id": 1, "n": 2}}}},
+        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 1}}, compute(3 * s), stat(1)]);
+    let doc = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
+    let opts = aeiou::exec::TimelineOpts { series: true, ..Default::default() };
+    let (_, st) = run_with(doc, &opts, |_, _| 10);
+    let ev: u64 = st.rows.iter().filter(|r| r.planned).map(|r| r.evictions).sum();
+    assert!(ev >= 1, "{:?}", st.rows);
+    assert_eq!(st.rows.iter().filter(|r| !r.planned).map(|r| r.evictions).sum::<u64>(), 0);
+}

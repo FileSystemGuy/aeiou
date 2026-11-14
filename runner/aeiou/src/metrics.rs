@@ -1054,7 +1054,9 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
                 }
                 self.par_n = 0;
             }
-            match self.vm.next()? {
+            let next = self.vm.next_at()?;
+            let at = next.as_ref().and_then(|(_, a)| *a);
+            match next.map(|(e, _)| e) {
                 None => match &mut self.role {
                     Role::Worker { b, workers, batches } => {
                         *b += *workers;
@@ -1067,7 +1069,12 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
                     _ => return Ok(false),
                 },
                 Some(Event::Op(op, ctx)) => {
-                    sink.lane = self.lane;
+                    // a timeline's op: its executor lane, at its planned time
+                    sink.lane = match at {
+                        Some(a) => sink.tl_lane(a.exec),
+                        None => self.lane,
+                    };
+                    sink.plan = at.map(|a| a.plan);
                     sink.op(&op, &ctx)?;
                     Self::record(&mut self.runs, &mut self.files, m, &op)?;
                     self.end_chain(m);

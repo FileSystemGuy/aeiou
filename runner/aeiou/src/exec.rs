@@ -126,6 +126,90 @@ pub struct Stats {
     /// The first certain failure, and whether the timeline stopped at it.
     pub certain: Option<String>,
     pub stopped: bool,
+    /// With a series: its summary, and (`simulate` alone) its rows.
+    pub series: Option<SeriesSummary>,
+    pub rows: Vec<SeriesRow>,
+}
+
+/// One second of a timeline's run, of run time (by when its ops completed) or of planned time
+/// (by when they were planned): what `--series` writes a line of (brief item 72 (7) step 5, the
+/// user's choice of 2026-11-14). Live lanes, staging, and the planner's lead are sampled on the
+/// run's clock alone; eviction batches are counted on the planned one.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SeriesRow {
+    pub planned: bool,
+    pub s: i64,
+    pub ops: BTreeMap<&'static str, u64>,
+    /// Opens that create (`O_CREAT`).
+    pub creates: u64,
+    pub read_bytes: i64,
+    pub write_bytes: i64,
+    /// Writes completed, their latency summed and largest, ns.
+    pub writes: u64,
+    pub write_ns: i64,
+    pub write_max_ns: i64,
+    pub edge_waits: u64,
+    pub edge_wait_ns: i64,
+    pub lateness_max_ns: i64,
+    /// Eviction batches started.
+    pub evictions: u64,
+    pub live_lanes: Option<u64>,
+    /// Each workers' staging held, its most in the second.
+    pub staging: BTreeMap<String, i64>,
+    /// The planner's lead over the clock, its least in the second, ns.
+    pub lead_ns: Option<i64>,
+}
+
+impl SeriesRow {
+    /// The row as a JSON line's object, for the instance `actor`.
+    pub fn json(&self, actor: &str) -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "clock": if self.planned { "planned" } else { "run" }, "actor": actor, "s": self.s,
+            "ops": self.ops, "creates": self.creates, "read_bytes": self.read_bytes, "write_bytes": self.write_bytes,
+            "writes": self.writes, "write_ns": self.write_ns, "write_max_ns": self.write_max_ns,
+            "edge_waits": self.edge_waits, "edge_wait_ns": self.edge_wait_ns, "lateness_max_ns": self.lateness_max_ns,
+        });
+        if self.planned {
+            v["evictions"] = serde_json::json!(self.evictions);
+        } else {
+            v["live_lanes"] = serde_json::json!(self.live_lanes.unwrap_or(0));
+            v["staging"] = serde_json::json!(self.staging);
+            v["planner_lead_ns"] = serde_json::json!(self.lead_ns);
+        }
+        v
+    }
+}
+
+/// What a series keeps between its seconds: the rows not yet complete, the issued records'
+/// planned time, kind, and bytes, and the records not completed by second of planned time.
+#[derive(Default)]
+struct SeriesAcc {
+    run: BTreeMap<i64, SeriesRow>,
+    planned: BTreeMap<i64, SeriesRow>,
+    info: HashMap<u64, (i64, OpKind, i64, bool, i64)>,
+    open_planned: BTreeMap<i64, usize>,
+}
+
+/// The second of `ns`.
+fn sec(ns: i64) -> i64 {
+    ns.div_euclid(1_000_000_000)
+}
+
+impl SeriesAcc {
+    fn row(&mut self, planned: bool, s: i64) -> &mut SeriesRow {
+        let m = if planned { &mut self.planned } else { &mut self.run };
+        m.entry(s).or_insert_with(|| SeriesRow { planned, s, ..Default::default() })
+    }
+}
+
+/// A run's series, summed as it went: its seconds of run time, and their peaks.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SeriesSummary {
+    pub seconds: u64,
+    pub peak_read_bytes: (i64, i64),
+    pub peak_write_bytes: (i64, i64),
+    pub peak_ops: (i64, u64),
+    pub peak_live_lanes: (i64, u64),
 }
 
 /// A run's host lateness p99 past which it is invalid: 10 ms (`DESIGN_REVIEW.md` §3.99 point 7,
@@ -162,6 +246,10 @@ pub struct TimelineOpts {
     pub keep_going: bool,
     pub lag_ceiling_ns: Option<i64>,
     pub watches: Vec<Watch>,
+    /// Keep a per-second series, and the file it is written to (`--series FILE`; `simulate`
+    /// keeps its rows and needs none).
+    pub series: bool,
+    pub series_file: Option<std::path::PathBuf>,
 }
 
 pub struct Exec {
@@ -190,12 +278,15 @@ pub struct Exec {
     /// until the window closes.
     open_win: HashMap<i64, usize>,
     win_d: BTreeMap<(i64, Arc<str>), Vec<i64>>,
+    /// Body lanes that have issued an op and not ended.
+    live: u64,
+    series: Option<SeriesAcc>,
     pub stats: Stats,
 }
 
 impl Exec {
     pub fn new() -> Self {
-        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), ended: Vec::new(), ceiling_ns: None, watching: false, pushed_to: 0, open_win: HashMap::new(), win_d: BTreeMap::new(), stats: Stats::default() }
+        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), ended: Vec::new(), ceiling_ns: None, watching: false, pushed_to: 0, open_win: HashMap::new(), win_d: BTreeMap::new(), live: 0, series: None, stats: Stats::default() }
     }
 
     fn lane(&mut self, l: usize) -> &mut Lane {
@@ -225,10 +316,16 @@ impl Exec {
     /// The planner's next event, in planned order.
     pub fn push(&mut self, p: Planned) {
         self.pushed_to = self.pushed_to.max(planned_at(&p));
+        if let (Some(acc), Planned::Evict { plan, .. }) = (&mut self.series, &p) {
+            acc.row(true, sec(*plan)).evictions += 1;
+        }
         match p {
             Planned::Op(r) => {
                 let l = r.lane;
                 self.outstanding.insert(r.seq);
+                if let Some(acc) = &mut self.series {
+                    *acc.open_planned.entry(sec(r.plan)).or_default() += 1;
+                }
                 let lane = self.lane(l);
                 let stage_now = lane.staging_open && lane.gates_queued == 0 && r.kind == OpKind::Write;
                 let (seq, len, w) = (r.seq, r.len, lane.workers);
@@ -395,7 +492,22 @@ impl Exec {
                         self.stats.late_max_ns = self.stats.late_max_ns.max(now - ready);
                     }
                     self.stats.issued += 1;
+                    if !lane.issued && !lane.queue {
+                        self.live += 1;
+                    }
                     lane.issued = true;
+                    if let Some(acc) = &mut self.series {
+                        let creates = r.kind == OpKind::Open && r.aux & (1 << 3) != 0;
+                        acc.info.insert(r.seq, (r.plan, r.kind, if r.kind == OpKind::Read { r.bytes } else { r.len }, creates, now));
+                        for (planned, s) in [(false, sec(now)), (true, sec(r.plan))] {
+                            let row = acc.row(planned, s);
+                            if ready > own {
+                                row.edge_waits += 1;
+                                row.edge_wait_ns += ready - own;
+                            }
+                            row.lateness_max_ns = row.lateness_max_ns.max(now - ready);
+                        }
+                    }
                     // a write's bytes were staged at its submission; a load's, a read in a span
                     // naming a staging, are from now until it completes
                     let load = if r.kind == OpKind::Read { lane.spans.last().and_then(|s| s.3) } else { None };
@@ -492,6 +604,9 @@ impl Exec {
                     let plan = *plan;
                     lane.q.pop_front();
                     lane.ended = true;
+                    if lane.issued && !lane.queue {
+                        self.live -= 1;
+                    }
                     self.ended.push(l);
                     let (parent, last) = (lane.parent, lane.last);
                     if let Some(p) = parent {
@@ -510,6 +625,31 @@ impl Exec {
     /// Record `seq` completed at `now`.
     pub fn complete(&mut self, seq: u64, now: i64) {
         self.outstanding.remove(&seq);
+        if let Some(acc) = &mut self.series {
+            if let Some((plan, kind, bytes, creates, issued)) = acc.info.remove(&seq) {
+                if let Some(n) = acc.open_planned.get_mut(&sec(plan)) {
+                    *n -= 1;
+                    if *n == 0 {
+                        acc.open_planned.remove(&sec(plan));
+                    }
+                }
+                for (planned, s) in [(false, sec(now)), (true, sec(plan))] {
+                    let row = acc.row(planned, s);
+                    *row.ops.entry(kind.name()).or_default() += 1;
+                    row.creates += creates as u64;
+                    match kind {
+                        OpKind::Read => row.read_bytes += bytes,
+                        OpKind::Write => {
+                            row.write_bytes += bytes;
+                            row.writes += 1;
+                            row.write_ns += now - issued;
+                            row.write_max_ns = row.write_max_ns.max(now - issued);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         if let Some((l, staged, w)) = self.flight.remove(&seq) {
             let lane = &mut self.lanes[l];
             lane.busy = None;
@@ -535,10 +675,72 @@ impl Exec {
         std::mem::take(&mut self.ended)
     }
 
-    /// Take `opts`' lag ceiling, and keep D by window when it watches a constraint.
+    /// Take `opts`' lag ceiling, keep D by window when it watches a constraint, and keep a
+    /// series when asked.
     pub fn configure(&mut self, opts: &TimelineOpts) {
         self.ceiling_ns = opts.lag_ceiling_ns;
         self.watching = !opts.watches.is_empty();
+        if opts.series {
+            self.series = Some(SeriesAcc::default());
+            self.stats.series = Some(SeriesSummary::default());
+        }
+    }
+
+    /// The series' seconds that are complete at `now` (a run second once a second has passed
+    /// its end, for completions a lane's thread times; a planned second once every op planned in
+    /// it has completed), or every one when `done`; the planner's lead over the clock `lead_ns`
+    /// is sampled into the current run second with the live lanes and the staging held.
+    pub fn series_rows(&mut self, now: i64, lead_ns: Option<i64>, done: bool) -> Vec<SeriesRow> {
+        let live = self.live;
+        let staging: Vec<(String, i64)> = self.stats.staging.iter().filter(|s| !s.name.is_empty()).map(|s| (s.name.clone(), s.held)).collect();
+        let pushed = sec(self.pushed_to);
+        let Some(acc) = &mut self.series else { return Vec::new() };
+        if !done {
+            let r = acc.row(false, sec(now));
+            r.live_lanes = Some(r.live_lanes.unwrap_or(0).max(live));
+            for (k, h) in staging {
+                let e = r.staging.entry(k).or_default();
+                *e = (*e).max(h);
+            }
+            if let Some(l) = lead_ns {
+                r.lead_ns = Some(r.lead_ns.map_or(l, |x| x.min(l)));
+            }
+        }
+        let mut out = Vec::new();
+        let run_upto = if done { i64::MAX } else { sec(now) - 1 };
+        while let Some((&s, _)) = acc.run.first_key_value() {
+            if s >= run_upto {
+                break;
+            }
+            out.push(acc.run.pop_first().unwrap().1);
+        }
+        let open = acc.open_planned.keys().next().copied().unwrap_or(i64::MAX);
+        let planned_upto = if done { i64::MAX } else { open.min(pushed) };
+        while let Some((&s, _)) = acc.planned.first_key_value() {
+            if s >= planned_upto {
+                break;
+            }
+            out.push(acc.planned.pop_first().unwrap().1);
+        }
+        if let Some(sum) = &mut self.stats.series {
+            for r in out.iter().filter(|r| !r.planned) {
+                sum.seconds += 1;
+                let ops: u64 = r.ops.values().sum();
+                if r.read_bytes > sum.peak_read_bytes.1 {
+                    sum.peak_read_bytes = (r.s, r.read_bytes);
+                }
+                if r.write_bytes > sum.peak_write_bytes.1 {
+                    sum.peak_write_bytes = (r.s, r.write_bytes);
+                }
+                if ops > sum.peak_ops.1 {
+                    sum.peak_ops = (r.s, ops);
+                }
+                if r.live_lanes.unwrap_or(0) > sum.peak_live_lanes.1 {
+                    sum.peak_live_lanes = (r.s, r.live_lanes.unwrap_or(0));
+                }
+            }
+        }
+        out
     }
 
     /// The windows of planned start that have closed since the last call (the planner past their
@@ -730,6 +932,7 @@ pub fn simulate_with(plan: &mut Plan, horizon: i64, opts: &TimelineOpts, mut lat
     let mut ex = Exec::new();
     ex.configure(opts);
     let mut stopping = false;
+    let mut rows = Vec::new();
     let mut now = 0i64;
     let mut ahead: Option<Planned> = plan.next()?;
     let mut flight: BinaryHeap<Reverse<(i64, u64)>> = BinaryHeap::new();
@@ -760,6 +963,8 @@ pub fn simulate_with(plan: &mut Plan, horizon: i64, opts: &TimelineOpts, mut lat
                 ahead = None;
             }
         }
+        let lead = ahead.as_ref().map(|p| planned_at(p) - now);
+        rows.extend(ex.series_rows(now, lead, false));
         if (stopping || (ahead.is_none() && ex.idle())) && flight.is_empty() {
             break;
         }
@@ -798,7 +1003,9 @@ pub fn simulate_with(plan: &mut Plan, horizon: i64, opts: &TimelineOpts, mut lat
     }
     // the last windows close with the plan
     ex.certain_failure(&opts.watches, true);
+    rows.extend(ex.series_rows(now, None, true));
     let mut st = ex.finish();
+    st.rows = rows;
     st.paths_peak = peak.max(plan.paths());
     Ok((out, st))
 }

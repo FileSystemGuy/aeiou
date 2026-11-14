@@ -1673,8 +1673,12 @@ numbers; the order is this note's.
     and stopping built the same day* (the addendum of that name): host lateness invalid past a
     p99 of 10 ms (the user's choice), `--lag-ceiling`, and `--on-certain-failure stop|continue`
     (a would-be drop, the ceiling, or a constraint `result.span.S.window_p99_s <= C` or
-    `.max_s <= C` lost once a window closes above C, the user's choice), stopping per host. Next:
-    the per-second report, the edge waits' report, and `--emit-trace`'s planned `t`.
+    `.max_s <= C` lost once a window closes above C, the user's choice), stopping per host. *The
+    series built the same day* (the addendum "The series and the planned trace"): `--series
+    FILE`, its own file of JSON lines a second of each clock (the user's choice), the edge waits
+    reported, and `--emit-trace`'s planned `t`; not yet the tiers' capacity held or an eviction
+    batch's span and overage. Next: `agentx-tiered` run at a reduced session count, then
+    `lmcache_local_disk` and its four cases retired.
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the

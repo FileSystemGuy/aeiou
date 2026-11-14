@@ -1444,6 +1444,9 @@ impl<E: Engine> Loop<E> {
                 d.ex.stats.stopped = true;
                 d.ahead = None;
             }
+            let lead = d.ahead.as_ref().map(|p| crate::exec::planned_at(p) - now);
+            let label = format!("{}#{}", t.io.a.template, t.io.a.actor);
+            self.sh.put_series(&label, d.ex.series_rows(now, lead, false))?;
             if d.stopping && d.ex.in_flight() == 0 {
                 return self.end_tl(id);
             }
@@ -1537,6 +1540,8 @@ impl<E: Engine> Loop<E> {
         let lanes: Vec<usize> = {
             let t = &mut self.tasks[id];
             let Prog::Tl(d) = &mut t.prog else { unreachable!() };
+            let label = format!("{}#{}", t.io.a.template, t.io.a.actor);
+            self.sh.put_series(&label, d.ex.series_rows(0, None, true))?;
             t.io.a.st.add_timeline(&d.ex.finish());
             d.lanes.iter().flatten().copied().collect()
         };

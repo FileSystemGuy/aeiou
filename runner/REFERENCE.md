@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules ~~V1–V27~~ V1–V29, V28 2026-10-22, V29 2026-11-02), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. Then each dataset's projection: samples, files, directories, mean file, and total bytes, what `datagen` writes (`project.rs`, 2026-10-13). `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). An option given without the one it narrows (`--steps`, `--limit` without `--gpu`; `--metrics-block`, `--metrics-sample` without `--metrics` or `--metrics-json`) is a usage error that lists what it needs (§15), never ignored. |
 | `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--[no-]ignore-space] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C or `SIGTERM` stops every host, exit 130 (143). Refuses a non-empty root (datasets are read-only, V12), and, on rank 0 before anything is written, bytes to write beyond the free space `statvfs` reports at a directory root (`--ignore-space` writes anyway; §5, *Space*). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--[no-]subset] [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--on-certain-failure stop\|continue] [--lag-ceiling SECS] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
+| `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--[no-]subset] [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--on-certain-failure stop\|continue] [--lag-ceiling SECS] [--series FILE] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -197,8 +197,9 @@ each is a recorded decision and the golden tests pin them.
   `publish` appends `(clock, values)` to the timeline's entries of its group (contract 0.17; 0
   when it gives none), which `published` counts and `entry` reads, each within one group; both are refused under an `x @ i` evaluation (V30). The ops' keys and the
   fingerprint are as anywhere: a lane's indices are its frames', a sub-actor's with its
-  `parallel` index. The planned clock is not yet in `--emit-trace`'s `t`, which stays the walk's
-  order; `aeiou run` issues a timeline's ops through the executor under every POSIX backend
+  `parallel` index. ~~The planned clock is not yet in `--emit-trace`'s `t`, which stays the walk's
+  order~~ `--emit-trace` writes a timeline's ops at their planned times, each executor lane a lane
+  (2026-11-14, §13); `aeiou run` issues a timeline's ops through the executor under every POSIX backend
   (*The executor*, below).
 - **`prev {ref, init}`** (contract 0.15). A `let` that some `prev` names (the names are
   collected by `sites::annotate`) keeps its value in the iteration last evaluated and in the
@@ -383,8 +384,26 @@ each is a recorded decision and the golden tests pin them.
   report adds `timeline lateness (…)` and `certain failure: … ; the run stopped there`; the JSON
   report's `timeline` adds `lateness` (a histogram), `lateness_p99_max_ns`,
   `lag_ceiling_crossed`, `certain_failure`, and `stopped`. Stopping is per host: another host's
-  timeline goes on (a coordinated stop is not built). Edge waits are measured and not yet
-  reported.
+  timeline goes on (a coordinated stop is not built).
+- **The series and the edge waits** (2026-11-14, step 5). `--series FILE` (the user's choice:
+  a file of its own, so the reports stay small and memory flat) writes, for each instance, a
+  JSON line a second of **run time**, by when its ops completed, and a line a second of
+  **planned time**, by when they were planned (`exec::SeriesRow`): `clock`, `actor`, `s`, `ops`
+  by kind, `creates` (opens with `O_CREAT`), `read_bytes`, `write_bytes`, `writes`, `write_ns`,
+  `write_max_ns` (each write's issue to completion), `edge_waits`, `edge_wait_ns`,
+  `lateness_max_ns`; a run second also `live_lanes` (body lanes that have issued and not ended,
+  the most sampled in it), `staging` (each workers' held bytes, the most sampled), and
+  `planner_lead_ns` (the planner's next event's planned time less the clock, the least); a
+  planned second also `evictions` (eviction batches started). A run second is written once a
+  second has passed its end (a lane's thread times its completions), a planned one once every op
+  planned in it has completed, so the executor holds only the seconds still open; at the end,
+  every one. Each host writes its own file. The reports carry a summary: the seconds of run time
+  and the peak second of read bytes, written bytes, ops, and live lanes (`timeline series: …`,
+  the JSON report's `timeline.series`), and, with or without a series, the edge waits (ops that
+  waited on another lane's op on their path past their own readiness, and the waits summed:
+  `timeline edge waits`, `timeline.edge_waits`). Not yet in the series: the tiers' capacity held
+  (the VM's tier state is not given to the executor) and an eviction batch's issue span and
+  overage.
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which
@@ -1994,7 +2013,9 @@ timeline {window_s, spans {name: {count, sum_ns, p50_ns, p99_ns, max_ns, window_
           windows [{window, start_s, count, p99_ns}]}}, lag {lanes, p50_ns, p99_ns, max_ns},
           staging {workers: {capacity_bytes, peak_bytes, drops, first_drop {at_ns, held_bytes} | null}},
           lateness {…a latency histogram…}, lateness_p99_max_ns, lag_ceiling_crossed {at_ns, lag_ns} | null,
-          certain_failure, stopped}
+          certain_failure, stopped, edge_waits {ops, sum_ns},
+          series {seconds, peak_read_bytes {s, bytes}, peak_write_bytes {s, bytes}, peak_ops {s, ops},
+                  peak_live_lanes {s, lanes}} | null}
           (only for a run with a timeline; §2 "D and lag, reported", 2026-11-14),
 instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_records [[stall_ns, compute_ns], …]}]
 ```
@@ -2234,7 +2255,11 @@ lane at every fork, as a pool thread), each `loader` worker, each lane of a `tra
 numbered as their first lines are written. The instances are walked in turn, one op of each per
 round (`metrics::interleave`), where the metrics walk takes each instance alone, so the lanes of
 instances interleave as instances that run at once would. The clock is the line's ordinal, one
-microsecond a line, `dur` 0: compute is not in it. An open is numbered as it is written; an op
+microsecond a line, `dur` 0: compute is not in it. A timeline's op (2026-11-14, brief item 72 (7)
+step 5) is written at its planned time in ns, on a lane of its executor lane's (`DryRun::tl_lane`,
+from `Vm::next_at`), so a `compute` is a gap a digest reads as think time and the file runs as a
+`trace` node as the executor would issue it; the header's `clock` then says so. A file can hold
+both clocks when an abstract has a timeline in one actor and not in another. An open is numbered as it is written; an op
 on a path names the latest open of it on its own lane, else in its instance. A read or write
 that names its offset is written with it, one that does not without, and an `lseek` with the
 position it sets as its `ret` (the VM's `Op.bytes` of an `lseek`, not hashed, since this),
@@ -2480,7 +2505,7 @@ and `--resume`, `--grow`, `--shrink`, `--settle`; for `dry-run` the identity and
 the output and metrics flags. A *layered* option may come from any layer: for `run` `--root`, `--endpoint`,
 `--threads`, `--buffer-mib`, `--write-compress`, `--time-scale`, the io_uring, libaio, and
 mmap knobs, `--object-threads`, `--object-part-mib`, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`,
-`--require-cold`, `--drop-caches`, `--on-certain-failure`, `--lag-ceiling`, `--report-json`, `--report-takes`; for `datagen` `--root`, `--endpoint`,
+`--require-cold`, `--drop-caches`, `--on-certain-failure`, `--lag-ceiling`, `--series`, `--report-json`, `--report-takes`; for `datagen` `--root`, `--endpoint`,
 `--writers`, `--object-threads`, `--progress-secs`, `--rank`, `--ranks`, `--coordinator`; for `dry-run` `--threads` and `--ranks`. `--rank` from the environment is
 the case the layers exist for: a launcher sets `AEIOU_RANK` from its own rank variable and
 the same command line runs on every host. ("Replace" is the only merge rule: `--endpoint`, the one

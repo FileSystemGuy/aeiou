@@ -192,7 +192,11 @@ fn timeline(s: &Stats) -> Option<Value> {
     let lag_ceiling = s.lag_ceiling.map_or(Value::Null, |(at, l)| json!({"at_ns": at, "lag_ns": l}));
     Some(json!({"window_s": crate::exec::WINDOW_NS / 1_000_000_000, "spans": spans, "lag": lag, "staging": staging,
         "lateness": hist(&s.lateness), "lateness_p99_max_ns": crate::exec::LATENESS_P99_MAX_NS,
-        "lag_ceiling_crossed": lag_ceiling, "certain_failure": s.certain, "stopped": s.stopped}))
+        "lag_ceiling_crossed": lag_ceiling, "certain_failure": s.certain, "stopped": s.stopped,
+        "edge_waits": {"ops": s.edge_waits, "sum_ns": s.edge_wait_ns},
+        "series": s.series.as_ref().map_or(Value::Null, |p| json!({"seconds": p.seconds,
+            "peak_read_bytes": {"s": p.read_bytes.0, "bytes": p.read_bytes.1}, "peak_write_bytes": {"s": p.write_bytes.0, "bytes": p.write_bytes.1},
+            "peak_ops": {"s": p.ops.0, "ops": p.ops.1}, "peak_live_lanes": {"s": p.live_lanes.0, "lanes": p.live_lanes.1}}))}))
 }
 
 /// The busy fraction of takes whose `compute` (recorded unscaled) was slept `× time_scale`

@@ -12436,6 +12436,34 @@ the build:
   over, with a warning, from the environment or a config file, as `--threads` is under a blocking
   backend; `--on-certain-failure` defaults to `stop` and needs neither.
 
+*The series and the planned trace (2026-11-14, step 5's last part).* The note's per-second report,
+the edge waits, and `--emit-trace`'s planned `t`. The per-second report put to the user: a whole
+`agentx-tiered` run is about 400,000 seconds of planned time; the user chose a file of its own,
+`--series FILE`, JSON lines written as the run goes, the reports carrying summaries. Choices made
+in the build:
+- *Two clocks, rows apart:* a second of run time takes the ops that completed in it; a second of
+  planned time the ops planned in it, so a backlog shows as a planned second's ops completing in
+  later run seconds. Live lanes, staging held, and the planner's lead are states of the run's
+  clock and are sampled there (the most, or for the lead the least, in the second, sampled each
+  time a driver looks); eviction batches are planned events and counted there.
+- *Written when complete:* a run second once the clock is a second past its end, since a lane
+  thread's completion can reach the driver a little after it happened; a planned second once
+  every op planned in it has completed (the executor counts the ops pushed and not completed by
+  planned second, and the planner pushes in planned order, so no later op lands in an earlier
+  second). Memory is the open seconds, not the run.
+- *Each host its own file*, as each rank its own JSON report; the summary's peaks are merged by
+  the largest, its seconds by the longest instance.
+- *The edge waits are reported with or without a series*: the ops that waited on another lane's
+  op on their path past their own readiness, and the waits summed.
+- *`--emit-trace` at planned times:* the metrics walk now takes each event's place in a timeline
+  (`Vm::next_at`); a timeline's op is written at its planned time in ns on a lane of its executor
+  lane's, so the file runs as a `trace` node lane by lane as the executor would, and a digest reads
+  a `compute` as a gap. Ops outside timelines keep the walk's order.
+- Not built: the tiers' capacity held (the VM's tier state would have to reach the executor as
+  notes) and an eviction batch's issue span and overage; both named in the documents.
+- The series' tests were written after its code (the tests-first rule broken); the planned
+  trace's before.
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes

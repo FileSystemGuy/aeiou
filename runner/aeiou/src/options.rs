@@ -43,7 +43,7 @@ pub const ALL_OPTIONS: &[&str] = &[
     "files", "abstract", "param", "params-file", "case", "case-file", "case-run", "workloads", "expect-case-sha", "expect-workload-id", "gpus", "seed", "posix", "cache", "s3", "root", "endpoint", "threads", "buffer-mib", "write-compress", "time-scale",
     "iowq-max-workers", "sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "aio-depth", "mmap-mode", "mmap-consume", "object-threads", "object-part-mib", "rank", "ranks",
     "coordinator", "rank-rotate", "subset", "expect-fingerprint", "expect-dataset-id", "max-gap", "require-cold", "drop-caches", "clean-namespaces",
-    "ignore-limits", "ignore-space", "on-certain-failure", "lag-ceiling", "report-json", "report-takes", "dedupe", "compress", "dataset", "gpu", "steps", "limit", "metrics", "metrics-block",
+    "ignore-limits", "ignore-space", "on-certain-failure", "lag-ceiling", "series", "report-json", "report-takes", "dedupe", "compress", "dataset", "gpu", "steps", "limit", "metrics", "metrics-block",
     "metrics-json", "emit-trace", "st-blksize", "writers", "progress-secs", "resume", "grow", "shrink", "settle", "config", "name", "where", "json",
 ];
 

@@ -553,8 +553,12 @@ staging its reads draw on while in flight, so staging counts loads beside pendin
 whose staging overflowed (a store would have been dropped) is invalid, and so is one whose host
 lateness p99 passes 10 ms; `--lag-ceiling SECS` and `--on-certain-failure stop|continue`
 (default stop: at a would-be drop, the ceiling, or a case's window constraint already lost, the
-run issues nothing more and reports where it stopped). The per-second report, the edge waits'
-report, and `--emit-trace`'s planned `t` come next.
+run issues nothing more and reports where it stopped). `--series FILE`, a JSON line a second of
+run time and of planned time for each instance (ops by kind, bytes, write latency, edge waits,
+lateness, live lanes, staging, the planner's lead, eviction batches), its peaks and the edge waits
+in the reports; `--emit-trace` writes a timeline's ops at their planned times, each executor lane
+a lane. Not yet in the series: the tiers' capacity held and an eviction batch's span and
+overage. Next: `agentx-tiered` run at a reduced session count, then `lmcache_local_disk` retired.
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

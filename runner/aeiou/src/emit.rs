@@ -38,6 +38,8 @@ pub struct Walked {
     pub bytes: i64,
     pub aux: u64,
     pub positioned: bool,
+    /// A timeline's op: its planned time, ns (its lane is then its executor lane's).
+    pub plan: Option<i64>,
 }
 
 impl Walked {
@@ -52,6 +54,7 @@ impl Walked {
             bytes: op.bytes,
             aux: op.aux,
             positioned: op.positioned,
+            plan: None,
         }
     }
 }
@@ -63,6 +66,8 @@ pub struct Summary {
     pub lines: usize,
     pub opens: usize,
     pub creates: Vec<String>,
+    /// A timeline's ops were written at their planned times.
+    pub planned: bool,
 }
 
 #[derive(Default)]
@@ -172,7 +177,15 @@ impl Emitter {
         }
         let lane = self.lane(inst, w.lane);
         o.insert("lane".into(), json!(lane));
-        o.insert("t".into(), json!(self.s.lines as i64 * 1000));
+        // a timeline's op at its planned time; any other at the walk's order
+        let t = match w.plan {
+            Some(p) => {
+                self.s.planned = true;
+                p
+            }
+            None => self.s.lines as i64 * 1000,
+        };
+        o.insert("t".into(), json!(t));
         o.insert("dur".into(), json!(0));
         self.s.lines += 1;
         Ok(Value::Object(o))
@@ -207,7 +220,11 @@ pub fn header(s: &Summary, identity: &Map<String, Value>) -> Value {
         "opens": s.opens,
         "creates": s.creates,
         "notes": {},
-        "clock": "the walk's order, one microsecond per line; no compute",
+        "clock": if s.planned {
+            "a timeline's planned time in ns for its ops, each executor lane a lane, compute its gaps; the walk's order, one microsecond per line, for any other op"
+        } else {
+            "the walk's order, one microsecond per line; no compute"
+        },
     });
     for (k, v) in identity {
         h[k] = v.clone();
@@ -253,7 +270,7 @@ mod tests {
     use super::*;
 
     fn w(lane: usize, kind: OpKind, path: &str) -> Walked {
-        Walked { lane, kind, path: path.into(), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, positioned: false }
+        Walked { lane, kind, path: path.into(), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, positioned: false, plan: None }
     }
 
     /// Every kind of op the VM issues, written as a line the runner's trace loader reads back as
