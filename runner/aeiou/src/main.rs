@@ -633,6 +633,15 @@ struct RunCmd {
     ignore_limits: bool,
     #[arg(long = "no-ignore-limits", hide = true, overrides_with_all = ["no_ignore_limits", "ignore_limits"])]
     no_ignore_limits: bool,
+    /// What a timeline's run does at a certain failure (a would-be drop, the lag ceiling crossed,
+    /// or a case's window constraint already lost): stop there, what is in flight completing, or
+    /// continue to the end. Default stop.
+    #[arg(long, value_name = "stop|continue", help_heading = "Timeline")]
+    on_certain_failure: Option<String>,
+    /// A timeline lane's lag, in seconds, past which the run has certainly failed: for a tuning
+    /// run, which stops there and says when and how much (see --on-certain-failure).
+    #[arg(long, value_name = "SECS", help_heading = "Timeline")]
+    lag_ceiling: Option<f64>,
     /// Write the run's report to FILE as JSON (runner/REFERENCE.md §12): the configuration, the
     /// results the text report prints with the latency histograms in full, and the verdict.
     /// Written when the run fails too, with the error; rank 0 of several hosts writes the
@@ -685,6 +694,8 @@ struct RunOptions {
     ignore_limits: bool,
     report_json: Option<PathBuf>,
     report_takes: bool,
+    on_certain_failure: String,
+    lag_ceiling: Option<f64>,
     /// The use case's lock, when the run names one (`--case`, `--case-file`).
     case: Option<Case>,
 }
@@ -767,6 +778,8 @@ fn resolve_run(mut a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Laye
         drop_caches: l.flag("drop-caches", neg(a.drop_caches, a.no_drop_caches), false)?,
         report_json: l.layered("report-json", a.report_json, None)?,
         report_takes: l.flag("report-takes", neg(a.report_takes, a.no_report_takes), false)?,
+        on_certain_failure: l.layered("on-certain-failure", a.on_certain_failure, Some("stop".to_string()))?.unwrap_or_else(|| "stop".into()),
+        lag_ceiling: l.layered("lag-ceiling", a.lag_ceiling, None)?,
         run: a.run,
         posix: a.posix,
         cache: a.cache,
@@ -823,6 +836,12 @@ fn resolve_run(mut a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Laye
     }
     if let Some(g) = o.max_gap.filter(|g| !(*g >= 0.0 && g.is_finite())) {
         aeiou::usage!("--max-gap {g}: a number of seconds, 0 or more{}", l.from(&["max-gap"]));
+    }
+    if !matches!(o.on_certain_failure.as_str(), "stop" | "continue") {
+        aeiou::usage!("--on-certain-failure {}: stop or continue{}", o.on_certain_failure, l.from(&["on-certain-failure"]));
+    }
+    if let Some(c) = o.lag_ceiling.filter(|c| !(*c > 0.0 && c.is_finite())) {
+        aeiou::usage!("--lag-ceiling {c}: a number of seconds above 0{}", l.from(&["lag-ceiling"]));
     }
     Ok((o, l))
 }
@@ -1612,6 +1631,12 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     let event_loop = backend.event_loop() || s3.event_loop();
     // a timeline's lanes are issued at their planned times by the executor (`exec.rs`, brief
     // item 72 (7)): a task a lane on the event loops, a thread a live lane under the blocking backends
+    // a ceiling on lanes the abstract does not have: from a lower layer, passed over; from the
+    // command line, refused, as the event-loop knobs are
+    pass_over(layers, "lag-ceiling", &mut a.lag_ceiling, loaded.ast.has_timeline(), "the abstract has no timeline");
+    if a.lag_ceiling.is_some() && !loaded.ast.has_timeline() {
+        aeiou::usage!("--lag-ceiling bounds a timeline's lanes' lag; the abstract has no timeline{}", layers.from(&["lag-ceiling"]));
+    }
     if loaded.ast.has_timeline() {
         if used.s3 {
             bail!("{}: a `timeline` with an object namespace is not run yet (brief item 72 (7))", a.abstract_path.display());
@@ -1885,6 +1910,11 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
         max_gap: a.max_gap,
         require_cold: a.require_cold,
         drop_caches: a.drop_caches,
+        timeline: aeiou::exec::TimelineOpts {
+            keep_going: a.on_certain_failure == "continue",
+            lag_ceiling_ns: a.lag_ceiling.map(|s| (s * 1e9).round() as i64),
+            watches: a.case.as_ref().map(|c| aeiou::case::watches(&c.lock)).unwrap_or_default(),
+        },
     };
     let (lo, hi) = run::gpu_range(cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
     writeln!(out, "host {}  rank {} of {}  rotate {}  gpu ids [{lo}, {hi})", run::hostname(), opts.rank, opts.ranks, opts.rank_rotate)?;
@@ -2126,11 +2156,34 @@ fn run_connected(
         for p in run::write_namespace_manifests(loaded, cfg, &opts, &opts, report, started, finished)? {
             writeln!(out, "namespace manifest {}", p.display())?;
         }
+        // a timeline's run: invalid on a would-be drop or the host's lateness; stopped at a
+        // certain failure, its op set is not the plan's, so no fingerprint is judged
+        // (brief item 72 (7) step 5)
+        if let Some(why) = run::staging_failure(&report.stats) {
+            bail!("{why}");
+        }
+        if let Some(why) = run::lateness_failure(&report.stats) {
+            bail!("{why}");
+        }
+        if let Some(why) = &report.stats.certain {
+            writeln!(out, "certain failure: {why}{}", if report.stats.stopped { "; the run stopped there" } else { "" })?;
+        }
+        if let Some((at, l)) = report.stats.lag_ceiling {
+            return Err(run::DidNotPass(format!("a lane's lag reached {:.3} s, past --lag-ceiling {:.3} s, at {:.3} s into the timeline", l as f64 / 1e9, opts.timeline.lag_ceiling_ns.unwrap_or(0) as f64 / 1e9, at as f64 / 1e9)).into());
+        }
+        if report.stats.stopped {
+            writeln!(out, "the run stopped at a certain failure: its fingerprint is not judged")?;
+            return Ok(());
+        }
         if let Some(fp) = opts.expect_fingerprint {
             if report.stats.fingerprint != fp {
                 bail!("fingerprint {:016x} does not match the expected {:016x}", report.stats.fingerprint, fp);
             }
             writeln!(out, "fingerprint matches")?;
+        }
+        // a timeline whose staging overflowed: a store would have been dropped (an invalid run)
+        if let Some(why) = run::staging_failure(&report.stats) {
+            bail!("{why}");
         }
         Ok(())
     };

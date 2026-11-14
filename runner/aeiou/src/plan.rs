@@ -82,13 +82,14 @@ pub enum Planned {
     Fork { parent: usize, kids: Vec<usize>, join: bool, plan: i64 },
     /// `parent` submitted a body to worker lane `worker` (of the timeline's workers `workers`,
     /// `staging` bytes): its ops start no earlier than the parent reaches this point.
-    Submit { parent: usize, worker: usize, workers: usize, staging: i64, plan: i64 },
+    Submit { parent: usize, worker: usize, workers: usize, name: Arc<str>, staging: i64, plan: i64 },
     /// An eviction batch on `lanes` at `plan`, started by a store of `parent` or at a tick.
     Evict { parent: Option<usize>, lanes: Vec<usize>, plan: i64 },
     /// A lane of the timeline's body ended at `plan`.
     End { lane: usize, plan: i64 },
-    /// `lane` entered span `name` at `plan`, or left the span it entered last.
-    SpanBegin { lane: usize, name: Arc<str>, plan: i64 },
+    /// `lane` entered span `name` at `plan`, its reads drawing on the staging of workers
+    /// `staging` (index, name, bytes; contract 0.21), or left the span it entered last.
+    SpanBegin { lane: usize, name: Arc<str>, staging: Option<(usize, Arc<str>, i64)>, plan: i64 },
     SpanEnd { lane: usize, plan: i64 },
 }
 
@@ -260,16 +261,16 @@ impl<'m, 'a: 'm> Plan<'m, 'a> {
                 let parent = p.lane(parent);
                 Planned::Fork { parent, kids: kids.into_iter().map(|k| p.lane(k)).collect(), join, plan }
             }
-            TlNote::Submit { parent, worker, workers, staging, plan } => {
+            TlNote::Submit { parent, worker, workers, name, staging, plan } => {
                 let parent = p.lane(parent);
-                Planned::Submit { parent, worker: p.lane(worker), workers, staging, plan }
+                Planned::Submit { parent, worker: p.lane(worker), workers, name, staging, plan }
             }
             TlNote::Evict { parent, lanes, plan } => {
                 let parent = parent.map(|x| p.lane(x));
                 Planned::Evict { parent, lanes: lanes.into_iter().map(|k| p.lane(k)).collect(), plan }
             }
             TlNote::End { lane, plan } => Planned::End { lane: p.lane(lane), plan },
-            TlNote::SpanBegin { lane, name, plan } => Planned::SpanBegin { lane: p.lane(lane), name, plan },
+            TlNote::SpanBegin { lane, name, staging, plan } => Planned::SpanBegin { lane: p.lane(lane), name, staging, plan },
             TlNote::SpanEnd { lane, plan } => Planned::SpanEnd { lane: p.lane(lane), plan },
         }
     }

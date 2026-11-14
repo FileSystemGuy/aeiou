@@ -713,7 +713,8 @@ class Describer:
         if k == "submit":
             return [pad + f"On a worker lane of `{a['workers']}`, at this lane's planned time:"] + self.body(a["body"], depth + 1)
         if k == "span":
-            return [pad + f"Measured as span `{a['name']}`, a request's own storage wait:"] + self.body(a["body"], depth + 1)
+            draws = f", its reads drawing on the staging of `{a['staging']}`" if "staging" in a else ""
+            return [pad + f"Measured as span `{a['name']}`, a request's own storage wait{draws}:"] + self.body(a["body"], depth + 1)
         if k == "publish":
             vals = ", ".join(f"{n} = `{self.sym(v)}`" for n, v in a["values"].items())
             g = f", group `{self.sym(a['group'])}`" if "group" in a else ""

@@ -28,7 +28,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.20", "name": "t", "params": {"n": {"default": 2}},
+    json!({"ast": "0.21", "name": "t", "params": {"n": {"default": 2}},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }

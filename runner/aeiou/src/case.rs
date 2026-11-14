@@ -327,6 +327,33 @@ pub fn when_of(name: &str) -> Option<When> {
     None
 }
 
+/// The constraints certain to fail once a window of planned start closes above them (the user's
+/// choice of 2026-11-14): of the form `result.span.SPAN.window_p99_s <= C` (or `<`), or `.max_s`,
+/// a maximum over windows, so one window above C decides it. Others are judged after the run.
+pub fn watches(lock: &Lock) -> Vec<crate::exec::Watch> {
+    let mut out = Vec::new();
+    for c in &lock.constraints {
+        let Some(o) = c.expr.as_object().filter(|o| o.len() == 1) else { continue };
+        let (op, args) = o.iter().next().expect("one");
+        let strict = match op.as_str() {
+            "le" => false,
+            "lt" => true,
+            _ => continue,
+        };
+        let Some([l, r]) = args.as_array().map(|a| a.as_slice()).and_then(|a| <&[Value; 2]>::try_from(a).ok()) else { continue };
+        let (Some(name), Some(limit)) = (l.get("result").and_then(Value::as_str), r.as_f64()) else { continue };
+        let full = format!("result.{name}");
+        let Some((span, stat)) = span_name(&full) else { continue };
+        let max = match stat {
+            "max_s" => true,
+            "window_p99_s" => false,
+            _ => continue,
+        };
+        out.push(crate::exec::Watch { span: span.to_string(), max, limit_ns: (limit * 1e9).round() as i64, strict, text: c.text.clone() });
+    }
+    out
+}
+
 /// Every constraint's `result.span.<span>.` names a span the abstract declares (`spans`):
 /// checked when the lock is read, so a misspelled span fails before the run, not after it.
 pub fn check_span_names(lock: &Lock, spans: &BTreeSet<String>) -> Result<()> {
@@ -636,6 +663,26 @@ mod tests {
         assert_eq!(f("result.span.load.window_p99_s"), 3.0);
         assert_eq!(f("result.lag.p50_s"), 0.0);
         assert_eq!(f("result.lag.max_s"), 2.0);
+    }
+
+    /// The constraints a run watches, certain to fail once a window closes above them: a span's
+    /// `window_p99_s` or `max_s` at most (or below) a number; any other form is judged after.
+    #[test]
+    fn window_and_max_constraints_are_watched() {
+        let c = |t: &str, e: Value| Constraint { text: t.into(), expr: e, names: vec![], doc: None };
+        let lock = Lock { path: String::new(), sha256: String::new(), name: "c".into(), runs: vec![], identity_frozen: false, doc: Value::Null, constraints: vec![
+            c("a", json!({"le": [{"result": "span.load.window_p99_s"}, 2]})),
+            c("b", json!({"lt": [{"result": "span.load.max_s"}, 0.5]})),
+            c("c", json!({"le": [{"result": "span.load.p99_s"}, 2]})),
+            c("d", json!({"ge": [{"result": "span.load.max_s"}, 2]})),
+            c("e", json!({"le": [2, {"result": "span.load.max_s"}]})),
+            c("f", json!({"le": [{"result": "elapsed_s"}, 2]})),
+        ] };
+        let w = watches(&lock);
+        assert_eq!(w, [
+            crate::exec::Watch { span: "load".into(), max: false, limit_ns: 2_000_000_000, strict: false, text: "a".into() },
+            crate::exec::Watch { span: "load".into(), max: true, limit_ns: 500_000_000, strict: true, text: "b".into() },
+        ]);
     }
 
     /// A constraint over a span the abstract does not declare is refused when the lock is read,

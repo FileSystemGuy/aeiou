@@ -284,7 +284,9 @@ def chunk_ops(c, tag, sq, gh):
     h3 = c.probe("lm", "g3", sq, P.per, h2, tag + "h3")
     hit = c.let(tag + "hit", h2 + h3)
     first = c.let(tag + "first", max_(h2, min_(gh * BL, seq_len(sq) * BL - 1) // (BL * P.per)))
-    with c.span("load"):                                            # D: the request's own storage wait
+    # D: the request's own storage wait; its reads load into G2, the pool the pending stores
+    # hold (item 13 (4)), so they draw on the store workers' staging (contract 0.21)
+    with c.span("load", staging="store"):
         with c.loop(tag + "r", hit, start=first) as j:
             chunk_read(c, c.let(tag + "rf", kv.object(key=chunk_key(sq, j, P.per))))
     c.touch("lm", "g3", sq, P.per, first, max_(0, hit - first))

@@ -5,7 +5,7 @@
     {
       "name": "npy_per_sample",
       "abstract": "input-pipeline/map/npy-per-sample/npy_per_sample.ast.json",
-      "ast_sha256": "6f8e5cd5a5fb907c7f028bf63cff70ae26002472e836540694c6005483c55d23",
+      "ast_sha256": "a57ce6e4c06d2511df2f06a89439eee4689c15565193dfa6ca008f676b9faaa9",
       "params": {
         "batch": {"default": 2},
         "cd_len": {"default": 102},

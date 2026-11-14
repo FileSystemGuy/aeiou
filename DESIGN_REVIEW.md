@@ -12379,6 +12379,63 @@ the dotted names. Choices made in the build:
   WSL2) is the hand-off between threads and timer wake-ups, the host's lateness, which step 5's
   second part reports and judges.
 
+*Staging counts loads (2026-11-14, contract 0.21, step 5).* The note decided that a store is too
+slow "if the bytes issued and unfinished, loads' included, exceed the WG-fixed staging size", but
+not which reads are loads or whose staging they draw on. Put to the user with three options (a
+span naming its pool; every span's reads against the one `workers`; loads left out until item
+74's capture); the user chose the first, recommended: an optional `staging` on `span` (contract
+0.21), V36 checking that it names workers of its timeline. Explicit, so a span that is not a load
+into the pool is never counted, and a timeline with several workers is not ambiguous. Built the
+same day:
+- A read in such a span holds its bytes in the workers' staging from its issue until it
+  completes (a write's from its submission, as before); the executor records a would-be drop when
+  either takes the held bytes past the size. Reads alone: an open, `stat`, or close in the span
+  holds nothing.
+- A run with a would-be drop is invalid, exit 1, its verdict's error naming the workers, the bytes
+  held, their size, when, and how many drops (`run::staging_failure`), judged on the whole run's
+  report after the fingerprint. The run goes to its end; stopping at the first drop comes with
+  `--on-certain-failure`.
+- The stats carry each staging by its workers' name (size, peak, each drop's time and bytes),
+  merged over actors and hosts by peak and drops; the text report's `timeline staging` line and
+  the JSON report's `timeline.staging`.
+- The tiered abstract's span `load` names its store workers: its G3 reads load into G2, the pool
+  its pending stores hold. Its fingerprint is unchanged (`f032df08b3594acd`); every AST was
+  rebuilt at 0.21, every case relocked, every shape re-measured (hashes only), the golden hashes
+  re-recorded from `check.py`.
+- Also the user's choices of the same day, for the rest of step 5: host lateness invalid past a
+  p99 of 10 ms (the proposal); a certain window failure is a case's constraint
+  `result.span.S.window_p99_s <= C` or `result.span.S.max_s <= C` already lost, once a window has
+  closed (the planner past its end and its spans ended) above C, since the result is a maximum.
+
+*Validity and stopping built (2026-11-14, step 5).* Host lateness, `--lag-ceiling`, and
+`--on-certain-failure`, within the decisions and the user's two choices above. Choices made in
+the build:
+- *Lateness is every timeline op's issue less its `ready`*, a histogram (the run's latency
+  histogram type, so it merges over actors and hosts), judged on its p99 against 10 ms. Under a
+  blocking backend the issue is when the actor's thread hands the record to its lane's thread,
+  so the hand-off is not in it; it measures what the executor could do, the timer and the
+  planner keeping up.
+- *Stopping ends a timeline cleanly, not by aborting the run*: the driver leaves the planner,
+  issues nothing more, lets what is in flight complete, and the timeline ends as any does, so the
+  report carries what was measured and says where it stopped. An abort would have lost the report
+  and made a certain failure look like a crash.
+- *Verdicts*: a would-be drop and lateness past 10 ms make the run invalid (exit 1), as decided;
+  the lag ceiling crossed makes it not pass (exit 3), as a constraint would, since the ceiling is
+  the tuner's judgment of the system under test, not of the run's validity; a lost constraint is
+  judged with the constraints after the run (exit 3). Validity is judged before the fingerprint,
+  and a stopped run's fingerprint is not judged at all (its op set is part of the plan's), so a
+  stop is never reported as a fingerprint mismatch.
+- *A watched constraint is only `<=` or `<` between a span's `window_p99_s` or `max_s` and a
+  number* (`case::watches`); any other form, or a negation, is judged after the run as before.
+  D is kept by window only while one is watched, so a run with none holds nothing more.
+- *Stopping is per host*: a certain failure on one host stops its timelines; the others go on to
+  their ends, and the merged report carries the first host's failure. A coordinated stop, through
+  the coordinator, is not built; a constraint's window p99 over several hosts is not certain on
+  one host's spans alone, which is the other reason it waits.
+- *`--lag-ceiling` for an abstract with no timeline* is refused on the command line and passed
+  over, with a warning, from the environment or a config file, as `--threads` is under a blocking
+  backend; `--on-certain-failure` defaults to `stop` and needs neither.
+
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the
 arrival orders, the drawn and measured think times, the user's challenge that a provider fixes

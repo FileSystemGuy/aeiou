@@ -732,6 +732,25 @@ turns it off, and the last one on the line wins.
   (`RLIMIT_NOFILE`, `RLIMIT_NPROC`, `kernel.threads-max`, `vm.max_map_count`); the problem
   is printed as `limits: IGNORED:`.
 
+**Timeline**
+
+- **--on-certain-failure** *stop|continue*
+
+  What a timeline's run does at a certain failure: a would-be drop (its workers' staging
+  past its size), a lane's lag past **--lag-ceiling**, or a use case's constraint
+  `result.span.`*SPAN*`.window_p99_s` or `.max_s` at most (or below) a number already lost,
+  a window of planned start having closed above it. `stop` issues nothing more and lets what
+  is in flight complete; `continue` runs to the end. Either way the failure is reported and
+  judged: a would-be drop makes the run invalid (exit 1), the ceiling and a lost constraint
+  make it not pass (exit 3); a stopped run's fingerprint is not judged. Default `stop`.
+  *Layered.*
+- **--lag-ceiling** *SECS*
+
+  A timeline lane's lag, in seconds, past which the run has certainly failed: for a tuning
+  run, which stops there (see **--on-certain-failure**) and says when and how much.
+  For an abstract with no timeline, refused on the command line and passed over (with a
+  warning) from the environment or a config file. *Layered.*
+
 **Report**
 
 - **--report-json** *FILE*

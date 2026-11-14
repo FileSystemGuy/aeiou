@@ -246,7 +246,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
       - Probes `m_seq` from chunk `m_h2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks: `m_h3` is the leading chunks held, nothing changed.
       - `m_hit` = `m_h2 + m_h3`.
       - `m_first` = `max(m_h2, min(m_gh × 64, seq_len(m_seq) × 64 − 1) div (64 × per))`.
-      - Measured as span `load`, a request's own storage wait:
+      - Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:
         - For `m_r` from `m_first` while below `m_hit`:
           - `m_rf` is the object of `kv` named by key = `chunk_key(m_seq, m_r, per)`.
           - If `direct = false` (true here):
@@ -450,7 +450,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
               - Probes `s_seq` from chunk `s_h2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks: `s_h3` is the leading chunks held, nothing changed.
               - `s_hit` = `s_h2 + s_h3`.
               - `s_first` = `max(s_h2, min(s_gh × 64, seq_len(s_seq) × 64 − 1) div (64 × per))`.
-              - Measured as span `load`, a request's own storage wait:
+              - Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:
                 - For `s_r` from `s_first` while below `s_hit`:
                   - `s_rf` is the object of `kv` named by key = `chunk_key(s_seq, s_r, per)`.
                   - If `direct = false` (true here):
@@ -653,7 +653,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
               - Probes `s_seq` from chunk `s_h2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks: `s_h3` is the leading chunks held, nothing changed.
               - `s_hit` = `s_h2 + s_h3`.
               - `s_first` = `max(s_h2, min(s_gh × 64, seq_len(s_seq) × 64 − 1) div (64 × per))`.
-              - Measured as span `load`, a request's own storage wait:
+              - Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:
                 - For `s_r` from `s_first` while below `s_hit`:
                   - `s_rf` is the object of `kv` named by key = `chunk_key(s_seq, s_r, per)`.
                   - If `direct = false` (true here):

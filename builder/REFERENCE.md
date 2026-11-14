@@ -168,6 +168,9 @@ part of a lane whose D a run measures (V36). The builder refuses a `submit` or `
 timeline, a `submit` naming workers its timeline does not declare, a span inside a span, a
 `compute`, `parallel`, `acquire`, or `lookup` in a span, and in a `submit` body anything but ops
 and the statements around them (what V35 bans in an eviction body, and `submit` and `span`).
+Since contract 0.21 (2026-11-14): `with c.span("load", staging="store"):`, a span whose reads
+draw on the store workers' staging while in flight, loads into the pool the pending stores hold;
+the builder refuses workers the timeline does not declare.
 
 **Expressions**: node arithmetic (`+ - * // %`, `ceil_div`, `min_`, `max_`, `-x`), comparisons
 (`== != < <= > >=`), `&`, `|`, `~`, `when(test, a, b)` (arms may be expressions, distributions,

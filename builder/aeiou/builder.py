@@ -239,7 +239,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.20"
+    AST_VERSION = "0.21"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -966,17 +966,21 @@ class Cursor:
             yield
 
     @contextlib.contextmanager
-    def span(self, name: str):
+    def span(self, name: str, staging: str | None = None):
         """A measured part of this lane (contract 0.20, rule V36): a run reports its D by
         `name`, from its launch (planned time plus the lane's lag on entry) to its last op's
         completion, a request's own storage wait. Nothing in the plan or the fingerprint. Never
         in another span or a `submit` body; never a `compute`, `parallel`, `acquire`, or
-        `lookup` in it."""
+        `lookup` in it. With `staging`, the timeline's workers whose staging its reads draw on
+        while in flight, loads into the pool the pending stores hold (contract 0.21)."""
         check_ident(name, "span")
-        if self._timeline_frame() is None:
+        tl = self._timeline_frame()
+        if tl is None:
             raise BuildError("span: outside a timeline, where no request is measured (V36)")
+        if staging is not None and staging not in tl.label[1]:
+            raise BuildError(f"span `{name}`: timeline `{tl.label[0]}` declares no workers `{staging}` (V36)")
         body: list = []
-        self._emit({"span": {"name": name, "body": body}})
+        self._emit({"span": {"name": name, **({"staging": staging} if staging is not None else {}), "body": body}})
         outer = next((f for f in reversed(self._frames) if f.kind in ("span", "submit")), None)
         if outer is not None and outer.kind == "span":
             raise BuildError(f"a span inside span `{outer.label}`: a lane's wait is measured once (V36)")

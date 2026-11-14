@@ -424,6 +424,9 @@ struct TlDrive {
     lanes: Vec<Option<usize>>,
     keep: usize,
     timer: Option<Instant>,
+    /// At a certain failure (unless told to keep going): nothing more issues, what is in
+    /// flight completes, and the timeline ends.
+    stopping: bool,
 }
 
 struct Task {
@@ -1229,7 +1232,9 @@ impl<E: Engine> Loop<E> {
             if crate::ast::body_has_timeline(body) {
                 let mut plan = crate::plan::Plan::new(model, template, actor, count);
                 let ahead = plan.next()?;
-                let d = TlDrive { plan, ex: crate::exec::Exec::new(), ahead, t0: Instant::now(), lanes: Vec::new(), keep: crate::exec::RETIRE_FLOOR, timer: None };
+                let mut ex = crate::exec::Exec::new();
+                ex.configure(&self.sh.opts.timeline);
+                let d = TlDrive { plan, ex, ahead, t0: Instant::now(), lanes: Vec::new(), keep: crate::exec::RETIRE_FLOOR, timer: None, stopping: false };
                 self.add_task(Prog::Tl(Box::new(d)), a, None, Role::Main, true);
                 continue;
             }
@@ -1424,7 +1429,7 @@ impl<E: Engine> Loop<E> {
                 plan.retire(|s| ex.done(s));
                 d.keep = (2 * d.plan.paths()).max(crate::exec::RETIRE_FLOOR);
             }
-            let recs = d.ex.poll(now);
+            let recs = if d.stopping { Vec::new() } else { d.ex.poll(now) };
             // a lane that ended gives back its task (its files checked, its counts the timeline's)
             let ended: Vec<usize> = d.ex.take_ended().into_iter().filter_map(|l| d.lanes.get_mut(l).and_then(Option::take)).collect();
             for tid in ended {
@@ -1433,8 +1438,19 @@ impl<E: Engine> Loop<E> {
             let t = &mut self.tasks[id];
             let Prog::Tl(d) = &mut t.prog else { unreachable!() };
             let d = &mut **d;
+            let topts = &self.sh.opts.timeline;
+            if !d.stopping && d.ex.certain_failure(&topts.watches, d.ahead.is_none()).is_some() && !topts.keep_going {
+                d.stopping = true;
+                d.ex.stats.stopped = true;
+                d.ahead = None;
+            }
+            if d.stopping && d.ex.in_flight() == 0 {
+                return self.end_tl(id);
+            }
             if recs.is_empty() {
                 if d.ahead.is_none() && d.ex.idle() {
+                    // the last windows close with the plan
+                    d.ex.certain_failure(&topts.watches, true);
                     return self.end_tl(id);
                 }
                 let wake = [d.ex.next_wake(), d.ahead.as_ref().map(|p| crate::exec::planned_at(p).saturating_sub(HORIZON_NS))].into_iter().flatten().min();

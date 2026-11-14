@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules ~~V1–V27~~ V1–V29, V28 2026-10-22, V29 2026-11-02), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. Then each dataset's projection: samples, files, directories, mean file, and total bytes, what `datagen` writes (`project.rs`, 2026-10-13). `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). An option given without the one it narrows (`--steps`, `--limit` without `--gpu`; `--metrics-block`, `--metrics-sample` without `--metrics` or `--metrics-json`) is a usage error that lists what it needs (§15), never ignored. |
 | `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--[no-]ignore-space] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C or `SIGTERM` stops every host, exit 130 (143). Refuses a non-empty root (datasets are read-only, V12), and, on rank 0 before anything is written, bytes to write beyond the free space `statvfs` reports at a directory root (`--ignore-space` writes anyway; §5, *Space*). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--[no-]subset] [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
+| `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--[no-]subset] [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--on-certain-failure stop\|continue] [--lag-ceiling SECS] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -330,8 +330,13 @@ each is a recorded decision and the golden tests pin them.
   started begin no earlier than their lane reaches them. Worker and eviction lanes are queues:
   their records issue at `max(plan, previous completion, gate, edges)`, L reported and never
   carried, so a batch past its tick delays the next by its overage. A submission's write bytes
-  are staged from its gate until each write completes; staging past the workers' `staging` is a
-  would-be drop, recorded with its time (reported, and made a gate failure, with step 5).
+  are staged from its gate until each write completes, and (contract 0.21, step 5) a read in a
+  span naming the workers as its `staging` holds its bytes there from its issue until it
+  completes, a load into the pool the pending stores hold; staging past the workers' `staging` is
+  a would-be drop, recorded with its time. A run with one is invalid (exit 1): the plan assumes
+  every store lands, so a drop ends its validity (`run::staging_failure`, judged on the whole
+  run's report after the fingerprint; the text report's `timeline staging NAME: peak … of …, N
+  would-be drop(s)`, the JSON report's `timeline.staging`).
   `exec::simulate` runs it on a simulated clock and storage (`tests/exec.rs`). Under `aeiou run`
   on the event loops (`uring.rs`, `aio.rs`) an instance whose body has a timeline is one task
   holding the planner, pulled 10 s of planned time ahead of the wall clock, and the executor,
@@ -360,8 +365,26 @@ each is a recorded decision and the golden tests pin them.
   and lags are kept whole (each span's two numbers) and concatenated over actors and hosts, so a
   merged report's quantiles are exact. In the text report `timeline spans (D: …)` and `timeline
   lag (final L of N lanes)`; in the JSON report `timeline` (§12); for a case's constraints
-  `result.span.SPAN.*` and `result.lag.*` (§17). The edge waits, host lateness, and staging are
-  measured and reported with the rest of step 5.
+  `result.span.SPAN.*` and `result.lag.*` (§17).
+- **Validity and stopping** (2026-11-14, step 5). Every timeline op's **lateness**, its issue
+  less its `ready` (the host's, never the system under test's), is a histogram; a run whose
+  lateness p99 passes 10 ms (`exec::LATENESS_P99_MAX_NS`, the user's choice) is invalid, exit 1:
+  the host could not issue the plan on time. A **certain failure** is a would-be drop, a body
+  lane's L past `--lag-ceiling SECS`, or a case's constraint `result.span.SPAN.window_p99_s` or
+  `.max_s` `<=` (or `<`) a number already lost (`case::watches`): the executor keeps D by window
+  of planned start while one is watched, and a window **closes** once the planner is past its end
+  (or has ended) and every span planned in it has ended; one closing above the number decides
+  the constraint, the result being a maximum over windows. Under `--on-certain-failure stop`
+  (the default) the driver, at the first, leaves the planner, issues nothing more, and lets what
+  is in flight complete; under `continue` it goes on. Judged on the whole run's report before the
+  fingerprint: a would-be drop or the lateness, invalid (exit 1); the ceiling crossed, not passed
+  (exit 3, `run::DidNotPass`); a lost constraint fails with the constraints after the run (exit
+  3). A stopped run's fingerprint is not judged, its op set being part of the plan's. The text
+  report adds `timeline lateness (…)` and `certain failure: … ; the run stopped there`; the JSON
+  report's `timeline` adds `lateness` (a histogram), `lateness_p99_max_ns`,
+  `lag_ceiling_crossed`, `certain_failure`, and `stopped`. Stopping is per host: another host's
+  timeline goes on (a coordinated stop is not built). Edge waits are measured and not yet
+  reported.
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which
@@ -1968,7 +1991,10 @@ object {retries, retries_by_cause {cause: n}} (null without an object endpoint; 
 take_summary {per_instance, instances, takes, stall_ns, compute_ns, stall_mean_ns, stall_p99_ns, stall_max_ns, busy,
               steps [{from, to, takes, stall_mean_ns, stall_p99_ns, stall_max_ns, busy}]},
 timeline {window_s, spans {name: {count, sum_ns, p50_ns, p99_ns, max_ns, window_p99_ns,
-          windows [{window, start_s, count, p99_ns}]}}, lag {lanes, p50_ns, p99_ns, max_ns}}
+          windows [{window, start_s, count, p99_ns}]}}, lag {lanes, p50_ns, p99_ns, max_ns},
+          staging {workers: {capacity_bytes, peak_bytes, drops, first_drop {at_ns, held_bytes} | null}},
+          lateness {…a latency histogram…}, lateness_p99_max_ns, lag_ceiling_crossed {at_ns, lag_ns} | null,
+          certain_failure, stopped}
           (only for a run with a timeline; §2 "D and lag, reported", 2026-11-14),
 instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_records [[stall_ns, compute_ns], …]}]
 ```
@@ -2454,7 +2480,7 @@ and `--resume`, `--grow`, `--shrink`, `--settle`; for `dry-run` the identity and
 the output and metrics flags. A *layered* option may come from any layer: for `run` `--root`, `--endpoint`,
 `--threads`, `--buffer-mib`, `--write-compress`, `--time-scale`, the io_uring, libaio, and
 mmap knobs, `--object-threads`, `--object-part-mib`, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`,
-`--require-cold`, `--drop-caches`, `--report-json`, `--report-takes`; for `datagen` `--root`, `--endpoint`,
+`--require-cold`, `--drop-caches`, `--on-certain-failure`, `--lag-ceiling`, `--report-json`, `--report-takes`; for `datagen` `--root`, `--endpoint`,
 `--writers`, `--object-threads`, `--progress-secs`, `--rank`, `--ranks`, `--coordinator`; for `dry-run` `--threads` and `--ranks`. `--rank` from the environment is
 the case the layers exist for: a launcher sets `AEIOU_RANK` from its own rank variable and
 the same command line runs on every host. ("Replace" is the only merge rule: `--endpoint`, the one

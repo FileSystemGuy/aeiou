@@ -460,8 +460,9 @@ enum Next<'a> {
     Block,
     /// A `submit` (contract 0.20): its workers and body.
     Submit(&'a str, &'a [Node]),
-    /// A `span` of a timeline's lane was entered, by name, or its body ended (contract 0.20).
-    SpanBegin(&'a str),
+    /// A `span` of a timeline's lane was entered, by name and the workers whose staging its
+    /// reads draw on (contract 0.21), or its body ended (contract 0.20).
+    SpanBegin(&'a str, Option<&'a str>),
     SpanEnd,
 }
 
@@ -488,7 +489,7 @@ pub enum TlNote {
     Fork { parent: Exec, kids: Vec<Exec>, join: bool, plan: i64 },
     /// Lane `parent` submitted a body to worker lane `worker` of the timeline's workers `workers`
     /// (by declaration order), whose `staging` is in bytes.
-    Submit { parent: Exec, worker: Exec, workers: usize, staging: i64, plan: i64 },
+    Submit { parent: Exec, worker: Exec, workers: usize, name: Arc<str>, staging: i64, plan: i64 },
     /// An eviction batch started its victims on `lanes` at `plan`: by a store of lane `parent`,
     /// or at a tick (`None`).
     Evict { parent: Option<Exec>, lanes: Vec<Exec>, plan: i64 },
@@ -496,7 +497,9 @@ pub enum TlNote {
     End { lane: Exec, plan: i64 },
     /// Lane `lane` entered span `name` at `plan`, or left the span it entered last (contract
     /// 0.20): what a run measures D over (`exec.rs`).
-    SpanBegin { lane: Exec, name: Arc<str>, plan: i64 },
+    /// Its reads draw on the staging of the timeline's workers `staging` (by declaration order,
+    /// named, and its bytes) while in flight (contract 0.21).
+    SpanBegin { lane: Exec, name: Arc<str>, staging: Option<(usize, Arc<str>, i64)>, plan: i64 },
     SpanEnd { lane: Exec, plan: i64 },
 }
 
@@ -509,7 +512,7 @@ enum LaneEv<'a> {
     Block,
     End,
     Submit(&'a str, &'a [Node]),
-    SpanBegin(&'a str),
+    SpanBegin(&'a str, Option<&'a str>),
     SpanEnd,
 }
 
@@ -1014,7 +1017,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Some(Next::Trace(t)) => Some((Event::Trace(t, self.ctx()), None)),
                 Some(Next::Block) => return Err(anyhow!("a lane waited outside a timeline (V34)")),
                 Some(Next::Submit(..)) => unreachable!("a `submit` outside a timeline is refused when walked"),
-                Some(Next::SpanBegin(_) | Next::SpanEnd) => continue,
+                Some(Next::SpanBegin(..) | Next::SpanEnd) => continue,
             });
         }
     }
@@ -1034,7 +1037,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             Some(Next::Trace(_)) => LaneEv::Trace,
             Some(Next::Block) => LaneEv::Block,
             Some(Next::Submit(w, b)) => LaneEv::Submit(w, b),
-            Some(Next::SpanBegin(n)) => LaneEv::SpanBegin(n),
+            Some(Next::SpanBegin(n, w)) => LaneEv::SpanBegin(n, w),
             Some(Next::SpanEnd) => LaneEv::SpanEnd,
             Some(Next::Timeline) => unreachable!("a timeline inside a timeline is refused when entered"),
         })
@@ -1186,16 +1189,18 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     kid.start(body);
                     let exec = (2, wi as i64, ord % run.workers[wi].1);
                     if let Some(n) = &run.notes {
-                        n.lock().unwrap().push(TlNote::Submit { parent: run.lanes[cur].exec, worker: exec, workers: wi, staging: run.workers[wi].2, plan: clock });
+                        n.lock().unwrap().push(TlNote::Submit { parent: run.lanes[cur].exec, worker: exec, workers: wi, name: Arc::from(name), staging: run.workers[wi].2, plan: clock });
                     }
                     run.lanes.push(Lane { vm: Some(kid), key: vec![wi as i64, ord], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 2, exec });
                     let l = run.lanes.len() - 1;
                     run.ready(l);
                 }
-                S::SpanBegin(name) => {
+                S::SpanBegin(name, staging) => {
                     if let Some(n) = &run.notes {
                         let lane = &run.lanes[cur];
-                        n.lock().unwrap().push(TlNote::SpanBegin { lane: lane.exec, name: Arc::from(name), plan: lane.vm.as_ref().unwrap().clock });
+                        // V36 holds that it names one of the timeline's workers
+                        let staging = staging.and_then(|w| run.workers.iter().position(|x| x.0 == w).map(|i| (i, Arc::from(w), run.workers[i].2)));
+                        n.lock().unwrap().push(TlNote::SpanBegin { lane: lane.exec, name: Arc::from(name), staging, plan: lane.vm.as_ref().unwrap().clock });
                     }
                 }
                 S::SpanEnd => {
@@ -3000,7 +3005,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 Ok(Some(Next::Submit(workers, body)))
             }
-            Node::Span { name, body } => {
+            Node::Span { name, staging, body } => {
                 // the plan walks its body where it stands; in a timeline's lane its begin and
                 // end are marked for the run, which measures D over it
                 if self.tl.is_none() {
@@ -3009,7 +3014,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 self.stack.push(Cont::SpanEnd);
                 self.push_body(body);
-                Ok(Some(Next::SpanBegin(name)))
+                Ok(Some(Next::SpanBegin(name, staging.as_deref())))
             }
             Node::Phase { name, body } => {
                 let label: Arc<str> = match self.expr(name)? {
@@ -3501,7 +3506,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.20", "name": "t",
+                r#"{{"ast": "0.21", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

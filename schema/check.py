@@ -1072,9 +1072,12 @@ class Check:
         self.span = outer
 
     def n_span(self, a, p, scope):
-        """V36: a `span` in a timeline, not in another, holding nothing planned."""
+        """V36: a `span` in a timeline, not in another, holding nothing planned; the staging its
+        reads draw on (contract 0.21) its timeline's workers."""
         if self.timeline is None:
             self.err(p, "span: outside a timeline, where no request is measured (V36)")
+        elif "staging" in a and a["staging"] not in self.workers:
+            self.err(p, f"span `{a['name']}`: timeline `{self.timeline[0]}` declares no workers `{a['staging']}` (V36)")
         if self.span is not None:
             self.err(p, f"a span inside span `{self.span}`: a lane's wait is measured once (V36)")
         bans = []

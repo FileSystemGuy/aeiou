@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.20";
+pub const AST_VERSION: &str = "0.21";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,7 +61,7 @@ impl Ast {
         fn walk(nodes: &[Node], out: &mut std::collections::BTreeSet<String>) {
             for n in nodes {
                 match n {
-                    Node::Span { name, body } => {
+                    Node::Span { name, body, .. } => {
                         out.insert(name.clone());
                         walk(body, out);
                     }
@@ -1035,8 +1035,15 @@ pub enum Node {
     /// ordinal mod `lanes`), its ops this lane's ops as written (contract 0.20, rule V36).
     Submit { workers: String, body: Body },
     /// A measured part of a lane: the run measures its D, a request's own storage wait, from its
-    /// launch to its last op's completion (contract 0.20, rule V36). Nothing in the plan.
-    Span { name: String, body: Body },
+    /// launch to its last op's completion (contract 0.20, rule V36). Nothing in the plan. Its
+    /// reads draw on the staging of the timeline's workers `staging` while in flight, loads into
+    /// the pool the pending stores hold (contract 0.21).
+    Span {
+        name: String,
+        #[serde(default)]
+        staging: Option<String>,
+        body: Body,
+    },
     /// An entry of the named timeline: these values at this lane's planned time (rule V30).
     /// In `group` (contract 0.17; 0 when none is given).
     Publish { timeline: String, #[serde(default)] group: Option<Expr>, values: std::collections::BTreeMap<String, Expr> },

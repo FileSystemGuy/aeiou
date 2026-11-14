@@ -281,6 +281,9 @@ pub struct RunOpts {
     pub require_cold: bool,
     /// `sync` and drop the page cache, dentries, and inodes before the start gate (`cold`).
     pub drop_caches: bool,
+    /// What a timeline's run stops on (`--on-certain-failure`, `--lag-ceiling`, a case's watched
+    /// constraints; brief item 72 (7) step 5).
+    pub timeline: crate::exec::TimelineOpts,
 }
 
 impl RunOpts {
@@ -624,6 +627,66 @@ pub struct Stats {
     pub spans: BTreeMap<String, Vec<(i64, i64)>>,
     #[serde(default)]
     pub lane_lag: Vec<i64>,
+    /// A timeline's workers' staging, by workers name (contract 0.20, 0.21).
+    #[serde(default)]
+    pub staging: BTreeMap<String, StagingRec>,
+    /// Each timeline op's lateness, its issue less when it was ready: the host's.
+    #[serde(default)]
+    pub lateness: LatHist,
+    /// The first time a body lane's L passed the lag ceiling: when, and the L.
+    #[serde(default)]
+    pub lag_ceiling: Option<(i64, i64)>,
+    /// The first certain failure of a timeline, and whether a timeline stopped at it.
+    #[serde(default)]
+    pub certain: Option<String>,
+    #[serde(default)]
+    pub stopped: bool,
+}
+
+/// A timeline's workers' staging over the run: its size, the most it held, and each would-be
+/// drop's time (ns from planned time 0) and bytes held.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StagingRec {
+    pub capacity: i64,
+    pub peak: i64,
+    pub drops: Vec<(i64, i64)>,
+}
+
+impl StagingRec {
+    fn merge(&mut self, o: &StagingRec) {
+        self.capacity = self.capacity.max(o.capacity);
+        self.peak = self.peak.max(o.peak);
+        self.drops.extend_from_slice(&o.drops);
+    }
+}
+
+/// Why a run whose timeline's staging overflowed is invalid (brief item 72 (7) step 5,
+/// `DESIGN_REVIEW.md` §3.99: the plan assumes every store lands, so a would-be drop ends its
+/// validity), naming the first drop; `None` when none did.
+pub fn staging_failure(s: &Stats) -> Option<String> {
+    let n: usize = s.staging.values().map(|r| r.drops.len()).sum();
+    let (name, rec, (at, held)) = s.staging.iter().flat_map(|(k, r)| r.drops.iter().map(move |d| (k, r, *d))).min_by_key(|(_, _, d)| d.0)?;
+    let when = if at < 0 { "as it was submitted".to_string() } else { format!("at {:.3} s into the timeline", at as f64 / 1e9) };
+    Some(format!(
+        "staging of workers `{name}` held {held} bytes, past its {}, {when}: a store would have been dropped, and the plan assumes every store lands, so the run is invalid ({n} would-be drop(s); brief item 72 (7), DESIGN_REVIEW.md §3.99)",
+        rec.capacity
+    ))
+}
+
+/// Why a timeline's run is invalid for the host's lateness: its ops' p99 past
+/// `exec::LATENESS_P99_MAX_NS` (`DESIGN_REVIEW.md` §3.99 point 7, 10 ms, the user's choice of
+/// 2026-11-14): the host could not issue the plan on time, so the storage was not what was
+/// measured; `None` otherwise.
+pub fn lateness_failure(s: &Stats) -> Option<String> {
+    let p99 = s.lateness.quantile(0.99);
+    (s.lateness.count > 0 && p99 > crate::exec::LATENESS_P99_MAX_NS).then(|| {
+        format!(
+            "the host's lateness p99 was {:.3} ms over {} timeline ops, past {} ms: the host could not issue the plan on time, so the run is invalid (brief item 72 (7), DESIGN_REVIEW.md §3.99)",
+            p99 as f64 / 1e6,
+            s.lateness.count,
+            crate::exec::LATENESS_P99_MAX_NS / 1_000_000
+        )
+    })
 }
 
 impl Stats {
@@ -633,6 +696,17 @@ impl Stats {
             self.spans.entry(k.to_string()).or_default().extend_from_slice(v);
         }
         self.lane_lag.extend_from_slice(&x.body_lag);
+        self.lateness.merge(&x.lateness);
+        if self.lag_ceiling.is_none() {
+            self.lag_ceiling = x.ceiling.map(|(at, _, l)| (at, l));
+        }
+        if self.certain.is_none() {
+            self.certain = x.certain.clone();
+        }
+        self.stopped |= x.stopped;
+        for st in x.staging.iter().filter(|s| !s.name.is_empty()) {
+            self.staging.entry(st.name.clone()).or_default().merge(&StagingRec { capacity: st.capacity, peak: st.peak, drops: st.drops.clone() });
+        }
     }
 
     pub fn merge(&mut self, o: &Stats) {
@@ -671,6 +745,17 @@ impl Stats {
             self.spans.entry(k.clone()).or_default().extend_from_slice(v);
         }
         self.lane_lag.extend_from_slice(&o.lane_lag);
+        for (k, r) in &o.staging {
+            self.staging.entry(k.clone()).or_default().merge(r);
+        }
+        self.lateness.merge(&o.lateness);
+        if self.lag_ceiling.is_none() {
+            self.lag_ceiling = o.lag_ceiling;
+        }
+        if self.certain.is_none() {
+            self.certain = o.certain.clone();
+        }
+        self.stopped |= o.stopped;
     }
 }
 
@@ -3256,6 +3341,13 @@ fn write_timeline(out: &mut impl Write, s: &Stats) -> std::io::Result<()> {
             writeln!(out, "  {:<10} {:>9} {:>9} {:>9} {:>9}   window p99 {} of {} window(s)   n={}", name, t(m.sum), t(m.p50), t(m.p99), t(m.max), t(m.window_p99), m.windows.len(), m.count)?;
         }
     }
+    if s.lateness.count > 0 {
+        let h = &s.lateness;
+        writeln!(out, "timeline lateness (issue less ready, the host's; invalid past a p99 of {} ms): p50 {}  p99 {}  max {}  n={}", crate::exec::LATENESS_P99_MAX_NS / 1_000_000, us(h.quantile(0.5)), us(h.quantile(0.99)), us(h.max), h.count)?;
+    }
+    for (name, r) in &s.staging {
+        writeln!(out, "timeline staging `{name}`: peak {} of {}, {} would-be drop(s)", human_bytes(r.peak.max(0) as u64), human_bytes(r.capacity.max(0) as u64), r.drops.len())?;
+    }
     if !s.lane_lag.is_empty() {
         let mut l = s.lane_lag.clone();
         l.sort_unstable();
@@ -3814,6 +3906,7 @@ impl Runner {
         let (tx, rx) = mpsc::channel::<LaneMsg>();
         let mut threads: Vec<(mpsc::Sender<LaneJob>, JoinHandle<Stats>)> = Vec::new();
         let mut ex = crate::exec::Exec::new();
+        ex.configure(&self.sh.opts.timeline);
         let r = self.timeline_loop(model, template, actor, count, &tx, &rx, &mut threads, &mut ex);
         if r.is_ok() {
             self.a.st.add_timeline(&ex.finish());
@@ -3858,6 +3951,10 @@ impl Runner {
         let mut seen: Vec<bool> = Vec::new();
         // planned time 0, once the threads of the lanes in the first horizon have their buffers
         let mut start: Option<Instant> = None;
+        // at a certain failure (unless told to keep going): nothing more issues, what is in
+        // flight completes
+        let topts = self.sh.opts.timeline.clone();
+        let mut stopping = false;
         loop {
             if self.sh.aborted.load(Ordering::Relaxed) {
                 return Err(self.sh.abort_error());
@@ -3923,7 +4020,7 @@ impl Runner {
                 start = Some(Instant::now());
                 continue;
             };
-            let recs = ex.poll(now);
+            let recs = if stopping { Vec::new() } else { ex.poll(now) };
             for l in ex.take_ended() {
                 if let Some(w) = held.get_mut(l).and_then(Option::take) {
                     let _ = threads[w].0.send(LaneJob::End);
@@ -3934,7 +4031,19 @@ impl Runner {
                 let w = held[r.lane].expect("a lane has its thread from when its first op was planned");
                 threads[w].0.send(LaneJob::Op(r)).map_err(|_| anyhow!("a timeline lane's thread ended"))?;
             }
-            if ahead.is_none() && ex.idle() {
+            if !stopping && ex.certain_failure(&topts.watches, ahead.is_none()).is_some() && !topts.keep_going {
+                stopping = true;
+                ex.stats.stopped = true;
+                ahead = None;
+                pending.clear();
+            }
+            if stopping {
+                if ex.in_flight() == 0 {
+                    return Ok(());
+                }
+            } else if ahead.is_none() && ex.idle() {
+                // the last windows close with the plan
+                ex.certain_failure(&topts.watches, true);
                 return Ok(());
             }
             let wake = [ex.next_wake(), ahead.as_ref().map(|p| planned_at(p).saturating_sub(HORIZON_NS)), pending.first().map(|(at, _)| at.saturating_sub(BIND_LEAD_NS))].into_iter().flatten().min();
@@ -3963,6 +4072,22 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A timeline's run is invalid when its host's lateness p99 passes 10 ms (the user's choice
+    /// of 2026-11-14), never at or below it, nor without timeline ops.
+    #[test]
+    fn host_lateness_past_10_ms_makes_a_run_invalid() {
+        let mut s = Stats::default();
+        assert!(lateness_failure(&s).is_none());
+        for _ in 0..99 {
+            s.lateness.add(1_000);
+        }
+        s.lateness.add(50_000_000);
+        assert!(lateness_failure(&s).is_none(), "one op in 100 late is the p99's own");
+        s.lateness.add(50_000_000);
+        let e = lateness_failure(&s).unwrap();
+        assert!(e.starts_with("the host's lateness p99 was ") && e.contains("over 101 timeline ops, past 10 ms"), "{e}");
+    }
 
     /// The pages of `[ptr, ptr + len)` the kernel has resident, by `mincore`.
     fn resident(ptr: *mut u8, len: usize) -> usize {

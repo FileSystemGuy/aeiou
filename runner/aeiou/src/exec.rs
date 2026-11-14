@@ -45,8 +45,9 @@ enum Item {
     /// is behind this join in its queue, so its sub-lanes end after it.
     Join { plan: i64, kids: usize },
     End { plan: i64 },
-    /// The lane enters span `name` (planned at `plan`), or leaves the one it entered last.
-    SpanBegin { name: Arc<str>, plan: i64 },
+    /// The lane enters span `name` (planned at `plan`), its reads drawing on the staging of
+    /// workers `staging`, or leaves the one it entered last.
+    SpanBegin { name: Arc<str>, staging: Option<usize>, plan: i64 },
     SpanEnd,
 }
 
@@ -77,19 +78,23 @@ struct Lane {
     staging_open: bool,
     timer: Option<i64>,
     ended: bool,
-    /// The spans it is in, innermost last: name, planned start, launch.
-    spans: Vec<(Arc<str>, i64, i64)>,
+    /// The span it is in: name, planned start, launch, and the workers whose staging its reads
+    /// draw on.
+    spans: Vec<(Arc<str>, i64, i64, Option<usize>)>,
     /// It has issued an op.
     issued: bool,
 }
 
-/// The workers' staging: bytes submitted and not yet written, its peak, and the would-be drops.
+/// The workers' staging: bytes submitted and not yet written, and the bytes of the loads in
+/// flight that draw on it (a span naming it, contract 0.21); its peak, and the would-be drops.
 #[derive(Debug, Default, Clone)]
 pub struct Staging {
+    /// The workers' name.
+    pub name: String,
     pub capacity: i64,
     pub held: i64,
     pub peak: i64,
-    /// (time, bytes held) each time a submission took it past its capacity.
+    /// (time, bytes held) each time a submission or a load took it past its capacity.
     pub drops: Vec<(i64, i64)>,
 }
 
@@ -113,14 +118,58 @@ pub struct Stats {
     /// The final L of each lane of the timeline's body that issued an op (a session's; worker
     /// and eviction lanes' L is reported, never carried, so not here).
     pub body_lag: Vec<i64>,
+    /// Each op's lateness, its issue less its `ready`: the host's, not the system under test's
+    /// (`DESIGN_REVIEW.md` §3.99 point 7; a run is invalid past a p99 of `LATENESS_P99_MAX_NS`).
+    pub lateness: crate::run::LatHist,
+    /// When a body lane's L first passed the lag ceiling: the time, the lane, and its L.
+    pub ceiling: Option<(i64, usize, i64)>,
+    /// The first certain failure, and whether the timeline stopped at it.
+    pub certain: Option<String>,
+    pub stopped: bool,
+}
+
+/// A run's host lateness p99 past which it is invalid: 10 ms (`DESIGN_REVIEW.md` §3.99 point 7,
+/// the user's choice of 2026-11-14).
+pub const LATENESS_P99_MAX_NS: u64 = 10_000_000;
+
+/// A case's constraint that is certain to fail once a window closes above it (the user's choice
+/// of 2026-11-14): `result.span.SPAN.window_p99_s` (or `.max_s` when `max`) at most `limit_ns`
+/// (below it when `strict`). Its `text` is the constraint's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Watch {
+    pub span: String,
+    pub max: bool,
+    pub limit_ns: i64,
+    pub strict: bool,
+    pub text: String,
+}
+
+impl Watch {
+    fn lost(&self, value: i64) -> bool {
+        if self.strict {
+            value >= self.limit_ns
+        } else {
+            value > self.limit_ns
+        }
+    }
+}
+
+/// What a run of a timeline is told to stop on (`--on-certain-failure`, `--lag-ceiling`, and the
+/// watches from a case's constraints).
+#[derive(Debug, Clone, Default)]
+pub struct TimelineOpts {
+    /// Stop at the first certain failure (`--on-certain-failure stop`, the default), or go on.
+    pub keep_going: bool,
+    pub lag_ceiling_ns: Option<i64>,
+    pub watches: Vec<Watch>,
 }
 
 pub struct Exec {
     lanes: Vec<Lane>,
     /// Pushed and not completed.
     outstanding: HashSet<u64>,
-    /// In flight: lane, and the bytes it staged.
-    flight: HashMap<u64, (usize, i64)>,
+    /// In flight: lane, and the bytes it holds in a staging and whose.
+    flight: HashMap<u64, (usize, i64, Option<usize>)>,
     /// Writes staged at their submission, not yet issued.
     staged: HashMap<u64, i64>,
     waiters: HashMap<u64, Vec<usize>>,
@@ -130,12 +179,23 @@ pub struct Exec {
     dirty: Vec<usize>,
     /// Lanes that have ended since `take_ended`.
     ended: Vec<usize>,
+    /// A body lane's L past this is a certain failure (`--lag-ceiling`).
+    pub ceiling_ns: Option<i64>,
+    /// A constraint is watched: D is kept by window until the window closes.
+    pub watching: bool,
+    /// The latest planned time pushed, and whether the planner has ended: a window is closed
+    /// once it is past and its spans have ended.
+    pushed_to: i64,
+    /// Spans pushed and not ended, by window of planned start; D by window and span name, kept
+    /// until the window closes.
+    open_win: HashMap<i64, usize>,
+    win_d: BTreeMap<(i64, Arc<str>), Vec<i64>>,
     pub stats: Stats,
 }
 
 impl Exec {
     pub fn new() -> Self {
-        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), ended: Vec::new(), stats: Stats::default() }
+        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), ended: Vec::new(), ceiling_ns: None, watching: false, pushed_to: 0, open_win: HashMap::new(), win_d: BTreeMap::new(), stats: Stats::default() }
     }
 
     fn lane(&mut self, l: usize) -> &mut Lane {
@@ -145,6 +205,18 @@ impl Exec {
         &mut self.lanes[l]
     }
 
+    /// Workers `w`'s staging, named `name`, of `capacity` bytes.
+    fn staging(&mut self, w: usize, name: &str, capacity: i64) {
+        if self.stats.staging.len() <= w {
+            self.stats.staging.resize_with(w + 1, Staging::default);
+        }
+        let s = &mut self.stats.staging[w];
+        s.capacity = capacity;
+        if s.name.is_empty() {
+            s.name = name.to_string();
+        }
+    }
+
     fn gate(&mut self, lanes: Vec<usize>) -> usize {
         self.gates.push((None, lanes));
         self.gates.len() - 1
@@ -152,6 +224,7 @@ impl Exec {
 
     /// The planner's next event, in planned order.
     pub fn push(&mut self, p: Planned) {
+        self.pushed_to = self.pushed_to.max(planned_at(&p));
         match p {
             Planned::Op(r) => {
                 let l = r.lane;
@@ -187,11 +260,8 @@ impl Exec {
                 }
                 self.dirty.push(parent);
             }
-            Planned::Submit { parent, worker, workers, staging, plan } => {
-                if self.stats.staging.len() <= workers {
-                    self.stats.staging.resize_with(workers + 1, Staging::default);
-                }
-                self.stats.staging[workers].capacity = staging;
+            Planned::Submit { parent, worker, workers, name, staging, plan } => {
+                self.staging(workers, &name, staging);
                 let g = self.gate(vec![worker]);
                 self.lane(parent).q.push_back(Item::Spawn { gate: g, plan });
                 let w = self.lane(worker);
@@ -221,8 +291,12 @@ impl Exec {
                 self.lane(lane).q.push_back(Item::End { plan });
                 self.dirty.push(lane);
             }
-            Planned::SpanBegin { lane, name, plan } => {
-                self.lane(lane).q.push_back(Item::SpanBegin { name, plan });
+            Planned::SpanBegin { lane, name, staging, plan } => {
+                *self.open_win.entry(plan.div_euclid(WINDOW_NS)).or_default() += 1;
+                if let Some((w, wname, bytes)) = &staging {
+                    self.staging(*w, wname, *bytes);
+                }
+                self.lane(lane).q.push_back(Item::SpanBegin { name, staging: staging.map(|s| s.0), plan });
                 self.dirty.push(lane);
             }
             Planned::SpanEnd { lane, .. } => {
@@ -304,6 +378,12 @@ impl Exec {
                     }
                     let Some(Item::Op(r)) = lane.q.pop_front() else { unreachable!() };
                     lane.l = lane.l.max(ready - r.plan);
+                    self.stats.lateness.add((now - ready).max(0) as u64);
+                    if let (false, Some(c), None) = (lane.queue, self.ceiling_ns, self.stats.ceiling) {
+                        if lane.l > c {
+                            self.stats.ceiling = Some((now, l, lane.l));
+                        }
+                    }
                     lane.busy = Some(r.seq);
                     lane.edge_t = 0;
                     if ready > own {
@@ -316,8 +396,22 @@ impl Exec {
                     }
                     self.stats.issued += 1;
                     lane.issued = true;
-                    let staged = self.staged.remove(&r.seq).unwrap_or(0);
-                    self.flight.insert(r.seq, (l, staged));
+                    // a write's bytes were staged at its submission; a load's, a read in a span
+                    // naming a staging, are from now until it completes
+                    let load = if r.kind == OpKind::Read { lane.spans.last().and_then(|s| s.3) } else { None };
+                    let held = match load {
+                        Some(w) => {
+                            let st = &mut self.stats.staging[w];
+                            st.held += r.len;
+                            st.peak = st.peak.max(st.held);
+                            if st.held > st.capacity && r.len > 0 {
+                                st.drops.push((now, st.held));
+                            }
+                            (r.len, Some(w))
+                        }
+                        None => (self.staged.remove(&r.seq).unwrap_or(0), lane.workers),
+                    };
+                    self.flight.insert(r.seq, (l, held.0, held.1));
                     out.push(r);
                     return;
                 }
@@ -378,13 +472,20 @@ impl Exec {
                 Item::SpanBegin { plan, .. } => {
                     // launched when the lane reaches it: its plan plus L, or its previous completion
                     let launch = (plan + if lane.queue { 0 } else { lane.l }).max(lane.last);
-                    let Some(Item::SpanBegin { name, plan }) = lane.q.pop_front() else { unreachable!() };
-                    lane.spans.push((name, plan, launch));
+                    let Some(Item::SpanBegin { name, staging, plan }) = lane.q.pop_front() else { unreachable!() };
+                    lane.spans.push((name, plan, launch, staging));
                 }
                 Item::SpanEnd => {
                     lane.q.pop_front();
-                    let (name, plan, launch) = lane.spans.pop().expect("a span's end follows its begin");
+                    let (name, plan, launch, _) = lane.spans.pop().expect("a span's end follows its begin");
                     let d = lane.last.max(launch) - launch;
+                    let w = plan.div_euclid(WINDOW_NS);
+                    if let Some(n) = self.open_win.get_mut(&w) {
+                        *n -= 1;
+                    }
+                    if self.watching {
+                        self.win_d.entry((w, name.clone())).or_default().push(d);
+                    }
                     self.stats.spans.entry(name).or_default().push((plan, d));
                 }
                 Item::End { plan } => {
@@ -409,14 +510,12 @@ impl Exec {
     /// Record `seq` completed at `now`.
     pub fn complete(&mut self, seq: u64, now: i64) {
         self.outstanding.remove(&seq);
-        if let Some((l, staged)) = self.flight.remove(&seq) {
+        if let Some((l, staged, w)) = self.flight.remove(&seq) {
             let lane = &mut self.lanes[l];
             lane.busy = None;
             lane.last = lane.last.max(now);
-            if staged > 0 {
-                if let Some(w) = lane.workers {
-                    self.stats.staging[w].held -= staged;
-                }
+            if let (true, Some(w)) = (staged > 0, w) {
+                self.stats.staging[w].held -= staged;
             }
             self.dirty.push(l);
         }
@@ -434,6 +533,60 @@ impl Exec {
     /// lanes never end; they go on until the timeline does.
     pub fn take_ended(&mut self) -> Vec<usize> {
         std::mem::take(&mut self.ended)
+    }
+
+    /// Take `opts`' lag ceiling, and keep D by window when it watches a constraint.
+    pub fn configure(&mut self, opts: &TimelineOpts) {
+        self.ceiling_ns = opts.lag_ceiling_ns;
+        self.watching = !opts.watches.is_empty();
+    }
+
+    /// The windows of planned start that have closed since the last call (the planner past their
+    /// end, or ended, and their spans ended): each span name's (window, count, p99, maximum) of D.
+    pub fn closed_windows(&mut self, planner_done: bool) -> Vec<(Arc<str>, i64, u64, i64, i64)> {
+        let closed: Vec<(i64, Arc<str>)> = self
+            .win_d
+            .keys()
+            .filter(|(w, _)| (planner_done || self.pushed_to >= (w + 1).saturating_mul(WINDOW_NS)) && self.open_win.get(w).copied().unwrap_or(0) == 0)
+            .cloned()
+            .collect();
+        let mut out = Vec::new();
+        for k in closed {
+            let mut v = self.win_d.remove(&k).unwrap_or_default();
+            v.sort_unstable();
+            out.push((k.1.clone(), k.0, v.len() as u64, quantile(&v, 0.99), v.last().copied().unwrap_or(0)));
+        }
+        out.retain(|x| x.2 > 0);
+        out
+    }
+
+    /// The first certain failure since the run began, if there is one now: a would-be drop, the
+    /// lag ceiling crossed, or a watched constraint lost in a window that has closed. Recorded in
+    /// the stats once.
+    pub fn certain_failure(&mut self, watches: &[Watch], planner_done: bool) -> Option<String> {
+        if let Some(c) = &self.stats.certain {
+            return Some(c.clone());
+        }
+        let mut why = None;
+        if let Some((at, held, st)) = self.stats.staging.iter().find_map(|s| s.drops.first().map(|d| (d.0, d.1, s))) {
+            why = Some(format!("staging of workers `{}` held {held} bytes, past its {}, at {:.3} s into the timeline: a store would have been dropped", st.name, st.capacity, at.max(0) as f64 / 1e9));
+        } else if let Some((at, lane, l)) = self.stats.ceiling {
+            why = Some(format!("lane {lane}'s lag reached {:.3} s, past the lag ceiling of {:.3} s, at {:.3} s into the timeline", l as f64 / 1e9, self.ceiling_ns.unwrap_or(0) as f64 / 1e9, at as f64 / 1e9));
+        } else if !watches.is_empty() {
+            for (name, w, n, p99, max) in self.closed_windows(planner_done) {
+                for x in watches.iter().filter(|x| x.span == *name) {
+                    let v = if x.max { max } else { p99 };
+                    if x.lost(v) && why.is_none() {
+                        let what = if x.max { "a D of" } else { "a p99 of" };
+                        why = Some(format!("constraint `{}` lost: span `{name}`'s window {w} (planned {} s to {} s) closed with {what} {:.3} s over {n} spans", x.text, w * (WINDOW_NS / 1_000_000_000), (w + 1) * (WINDOW_NS / 1_000_000_000), v as f64 / 1e9));
+                    }
+                }
+            }
+        }
+        if why.is_some() {
+            self.stats.certain = why.clone();
+        }
+        why
     }
 
     /// Whether `seq` has completed (or was never pushed): for the planner's `retire`.
@@ -567,8 +720,16 @@ pub struct Simulated {
 /// Run `plan` through an executor on a simulated clock: each op completes `latency(record,
 /// issued)` ns after it is issued; the planner is pulled `horizon` ns of planned time ahead
 /// of the clock. Returns the ops in the order issued, and the executor's stats.
-pub fn simulate(plan: &mut Plan, horizon: i64, mut latency: impl FnMut(&Record, i64) -> i64) -> Result<(Vec<Simulated>, Stats)> {
+pub fn simulate(plan: &mut Plan, horizon: i64, latency: impl FnMut(&Record, i64) -> i64) -> Result<(Vec<Simulated>, Stats)> {
+    simulate_with(plan, horizon, &TimelineOpts { keep_going: true, ..Default::default() }, latency)
+}
+
+/// `simulate` told what to stop on: at the first certain failure, unless `opts.keep_going`, the
+/// planner is left and no record is issued again; what is in flight completes.
+pub fn simulate_with(plan: &mut Plan, horizon: i64, opts: &TimelineOpts, mut latency: impl FnMut(&Record, i64) -> i64) -> Result<(Vec<Simulated>, Stats)> {
     let mut ex = Exec::new();
+    ex.configure(opts);
+    let mut stopping = false;
     let mut now = 0i64;
     let mut ahead: Option<Planned> = plan.next()?;
     let mut flight: BinaryHeap<Reverse<(i64, u64)>> = BinaryHeap::new();
@@ -586,14 +747,30 @@ pub fn simulate(plan: &mut Plan, horizon: i64, mut latency: impl FnMut(&Record, 
             ex.push(p);
             ahead = plan.next()?;
         }
-        for r in ex.poll(now) {
-            let done = now + latency(&r, now).max(0);
-            flight.push(Reverse((done, r.seq)));
-            issued.insert(r.seq, out.len());
-            out.push(Simulated { record: r, issued: now, completed: -1 });
+        if !stopping {
+            for r in ex.poll(now) {
+                let done = now + latency(&r, now).max(0);
+                flight.push(Reverse((done, r.seq)));
+                issued.insert(r.seq, out.len());
+                out.push(Simulated { record: r, issued: now, completed: -1 });
+            }
+            if ex.certain_failure(&opts.watches, ahead.is_none()).is_some() && !opts.keep_going {
+                stopping = true;
+                ex.stats.stopped = true;
+                ahead = None;
+            }
         }
-        if ahead.is_none() && flight.is_empty() && ex.idle() {
+        if (stopping || (ahead.is_none() && ex.idle())) && flight.is_empty() {
             break;
+        }
+        if stopping {
+            // what is in flight completes; nothing more issues
+            let Some(Reverse((t, seq))) = flight.pop() else { break };
+            now = t.max(now);
+            ex.complete(seq, now);
+            let i = issued.remove(&seq).expect("an op in flight was issued");
+            out[i].completed = now;
+            continue;
         }
         let mut next = [flight.peek().map(|Reverse((t, _))| *t), ex.next_wake(), ahead.as_ref().map(|p| planned_at(p).saturating_sub(horizon))]
             .into_iter()
@@ -619,6 +796,8 @@ pub fn simulate(plan: &mut Plan, horizon: i64, mut latency: impl FnMut(&Record, 
             keep = (2 * plan.paths()).max(RETIRE_FLOOR);
         }
     }
+    // the last windows close with the plan
+    ex.certain_failure(&opts.watches, true);
     let mut st = ex.finish();
     st.paths_peak = peak.max(plan.paths());
     Ok((out, st))
@@ -645,7 +824,7 @@ mod tests {
     fn a_stuck_executor_says_what_waits_on_what() {
         let mut ex = Exec::new();
         ex.push(rec(0, 0, 0, OpKind::Stat, &[1]));
-        ex.push(Planned::Submit { parent: 0, worker: 1, workers: 0, staging: 1 << 20, plan: 0 });
+        ex.push(Planned::Submit { parent: 0, worker: 1, workers: 0, name: "w".into(), staging: 1 << 20, plan: 0 });
         ex.push(rec(1, 1, 0, OpKind::Write, &[]));
         assert!(ex.poll(0).is_empty());
         assert_eq!(ex.in_flight(), 0);
@@ -661,7 +840,7 @@ mod tests {
         ex.push(Planned::Fork { parent: 0, kids: vec![1], join: true, plan: 0 });
         ex.push(rec(0, 1, 0, OpKind::Stat, &[]));
         ex.push(Planned::End { lane: 1, plan: 0 });
-        ex.push(Planned::Submit { parent: 0, worker: 2, workers: 0, staging: 1 << 20, plan: 0 });
+        ex.push(Planned::Submit { parent: 0, worker: 2, workers: 0, name: "w".into(), staging: 1 << 20, plan: 0 });
         ex.push(rec(1, 2, 0, OpKind::Stat, &[]));
         ex.push(Planned::End { lane: 0, plan: 0 });
         let r = ex.poll(0);
@@ -684,7 +863,7 @@ mod tests {
     #[test]
     fn a_write_pushed_after_its_gate_opened_is_staged_at_once() {
         let mut ex = Exec::new();
-        ex.push(Planned::Submit { parent: 0, worker: 1, workers: 0, staging: 4096, plan: 0 });
+        ex.push(Planned::Submit { parent: 0, worker: 1, workers: 0, name: "w".into(), staging: 4096, plan: 0 });
         assert!(ex.poll(0).is_empty());
         ex.push(rec(0, 1, 0, OpKind::Write, &[]));
         ex.push(rec(1, 1, 0, OpKind::Write, &[]));

@@ -59,6 +59,7 @@ fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
         max_gap: None,
         require_cold: false,
         drop_caches: false,
+        timeline: Default::default(),
     }
 }
 

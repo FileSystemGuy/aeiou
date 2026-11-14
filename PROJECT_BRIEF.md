@@ -1667,9 +1667,14 @@ numbers; the order is this note's.
     declared API. *Step 5's first part built 2026-11-14* (the addendum "D and lag reported"):
     each span's D and the body lanes' final L, in the reports and as `result.span.SPAN.*` and
     `result.lag.*`; a blocking lane's thread taken 250 ms ahead with its buffers faulted in, so
-    they are not in L or D. Next, step 5's second part: staging (loads included) and the
-    would-be drop as a gate failure, `--on-certain-failure`, `--lag-ceiling`, host lateness,
-    the per-second report, and `--emit-trace`'s planned `t`.
+    they are not in L or D. *Contract 0.21 built 2026-11-14* (the addendum "Staging counts
+    loads"; the user's choice of a span naming its staging): a span's `staging` draws its reads on
+    those workers' staging while in flight, and a run with a would-be drop is invalid. *Validity
+    and stopping built the same day* (the addendum of that name): host lateness invalid past a
+    p99 of 10 ms (the user's choice), `--lag-ceiling`, and `--on-certain-failure stop|continue`
+    (a would-be drop, the ceiling, or a constraint `result.span.S.window_p99_s <= C` or
+    `.max_s <= C` lost once a window closes above C, the user's choice), stopping per host. Next:
+    the per-second report, the edge waits' report, and `--emit-trace`'s planned `t`.
     The WG's values, none chosen: the queue-wait target that places the operating point below the
     knee (the user's decision of 2026-11-10: no provider queue policy in the workload), the TTFT
     target behind the budget, the ramp, the resumed share, the L2 capacity, the staging size, the

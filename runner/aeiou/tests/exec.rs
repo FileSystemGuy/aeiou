@@ -9,7 +9,7 @@ use aeiou::plan::{Plan, Record};
 use serde_json::{json, Value};
 
 fn model(body: Value) -> &'static Model<'static> {
-    let doc = json!({"ast": "0.20", "name": "t",
+    let doc = json!({"ast": "0.21", "name": "t",
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
            "actors": {"gpu": {"count": 1, "body": body}}}).to_string();
@@ -288,4 +288,114 @@ fn span_summaries_are_by_window_of_planned_start() {
     assert_eq!(s.window_p99, 500);
     let e = summarize(&[]);
     assert_eq!((e.count, e.p99, e.window_p99), (0, 0, 0));
+}
+
+/// A span naming its staging (contract 0.21, the user's choice of 2026-11-14) draws on the
+/// workers' staging with its reads while they are in flight, as a load into the pool the
+/// pending stores hold: one lane's read fits, two lanes' at once are past it, a would-be drop;
+/// a span naming none is not counted (brief item 72 (7) step 5).
+#[test]
+fn a_spans_loads_draw_on_its_staging() {
+    let load = |staging: Option<&str>| {
+        let mut s = json!({"span": {"name": "load", "body": [obj("f", 1), {"open": {"file": r("f"), "flags": ["RDONLY"]}},
+            {"read": {"file": r("f"), "len": 6000}}, {"close": {"file": r("f")}}]}});
+        if let Some(w) = staging {
+            s["span"]["staging"] = json!(w);
+        }
+        s
+    };
+    // one lane: 6000 of 8192 held while the read is in flight
+    let (_, st) = run(tl(json!([load(Some("w"))])), |_, _| 10);
+    assert_eq!((st.staging[0].peak, st.staging[0].held), (6000, 0));
+    assert!(st.staging[0].drops.is_empty());
+    // two lanes reading at once, each after its open: 12,000 held at 10, past 8192
+    let (_, st) = run(tl(json!([{"parallel": {"index": "k", "width": 2, "body": [load(Some("w"))]}}])), |_, _| 10);
+    assert_eq!(st.staging[0].peak, 12000);
+    assert_eq!(st.staging[0].drops, [(10, 12000)]);
+    assert_eq!(st.staging[0].held, 0);
+    // a span naming no staging: nothing held
+    let (_, st) = run(tl(json!([{"parallel": {"index": "k", "width": 2, "body": [load(None)]}}])), |_, _| 10);
+    assert!(st.staging.iter().all(|s| s.peak == 0 && s.drops.is_empty()), "{:?}", st.staging);
+}
+
+/// A submitted write not yet written and a span's load in flight share the staging: 4096 + 6000
+/// past 8192 when the read issues while the write is still in flight.
+#[test]
+fn stores_and_loads_share_the_staging() {
+    let body = tl(json!([obj("g", 2), {"submit": {"workers": "w", "body": [{"open": {"file": r("g"), "flags": ["WRONLY", "CREAT"]}},
+        {"write": {"file": r("g"), "len": 4096}}, {"close": {"file": r("g")}}]}},
+        {"span": {"name": "load", "staging": "w", "body": [obj("f", 1), {"open": {"file": r("f"), "flags": ["RDONLY"]}},
+            {"read": {"file": r("f"), "len": 6000}}, {"close": {"file": r("f")}}]}}]));
+    // the write takes 100; the read issues at 1 (after the span's open) while it is in flight
+    let (_, st) = run(body, |r, _| if r.kind == aeiou::vm::OpKind::Write { 100 } else { 1 });
+    assert_eq!(st.staging[0].peak, 10096);
+    assert_eq!(st.staging[0].drops.len(), 1, "{:?}", st.staging[0]);
+}
+
+fn run_with(body: Value, opts: &aeiou::exec::TimelineOpts, latency: impl FnMut(&Record, i64) -> i64) -> (Vec<Simulated>, Stats) {
+    let m = model(body);
+    let mut p = Plan::new(m, "gpu", 0, 1);
+    aeiou::exec::simulate_with(&mut p, 1_000_000_000, opts, latency).unwrap_or_else(|e| panic!("{e:#}"))
+}
+
+/// Every op's lateness is recorded (on a simulated clock, none); a body lane whose L passes the
+/// lag ceiling is a certain failure: the run stops there, what is in flight completing, unless
+/// told to keep going (brief item 72 (7) step 5).
+#[test]
+fn the_lag_ceiling_stops_a_run_unless_told_to_keep_going() {
+    // each stat takes 100, planned 10 apart: L grows by 90 an op
+    let body = tl(json!([stat(1), compute(10), stat(2), compute(10), stat(3), compute(10), stat(4)]));
+    let (ops, st) = run(body.clone(), |_, _| 100);
+    assert_eq!(st.lateness.count, 4);
+    assert_eq!(st.lateness.max, 0);
+    assert_eq!(ops.len(), 4);
+    let stop = aeiou::exec::TimelineOpts { lag_ceiling_ns: Some(150), ..Default::default() };
+    let (ops, st) = run_with(body.clone(), &stop, |_, _| 100);
+    // d/3 at 200 (L 180) passes 150: it is issued, and nothing after it
+    assert_eq!(when(&ops), pairs(&[("d/1", 0), ("d/2", 100), ("d/3", 200)]));
+    assert!(ops.iter().all(|o| o.completed >= o.issued));
+    assert_eq!(st.ceiling, Some((200, 0, 180)));
+    assert!(st.stopped);
+    assert_eq!(st.certain.as_deref(), Some("lane 0's lag reached 0.000 s, past the lag ceiling of 0.000 s, at 0.000 s into the timeline"));
+    let go = aeiou::exec::TimelineOpts { keep_going: true, ..stop };
+    let (ops, st) = run_with(body, &go, |_, _| 100);
+    assert_eq!(ops.len(), 4);
+    assert!(!st.stopped);
+    assert!(st.certain.is_some());
+}
+
+/// A watched constraint (`result.span.S.window_p99_s <= C`) is lost once a window closes with a
+/// p99 above C: the run stops at the window's close, not at the span; a window within C, or one
+/// not closed, does not stop it; `.max_s` is judged on the window's largest D.
+#[test]
+fn a_watched_constraint_stops_the_run_when_a_window_closes_above_it() {
+    let w = aeiou::exec::WINDOW_NS;
+    // a span each window: the first's read takes 10, the second's 5000, a third window after
+    let body = tl(json!([span("load", json!([stat(1)])), compute(w), span("load", json!([stat(2)])), compute(w), span("load", json!([stat(3)])), compute(w), stat(4)]));
+    let lat = |r: &Record, _: i64| if &*r.path == "d/2" { 5000 } else { 10 };
+    let watch = |limit_ns: i64, max: bool| aeiou::exec::Watch { span: "load".into(), max, limit_ns, strict: false, text: "result.span.load.window_p99_s <= C".into() };
+    let opts = aeiou::exec::TimelineOpts { watches: vec![watch(1000, false)], ..Default::default() };
+    let (ops, st) = run_with(body.clone(), &opts, lat);
+    // window 1 closes when the planner passes 2w (d/3's span planned there): d/3 is not issued
+    assert_eq!(when(&ops).iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["d/1", "d/2"]);
+    assert!(st.stopped);
+    let c = st.certain.unwrap();
+    assert!(c.starts_with("constraint `result.span.load.window_p99_s <= C` lost: span `load`'s window 1 (planned 300 s to 600 s) closed with a p99 of 0.000 s over 1 spans"), "{c}");
+    // within its limit, the whole run
+    let opts = aeiou::exec::TimelineOpts { watches: vec![watch(10_000, true)], ..Default::default() };
+    let (ops, st) = run_with(body, &opts, lat);
+    assert_eq!(ops.len(), 4);
+    assert!(st.certain.is_none() && !st.stopped);
+}
+
+/// A would-be drop is a certain failure: the run stops at it.
+#[test]
+fn a_would_be_drop_stops_the_run() {
+    let load = json!({"span": {"name": "load", "staging": "w", "body": [obj("f", 1), {"open": {"file": r("f"), "flags": ["RDONLY"]}},
+        {"read": {"file": r("f"), "len": 6000}}, {"close": {"file": r("f")}}]}});
+    let body = tl(json!([{"parallel": {"index": "k", "width": 2, "body": [load, compute(100), stat(9)]}}]));
+    let (ops, st) = run_with(body, &Default::default(), |_, _| 10);
+    assert!(st.stopped);
+    assert!(st.certain.unwrap().starts_with("staging of workers `w` held 12000 bytes, past its 8192"));
+    assert!(!ops.iter().any(|o| &*o.record.path == "d/9"), "nothing issues after the stop");
 }

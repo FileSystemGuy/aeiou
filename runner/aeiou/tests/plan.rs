@@ -9,7 +9,7 @@ use aeiou::vm::{actor_counts, op_hash, run_actor, Control, Op, OpCtx, Sink};
 use serde_json::{json, Value};
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.20", "name": "t",
+    json!({"ast": "0.21", "name": "t",
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
            "actors": {"gpu": {"count": 1, "body": body}}}).to_string()
@@ -339,10 +339,10 @@ fn lane_events_come_before_the_ops_they_order() {
         Planned::Op(r) => format!("op {} {}", r.lane, r.path),
         Planned::Compute { lane, plan, ns } => format!("compute {lane} {plan}+{ns}"),
         Planned::Fork { parent, kids, join, plan } => format!("fork {parent} {kids:?} {join} {plan}"),
-        Planned::Submit { parent, worker, workers, staging, plan } => format!("submit {parent} {worker} {workers} {staging} {plan}"),
+        Planned::Submit { parent, worker, workers, staging, plan, .. } => format!("submit {parent} {worker} {workers} {staging} {plan}"),
         Planned::Evict { parent, lanes, plan } => format!("evict {parent:?} {lanes:?} {plan}"),
         Planned::End { lane, plan } => format!("end {lane} {plan}"),
-        Planned::SpanBegin { lane, name, plan } => format!("span {lane} {name} {plan}"),
+        Planned::SpanBegin { lane, name, plan, .. } => format!("span {lane} {name} {plan}"),
         Planned::SpanEnd { lane, plan } => format!("span end {lane} {plan}"),
     }).collect();
     // the root (lane 0) forks lanes 1 and 2 and waits; at 10 lane 2's stat; then the root goes on

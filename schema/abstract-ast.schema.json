@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.20",
+      "const": "0.21",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -2072,7 +2072,7 @@
               "$ref": "#/$defs/body"
             }
           },
-          "description": "Lanes planned together (contract 0.15, DESIGN_REVIEW.md \u00a73.99, rule V30): the body's main line and every sub-actor of a `parallel` in it is a lane with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. Never a `timeline`, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside. Its `caches` (contract 0.16, rule V33) and `resources` (contract 0.18, rule V34) are walked with its lanes, in planned order; a lane that must wait for one is parked until a release, and resumes at the release's planned time. Its `workers` (contract 0.20, rule V36) take the bodies of its lanes' `submit`s. `aeiou run` does not run one yet."
+          "description": "Lanes planned together (contract 0.15, DESIGN_REVIEW.md \u00a73.99, rule V30): the body's main line and every sub-actor of a `parallel` in it is a lane with a planned clock, which a `compute` moves by `ns`. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. Never a `timeline`, `channel`, `put`, `take`, `loader`, `barrier`, or `trace` inside. Its `caches` (contract 0.16, rule V33) and `resources` (contract 0.18, rule V34) are walked with its lanes, in planned order; a lane that must wait for one is parked until a release, and resumes at the release's planned time. Its `workers` (contract 0.20, rule V36) take the bodies of its lanes' `submit`s. `aeiou run` issues its lanes' ops at their planned times plus each lane's lag (brief item 72 (7))."
         },
         "publish": {
           "type": "object",
@@ -2222,11 +2222,15 @@
             "name": {
               "$ref": "#/$defs/ident"
             },
+            "staging": {
+              "$ref": "#/$defs/ident",
+              "description": "Contract 0.21: the timeline's workers whose staging this span's reads draw on while in flight, loads into the pool the pending stores hold; past its size, a would-be drop (rule V36: one of the timeline's `workers`)."
+            },
             "body": {
               "$ref": "#/$defs/body"
             }
           },
-          "description": "A measured part of a timeline's lane (contract 0.20, rule V36): in a run, its D, from its launch (planned time plus the lane's lag on entry) to its last op's completion, is reported by `name`, a request's own storage wait. No effect on the plan or the fingerprint. Never in another span or a `submit` body, and never holding a `compute`, `parallel`, `acquire`, or `lookup`, which move or wait on the planned clock."
+          "description": "A measured part of a timeline's lane (contract 0.20, rule V36): in a run, its D, from its launch (planned time plus the lane's lag on entry) to its last op's completion, is reported by `name`, a request's own storage wait. No effect on the plan or the fingerprint. Never in another span or a `submit` body, and never holding a `compute`, `parallel`, `acquire`, or `lookup`, which move or wait on the planned clock. With `staging` (contract 0.21) its reads draw on those workers' staging."
         },
         "probe": {
           "type": "object",

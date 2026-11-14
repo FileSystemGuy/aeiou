@@ -24,7 +24,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(params: Value, body: Value) -> String {
-    json!({"ast": "0.20", "name": "t", "params": params,
+    json!({"ast": "0.21", "name": "t", "params": params,
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -308,7 +308,7 @@ fn run_issues_a_timeline_on_every_backend() {
         json!({"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}}),
         json!({"submit": {"workers": "w", "body": write}}), json!({"compute": {"ns": 50_000_000}})];
     session.extend(read.as_array().unwrap().iter().cloned());
-    let text = json!({"ast": "0.20", "name": "t",
+    let text = json!({"ast": "0.21", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "workers": [{"name": "w", "lanes": 2, "staging": 1 << 20}],
             "body": [{"parallel": {"index": "k", "width": 3, "body": session}}]}}]}}}).to_string();
@@ -343,7 +343,7 @@ fn run_issues_a_timeline_on_every_backend() {
     assert_eq!(r.status.code(), Some(2), "{err}");
     assert!(err.contains("a timeline's planned clock is the workload"), "{err}");
     // an op outside the timeline of an actor whose body has one is not issued yet
-    let text = json!({"ast": "0.20", "name": "t",
+    let text = json!({"ast": "0.21", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [
             {"let": {"name": "g", "value": {"object": {"namespace": "kv", "fields": {"key": 9}}}}},
@@ -370,7 +370,7 @@ fn blocking_timeline_lanes_reuse_their_threads() {
         {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
         {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}},
         {"compute": {"ns": 300_000_000}}]);
-    let text = json!({"ast": "0.20", "name": "t",
+    let text = json!({"ast": "0.21", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl",
             "body": [{"loop": {"index": "k", "to": 5, "body": [{"parallel": {"index": "j", "width": 1, "body": session}}]}}]}}]}}}).to_string();
@@ -391,7 +391,7 @@ fn blocking_timeline_lanes_reuse_their_threads() {
 #[test]
 fn a_failing_op_on_a_blocking_timeline_lane_ends_the_run() {
     let rf = |n: &str| json!({"ref": n});
-    let text = json!({"ast": "0.20", "name": "t",
+    let text = json!({"ast": "0.21", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 2, "body": [
             {"compute": {"ns": {"mul": [{"index": "k"}, 50_000_000]}}},
@@ -416,7 +416,7 @@ fn a_failing_op_on_a_blocking_timeline_lane_ends_the_run() {
 #[test]
 fn a_blocking_timeline_over_many_paths_retires_them() {
     let rf = |n: &str| json!({"ref": n});
-    let text = json!({"ast": "0.20", "name": "t",
+    let text = json!({"ast": "0.21", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 0, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"loop": {"index": "k", "to": 1500, "body": [
             {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
@@ -442,7 +442,7 @@ fn a_run_reports_its_spans_and_lag() {
         {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}},
         {"compute": {"ns": 20_000_000}},
         {"span": {"name": "load", "body": [{"open": {"file": rf("f"), "flags": ["RDONLY"]}}, {"read": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]}}]);
-    let text = json!({"ast": "0.20", "name": "t",
+    let text = json!({"ast": "0.21", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 3, "body": session}}]}}]}}}).to_string();
     let dir = crate::common::tmpdir("timeline", "spans");
@@ -478,7 +478,7 @@ fn a_run_reports_its_spans_and_lag() {
 fn an_abstracts_span_names_are_found_anywhere_in_its_timelines() {
     let st = json!({"stat": {"file": {"file": {"dataset": "d", "id": 1}}}});
     let sp = |n: &str| json!({"span": {"name": n, "body": [st.clone()]}});
-    let text = json!({"ast": "0.20", "name": "t",
+    let text = json!({"ast": "0.21", "name": "t",
         "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [
             {"loop": {"index": "i", "to": 2, "body": [sp("a")]}},
@@ -488,4 +488,98 @@ fn an_abstracts_span_names_are_found_anywhere_in_its_timelines() {
             {"parallel": {"index": "k", "width": 1, "body": [{"phase": {"name": "p", "body": [sp("e")]}}]}}]}}]}}}).to_string();
     let loaded = aeiou::load_str(&text).unwrap_or_else(|e| panic!("{e:#}"));
     assert_eq!(loaded.ast.span_names().into_iter().collect::<Vec<_>>(), ["a", "b", "c", "d", "e"]);
+}
+
+/// A would-be drop, a timeline's staging past its size, makes the run invalid (brief item 72 (7)
+/// step 5, `DESIGN_REVIEW.md` §3.99: the plan assumes every store lands, so a drop ends its
+/// validity): exit 1, the verdict's error naming the workers, the bytes, and when; on the event
+/// loop and under a blocking backend.
+#[test]
+fn a_would_be_drop_makes_the_run_invalid() {
+    let rf = |n: &str| json!({"ref": n});
+    let store = |k: i64| json!([{"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": k}}}}},
+        {"submit": {"workers": "store", "body": [{"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]}}]);
+    let mut body: Vec<Value> = store(1).as_array().unwrap().clone();
+    body.extend(store(2).as_array().unwrap().iter().cloned());
+    let text = json!({"ast": "0.21", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "workers": [{"name": "store", "lanes": 2, "staging": 4096}], "body": body}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "drop");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    for posix in ["io_uring", "sync"] {
+        let root = dir.join(posix);
+        std::fs::create_dir_all(&root).unwrap();
+        let json_path = dir.join(format!("{posix}.json"));
+        let r = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"))
+            .args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", posix, "--report-json", json_path.to_str().unwrap()])
+            .output().unwrap();
+        let err = String::from_utf8_lossy(&r.stderr);
+        assert_eq!(r.status.code(), Some(1), "{posix}: {err}");
+        assert!(err.contains("staging of workers `store` held 8192 bytes, past its 4096, at 0.000 s into the timeline: a store would have been dropped"), "{posix}: {err}");
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+        assert_eq!(doc["verdict"]["ok"], false, "{posix}");
+        assert!(doc["verdict"]["error"].as_str().unwrap().contains("a store would have been dropped"), "{posix}");
+        assert_eq!(doc["result"]["timeline"]["staging"]["store"]["drops"], 1, "{posix}: {}", doc["result"]["timeline"]);
+        assert_eq!(doc["result"]["timeline"]["staging"]["store"]["peak_bytes"], 8192, "{posix}");
+    }
+}
+
+/// `--lag-ceiling` (brief item 72 (7) step 5): a lane whose lag passes it has certainly failed;
+/// the run stops there by default and did not pass (exit 3), saying when and how much; under
+/// `--on-certain-failure continue` it runs to its end and still did not pass. A bad value is a
+/// usage error, and an abstract with no timeline passes the ceiling over.
+#[test]
+fn the_lag_ceiling_stops_a_run_that_then_did_not_pass() {
+    let rf = |n: &str| json!({"ref": n});
+    // one lane: 40 files written back to back at planned 0, so its lag grows with each
+    let mut body = vec![];
+    for k in 0..40 {
+        body.push(json!({"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": k}}}}}));
+        body.extend([json!({"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}), json!({"write": {"file": rf("f"), "len": 4096}}), json!({"close": {"file": rf("f")}})]);
+    }
+    let text = json!({"ast": "0.21", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": body}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "ceiling");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    let run = |root: &str, extra: &[&str]| {
+        let root = dir.join(root);
+        std::fs::create_dir_all(&root).unwrap();
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", "sync"]).args(extra).output().unwrap();
+        (o.status.code(), String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string())
+    };
+    let (code, out, err) = run("stop", &["--lag-ceiling", "0.000001"]);
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert!(err.contains("past --lag-ceiling 0.000 s"), "{err}");
+    assert!(out.contains("certain failure: lane 0's lag reached") && out.contains("; the run stopped there"), "{out}");
+    let ops: u64 = out.lines().find_map(|l| l.strip_prefix("ops ")).and_then(|l| l.split_whitespace().next()).unwrap().parse().unwrap();
+    assert!(ops < 120, "stopped before the end: {ops} ops of 120\n{out}");
+    let (code, out, err) = run("continue", &["--lag-ceiling", "0.000001", "--on-certain-failure", "continue"]);
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert!(out.contains("by kind: open=40 close=40 write=40"), "{out}");
+    assert!(!out.contains("the run stopped there"), "{out}");
+    let (code, _, err) = run("bad", &["--on-certain-failure", "maybe"]);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("--on-certain-failure maybe: stop or continue"), "{err}");
+    let (code, _, err) = run("bad2", &["--lag-ceiling", "0"]);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("--lag-ceiling 0: a number of seconds above 0"), "{err}");
+    // no timeline: passed over
+    let plain = json!({"ast": "0.21", "name": "t", "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": 1}}}}},
+            {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"close": {"file": rf("f")}}]}}}).to_string();
+    std::fs::write(&ast, plain).unwrap();
+    // no timeline: refused from the command line, passed over from a lower layer
+    let (code, out, err) = run("plain", &["--lag-ceiling", "5"]);
+    assert_eq!(code, Some(2), "{out}{err}");
+    assert!(err.contains("--lag-ceiling bounds a timeline's lanes' lag; the abstract has no timeline"), "{err}");
+    let root = dir.join("plain-env");
+    std::fs::create_dir_all(&root).unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", "sync"])
+        .env("AEIOU_LAG_CEILING", "5").output().unwrap();
+    let (out, err) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert_eq!(o.status.code(), Some(0), "{out}{err}");
+    assert!(format!("{out}{err}").contains("--lag-ceiling from env AEIOU_LAG_CEILING is not used: the abstract has no timeline"), "{out}{err}");
 }

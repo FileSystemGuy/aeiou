@@ -548,8 +548,13 @@ times plus each lane's lag under `--posix io_uring` and `libaio`, and (step 4) u
 backends, the tiered abstract's declared API included, a thread each live lane. Step 5's first
 part (2026-11-14): each `span`'s D, from its launch to its last op's completion, and the body
 lanes' final lag, in the text and JSON reports and as `result.span.SPAN.*` and `result.lag.*`
-for a case's constraints; the edge waits, host lateness, and staging are measured, not yet
-reported, and the flags and the would-be drop's gate failure come with the second part.
+for a case's constraints. Contract 0.21 (the same day): a span's `staging`, the workers whose
+staging its reads draw on while in flight, so staging counts loads beside pending stores; a run
+whose staging overflowed (a store would have been dropped) is invalid, and so is one whose host
+lateness p99 passes 10 ms; `--lag-ceiling SECS` and `--on-certain-failure stop|continue`
+(default stop: at a would-be drop, the ceiling, or a case's window constraint already lost, the
+run issues nothing more and reports where it stopped). The per-second report, the edge waits'
+report, and `--emit-trace`'s planned `t` come next.
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

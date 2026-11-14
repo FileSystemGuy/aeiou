@@ -1326,12 +1326,16 @@ impl<'a> Checker<'a> {
                 self.body(body, &bp, scope, st);
                 st.span = outer;
             }
-            Node::Span { name, body } => {
+            Node::Span { name, staging, body } => {
                 if !is_ident(name) {
                     self.err(&p(pp, &["name"]), "not an identifier");
                 }
-                if st.timeline.is_none() {
-                    self.err(pp, "span: outside a timeline, where no request is measured (V36)");
+                match (&st.timeline, staging) {
+                    (None, _) => self.err(pp, "span: outside a timeline, where no request is measured (V36)"),
+                    (Some((t, _)), Some(w)) if !st.workers.contains(w.as_str()) => {
+                        self.err(pp, format!("span `{name}`: timeline `{t}` declares no workers `{w}` (V36)"));
+                    }
+                    _ => {}
                 }
                 if let Some(outer) = st.span {
                     self.err(pp, format!("a span inside span `{outer}`: a lane's wait is measured once (V36)"));
