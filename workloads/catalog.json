@@ -1091,6 +1091,51 @@
       ]
     },
     {
+      "name": "lmcache-local-disk/agentx-tiered",
+      "dir": "kvcache/lmcache-local-disk/cases/agentx-tiered",
+      "lock": "kvcache/lmcache-local-disk/cases/agentx-tiered/case.lock.json",
+      "description": "kvcache/lmcache-local-disk/cases/agentx-tiered/DESCRIPTION.md",
+      "gpus": [
+        1
+      ],
+      "attributes": {
+        "category": "kvcache",
+        "application": "vllm-lmcache",
+        "format": "lmcache-chunks",
+        "phase": [
+          "inference"
+        ],
+        "domain": [
+          "ai"
+        ],
+        "kind": "unsettled",
+        "modality": "agentic",
+        "model-family": "llm"
+      },
+      "runs": [
+        {
+          "ast": "lmcache_local_disk_tiered",
+          "does": "One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2 and G3 (LMCache's), G3 the directory under test.",
+          "is": "AgentX sessions on one engine with the WG's example tier sizes (the user, 2026-11-13, DESIGN_REVIEW.md §3.99 note \"Tier names\"): G1 180 GiB of HBM less Llama 3.1 8B's bf16 weights (8,030,261,248 parameters, 16,060,522,496 bytes), G2 490 GiB, G3 a 7.68 TB drive; the model's 128 KiB of KV a token, 32 MiB a chunk; 40 sessions arriving over an hour on 16 slots, not yet the WG's operating point.",
+          "attributes": {
+            "api": "sync",
+            "writes": "yes",
+            "inputs": "no",
+            "status": "untraced",
+            "run_length_read": "large",
+            "run_length_write": "large",
+            "request_size_read": "large",
+            "request_size_write": "large",
+            "read_share": "mixed",
+            "metadata": "high",
+            "reads_own_writes": "yes",
+            "reread": "repeated",
+            "skew": "uniform"
+          }
+        }
+      ]
+    },
+    {
       "name": "lmcache-local-disk/chat-64-slots",
       "dir": "kvcache/lmcache-local-disk/cases/chat-64-slots",
       "lock": "kvcache/lmcache-local-disk/cases/chat-64-slots/case.lock.json",

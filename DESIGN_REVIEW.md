@@ -12127,8 +12127,46 @@ Choices made in the build, within the answers:
   `compare10.py`, `PORT=gen10_lmc SEM=lmcache`). A G2 and G3 smaller than G1 leaves G3 almost never
   read (one read in four of the seven), since G1 holds more than they do: a realistic hierarchy has
   G2 at least G1.
-- Not yet: the committed `lmcache-local-disk` abstract written with G2 and G3, `preempt`, Dynamo's
-  tiers, and the run side (item 72 (7)).
+- Not yet: ~~the committed `lmcache-local-disk` abstract written with G2 and G3~~ (below, the same
+  day), `preempt`, Dynamo's tiers, and the run side (item 72 (7)).
+
+**The tiered abstract committed (2026-11-13; the user's choices the same day).** The 0.19 port
+made a workload of the `lmcache-local-disk` mechanism. Three choices, put to the user with a
+recommendation each and taken as recommended:
+- *Beside, not in place.* The committed `lmcache_local_disk` is the slot model (`keep` and `retain`
+  drawn, no timeline), its four cases and captures fitted to it; a timeline is refused by `aeiou
+  run` until item 72 (7). So the tiered abstract is a second script of the mechanism,
+  `lmcache_local_disk_tiered.py` (as `lmcache_shared_fs.py` emits two), with a new case,
+  `agentx-tiered`, `unsettled` and dry-run only; the older abstract and its cases stay runnable and
+  are retired when (7) lands. Replacing in place would have left the mechanism unrunnable; building
+  (7) first would have delayed the tiers' first committed use behind the largest open item.
+- *The traced calls.* A chunk's read and write are the in-process connector's traced calls
+  (Python's `open` around one `read` or `write`, or the `O_DIRECT` path), an eviction one `unlink`;
+  the multi-process `fs_native` adapter, the mechanism's target (item 70), replaces them when
+  item 74 captures it. Writing `fs_native` from its Python source alone would have put an
+  unconfirmed call sequence (its C++ part unread) into a committed abstract.
+- *The WG's example sizes*, as the user gave them above, in bytes in the case, the tiers' units
+  derived in the abstract: G1 180 GiB less Llama 3.1 8B's bf16 weights (16,060,522,496 bytes;
+  21,125 blocks of 64 tokens at 128 KiB a token), G2 490 GiB (15,680 chunks of 32 MiB), G3 a
+  7.68 TB drive (228,881 chunks; the user's "7.68 TiB" read as the drive's decimal capacity).
+Built: `kit/agentx.py sessions`, the scratch's `fit_gen5.py` as a subcommand of the kit's corpus
+tool (corpus path and output as arguments, the main prefix from `agentx.main_blocks`), whose
+output on the corpus equals the scratch's `gen5.8.json` (393 sessions, 8 classes, 5,839 numbers),
+committed as `kit/sessions.fit.json`; the abstract reads it at build time for its defaults, so the
+fit's shape (classes, grid) is the abstract's and its values the case may override. The abstract is
+`gen10_lmc.py` less what the comparison needed (the marker files `pr` and `dn` and the bindings only
+they read), its chunk calls the traced ones, its capacities from bytes. Held to the port: the port
+less its markers (`gen10_nomark.py`, scratch) and the committed abstract issue the same chunk
+reads, writes, and unlinks, as multisets of keys, at three configurations (sessions, seed, G2 and
+G3 chunks, G1 tokens: 20, 1, 2,000, 20,000, 6M: 0 / 56,282 / 38,612; 40, 2, 3,000, 20,000, 1M:
+1,664,040 / 182,006 / 161,119; 40, 2, 300, 5,000, 6M: 1 / 356,313 / 318,351), and the port with
+its markers is held to LMCache's own `LRUEvictionPolicy` (above). The markers move every draw's
+site, so the counts are not the table's above; the semantics are the same.
+At the case's sizes (40 sessions over an hour, 16 slots; seed 0): 379,121 chunk reads, 120,642
+writes, no unlink. G3 never reaches 0.8 of 228,881 chunks within the run, and G1 (1.35M tokens)
+and G2 (4M tokens) hold far less than the sessions' live contexts, so nearly every reuse is read
+from G3: 11.6 TiB read against 3.7 TiB written. The session count is the scratch port's, not the
+WG's operating point (items 72 (1) and 74).
 
 **The structure proposed for the KV-cache workloads, consolidated (draft for the user's review,
 2026-11-09; nothing decided, nothing built).** The draft above, revised by the notes since it: the

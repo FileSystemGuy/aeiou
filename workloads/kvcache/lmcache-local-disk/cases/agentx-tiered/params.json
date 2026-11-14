@@ -1,0 +1,10 @@
+{"params_version": 2, "abstract": "lmcache_local_disk_tiered",
+ "doc": "AgentX sessions on one engine with the WG's example tier sizes (the user, 2026-11-13, DESIGN_REVIEW.md §3.99 note \"Tier names\"): G1 180 GiB of HBM less Llama 3.1 8B's bf16 weights (8,030,261,248 parameters, 16,060,522,496 bytes), G2 490 GiB, G3 a 7.68 TB drive; the model's 128 KiB of KV a token, 32 MiB a chunk; 40 sessions arriving over an hour on 16 slots, not yet the WG's operating point.",
+ "params": {
+  "sessions": {"default": 40},
+  "window_s": {"default": 3600},
+  "slots": {"default": 16},
+  "chunk_bytes": {"default": 33554432},
+  "g1_bytes": {"default": 177213005824},
+  "g2_bytes": {"default": 526133493760},
+  "g3_bytes": {"default": 7680000000000}}}

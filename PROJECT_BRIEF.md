@@ -1727,8 +1727,15 @@ numbers; the order is this note's.
     (the unlinks), and `probe`, `touch`, `store` over a range of chunks, or over an array of them,
     a store's `taken` (what it newly stored) and `present: renew`, for G2 above G3, written as
     LMCache writes it; the gen10 ports equal to LMCache's own `LRUEvictionPolicy` request by
-    request and unlink by unlink. Not built: the KV abstract's G2 and G3 (the committed
-    `lmcache-local-disk` still has none), `preempt`, Dynamo's tiers, the run side (item 72 (7)).
+    request and unlink by unlink. Not built: ~~the KV abstract's G2 and G3 (the committed
+    `lmcache-local-disk` still has none)~~, `preempt`, Dynamo's tiers, the run side (item 72 (7)).
+    *The KV abstract's G2 and G3, 2026-11-13 (the user's choices; `DESIGN_REVIEW.md` §3.99, the note
+    "The tiered abstract committed"):* `lmcache_local_disk_tiered`, beside `lmcache_local_disk` in
+    its mechanism: the session generator of item 71 (its fit `kit/sessions.fit.json`, written by
+    `kit/agentx.py sessions`), one engine's slots and G1, LMCache's G2 and G3 at the WG's example
+    sizes (G1 180 GiB less the weights, G2 490 GiB, G3 7.68 TB), the chunk calls traced under the
+    in-process connector; its case `agentx-tiered` unsettled and dry-run only until (7). The older
+    abstract and its four cases are retired when (7) lands.
 
 76. **Dynamo's block tier (queued by the user 2026-11-10, `DESIGN_REVIEW.md` §3.99 note "The
     generator in the abstract, a shared tier, and events between runners"; not started, not
@@ -1760,6 +1767,23 @@ numbers; the order is this note's.
     Ops, paths, sizes, the fingerprint, CLOSED, and the compression ratio unchanged. A change to
     the runner's payload definition for namespaces (`runner/REFERENCE.md` §5), a recorded
     decision; `aeiou-verify` takes the nonce from the manifest or the marker.
+
+78. **G3 and G4 active together in one abstract (queued by the user 2026-11-13; not started).**
+    Some products serve a node-local G3 and a shared G4 at once (the user's example: Hammerspace),
+    so a KV abstract must be able to have both, each tier a namespace of its own on its own
+    storage (G3 the node's drive, G4 the shared file system or object store), each issuing its
+    own reads, writes, and unlinks, while G1 and G2 issue nothing (as in
+    `lmcache_local_disk_tiered`, held by `test_kv_tiered_issues_storage_ops_on_g3_alone`).
+    First, read from LMCache's source (and Dynamo's, item 76) what a server with two L2 adapters
+    does: every chunk written to G2 copied to each adapter (0.5.5's store loop, as read
+    2026-11-13), the lookup order across them and where a G4 hit is loaded, each adapter's own
+    eviction, and whether a chunk evicted from G3 is still found in G4. Then: whether 0.19's
+    tiers, `probe`/`store`/`touch` and `on_evict`, already say it (expected: a G4 tier in the
+    timeline's cache with its own namespace and eviction body), or what the contract lacks; how
+    a run places G3's namespace on node-local storage and G4's on the shared system (`--root`
+    and `--endpoint` today name one root and S3 endpoints); and G4 as one tier shared by a
+    domain's engines (item 72 (5)). A case with both at the WG's sizes; a WG what-if, not a
+    default.
 
 ## 7. Environment
 

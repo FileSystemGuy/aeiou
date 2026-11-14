@@ -675,6 +675,9 @@ and 2026-10-08, §3.63, at 2 GiB and 6 GiB of engine KV, §3.64). A fit of what 
 holds records the engine it was fitted at (pool, model, CPU tier, slots) as its parameter
 file's `provenance`; `agentx.py holds` checks a replay's holds against a simulation of the
 engine's prefix cache, and `agentx.py log` writes the reduced server log the kit keeps.
+`agentx.py sessions` writes the session generator's fit (`kit/sessions.fit.json`, brief item 71:
+classes of sessions by mean prompt, quantile tables of their requests, step kinds, batches, and
+gaps), which `lmcache_local_disk_tiered.py` reads at build time for its defaults (2026-11-13).
 `lmcache_shared_fs`'s kit is the same load on LMCache's `fs://` backend, twice: an engine on
 an empty store, then a restarted engine on the filled one, sent the same requests
 (`lmcache_local_disk`'s `kit/replay.py --save`, `--replay`). `workloads/kvcache/lmcache-shared-fs/lmcache_shared_fs.py` emits both abstracts,

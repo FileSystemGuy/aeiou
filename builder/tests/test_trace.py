@@ -876,6 +876,38 @@ def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_kv_tiered_issues_storage_ops_on_g3_alone(tmp_path):
+    """`lmcache_local_disk_tiered` (2026-11-13, DESIGN_REVIEW.md §3.99 note "The tiered abstract
+    committed"): G1 (vLLM's pool) and G2 (LMCache's host DRAM) are tiers of the plan with no
+    namespace and no eviction body, so their hits, stores, drops, and evictions shape the counts and
+    issue nothing; every op on a path is on G3's `kv` namespace: its hits read, what it takes
+    written, its victims unlinked, each victim a file it wrote. Small tiers so that G2 drops, G3
+    evicts, and G1 (just above the longest context) loses chunks to G3's reads."""
+    case = case_dir("lmcache_local_disk_tiered", "agentx-tiered")
+    out = tmp_path / "trace.jsonl"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk_tiered")), "--gpus", "1", "--seed", "1",
+                        "--params-file", str(case / "params.json"), "--param", "sessions=6", "--param", "slots=6",
+                        "--param", "chunk_bytes=4096", "--param", "g1_bytes=16384000", "--param", "g2_bytes=1228800",
+                        "--param", "g3_bytes=12288000", "--emit-trace", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    ops, paths, written, unlinked = {}, set(), set(), set()
+    for line in out.read_text().splitlines()[1:]:
+        o = json.loads(line)
+        ops[o["op"]] = ops.get(o["op"], 0) + 1
+        if "path" in o:
+            paths.add(o["path"].split("/")[0])
+            if o["op"] == "open" and "WRONLY" in o["flags"]:
+                written.add(o["path"])
+            elif o["op"] == "unlink":
+                unlinked.add(o["path"])
+    assert paths == {"kv"}
+    assert set(ops) == {"open", "fstat", "ioctl", "lseek", "read", "write", "close", "unlink"}
+    assert ops["read"] > 0 and ops["write"] > 0 and ops["unlink"] > 0
+    assert ops["open"] == ops["close"] == ops["read"] + ops["write"]
+    assert unlinked <= written
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     """`workloads/kvcache/lmcache-shared-fs`: vLLM with LMCache's `fs://` backend, the 300 requests of
     the row above sent to an engine on an empty store and then to a restarted engine on the

@@ -8,6 +8,7 @@ InferenceX AgentX sessions (Claude Code through a proxy, published on HuggingFac
     python agentx.py reference traces.jsonl [--traces N] [--context TOKENS] -o agentx.reference.json
     python agentx.py log serve.log -o agentx.lmcache.log
     python agentx.py holds traces.jsonl --replay replay.log serve.log [--pool TOKENS] [--timeline engine|paced|serial|rounds] [--service C_IN C_OUT] [--chunk-bytes B] [-o FILE]
+    python agentx.py sessions traces.jsonl [--classes 8] [--points 24] [--half even|odd] -o sessions.fit.json
 
 One line of the file is one session: `requests` in time order, each with `t` (seconds), `in`
 (prompt tokens, a count of 64-token KV blocks), `out` (generated tokens), `hash_ids` (the
@@ -103,7 +104,7 @@ parameters is compared with: per request, the whole 256-token chunks its prompt 
 many of them the session had stored before of its model (the prefix the store would hit), and how many
 are new (stored now), with totals, means, and equal shares.
 """
-import argparse, collections, datetime, json, re, statistics
+import argparse, bisect, collections, datetime, json, re, statistics
 
 from fit import conditions, kept, write
 
@@ -759,9 +760,158 @@ def reference(a):
         n, ref["chains"], sum(stored), sum(stored) / n, sum(hit), sum(hit) / n, sum(inp) / n))
 
 
+def sessions(a):
+    """`sessions`: the session generator's fit (brief item 71; DESIGN_REVIEW.md §3.99, the notes "The
+    fifth generator held out" and "The sixth generator, in planned-time order"), the scratch's `gen5`
+    fit, read by `lmcache_local_disk_tiered.py`. Sessions are put in `--classes` classes by mean
+    prompt, equal shares of the requests; each class has quantile tables, on one grid of
+    `--points` equal steps and the tail points .97 to .999, of its sessions' main-agent requests,
+    sub-agent batches, step kinds (E extend the tip, O an older tip, F fresh, T trim, D a deep cut,
+    M a cut to the main prefix, C a compaction), kept shares, and new tokens; the corpus-wide tables
+    are the first prompts, replies, service times, idle gaps (short and long apart, with a long gap's
+    persistence), growth, batch sizes, spawn points, and synchrony. Blocks of 64 tokens (the corpus's
+    `hash_ids`) in chunks of 256. `--half even|odd` fits on half the sessions (the held-out check)."""
+    SUB = {"even": 0, "odd": 1}.get(a.half)
+    K, POINTS = a.classes, a.points
+    BL, CT = 64, 256
+    MB = main_blocks(a.corpus)
+    LONG = 60.0
+    GRID = [i / POINTS for i in range(POINTS + 1)] + [.97, .99, .995, .999]; GRID = sorted(set(GRID))
+    def tab(v):
+        s = sorted(v)
+        return [round(s[int(g * (len(s) - 1))], 3) for g in GRID] if s else [0.0] * len(GRID)
+    sess = []
+    GL = collections.defaultdict(list); GLK = collections.defaultdict(collections.Counter); PROF = collections.defaultdict(list)
+    with open(a.corpus) as f:
+        for ti, line in enumerate(f):
+            if SUB is not None and ti % 2 != SUB: continue
+            d = json.loads(line); fl = []; flatten(d['requests'], fl)
+            s = dict(ti=ti, n=len(fl), inn=[r['in'] for _, r in fl], steps=collections.defaultdict(collections.Counter), rate=collections.defaultdict(list), fresh=collections.defaultdict(list),
+                     keepT=collections.defaultdict(list), keepD=collections.defaultdict(list), cutnew=collections.defaultdict(list), turns=collections.defaultdict(list), step2=collections.Counter(), t2=[], dfrom=[], rw=collections.defaultdict(list), keepC=collections.defaultdict(list), cutnewC=collections.defaultdict(list), cutnewT=collections.defaultdict(list), small=0)
+            rm = 0; store = set(); subseen = False; prof = []; sp0 = shared_prefix(fl, CT // BL); lastk = {}; tips = collections.defaultdict(list); grp = collections.defaultdict(list); deltas = collections.defaultdict(list); wr = 0; idx = collections.Counter()
+            prev = {}; s.update(nl=collections.Counter(), ng=collections.Counter(), ll=collections.Counter(), lp=collections.Counter())
+            for g, r in fl:
+                who = 'main' if g < 0 else 'sub'; h = r['hash_ids']; T = tips[g]; grp[g].append(r); i = idx[g]; idx[g] += 1
+                ch = chunk_ids(h, r['in'], CT // BL, CT); new = sum(1 for x in ch if x not in store); store.update(ch)
+                rm = max(rm, r['in']) if who == 'main' else rm
+                GL['out_' + who].append(r['out']); GL['api_' + who].append(r.get('api_time', 0.0))
+                p = prev.get(g); c = common(p, h) if p is not None else 0
+                wr += r['in'] // CT - min(c * BL // CT, r['in'] // CT); prev[g] = h
+                if not T:
+                    GL['first_' + who].append(r['in']) if who == 'main' else GL['sub_first'].append(r['in'])
+                    if who == 'sub':
+                        has = common(sp0, h) * BL >= 12800 if sp0 else False
+                        GL['has_sp'].append(1 if has else 0)
+                        if subseen and has: GL['sub_past'].append(new * CT)
+                        if not has: GL['first_new'].append(new * CT)
+                        subseen = True
+                else:
+                    best, bi = 0, -1
+                    for j, q_ in enumerate(T):
+                        cc = common(q_, h)
+                        if cc >= best and cc > 0: best, bi = cc, j
+                    if bi < 0:
+                        k = 'F'; s['fresh'][who].append(r['in']); GL['fnew_' + who].append(new * CT)   # what it writes, in tokens, not a share of its size
+                    else:
+                        q_ = T[bi]; n = len(T) - 1 - bi
+                        if best >= len(q_) - 1:
+                            k = 'E' if n == 0 else 'O'
+                            if n: GL['older'].append(n)
+                            GL['ext_full'].append(1 if best == len(q_) else 0)
+                            d_ = r['in'] - len(q_) * BL
+                            deltas[g].append(d_)
+                            if g < 0: prof.append((i, d_))
+                        else:
+                            kept = min(1.0, max(0, r['in'] - new * CT) / (len(q_) * BL))
+                            if best <= .9 * len(q_) and who == 'main' and len(q_) * BL >= .5 * rm:  # a compaction: the session's large context cut
+                                k = 'C'; s['dfrom'].append(len(q_) * BL); s['keepC']['main'].append(kept); s['cutnewC']['main'].append(new * CT)
+                            elif abs(best - MB) <= 1: k = 'M'
+                            elif best > .9 * len(q_): k = 'T'; s['keepT'][who].append(kept)
+                            else: k = 'D'; s['keepD'][who].append(kept)
+                        if k == 'T': s['cutnewT'][who].append(new * CT)
+                        elif k in 'DM': s['cutnew'][who].append(new * CT)
+                        T.pop(bi)
+                    if who == 'main' and i == 1:
+                        s['t2'].append(r['in']); GL['t2_new'].append(new * CT)   # what it writes, in tokens
+                        s['step2'][k] += 1
+                    elif lastk.get(g) in ('Fs', 'Fb'): GLK[who + lastk[g]][k] += 1
+                    else:
+                        s['steps'][who][k] += 1
+                        if who == 'main' and bi >= 0 and len(q_) * BL < .5 * rm: s['small'] += 1   # a tip a deep cut may take: a large one's is a compaction
+                    lastk[g] = ('Fs' if max(len(x) * BL for x in T) > r['in'] else 'Fb') if k == 'F' else k
+                T.append(h); del T[:-16]
+            for g, v in deltas.items():
+                who = 'main' if g < 0 else 'sub'
+                if len(v) >= 3:
+                    m = sum(v) / len(v); s['rate'][who].append(m); s['rw'][who] += [m] * len(v)
+                    GL['z_' + who] += [x / m for x in v if m > 0]
+            ms_ = s['steps']['main']; s['dshare'] = (ms_['D'] + ms_['M']) / max(1, sum(ms_.values()))
+            s['wpr'] = wr / len(fl); s['mean'] = sum(s['inn']) / len(fl); s['main'] = sum(1 for g, _ in fl if g < 0) / len(fl)
+            M = grp.get(-1, []); s['n_main'] = max(1, len(M))
+            s['sub_turns'] = [len(v) for g, v in grp.items() if g >= 0]; s['n_sub'] = len(s['sub_turns'])
+            s['sp'] = len(shared_prefix(fl, CT // BL))
+            for g, v in grp.items():
+                who = 'main' if g < 0 else 'sub'
+                gs_ = [max(0.0, b['t'] - a['t'] - a.get('api_time', 0.0)) for a, b in zip(v, v[1:])]
+                GL['idle_' + who] += gs_
+                for x_ in gs_: GL[('idle_l_' if x_ >= LONG else 'idle_s_') + who].append(x_)
+                s['nl'][who] += sum(x_ >= LONG for x_ in gs_); s['ng'][who] += len(gs_)
+                s['ll'][who] += sum(1 for p_, q_ in zip(gs_, gs_[1:]) if p_ >= LONG and q_ >= LONG); s['lp'][who] += sum(1 for p_ in gs_[:-1] if p_ >= LONG)
+            S = sorted((v[0]['t'], max(r['t'] + r.get('api_time', 0) for r in v), g) for g, v in grp.items() if g >= 0)
+            i = 0; bs = []
+            while i < len(S):
+                j = i; e = S[i][1]
+                while j + 1 < len(S) and S[j + 1][0] < e: j += 1; e = max(e, S[j][1])
+                bs.append(j - i + 1); GL['batch'].append(j - i + 1)
+                GL['sync'].append(1 if not any(S[i][0] + 1 < r['t'] < e for r in M) else 0)
+                GL['spawn'].append(sum(1 for r in M if r['t'] < S[i][0]) / max(1, len(M)))
+                i = j + 1
+            for i_, d_ in prof: PROF[i_ * 10 // max(1, len(M))].append(d_)
+            s['n_batch'] = len(bs); s['maxin'] = max(s['inn'])
+            sess.append(s)
+    by = sorted(sess, key=lambda x: x['mean'])
+    W = sum(x['n'] for x in sess); bins, cur, acc = [], [], 0
+    for x in by:
+        cur.append(x); acc += x['n']
+        if acc >= W * (len(bins) + 1) / K and len(bins) < K - 1: bins.append(cur); cur = []
+    bins.append(cur)
+    def mix(v):
+        c = collections.Counter()
+        for x in v: c.update(x)
+        n = sum(c.values())
+        return {k: round(c[k] / n, 5) for k in 'EOFTDM' if c[k]} if n else {'E': 1.0}
+    rw_ = lambda xs, f: sum(x[f] * x['n'] for x in xs) / sum(x['n'] for x in xs)
+    C = []
+    for b in bins:
+        def col(f, who): return [y for x in b for y in x[f][who]]
+        subbed = [x for x in b if x['n_sub']]
+        dv = [y for x in b for y in x['dfrom']]; med = sorted(dv)[len(dv) // 2] if dv else 1 << 40; tall = [x for x in b if max(x['inn']) >= med]
+        C.append(dict(weight=len(b), n_compact=sum(len(x['dfrom']) for x in b) / len(b), target=rw_(b, 'mean'), target_wpr=rw_(b, 'wpr'), target_main=rw_(b, 'main'), n_main=tab([x['n_main'] for x in b]), p_sub=len(subbed) / len(b), n_batch=tab([x['n_batch'] for x in subbed]), sp=tab([x['sp'] for x in subbed]),
+            t2=tab([y for x in b for y in x['t2']]),
+            dfrom=tab(dv), p_nodeep=sum(1 for x in tall if not x['dfrom']) / max(1, len(tall)), main=dict(keepC=tab(col('keepC', 'main')), cutnewC=tab(col('cutnewC', 'main')), dshare=tab([x['dshare'] for x in b]), steps=mix([x['steps']['main'] for x in b]), rate=tab(col('rw', 'main')), fresh=tab(col('fresh', 'main')), keepT=tab(col('keepT', 'main')), keepD=tab(col('keepD', 'main')), cutnew=tab(col('cutnew', 'main')), cutnewT=tab(col('cutnewT', 'main')), p_D_small=sum(x['steps']['main']['D'] for x in b) / max(1, sum(x['small'] for x in b))),
+            sub=dict(steps=mix([x['steps']['sub'] for x in b]), rate=tab(col('rw', 'sub')), fresh=tab(col('fresh', 'sub')), keepT=tab(col('keepT', 'sub')), keepD=tab(col('keepD', 'sub')), cutnew=tab(col('cutnew', 'sub')), cutnewT=tab(col('cutnewT', 'sub')), turns=tab([y for x in b for y in x['sub_turns']]))))
+    G = {k: tab(v) for k, v in GL.items() if k not in ('ext_full', 'sync', 'has_sp')}
+    ov = sum(sum(v) for v in PROF.values()) / sum(len(v) for v in PROF.values()); G['prof'] = [round(sum(PROF[d]) / max(1, len(PROF[d])) / ov, 3) for d in range(10)]; G['p_has_sp'] = sum(GL['has_sp']) / len(GL['has_sp']); print('growth profile', G['prof'], 'p_has_sp %.2f' % G['p_has_sp'])
+    nm_ = sorted(x['n_main'] for x in sess); G['n_edges'] = [nm_[len(nm_) * q // 4] for q in (1, 2, 3)]
+    binof = lambda n: bisect.bisect_right(G['n_edges'], n)
+    for who in ('main', 'sub'):
+        U = [x for x in sess if x['ng'][who] >= 5]
+        if who == 'main': G['plong_main'] = [tab([x['nl'][who] / x['ng'][who] for x in U if binof(x['n_main']) == b_ for _ in range(x['ng'][who])]) for b_ in range(4)]  # weighted by its gaps: the share a drawn gap sees
+        else: G['plong_sub'] = tab([x['nl'][who] / x['ng'][who] for x in U for _ in range(x['ng'][who])])
+        ep = sum(x['nl'][who] for x in U) / sum(x['ng'][who] for x in U); ep2 = sum(x['nl'][who] ** 2 / x['ng'][who] for x in U) / sum(x['ng'][who] for x in U)
+        pll = sum(x['ll'][who] for x in U) / max(1, sum(x['lp'][who] for x in U))
+        G['lam_' + who] = max(0.0, min(.95, (pll * ep - ep2) / max(1e-9, ep - ep2))); print(who, 'P(long) %.3f P(long|long) %.3f lambda %.3f' % (ep, pll, G['lam_' + who]))
+    G['afterF'] = {w: {k: v / sum(c.values()) for k, v in c.items()} for w, c in GLK.items()}; print('after a fresh prompt', G['afterF'])
+    G['p_ext_full'] = sum(GL['ext_full']) / len(GL['ext_full']); G['p_sync'] = sum(GL['sync']) / len(GL['sync']); G['cap'] = max(x['maxin'] for x in sess); G['mb'] = MB; G['grid'] = GRID
+    with open(a.out, 'w') as f_:
+        json.dump(dict(classes=C, glob=G), f_)
+    def count(o): return 1 if not isinstance(o, (dict, list)) else sum(count(v) for v in (o.values() if isinstance(o, dict) else o))
+    print('sessions %d in %d classes; generator numbers (without the shared grid): %d' % (len(sess), K, count(C) + count(G) - len(GRID)))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=["fit", "reference", "holds", "log"])
+    ap.add_argument("what", choices=["fit", "reference", "holds", "log", "sessions"])
     ap.add_argument("corpus")
     ap.add_argument("--abstract", default="lmcache_local_disk")
     ap.add_argument("--traces", type=int, default=10 ** 9, help="use the first N sessions")
@@ -781,13 +931,16 @@ def main():
                     help="holds: the engine's own; or sessions back to back at --service's cost; or one request at a time, the sessions in turn; or each session's next together")
     ap.add_argument("--service", type=float, nargs=2, metavar=("C_IN", "C_OUT"), help="holds --timeline paced: seconds per prompt and per reply token")
     ap.add_argument("--chunk-bytes", type=int, default=3145728, help="holds: a chunk's bytes, for the reuse distances (the replays' Qwen2.5-0.5B: 12 KiB a token)")
+    ap.add_argument("--classes", type=int, default=8, help="sessions: classes of sessions, by mean prompt")
+    ap.add_argument("--points", type=int, default=24, help="sessions: equal steps of the quantile grid (its tail points added)")
+    ap.add_argument("--half", choices=["even", "odd"], help="sessions: fit on half the sessions")
     ap.add_argument("-o", "--out", help="fit, reference: the file; holds: per request, session index prompt measured predicted")
     a = ap.parse_args()
     if a.what != "holds" and not a.out or a.what == "holds" and not a.replay:
-        ap.error("fit, reference, and log need -o; holds needs --replay")
+        ap.error("fit, reference, log, and sessions need -o; holds needs --replay")
     if a.what == "log":                            # its one argument is the server's log
         return trim(a.corpus, a.out)
-    {"fit": fit, "reference": reference, "holds": holds}[a.what](a)
+    {"fit": fit, "reference": reference, "holds": holds, "sessions": sessions}[a.what](a)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,85 @@
+{
+  "shape_version": 3,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "lmcache_local_disk_tiered",
+      "ast_sha256": "2220d24b9aec6a36581d03be76b148f88e14d4057b183f14d093d52c4b5d6215",
+      "params": "case.lock.json",
+      "params_sha256": "6d14c2b51264c7f1b184509e97e8ee70ee3d95d20cbecce249d5b3a766a7b50e",
+      "gpus": 1,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": null,
+      "stable": false,
+      "moving": [
+        "read_share",
+        "reread",
+        "skew"
+      ],
+      "ops": 1208100,
+      "counts": {
+        "close": 201350,
+        "fstat": 201350,
+        "ioctl": 201350,
+        "lseek": 201350,
+        "open": 201350,
+        "read": 115491,
+        "write": 85859
+      },
+      "bytes_read": 3875234906112,
+      "bytes_written": 2880949977088,
+      "datasets": [],
+      "attributes": {
+        "run_length_read": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "run_length_write": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "request_size_read": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "request_size_write": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "read_share": {
+          "value": 0.74361,
+          "spread": 0.247802,
+          "class": "mixed"
+        },
+        "metadata": {
+          "value": 3.0,
+          "spread": 0.0,
+          "class": "high"
+        },
+        "reads_own_writes": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "yes"
+        },
+        "reread": {
+          "value": 0.884103,
+          "spread": 0.118385,
+          "class": "repeated"
+        },
+        "skew": {
+          "value": 0.0899113,
+          "spread": 0.0490546,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

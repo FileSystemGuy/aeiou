@@ -351,6 +351,40 @@ def test_agentx_fit_of_the_corpus(tmp_path, corpus):
     assert p["reuse"]["mixture"][0]["weight"] == 0
 
 
+def test_agentx_sessions_fits_the_session_generator(tmp_path):
+    """`agentx.py sessions`: the session generator's fit (brief item 71, `gen5`), read by
+    `lmcache_local_disk_tiered.py`: per class of sessions (by mean prompt, equal shares of the
+    requests) quantile tables on one grid, and the corpus-wide tables, shares, and constants."""
+    sessions = []
+    for si in range(4):                     # a main agent extending its prompt, a sub-agent group beside it
+        base, t, main = list(range(1000 * si, 1000 * si + 8)), 0.0, []
+        for i in range(8):
+            main.append(_req(t, base + list(range(1000 * si + 100, 1000 * si + 100 + 2 * i)), 64 * (8 + 2 * i) + 10, 50 + i))
+            main[-1]["api_time"] = 2.0
+            t += 3.0 + (90.0 if i % 3 == 2 else 0.0)          # a long gap now and then
+        sub = [_req(t0, base[:4] + list(range(1000 * si + 500, 1000 * si + 500 + j + 1)), 64 * (5 + j), 20)
+               for j, t0 in enumerate((4.0, 70.0, 140.0, 141.0, 210.0, 280.0))]
+        sessions.append(main[:2] + [{"type": "subagent", "requests": sub}] + main[2:])
+    corpus = tmp_path / "sessions.jsonl"
+    corpus.write_text("".join(json.dumps({"requests": s}) + "\n" for s in sessions))
+    out = tmp_path / "fit.json"
+    r = _agentx("sessions", corpus, "--classes", 2, "--points", 4, "-o", out)
+    assert r.returncode == 0, r.stderr
+    f = json.loads(out.read_text())
+    g, cl = f["glob"], f["classes"]
+    assert g["grid"] == [0.0, 0.25, 0.5, 0.75, 0.97, 0.99, 0.995, 0.999, 1.0]
+    assert len(cl) == 2 and sum(c["weight"] for c in cl) == 4                 # two sessions each
+    assert all(len(c["n_main"]) == len(g["grid"]) for c in cl)
+    assert all(len(c[w]["steps"]) and abs(sum(c[w]["steps"].values()) - 1) < 1e-3 for c in cl for w in ("main", "sub"))
+    assert g["mb"] == 0 and g["cap"] == 64 * 22 + 10                          # no main-agent cut; the longest prompt
+    assert len(g["prof"]) == 10 and len(g["plong_main"]) == 4 and len(g["n_edges"]) == 3
+    for k in ("p_has_sp", "p_ext_full", "p_sync", "lam_main", "lam_sub"):
+        assert 0 <= g[k] <= 1, k
+    for k in ("first_main", "sub_first", "out_main", "api_main", "idle_s_main", "z_main", "batch", "spawn"):
+        assert len(g[k]) == len(g["grid"]), k
+    assert "sessions" in r.stdout and "numbers" in r.stdout
+
+
 def test_agentx_reference_is_the_corpus_chunk_accounting(tmp_path, corpus):
     out = tmp_path / "ref.json"
     r = _agentx("reference", corpus, "--chunk-tokens", 128, "--context", 4096, "--bins", 2, "-o", out)
@@ -365,9 +399,9 @@ def test_agentx_reference_is_the_corpus_chunk_accounting(tmp_path, corpus):
 
 
 def test_agentx_needs_its_outputs():
-    for args in (("fit", "x"), ("reference", "x"), ("log", "x"), ("holds", "x")):
+    for args in (("fit", "x"), ("reference", "x"), ("log", "x"), ("sessions", "x"), ("holds", "x")):
         r = _agentx(*args)
-        assert r.returncode == 2 and "fit, reference, and log need -o; holds needs --replay" in r.stderr, args
+        assert r.returncode == 2 and "fit, reference, log, and sessions need -o; holds needs --replay" in r.stderr, args
 
 
 # The replay of CORPUS as replay_agentx.py would send it (fi 2 of session 1 over the context): per

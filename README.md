@@ -529,7 +529,13 @@ the rule an expression over what the tier holds), an eviction body run for each 
 eviction lanes (an unlink is an op of the plan), and `probe`, `touch`, and `store` over a range
 of chunks or an array of them (a store's `taken`, what it newly stored, and `present: renew`),
 so G2 above G3 (NVIDIA's names, adopted the same day) and LMCache's planned drop are
-written in the abstract; rule V35. Not yet written with them: the KV abstract's G2 and G3.
+written in the abstract; rule V35. ~~Not yet written with them: the KV abstract's G2 and G3.~~
+Written with them (2026-11-13, the user's choices): `lmcache_local_disk_tiered`, beside
+`lmcache_local_disk` in its mechanism, the AgentX session generator (`kit/agentx.py sessions`)
+on one engine with G1, G2, and G3 at the WG's example sizes and the in-process connector's traced
+chunk calls, its case `agentx-tiered` unsettled and dry-run only until item 72 (7); the older
+abstract and its four cases stay runnable until then. Its G1 and G2 issue no ops, only G3 does;
+G3 and G4 active together in one abstract is queued (brief item 78).
 
 Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
 §3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the

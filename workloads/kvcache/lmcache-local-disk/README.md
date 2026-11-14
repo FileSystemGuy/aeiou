@@ -193,3 +193,25 @@ python kit/agentx.py holds traces.jsonl --replay $C/replay.log $C/lmcache.log [-
   with its reason in the capture's `trace.tolerances.json` (and under strace, since the side runs, the
   top tenth's popularity just outside, the case being the eBPF capture's fit).
 
+
+## The cache hierarchy on a timeline: `lmcache_local_disk_tiered` (2026-11-13)
+
+`lmcache_local_disk_tiered.py` is the second abstract of this mechanism (`DESIGN_REVIEW.md` §3.99,
+the note "The tiered abstract committed"; brief items 71, 72, 75). It replaces the older
+abstract's `keep` and `retain` draws with the planned walk of one engine: sessions from the
+generator fitted to the AgentX corpus, each a lane of one timeline with its sub-agents; the
+engine's slots; G1, vLLM's pool, as a held tier; and LMCache 0.5.5's G2 and G3 with their timed
+eviction, a G3 victim unlinked on the connector's four delete workers. Its chunk calls are the
+ones traced above. `aeiou run` refuses a timeline until item 72 (7) is built, so it is checked
+and dry-run only, and the older abstract and its cases stay until then.
+
+```
+# from this directory; the corpus as in the AgentX section
+python kit/agentx.py sessions traces.jsonl -o kit/sessions.fit.json     # 393 sessions in 8 classes, 5,839 numbers
+aeiou-build lmcache_local_disk_tiered.py
+aeiou dry-run --case agentx-tiered --workloads ../.. --gpus 1
+```
+
+The fit equals the scratch's `gen5.8.json`, and the abstract's chunk reads, writes, and unlinks
+equal, key for key, those of the scratch port held to LMCache's own `LRUEvictionPolicy`
+(`gen10_lmc`, less the marker files it writes for that comparison), at three configurations.
