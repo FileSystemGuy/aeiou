@@ -10,8 +10,9 @@ name: release
 # uses rustls, no OpenSSL). Each architecture is built and smoke-tested on its own hardware, since
 # PyInstaller makes aeiou-header for the machine it runs on (DESIGN_REVIEW.md §3.84). Nothing is
 # published to a registry. The tag must equal the version in runner/Cargo.toml and
-# builder/pyproject.toml. A dispatch builds and smoke-tests both tarballs, keeps them as the run's
-# artifacts, and publishes nothing.
+# builder/pyproject.toml. Each leg runs the runner's golden tests (the recorded fingerprints and AST
+# hashes) on its own hardware before it assembles anything. A dispatch builds, tests, and smoke-tests
+# both tarballs, keeps them as the run's artifacts, and publishes nothing.
 on:
   push:
     tags: ['v*']
@@ -76,6 +77,13 @@ jobs:
         # runner/REFERENCE.md §16), so one binary serves every format and S3 stores alike (2026-10-16)
         # and the capture's library, which aeiou-trace capture preloads (DESIGN_REVIEW.md §3.96), into lib/
         run: cargo build --release --bin aeiou --bin aeiou-trace && cargo build --release -p aeiou-capture-shim
+
+      - name: The golden hashes hold on this architecture
+        working-directory: runner
+        # drawn sizes (lognormal, normal, zipf) go through libm's ln, sqrt, cos, exp, and pow, which no standard
+        # holds to one answer on x86_64 and aarch64, so the recorded fingerprints and AST hashes are run on this
+        # leg's hardware before its tarball is assembled (DESIGN_REVIEW.md §3.100, "The six suggestions decided")
+        run: cargo test --release --locked --test all golden::
 
       - name: Build the builder's wheel
         working-directory: builder

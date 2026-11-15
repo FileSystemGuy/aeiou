@@ -13037,8 +13037,17 @@ acts only on a strictly lower tier, so a cascade ends; entries carrying values a
 on tier state wait for a committed user; (3) deferred and recorded as a constraint on item
 72 (6): events are designed as the base, and nothing existing is lowered onto them until
 they exist, `consume`'s position formula being defined through `loader`; (6) deferred, to be
-costed when item 58 starts. Which workflow runs the aarch64 golden tests, CI's or the
-release's, is not settled. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
+costed when item 58 starts. ~~Which workflow runs the aarch64 golden tests, CI's or the
+release's, is not settled.~~ The release workflow runs them, on both legs (the user's "release
+workflow with a manual trigger", the same day; built the same day): a step of the matrix job,
+`cargo test --release --locked --test all golden::`, after the runner is built and before
+anything is assembled, so a tag does not publish a tarball whose runner draws other sizes
+than the recorded ones, and a dispatch, which the workflow already had and which publishes
+nothing, gives the answer on demand; CI's four jobs and their wait are unchanged.
+`builder/tests/test_pins.py` holds the step to the matrix job and its place. The golden
+table covers every committed abstract that draws a size, `faiss_ivf_ondisk` with a
+`lognormal` list size and a `zipf` among them. Not yet run on aarch64: the first dispatch is
+the measurement. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
 corrected in place.
 
 ## 4. Plan changes

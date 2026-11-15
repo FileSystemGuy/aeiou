@@ -164,3 +164,16 @@ def test_the_release_builds_each_architecture_on_its_own_hardware():
     assert "DIST=aeiou-$ver-${{ matrix.arch }}-linux" in rel
     assert "workflow_dispatch:" in rel
     assert "if: startsWith(github.ref, 'refs/tags/v')" in rel
+
+
+def test_the_release_holds_the_golden_hashes_on_each_architecture():
+    """Drawn sizes (`lognormal`, `normal`, `zipf`) go through libm, so the golden fingerprints and
+    AST hashes are run on each leg's own hardware, before anything is assembled: a tarball whose
+    runner draws other sizes than the recorded ones is never built, on a tag or on a dispatch
+    (DESIGN_REVIEW.md §3.100, the note "The six suggestions decided")."""
+    rel = workflows()["release.yml"]
+    step = "cargo test --release --locked --test all golden::"
+    assert step in rel
+    assert rel.index("name: Build the runner") < rel.index(step) < rel.index("name: Assemble the tarball")
+    job = rel[rel.index("  tarball:"):rel.index("  release:")]
+    assert step in job and "runs-on: ${{ matrix.runner }}" in job   # in the matrix job, so on both legs

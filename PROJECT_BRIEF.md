@@ -1846,7 +1846,8 @@ numbers; the order is this note's.
     barriers, and item 72 (6)'s events; `span` everywhere, merged with `phase`; a
     quantile-table distribution; ops as table rows before item 58), decided by the user on
     2026-11-14 and none built (`DESIGN_REVIEW.md` §3.100, the note "The six suggestions decided"):
-    in order, the golden tests on aarch64 and then the quantile table as a new distribution
+    in order, the golden tests on aarch64 (a step of the release workflow's matrix job since
+    2026-11-14, on a tag and on a dispatch; its first run on aarch64 still to be made) and then the quantile table as a new distribution
     (`normal` and `lognormal` kept: they size six committed ASTs' datasets, which the review's
     count of 18 unused primitives, now 16, had missed), the cache verbs over keys, `span`
     outside a timeline with no merge into `phase`, an eviction body acting on a strictly lower
