@@ -96,7 +96,7 @@ generator logic, and every one of those properties would go with it. This was Op
 |---|---|---|
 | The library | Nothing, if the emitted AST is the same | A builder release |
 | One abstract's script | That abstract's AST hash, and its fingerprint if its ops changed | Its cases relocked, its shapes re-measured |
-| The instruction set, by addition | The contract version; no existing fingerprint | Every AST regenerated at the new version, every case relocked (hashes only) |
+| The instruction set, by addition | The contract version; no existing fingerprint; today every AST hash and so every workload id (section 7.5) | Every AST regenerated at the new version, every case relocked, every shape re-measured |
 | A definition a fingerprint depends on | Every fingerprint or every dataset id | A recorded decision (`CLAUDE.md`); to be avoided |
 | The microarchitecture | Nothing published | The runner's own tests |
 
@@ -294,11 +294,129 @@ The rule this section proposes for the future: a composite is never added to the
 set. A new intrinsic needs a reason from the definition above (an order, or state), stated where
 it is defined.
 
-### 7. The growth policy (proposal; not yet written)
+### 7. The growth policy (drafted and decided 2026-11-14; 7.5's version range not built yet)
 
-The core is frozen. Capability grows by adding a map type or a helper with a declared effect
-signature. An addition never moves an existing fingerprint. A new piece is provisional until a
-second workload uses it.
+The question this section answers is the one the review began with: how does the suite take a
+new development in the AI stack without a change to the runner each time, and when a change to
+the runner is right, what must it be held to. The model is eBPF's: a small instruction set that
+does not grow, and capability added as **maps** (state structures with a declared order and
+bound, section 3) and **helpers** (statements over them with declared effects, section 4).
+
+**7.1 The ladder.** A new requirement is tried at each rung in turn and stops at the first that
+holds it. Each rung costs more than the one before (section 0.4).
+
+| Rung | The requirement is met by | Who decides | Example |
+|---|---|---|---|
+| 1 | Parameters of a committed abstract: a new case | The case's author | A second accelerator for a training job |
+| 2 | The abstract's own script, or a library function, over existing instructions | The script's author | `lru()`, the session generator of the tiered KV abstract |
+| 3 | A new helper on an existing map | A recorded decision | `probe`, `touch`, `store` over a range (contract 0.19) |
+| 4 | A new map type, with its helpers | A recorded decision | The tier (0.16, 0.18), the counted resource (0.18) |
+| 5 | A new op, or a new handle or expression of the core | A recorded decision | `truncate` (0.14) |
+| 6 | A change to a definition fingerprints depend on | To be avoided (`CLAUDE.md`) | None since the release |
+
+The test between rungs 2 and 3 is section 6's: a capability is an intrinsic only if it needs an
+order across lanes or state kept efficiently, and the reason is written where it is defined. A
+composite, something a library function over existing instructions would emit the same ops
+for, is never added.
+
+**7.2 What an addition declares.** A new helper or map type comes with these, in
+`schema/README.md` beside its definition, before it is built:
+
+1. **Its effects** in section 5's terms, so that every context's rule follows without a new
+   list (`builder/tests/test_architecture.py` fails until the section classifies it).
+2. **Its state** (a map): what it holds, the order it is read and changed in (positional, a
+   lane's own, or planned order; section 1), and what bounds its memory. Never a structure per
+   file.
+3. **Its side of the wall** (section 15): which of its inputs are the abstract's, and that
+   none is the run's. What a run observes of it has one of the four fates.
+4. **Why it is not library**: the order or the state it needs.
+5. **Its refusals**: the shared refusal cases both checkers are held to.
+
+**7.3 What an addition never does.**
+
+- It never changes the op multiset of a document that does not use it, so no existing
+  fingerprint and no dataset id moves. The history in `schema/README.md` §9 records "no
+  fingerprint and no dataset id changed" for every version from 0.15 to 0.22.
+- It never makes the plan a function of the run (section 15).
+- It never gives a committed abstract a second meaning: a document valid before and after
+  means the same.
+
+**7.4 Provisional and settled.** A new piece is **provisional** until a second mechanism uses
+it; a settled piece is frozen. This is practice already: the history of `schema/README.md` §9
+marks 0.15's, 0.16's, and 0.18's pieces "provisional until a second workload uses them". What
+the policy adds is what the word permits: while provisional a piece may be narrowed, reshaped,
+or removed with a contract version. Twice so far: contract 0.18 rewrote 0.16's `evict` enum
+as `order` expressions and changed what a `lookup` touches, and contract 0.22 refused
+`published` and `entry` in two bodies where 0.21 accepted them; each was possible because one
+abstract, regenerated the same day, was the only user. The whole timeline family (23
+primitives, one abstract; "The review behind this outline") is provisional today; 0.19's,
+0.20's, and 0.21's pieces are not marked so in the history and would be. The 18 primitives no committed abstract uses are provisional
+too, and a candidate for removal is any of them a library function could emit (section 6's
+composites).
+
+**7.5 The version, and what a bump moves today.** *Found while drafting, 2026-11-14.* The
+runner accepts one contract version exactly (`ast.rs`: "ast version `X` is not `Y`"), the
+version is a key of the document, and the AST hash covers it (`schema/check.py`'s `canonical`
+removes only `provenance`). A case's workload id, what results are compared by, covers the AST
+hash (`runner/REFERENCE.md` §17). So every addition to the contract, though it moves no
+fingerprint, changes every AST hash, every lock, and every workload id: eight versions in three
+days (0.15 to 0.22) each regenerated 14 ASTs and relocked 25 cases, and the shapes take about
+36 minutes to re-measure. Before anything is published this costs time only. After a working
+group publishes reference hashes, an addition made for one new workload would split the
+results of every other workload from those before it.
+
+- *Proposal (a):* the runner accepts every contract version from a stated floor up to its own,
+  and an abstract carries the lowest version that holds everything it uses. An addition then
+  touches no committed AST, lock, or workload id; eBPF's rule that a program loads on every
+  later kernel. It rests on 7.3: a document valid at version N is valid at N+1 and means the
+  same. The builder would emit the lowest sufficient version, which needs each primitive's
+  version recorded (the schema's descriptions carry it in prose today).
+- *Proposal (b):* a change that 7.3 does not hold for (a narrowing such as 0.22, a reshaping
+  such as 0.8's one dataset shape) raises the floor, or is confined to provisional pieces whose
+  abstracts are regenerated alone. Which of the two is a decision; the second keeps settled
+  abstracts' hashes through every change.
+- *Not proposed:* taking the version out of the hash. The hash would then no longer say which
+  rules the document was checked under.
+- *The record, for scale:* of the eight versions 0.15 to 0.22, six only added (the history says
+  of each that the document before it is one of the new version "with the version changed"),
+  and two changed a provisional piece (0.18, 0.22). Earlier versions that changed existing keys
+  or rules (0.5, 0.6, 0.8) were not reread for this draft.
+
+**7.6 What the policy would have said of the last eight versions.** A check of the policy
+against the record, not a criticism of it: the pieces were built in the order one abstract
+needed them.
+
+| Version | What it added | Rung | Under this policy |
+|---|---|---|---|
+| 0.15 | `timeline`, `publish`, `published`, `entry`, `prev`, `array` | 4 | A map (the published log) and the planned order; `prev` and `array` are core (rung 5) |
+| 0.16 | `seq` values, a tier with `lookup` | 4 | A map; `lookup` is a composite (section 6) and would have been `probe`, `touch`, `store` first |
+| 0.17 | Groups of entries | 3 | A key on an existing map |
+| 0.18 | Tier `order`, holds, `full`; resources; `now` | 3 and 4 | The tier's policy moved from an enum to expressions: a provisional piece reshaped (7.4) and made general, the pattern to repeat |
+| 0.19 | Timed eviction, `on_evict`, `probe`, `touch`, `store` | 3 | Helpers; the eviction body is a new context (section 5) |
+| 0.20 | `workers`, `submit`, `span` | 4 and 3 | A map (staging) and two helpers; a new context |
+| 0.21 | A span's `staging` | 3 | A key on an existing helper |
+| 0.22 | A refusal | none | A provisional piece narrowed (7.4) |
+
+Two things the table shows. Contexts (a body with its own allowed effects) were added three
+times and are as much a part of the growth as maps and helpers, so 7.2's first item matters
+most. And 0.18's move, a fixed list of policies replaced by expressions over declared
+attributes, is the one that removed a future runner change for every new eviction policy; the
+six suggestions of the review are mostly the same move applied elsewhere (keys for chunks,
+values on entries, a quantile table for four distributions).
+
+**7.7 Decided (the user, 2026-11-14; `DESIGN_REVIEW.md` §3.100, the note "The growth policy
+decided").**
+
+1. The ladder and 7.2's five declarations are the rule for additions to the contract.
+2. "Provisional until a second mechanism uses it" is the rule, and it permits narrowing,
+   reshaping, and removal. The timeline family is declared provisional in `schema/README.md`
+   §9.
+3. Proposal 7.5 (a) is accepted: the runner is to accept every contract version from a floor
+   up to its own, an abstract carrying the lowest version that holds what it uses. **Not built
+   yet** (brief item 80); until it is, the runner accepts its own version alone and every
+   version regenerates every AST. The form of (b) is settled when it is built.
+4. Removing the unused composites (`choose`, `mixture`, `hotset`) waits for the decision on
+   review suggestion 5, the quantile table, which would replace two of them.
 
 ### 8. The definitions fingerprints depend on (exists; not yet written)
 

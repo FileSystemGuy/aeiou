@@ -12984,6 +12984,34 @@ and `builder/tests/test_architecture.py` places them, in an op, in every context
 placements, 74 refused). No committed abstract read either expression in such a body; every
 committed AST was regenerated for the version, no fingerprint and no dataset id changed.
 
+**The growth policy decided (2026-11-14, the user's "agreed on all questions").** Section 7 of
+`ARCHITECTURE.md` was drafted as a proposal: a ladder of six rungs a new requirement climbs
+(a case's parameters; a script or library function; a helper on an existing map; a new map
+type; a new op or core expression; a definition fingerprints depend on), five things an
+addition declares before it is built (its effects in section 5's terms, its state with its
+order and bound, its side of the wall, why it is not library, its refusals), three things it
+never does (move a fingerprint of a document not using it, make the plan a function of the
+run, give a valid document a second meaning), and the meaning of provisional. Held against
+the record, contracts 0.15 to 0.22: six only added, two changed a provisional piece (0.18
+rewrote 0.16's `evict` and changed what a `lookup` touches; 0.22 refused two expressions in
+two bodies), and three added a context, a body with its own allowed effects.
+
+*Found while drafting.* The runner accepts one contract version exactly, the version is a key
+of the hashed document (`check.py`'s `canonical` removes only `provenance`), and the workload
+id covers the AST hash (`runner/REFERENCE.md` §17). So a version that moves no fingerprint
+still changes every AST hash, every lock, and every workload id. Before publication that is
+regeneration time (14 ASTs, 25 locks, about 36 minutes of shapes, eight times in three days);
+after it, an addition for one workload would split every other workload's results.
+
+*Decided by the user:* (1) the ladder and the five declarations are the rule; (2)
+"provisional until a second mechanism uses it" is the rule and permits narrowing, reshaping,
+and removal, and the timeline family is marked provisional in `schema/README.md` §9; (3) the
+runner is to accept a range of contract versions, an abstract carrying the lowest that holds
+what it uses, as eBPF programs load on every later kernel; queued as brief item 80, not built;
+taking the version out of the hash was not proposed, since the hash would no longer say which
+rules the document was checked under; (4) removing `choose`, `mixture`, and `hotset` waits on
+review suggestion 5.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

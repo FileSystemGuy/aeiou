@@ -806,6 +806,15 @@ results are compared by.
 
 ## 9. Version history
 
+**Provisional and settled (decided 2026-11-14, `ARCHITECTURE.md` §7.4, `DESIGN_REVIEW.md`
+§3.100).** A piece of the contract is provisional until a second mechanism under `workloads/`
+uses it. A provisional piece may be narrowed, reshaped, or removed by a later version, its
+one abstract regenerated with it; a settled piece is frozen. Provisional today: everything
+added by 0.15 to 0.21, the timeline family (the `timeline` and what stands only in one, `prev`,
+the `array`, the `seq` values), whose one user is `lmcache_local_disk_tiered`. An addition to
+the contract follows `ARCHITECTURE.md` §7: it declares its effects, its state and order, its
+side of the wall between plan and run, why it is not library, and its refusals.
+
 - **0.1** (2026-09-30): the contract as drafted (§1–§7).
 - **0.2** (2026-09-30): `format.layout` (the container layout, §2); handles `unit {of, index}`
   and `column {of, index}`; expressions `units` and `unit_index` (the latter renamed from

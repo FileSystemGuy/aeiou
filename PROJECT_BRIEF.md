@@ -1855,7 +1855,14 @@ numbers; the order is this note's.
     issues ops reads no state of its timeline, so `published` and `entry` are refused in a
     `submit` and an `on_evict` body as `probe` is, and `now` there is the body's planned
     instant; `DESIGN_REVIEW.md` §3.100, the note "Section 5's two questions settled"); (c) the growth policy (a frozen core, capability added as map types and
-    helpers with declared effects, no addition moving an existing fingerprint); (d) a
+    helpers with declared effects, no addition moving an existing fingerprint), drafted as
+    section 7 on 2026-11-14 and decided by the user the same day (its 7.7: the ladder and the
+    declarations adopted, provisional status a rule, the version range accepted and queued as
+    item 80, the composites' removal waiting on suggestion 5), the four things having been: the ladder and the five
+    declarations an addition makes; "provisional until a second mechanism uses it" as a rule
+    that permits narrowing and reshaping; a range of accepted contract versions, since today
+    every version changes every AST hash and so every workload id though no fingerprint; and
+    removing the unused composites (`choose`, `mixture`, `hotset`); (d) a
     conformance kit; (e) how stable the planned-op stream (the trace file) is as an interface;
     (f) the idiom catalogue, each library function carrying its lowering and its trace
     signature so the digest names what the builder emits, to be costed first; (g) the fit
@@ -1863,6 +1870,18 @@ numbers; the order is this note's.
     against the application's own policy code), whether the structural comparison of digests is
     part of acceptance, and whether time is judged. Related: item 48 (the fitting skill, whose
     reference Part IV may become), item 75 (the tier, provisional until a second user).
+
+80. **A range of accepted contract versions (decided by the user 2026-11-14, `ARCHITECTURE.md`
+    §7.5, `DESIGN_REVIEW.md` §3.100; not built).** Today the runner accepts exactly its own
+    contract version, the version is inside the hashed document, and a case's workload id
+    covers the AST hash, so every addition to the contract changes every AST hash, lock, and
+    workload id though no fingerprint. To build: the runner and `schema/check.py` accept every
+    version from a floor to their own; the builder emits the lowest version that holds what
+    the abstract uses, which needs each primitive's version recorded in a form a tool reads
+    (the schema's descriptions carry it in prose); a test that every committed AST is still
+    accepted unchanged after an addition. To settle when built: the floor (0.22, or lower),
+    and what a change that is not an addition does (raise the floor, or stay within
+    provisional pieces whose abstracts alone are regenerated).
 
 ## 7. Environment
 
