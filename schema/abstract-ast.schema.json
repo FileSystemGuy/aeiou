@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.21",
+      "const": "0.22",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -652,7 +652,7 @@
                   }
                 }
               ],
-              "description": "The number of entries the named timeline holds before this step in one group, in planned order (contract 0.15, rule V30): a timeline's name for its group 0, or `{timeline, group}` (contract 0.17), `group` an integer. Not positional: `@` may not reach it."
+              "description": "The number of entries the named timeline holds before this step in one group, in planned order (contract 0.15, rule V30): a timeline's name for its group 0, or `{timeline, group}` (contract 0.17), `group` an integer. Not positional: `@` may not reach it. Never in a `submit` body or an `on_evict` body (contract 0.22, rules V35 and V36)."
             },
             "entry": {
               "type": "object",
@@ -676,7 +676,7 @@
                   "$ref": "#/$defs/ident"
                 }
               },
-              "description": "Value `key` of entry `index` of the named timeline in group `group` (contract 0.17; 0 when absent), in planned order; `index` below that group's `published` (contract 0.15, rule V30). Not positional: `@` may not reach it."
+              "description": "Value `key` of entry `index` of the named timeline in group `group` (contract 0.17; 0 when absent), in planned order; `index` below that group's `published` (contract 0.15, rule V30). Not positional: `@` may not reach it. Never in a `submit` body or an `on_evict` body (contract 0.22, rules V35 and V36)."
             },
             "prev": {
               "type": "object",
@@ -2209,7 +2209,7 @@
               "$ref": "#/$defs/body"
             }
           },
-          "description": "`body` run on a worker lane of the enclosing timeline's `workers`, at this lane's planned instant (contract 0.20, rule V36): worker lane (submission ordinal mod `lanes`), never the first free one. Its ops are those it would issue where it stands, with the same enclosing indices, so the op set and fingerprint are the body's written inline; in a run its ops wait on its worker lane, not on this lane. The body only issues ops: no `compute`, cache or timeline statement, `acquire`, `release`, `parallel`, `submit`, or `span`."
+          "description": "`body` run on a worker lane of the enclosing timeline's `workers`, at this lane's planned instant (contract 0.20, rule V36): worker lane (submission ordinal mod `lanes`), never the first free one. Its ops are those it would issue where it stands, with the same enclosing indices, so the op set and fingerprint are the body's written inline; in a run its ops wait on its worker lane, not on this lane. The body only issues ops: no `compute`, cache or timeline statement, `acquire`, `release`, `parallel`, `submit`, or `span`, and (contract 0.22) no `published` or `entry`; `now` in it is the submission's planned instant."
         },
         "span": {
           "type": "object",
@@ -2531,7 +2531,7 @@
               "$ref": "#/$defs/body"
             }
           },
-          "description": "What each victim runs (contract 0.19, rule V35): `body`, with `victim` its key, on eviction lanes of the timeline, victim i of a batch on lane i mod `lanes`, at the planned instant of the tick or the store that evicted it, before any other lane's step at that instant. The body sees the bindings around the timeline and parameters; it holds no `compute`, `lookup`, `probe`, `touch`, `store`, `acquire`, `release`, `publish`, `parallel`, `loader`, channel, barrier, timeline, or trace. `lanes` reads parameters and literals. Needs an `order`."
+          "description": "What each victim runs (contract 0.19, rule V35): `body`, with `victim` its key, on eviction lanes of the timeline, victim i of a batch on lane i mod `lanes`, at the planned instant of the tick or the store that evicted it, before any other lane's step at that instant. The body sees the bindings around the timeline and parameters; it holds no `compute`, `lookup`, `probe`, `touch`, `store`, `acquire`, `release`, `publish`, `parallel`, `loader`, channel, barrier, timeline, or trace, and (contract 0.22) reads no `published` or `entry`; `now` in it is the eviction's planned instant. `lanes` reads parameters and literals. Needs an `order`."
         }
       },
       "description": "A tier (contracts 0.16, 0.18, and 0.19, rule V33): at most `capacity` (counted in entries, the default, or bytes) of entries no lane holds evicted by `order`, at store or, with `evict`, at planned ticks; held entries are never victims; an entry larger than the tier is not stored."

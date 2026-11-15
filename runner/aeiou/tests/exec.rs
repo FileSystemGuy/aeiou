@@ -9,7 +9,7 @@ use aeiou::plan::{Plan, Record};
 use serde_json::{json, Value};
 
 fn model(body: Value) -> &'static Model<'static> {
-    let doc = json!({"ast": "0.21", "name": "t",
+    let doc = json!({"ast": "0.22", "name": "t",
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
            "actors": {"gpu": {"count": 1, "body": body}}}).to_string();

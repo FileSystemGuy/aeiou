@@ -28,7 +28,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.21", "name": "t", "params": {"n": {"default": 2}},
+    json!({"ast": "0.22", "name": "t", "params": {"n": {"default": 2}},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -182,6 +182,28 @@ fn workers_used_wrongly_are_refused_when_walked() {
 }
 
 // ---------------------------------------------------------------- rule V36
+
+/// A `submit` body reads no state of the timeline (contract 0.22, V36): no `published` and no
+/// `entry`, anywhere in it, since its lane steps after every other at its instant. A `let`
+/// before the `submit` holds the value as it stood there, and the body reads that.
+#[test]
+fn a_submit_body_reads_no_timeline_state() {
+    let publish = json!({"publish": {"timeline": "tl", "values": {"a": 1}}});
+    for (e, what) in [(json!({"published": "tl"}), "published"), (json!({"published": {"timeline": "tl", "group": 0}}), "published"),
+                      (json!({"entry": {"timeline": "tl", "index": 0, "key": "a"}}), "entry")] {
+        let errs = refused(tl(json!([publish, submit(json!([{"cond": {"if": true, "then": [stat(json!({"add": [e, 1]}))]}}]))])));
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(errs[0].ends_with(&format!("{what}: in a `submit` body, which reads no state of its timeline (V36)")), "{errs:?}");
+    }
+    let (ops, _) = walk(tl(json!([
+        publish,
+        {"let": {"name": "seen", "value": {"published": "tl"}}},
+        submit(json!([stat(json!({"ref": "seen"}))])),
+        publish,
+        compute(1),
+    ])));
+    assert_eq!(ops, ["+1", "d/1"]);
+}
 
 fn has(errs: &[String], needle: &str) {
     assert!(errs.iter().any(|e| e.contains(needle)), "wanted `{needle}` in:\n{}", errs.join("\n"));

@@ -298,7 +298,10 @@ each is a recorded decision and the golden tests pin them.
   bindings, phases, open files, and the values its `prev`s read as they stand, with no frame of its own, so its ops carry the
   indices they would carry inline and hash as the body written there would; the submitting lane
   goes on at once. Its worker lane, which the run issues it on (brief item 72 (7)), is the
-  ordinal mod `lanes`. A `span` walks its body where it stands (a body with its own scope level,
+  ordinal mod `lanes`. Neither it nor an eviction body reads `published` or `entry` (contract
+  0.22, V35, V36: such a lane steps after the lane that made it has run on to its next
+  `compute`, so the log it would read is this planner's order); `now` in either is the planned
+  instant the lane was made at, which nothing in the body moves. A `span` walks its body where it stands (a body with its own scope level,
   as a `phase`'s) and changes nothing in the plan; the run measures it.
 - **The planner** (2026-11-13, `plan.rs`; `DESIGN_REVIEW.md` §3.99, the note "The run side of
   timelines", step 2). A timeline's walk, each op an owned record: its number in planned order,

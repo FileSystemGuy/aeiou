@@ -168,6 +168,10 @@ part of a lane whose D a run measures (V36). The builder refuses a `submit` or `
 timeline, a `submit` naming workers its timeline does not declare, a span inside a span, a
 `compute`, `parallel`, `acquire`, or `lookup` in a span, and in a `submit` body anything but ops
 and the statements around them (what V35 bans in an eviction body, and `submit` and `span`).
+Since contract 0.22 (2026-11-14) a `submit` body and an eviction body read no `tl.published`
+and no `tl.entry(...)`, refused by the checker when the abstract is built (V35, V36): bind the
+value with `c.let` before the `submit` and read that; `now()` in either is the body's planned
+instant.
 Since contract 0.21 (2026-11-14): `with c.span("load", staging="store"):`, a span whose reads
 draw on the store workers' staging while in flight, loads into the pool the pending stores hold;
 the builder refuses workers the timeline does not declare.

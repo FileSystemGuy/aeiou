@@ -12951,6 +12951,39 @@ abstracts), both checkers held to them, a wrong table shown to be caught (three 
 acceptance is two checks today, the trace check (`compare --judge`) and a policy check against
 the application's own code that has no tool or recorded form. What remains is brief item 79.
 
+**Section 5's two questions settled: contract 0.22 (2026-11-14, the user's "proceed with the
+refusal and the bump to 0.22").** *What was found.* An eviction body and a `submit` body each
+run as a lane of the timeline (`vm.rs`'s `spawn_evictions` and `tl_step`), so `now`,
+`published`, and `entry` all evaluated there. `now` is well defined: the lane's clock is set to
+the eviction's or the submission's planned instant and nothing in the body can move it
+(`compute` is banned). `published` and `entry` were deterministic but read the log at a moment
+the abstract does not name: a lane runs until its next `compute`, and only then does the new
+lane step (a worker lane after every other lane at that instant too). Three abstracts given to
+`aeiou dry-run` showed it: with `publish`, a `store` that evicts, `publish`, `compute(7)`,
+`publish`, the eviction body read `published` as 2, the publish written after the evicting
+store included; a store at 5 ns gave `now` 5; `entry 0` gave the first entry's value. A `probe`
+there would read a tier at the same moment, which is a reason for its ban that the rule's text
+("it plans no time and changes no cache or timeline") never gave.
+
+*The options.* (1) Keep the expressions and document "the log as of the end of the step that
+made the lane": no contract change, but the planner's stepping order becomes part of the
+contract. (2) Refuse `published` and `entry` in both bodies, keep `now` and define it: one rule,
+a body that only issues ops reads no state of its timeline, which is also `probe`'s reason.
+Recommended (2): a `submit` body loses nothing (a `let` before the `submit` holds the value at
+an exact point, tested: `publish`, `let seen = published`, `submit [stat seen]`, `publish`
+reads 1), and an eviction body that one day needs an entry's values should be handed them
+(review suggestion 2), not read a log at an unnamed moment.
+
+*Decided by the user:* (2), with the contract at 0.22. *Built the same day,* tests first: both
+checkers (`schema/check.py`'s `reads_state`, `validate.rs`'s `reads_state`, one message,
+"`published`: in a `submit` body, which reads no state of its timeline (V36)", V35 for an
+eviction body); two shared refusal cases; `tests/evict.rs` (`now` at a tick and at an evicting
+store; the refusals) and `tests/workers.rs` (the refusals; the `let` before a `submit`); a
+builder test; `ARCHITECTURE.md` section 5, where the two expressions take the effect `read`
+and `builder/tests/test_architecture.py` places them, in an op, in every context (230
+placements, 74 refused). No committed abstract read either expression in such a body; every
+committed AST was regenerated for the version, no fingerprint and no dataset id changed.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

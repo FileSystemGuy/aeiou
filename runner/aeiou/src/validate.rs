@@ -230,6 +230,9 @@ struct ActorState<'a> {
     in_evict: bool,
     /// V35: checking an `on_evict` body, where `victim` may be read.
     in_on_evict: bool,
+    /// V35, V36 (contract 0.22): checking a body that only issues ops, an `on_evict`'s or a
+    /// `submit`'s, with its rule: it reads no state of its timeline (`published`, `entry`).
+    op_body: Option<(&'static str, &'static str)>,
     /// V34: the enclosing timeline's resources, and the holds its `acquire`s and `lookup`s name.
     resources: HashSet<&'a str>,
     holds: BTreeSet<&'a str>,
@@ -1323,7 +1326,9 @@ impl<'a> Checker<'a> {
                     self.err(&bp2, format!("a `{what}` in a `submit` body, which only issues its ops on a worker lane (V36)"));
                 }
                 let outer = st.span.take();
+                st.op_body = Some(("a `submit` body", "V36"));
                 self.body(body, &bp, scope, st);
+                st.op_body = None;
                 st.span = outer;
             }
             Node::Span { name, staging, body } => {
@@ -1503,7 +1508,9 @@ impl<'a> Checker<'a> {
                 for (b, bp) in on_evict {
                     let mut inner = scope.child();
                     st.in_on_evict = true;
+                    st.op_body = Some(("an `on_evict` body", "V35"));
                     self.body(b, &bp, &mut inner, st);
+                    st.op_body = None;
                     st.in_on_evict = false;
                 }
                 self.body(body, &p(pp, &["body"]), scope, st);
@@ -1656,6 +1663,15 @@ impl<'a> Checker<'a> {
     }
 
     /// V30: a `publish`, `published`, or `entry` names the timeline it is in.
+    /// V35, V36 (contract 0.22): `published` and `entry` read the timeline's log, which a body
+    /// that only issues ops does not: its lane steps after the lane that evicted or submitted,
+    /// so what it would read is the planner's order, not the abstract's.
+    fn reads_state(&mut self, what: &str, path: &P, st: &ActorState<'a>) {
+        if let Some((body, rule)) = st.op_body {
+            self.err(path, format!("{what}: in {body}, which reads no state of its timeline ({rule})"));
+        }
+    }
+
     fn in_timeline(&mut self, name: &str, what: &str, path: &P, st: &ActorState<'a>) -> bool {
         match &st.timeline {
             Some((t, _)) if *t == name => true,
@@ -2402,6 +2418,7 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprNode::Published(arg) => {
+                self.reads_state("published", path, st);
                 self.in_timeline(arg.timeline(), "published", path, st);
                 if let Some(g) = arg.group() {
                     self.expr(g, &p(path, &["group"]), scope, st, None);
@@ -2409,6 +2426,7 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprNode::Entry { timeline, group, index, key } => {
+                self.reads_state("entry", path, st);
                 if let Some(g) = group {
                     self.expr(g, &p(path, &["group"]), scope, st, None);
                     self.int(g, &p(path, &["group"]), scope);

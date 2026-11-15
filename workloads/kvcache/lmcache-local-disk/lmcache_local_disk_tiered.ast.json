@@ -1,5 +1,5 @@
 {
-  "ast": "0.21",
+  "ast": "0.22",
   "name": "lmcache_local_disk_tiered",
   "doc": "One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2 and G3 (LMCache's), G3 the directory under test.",
   "params": {
@@ -30222,10 +30222,10 @@
       "script": "lmcache_local_disk_tiered.py",
       "sha256": "4fb016ef251d5468a557a86f102a5a5aa0b78a1aa3503347383403f83711f8a8",
       "builder_version": "0.4.0",
-      "git": "274b57887af1-dirty"
+      "git": "9d05cef8f0a6"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "106e77b38a0ded2d587d88934617f7f7e01837a452f5ef5141d11160b2709647"
+    "ast_sha256": "b3cc8544321032fa0c26dd418cdf587cd2ba3c24f0206ad8c892b088984e7d36"
   }
 }

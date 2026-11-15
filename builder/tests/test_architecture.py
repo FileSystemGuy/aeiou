@@ -3,7 +3,8 @@ stand. The section gives every statement a set of effects and every context (an 
 outside a timeline, a timeline's lane, a `span`'s body, a `submit`'s body, an `on_evict` body)
 the effects it allows; rules V30, V34, V35, and V36 are those two tables read together. Here the
 tables are read from the document itself, every statement of the schema is placed in every
-context, and `schema/check.py`'s `Check` (and, when the runner is built, `aeiou check`) must
+context, and the two expressions that read a timeline's log (`published`, `entry`, which the
+first table gives the effect `read`; contract 0.22) in an op of each, and `schema/check.py`'s `Check` (and, when the runner is built, `aeiou check`) must
 refuse exactly the placements the tables refuse. A statement the schema gains and the document
 does not classify fails, as does a ban list changed in a checker without the document."""
 from __future__ import annotations
@@ -26,6 +27,8 @@ DOC = ROOT / "ARCHITECTURE.md"
 _, check = _load()
 KINDS = set(check.SCHEMA["$defs"]["node"]["properties"])
 OPS = KINDS - check.CONTROL
+# the expressions the first table gives an effect: each is placed as the file id of a `stat`
+EXPRS = {"published": {"published": "tl"}, "entry": {"entry": {"timeline": "tl", "index": 0, "key": "a"}}}
 
 # the contexts, by the words of the table's first column
 CONTEXTS = {"outside": "outside a timeline", "lane": "A timeline's lane", "span": "`span`'s body",
@@ -96,13 +99,13 @@ def tables(text: str):
     whether its `fork` is the joined one alone)."""
     sec = text.split("### 5. The verifier", 1)[1].split("\n### 6.", 1)[0]
     rows = [[c.strip() for c in ln.strip().strip("|").split("|")] for ln in sec.splitlines() if ln.startswith("| `") or ln.startswith("| A")]
-    effects, allows, joined_only = {k: set() for k in KINDS}, {}, {}
+    effects, allows, joined_only = {k: set() for k in KINDS | set(EXPRS)}, {}, {}
     names = set()
     for r in rows:
         m = re.fullmatch(r"`(\w+)`", r[0])
         if m and len(r) == 3 and not any(w in r[0] for w in CONTEXTS.values()):
             names.add(m.group(1))
-            named = OPS if m.group(1) == "op" else set(re.findall(r"`(\w+)`", r[2])) & KINDS
+            named = OPS if m.group(1) == "op" else set(re.findall(r"`(\w+)`", r[2])) & set(effects)
             for k in named:
                 effects[k].add(m.group(1))
     for r in rows:
@@ -141,15 +144,20 @@ def document(ctx: str, node: dict) -> dict:
 
 
 def placements():
-    """Every statement, and `parallel` not joined beside the joined one."""
+    """Every statement, `parallel` not joined beside the joined one, and each expression with an
+    effect as the file id of a `stat`."""
     for kind in sorted(KINDS):
         yield kind, {kind: copy.deepcopy(INSTANCES[kind])}
     yield "parallel join:false", {"parallel": {**INSTANCES["parallel"], "join": False}}
+    for name, e in sorted(EXPRS.items()):
+        yield f"{name} (expression)", {"stat": {"file": {"file": {"dataset": "d", "id": e}}}}
 
 
 def by_table(name, node, ctx, effects, allows, joined_only):
     kind = next(iter(node))
     eff = set(effects[kind])
+    if name.endswith(" (expression)"):
+        eff |= effects[name.split()[0]]
     if kind in ("submit", "span", "loop", "cond", "choose", "phase"):
         eff.add("op")                                   # the `stat` in its body
     if name == "parallel join:false" and joined_only[ctx]:
@@ -180,7 +188,7 @@ def test_every_statement_has_an_instance_here():
 def test_the_document_classifies_every_statement():
     effects, allows, _, none = tables(DOC.read_text(encoding="utf-8"))
     assert set(allows) == set(CONTEXTS)
-    unclassified = sorted(k for k in KINDS if not effects[k] and k not in none)
+    unclassified = sorted(k for k in KINDS | set(EXPRS) if not effects[k] and k not in none)
     assert not unclassified, f"ARCHITECTURE.md §5 gives these statements no effect and does not list them as having none: {unclassified}"
     both = sorted(k for k in none if effects[k])
     assert not both, f"ARCHITECTURE.md §5 lists these as having no effect and gives them one: {both}"
@@ -202,11 +210,22 @@ def test_the_table_and_the_runner_place_statements_alike(tmp_path):
     assert disagreements(runner_refuses) == []
 
 
+@pytest.mark.parametrize("ctx", CONTEXTS)
+def test_now_is_read_in_every_context_of_a_timeline(ctx):
+    """`now` is the lane's own clock, no state of the timeline: accepted in every context a
+    timeline encloses, an eviction body and a `submit` body included, and refused outside one."""
+    errs = check.Check(document(ctx, {"stat": {"file": {"file": {"dataset": "d", "id": {"now": {}}}}}}), "t").run()
+    assert bool(errs) == (ctx == "outside"), errs
+    assert all("now: outside a timeline" in e for e in errs)
+
+
 @pytest.mark.parametrize("old, new, found", [
     # the span's row gaining `time`: a `compute` in a span, which V36 refuses
     ("| A `span`'s body | `op`, ", "| A `span`'s body | `op`, `time`, ", "`compute` in context `span`: the table allows it, the checker refuses it"),
     # `probe` taken out of the first table: unclassified, so allowed everywhere by the table
-    ("| `read` | Reads a tier by a statement | `probe` |", "| `read` | Reads a tier by a statement | nothing |", "`probe` in context `outside`: the table allows it, the checker refuses it"),
+    ("| `read` | Reads timeline state | `probe`; the expressions `published` and `entry` |", "| `read` | Reads timeline state | the expressions `published` and `entry` |", "`probe` in context `outside`: the table allows it, the checker refuses it"),
+    # `entry` taken out: its op allowed in a `submit` body by the table
+    ("the expressions `published` and `entry` |", "the expression `published` |", "`entry (expression)` in context `submit`: the table allows it, the checker refuses it"),
     # the lane's row losing `write`
     ("`wait`, `read`, `write`, `fork` (joined or not)", "`wait`, `read`, `fork` (joined or not)", "`publish` in context `lane`: the table refuses it, the checker allows it"),
 ])

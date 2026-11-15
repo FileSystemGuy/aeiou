@@ -48,7 +48,7 @@ change.
    an agent writes an authoring script; running it once emits an AST. Python functions are the
    language's only means of abstraction: `lru()`, the format classes, a script's own helpers.
    Python never runs the workload and never reaches a client node.
-2. **The instruction set** is the AST contract (`schema/README.md`, version 0.21). It is the
+2. **The instruction set** is the AST contract (`schema/README.md`, version 0.22). It is the
    published artefact: hashed, pinned by a case's lock, the only thing the runner executes. Its
    meaning is its architectural result, the op multiset and each op's planned time where the
    abstract plans time. The definitions that fix that result bit for bit are
@@ -176,7 +176,7 @@ in it.
 | `op` | Issues an op to the system under test | The POSIX ops (`open` to `readdir`) |
 | `time` | Moves the lane's clock (planned, in a timeline; a real delay outside one) | `compute` |
 | `wait` | May wait in planned time for another lane | `acquire`; `lookup` (on a `full: wait` tier) |
-| `read` | Reads a tier by a statement | `probe` |
+| `read` | Reads timeline state | `probe`; the expressions `published` and `entry` |
 | `write` | Changes timeline state | `publish`, `lookup`, `touch`, `store`, `release` |
 | `fork` | Starts lanes that plan their own time | `parallel` (joined, or with `join: false`) |
 | `hand` | Hands ops to a worker lane | `submit` |
@@ -184,10 +184,10 @@ in it.
 | `sync` | Waits on another actor in real time | `channel`, `put`, `take`, `barrier`, `loader` |
 | `nest` | Opens a scope of its own | `timeline`, `trace` |
 
-`let`, `loop`, `cond`, `choose`, `phase`, and `array` have no effect of their own. The expressions
-that read timeline state (`published`, `entry`, `now`) are not in this table: they are accepted
-anywhere a timeline encloses them and refused outside one, whatever the context (see "What the
-check found" below).
+`let`, `loop`, `cond`, `choose`, `phase`, and `array` have no effect of their own. Two expressions
+carry an effect, and give it to the statement they stand in: `published` and `entry` read the
+timeline's log (contract 0.22; see "What the check found" below). `now` carries none: it is the
+lane's own clock, accepted wherever a timeline encloses it.
 
 **The contexts.** Each context allows a set of effects. The reason is in the last column.
 
@@ -196,7 +196,7 @@ check found" below).
 | An actor's body outside a timeline | `op`, `time`, `fork` (joined), `sync`, `nest` | No shared order exists, so no timeline state |
 | A timeline's lane | `op`, `time`, `wait`, `read`, `write`, `fork` (joined or not), `hand`, `measure` | Lanes wait on one another only in planned time, so no `sync`; one planned order, so no `nest` |
 | A `span`'s body | `op`, `read`, `write`, `hand` | Its D is a storage wait, so nothing in it may move or wait on the planned clock |
-| A `submit`'s body | `op` | A worker's ops stand at the submitting lane's instant: it plans no time and changes no state |
+| A `submit`'s body | `op` | A worker's ops stand at the submitting lane's instant: it plans no time, and neither reads nor changes the timeline's state |
 | A tier's `on_evict` body | `op` | The same, at the eviction's instant |
 
 Read against `schema/README.md` §4, this table gives V30's list (a timeline's lane lacks `sync`
@@ -213,7 +213,8 @@ cases (`runner/aeiou/tests/refusals.json`, 236) hold 21 placement refusals, ever
 the table gives. Since the same day a test keeps them together: `builder/tests/test_architecture.py` reads the
 two tables from this section, places every statement of the schema (43, and `parallel` not
 joined) in every context, 220 abstracts, and holds `Check`, and `aeiou check` when the runner is
-built, to refuse exactly the placements the tables refuse (68 of them). A statement the schema
+built, to refuse exactly the placements the tables refuse (68 of them; since contract 0.22
+also `published` and `entry`, each in an op of every context, 230 abstracts and 74 refusals). A statement the schema
 gains fails it until this section classifies it, and so does a ban list changed in a checker
 alone. So the wording of the two tables is read by a test: an effect is a backticked word in
 the first column, a statement a backticked name in the third, and a context is known by the
@@ -222,8 +223,9 @@ words of its first column.
 **What the check found.** The first draft of this table gave the expressions `published`,
 `entry`, and `now` the effect `read`, with `probe`. That is not what the checkers do: both accept
 those expressions in a `submit` body and in an `on_evict` body, where `probe` is refused, and
-`aeiou dry-run` walks them there. So a statement's placement and an expression's are two rules,
-and the table above is the statements' alone. Two things follow, neither decided:
+`aeiou dry-run` walks them there. So a statement's placement and an expression's were two rules,
+and the table was the statements' alone. Two questions followed, both settled the same day
+(below):
 
 - `probe` is refused in those two bodies though it changes nothing, and the reason the rules
   give for the bodies ("it plans no time and changes no cache or timeline") does not cover it.
@@ -233,6 +235,20 @@ and the table above is the statements' alone. Two things follow, neither decided
   instant or the evicting store's, and the log as of when) is stated nowhere found in
   `schema/README.md` or `runner/REFERENCE.md`, and no test of `tests/evict.rs` reads one there.
   In a `submit` body the answer is given: the submitting lane's instant and bindings.
+
+**Settled (2026-11-14, contract 0.22; the user's decision).** Both questions have one answer. A
+`submit` body and an eviction body each run as a lane of their own, and that lane takes its step
+only after the lane that submitted or evicted has run on to its next `compute` (a worker lane
+after every other lane at its instant as well). So anything such a body read of the timeline,
+a tier by `probe` or the log by `published` or `entry`, would be the state as the planner's
+order left it, not a state the abstract names: with `publish`, a `store` that evicts, `publish`,
+`compute`, the eviction body saw both publishes. That is the reason for the ban on `probe`, and
+it covers the two expressions, which both checkers refuse there since contract 0.22. The rule
+is one sentence: a body that only issues ops reads no state of its timeline. What it needs is
+given to it: `victim`, the bindings it starts from (a `let` before a `submit` holds a
+`published` as it stood there), and `now`, the planned instant the lane was made at, which
+nothing in the body can move. So `published` and `entry` have the effect `read` in the table
+above, and it is again one rule for statements and expressions.
 
 What the table does not replace: the rules about names and declarations (a cache named once, a
 `release` naming a hold some `acquire` takes), about what an expression may read (a tier's

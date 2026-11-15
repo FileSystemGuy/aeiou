@@ -1847,10 +1847,14 @@ numbers; the order is this note's.
     quantile-table distribution; ops as table rows before item 58); (b) rules V30, V35, V36,
     and V34's placement restated in `schema/README.md` as section 5's table of effects and
     contexts (held to both checkers since 2026-11-14 by `builder/tests/test_architecture.py`, which
-    reads the tables from the document: 220 placements), whether the checkers' code follows, and the two
+    reads the tables from the document: 220 placements, 230 since contract 0.22), whether the checkers' code follows ~~, and the two
     questions the check raised: `probe` refused in a `submit` and an `on_evict` body though it
     changes nothing, and what `now`, `published`, and `entry` mean in an `on_evict` body, where
-    both checkers accept them and nothing defines or tests them; (c) the growth policy (a frozen core, capability added as map types and
+    both checkers accept them and nothing defines or tests them~~ (the two questions the check
+    raised were settled on 2026-11-14 by contract 0.22, the user's decision: a body that only
+    issues ops reads no state of its timeline, so `published` and `entry` are refused in a
+    `submit` and an `on_evict` body as `probe` is, and `now` there is the body's planned
+    instant; `DESIGN_REVIEW.md` §3.100, the note "Section 5's two questions settled"); (c) the growth policy (a frozen core, capability added as map types and
     helpers with declared effects, no addition moving an existing fingerprint); (d) a
     conformance kit; (e) how stable the planned-op stream (the trace file) is as an interface;
     (f) the idiom catalogue, each library function carrying its lowering and its trace

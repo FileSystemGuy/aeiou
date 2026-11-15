@@ -21,7 +21,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.21", "name": "t", "params": {"cap": {"default": 10}},
+    json!({"ast": "0.22", "name": "t", "params": {"cap": {"default": 10}},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -254,6 +254,35 @@ fn each_victim_runs_the_eviction_body() {
     assert_eq!(walk(body), ["d/17"]);
 }
 
+/// `now` in an eviction body is the eviction's planned instant, a tick's or the evicting
+/// store's (contract 0.22, V35): the body plans no time, so it is that for the whole body.
+#[test]
+fn now_in_an_eviction_body_is_the_evictions_instant() {
+    let now_body = json!({"lanes": 1, "body": [stat(json!({"now": {}})), stat(json!({"now": {}}))]});
+    // a tick at 100 ns evicts one of nine
+    let body = json!([tl(timed(json!({"on_evict": now_body})), json!([store(shared(1, 9), 0, 9), compute(150)]))]);
+    assert_eq!(walk(body), ["d/100", "d/100"]);
+    // a store at 5 ns evicts one; the storing lane's later `compute` does not move it
+    let body = json!([tl(json!([{"name": "t", "order": [cached("stored")], "capacity": 2, "on_evict": now_body}]), json!([
+        compute(5), store(shared(1, 3), 0, 3), compute(7)]))]);
+    assert_eq!(walk(body), ["d/5", "d/5"]);
+}
+
+/// An eviction body reads no state of the timeline (contract 0.22, V35): no `published` and no
+/// `entry`, anywhere in it; its step comes after the evicting lane's, so what it would read is
+/// the scheduler's, not the abstract's.
+#[test]
+fn an_eviction_body_reads_no_timeline_state() {
+    let publish = json!({"publish": {"timeline": "tl", "values": {"a": 1}}});
+    for (e, what) in [(json!({"published": "tl"}), "published"), (json!({"published": {"timeline": "tl", "group": 0}}), "published"),
+                      (json!({"entry": {"timeline": "tl", "index": 0, "key": "a"}}), "entry")] {
+        let ev = json!({"lanes": 1, "body": [{"loop": {"index": "i", "to": 1, "body": [stat(json!({"add": [e, 1]}))]}}]});
+        let errs = refused(json!([tl(timed(json!({"on_evict": ev})), json!([publish]))]));
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(errs[0].ends_with(&format!("{what}: in an `on_evict` body, which reads no state of its timeline (V35)")), "{errs:?}");
+    }
+}
+
 #[test]
 fn eviction_used_wrongly_is_refused_when_walked() {
     walk_fails(json!([stat(json!({"victim": {}}))]), "victim: outside a tier's `on_evict` body (V35)");
@@ -368,7 +397,7 @@ fn a_store_binds_the_chunks_it_took_and_a_store_of_chunks_acts_on_those() {
         probe_in("u", r("a"), 0, "h0"), probe_in("u", r("a"), 2, "h2"), stat(r("h0")), stat(r("h2"))]))]);
     assert_eq!(walk(body), ["d/1", "d/1"]);
     // a parameter array names chunks too
-    let doc_ = json!({"ast": "0.21", "name": "t", "params": {"some": {"default": [1, 3]}},
+    let doc_ = json!({"ast": "0.22", "name": "t", "params": {"some": {"default": [1, 3]}},
         "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000000, "size": {"const": 1}, "seed": 1}},
         "actors": {"gpu": {"body": [tl(tiers_tu(9), json!([
             let_("a", shared(1, 4)), store_in("u", r("a"), json!({"chunks": "some", "taken": "tk"})),

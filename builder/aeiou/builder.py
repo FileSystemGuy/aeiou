@@ -239,7 +239,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.21"
+    AST_VERSION = "0.22"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")

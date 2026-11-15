@@ -438,6 +438,9 @@ class Check:
         self.in_evict = False
         # V35: checking an `on_evict` body, where `victim` may be read
         self.in_on_evict = False
+        # V35, V36 (contract 0.22): checking a body that only issues ops, an `on_evict`'s or a
+        # `submit`'s, with its rule: it reads no state of its timeline (`published`, `entry`)
+        self.op_body = None
         # V34: the enclosing timeline's resources, and the holds its `acquire`s and `lookup`s name
         self.resources = set()
         self.holds = set()
@@ -1057,6 +1060,13 @@ class Check:
         self.expr(a["name"], p + ["name"], scope)
         self.body(a["body"], p + ["body"], scope)
 
+    def reads_state(self, what, p):
+        """V35, V36 (contract 0.22): `published` and `entry` read the timeline's log, which a
+        body that only issues ops does not: its lane steps after the lane that evicted or
+        submitted, so what it would read is the planner's order, not the abstract's."""
+        if self.op_body:
+            self.err(p, f"{what}: in {self.op_body[0]}, which reads no state of its timeline ({self.op_body[1]})")
+
     def n_submit(self, a, p, scope):
         """V36: a `submit` names workers of its timeline; its body only issues ops."""
         if self.timeline is None:
@@ -1068,7 +1078,9 @@ class Check:
         for bp, what in bans:
             self.err(bp, f"a `{what}` in a `submit` body, which only issues its ops on a worker lane (V36)")
         outer, self.span = self.span, None
+        self.op_body = ("a `submit` body", "V36")
         self.body(a["body"], p + ["body"], scope)
+        self.op_body = None
         self.span = outer
 
     def n_span(self, a, p, scope):
@@ -1193,9 +1205,9 @@ class Check:
         self.timeline = (a["name"], keys)
         # an eviction body sees what the timeline sees where it stands, and `victim`
         for b, bp in on_evict:
-            self.in_on_evict = True
+            self.in_on_evict, self.op_body = True, ("an `on_evict` body", "V35")
             self.body(b, bp, scope.child())
-            self.in_on_evict = False
+            self.in_on_evict, self.op_body = False, None
         self.body(a["body"], p + ["body"], scope)
         self.timeline = None
         self.caches = {}
@@ -1565,6 +1577,7 @@ class Check:
             if not self.in_on_evict:
                 self.err(p, "victim: outside a tier's `on_evict` body (V35)")
         elif k == "published":
+            self.reads_state("published", p)
             if isinstance(a, dict):              # a timeline and a group (contract 0.17)
                 self.in_timeline(a["timeline"], "published", p)
                 self.expr(a["group"], p + ["group"], scope)
@@ -1572,6 +1585,7 @@ class Check:
             else:
                 self.in_timeline(a, "published", p)
         elif k == "entry":
+            self.reads_state("entry", p)
             if "group" in a:
                 self.expr(a["group"], p + ["group"], scope)
                 self.typed(a["group"], p + ["group"], scope)

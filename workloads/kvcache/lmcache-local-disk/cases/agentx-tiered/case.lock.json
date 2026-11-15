@@ -5,7 +5,7 @@
     {
       "name": "lmcache_local_disk_tiered",
       "abstract": "kvcache/lmcache-local-disk/lmcache_local_disk_tiered.ast.json",
-      "ast_sha256": "106e77b38a0ded2d587d88934617f7f7e01837a452f5ef5141d11160b2709647",
+      "ast_sha256": "b3cc8544321032fa0c26dd418cdf587cd2ba3c24f0206ad8c892b088984e7d36",
       "params": {
         "cap": {"default": 989824},
         "chunk_bytes": {"default": 33554432},
