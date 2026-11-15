@@ -12938,7 +12938,13 @@ proposals inside it and marked; three things taken from the analogy: the fit spe
 carrying its lowering and its trace signature (its section 17, to be costed). The outline was
 committed first (0cd8769), then Part 0 and sections 1, 5, 6, 15, and 20 drafted for the user's
 review. Section 5 derives rules V30, V35, V36, and V34's placement from ten effects and five
-contexts; it is checked against the text of `schema/README.md` §4 only. Section 20 found that
+contexts; ~~it is checked against the text of `schema/README.md` §4 only~~ held to the Python
+checker the same day (the user's request): 26 statements in each of the five contexts, 130
+abstracts, the table's verdict and the checker's equal in all, and the 21 placement refusals of
+the shared cases all given by it. The check corrected the draft: `published`, `entry`, and `now`
+are accepted in a `submit` and an `on_evict` body, where `probe` is refused, so expressions are
+not under the table; and it left two questions (brief item 79 (b)): why `probe` is refused there,
+and what those expressions mean in an `on_evict` body, which nothing defines or tests. Section 20 found that
 acceptance is two checks today, the trace check (`compare --judge`) and a policy check against
 the application's own code that has no tool or recorded form. What remains is brief item 79.
 

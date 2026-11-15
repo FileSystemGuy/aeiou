@@ -4,8 +4,8 @@
 20. Every other section is still its outline entry, tagged as below. Decided by the user on
 2026-11-14: one document, the proposals inside it (each marked a proposal until decided), at the
 top level under this name. The draft sections are for the user's review and are not yet held to
-the code by any test; section 5's table is derived from the text of `schema/README.md` §4 and
-has not been checked against the two checkers' refusal cases. The reasoning is `DESIGN_REVIEW.md`
+the code by any test; section 5's table was held to the Python checker once, by a script, on
+2026-11-14 (130 placements, all agreeing, after one correction the check forced). The reasoning is `DESIGN_REVIEW.md`
 §3.100; what remains is brief item 79.
 
 This document is a map and a rulebook, not a second reference. Where a definition already lives
@@ -175,23 +175,26 @@ in it.
 |---|---|---|
 | `op` | Issues an op to the system under test | The POSIX ops (`open` to `readdir`) |
 | `time` | Moves the lane's clock (planned, in a timeline; a real delay outside one) | `compute` |
-| `wait` | May wait in planned time for another lane | `acquire`; `lookup` (on a `full: wait` tier); a joined `parallel` |
-| `read` | Reads timeline state | `probe`; the expressions `published`, `entry`, `now` |
+| `wait` | May wait in planned time for another lane | `acquire`; `lookup` (on a `full: wait` tier) |
+| `read` | Reads a tier by a statement | `probe` |
 | `write` | Changes timeline state | `publish`, `lookup`, `touch`, `store`, `release` |
-| `fork` | Starts lanes that plan their own time | `parallel` |
+| `fork` | Starts lanes that plan their own time | `parallel` (joined, or with `join: false`) |
 | `hand` | Hands ops to a worker lane | `submit` |
 | `measure` | Marks a measured region | `span` |
 | `sync` | Waits on another actor in real time | `channel`, `put`, `take`, `barrier`, `loader` |
 | `nest` | Opens a scope of its own | `timeline`, `trace` |
 
-`let`, `loop`, `cond`, `choose`, `phase`, and `array` have no effect of their own.
+`let`, `loop`, `cond`, `choose`, `phase`, and `array` have no effect of their own. The expressions
+that read timeline state (`published`, `entry`, `now`) are not in this table: they are accepted
+anywhere a timeline encloses them and refused outside one, whatever the context (see "What the
+check found" below).
 
 **The contexts.** Each context allows a set of effects. The reason is in the last column.
 
 | Context | Allows | Why |
 |---|---|---|
 | An actor's body outside a timeline | `op`, `time`, `fork` (joined), `sync`, `nest` | No shared order exists, so no timeline state |
-| A timeline's lane | `op`, `time`, `wait`, `read`, `write`, `fork`, `hand`, `measure` | Lanes wait on one another only in planned time, so no `sync`; one planned order, so no `nest` |
+| A timeline's lane | `op`, `time`, `wait`, `read`, `write`, `fork` (joined or not), `hand`, `measure` | Lanes wait on one another only in planned time, so no `sync`; one planned order, so no `nest` |
 | A `span`'s body | `op`, `read`, `write`, `hand` | Its D is a storage wait, so nothing in it may move or wait on the planned clock |
 | A `submit`'s body | `op` | A worker's ops stand at the submitting lane's instant: it plans no time and changes no state |
 | A tier's `on_evict` body | `op` | The same, at the eviction's instant |
@@ -199,8 +202,31 @@ in it.
 Read against `schema/README.md` §4, this table gives V30's list (a timeline's lane lacks `sync`
 and `nest`), V35's (an eviction body allows `op` alone), V36's for `submit` (the same) and for
 `span` (no `time`, `wait`, or `fork`, and no `measure`, so no span in a span), and V34's rule that
-`acquire`, `release`, and `now` stand only in a timeline. It has not yet been checked against the
-checkers' shared refusal cases, which is the test of whether it is right.
+`acquire` and `release` stand only in a timeline.
+
+**Held to the checker (2026-11-14).** Each of 26 statements (every control statement, one op,
+`parallel` joined and not, and every timeline statement) was placed in each of the five contexts,
+130 abstracts, and each was given to the Python checker (`schema/check.py`), which holds the same
+lists as the runner's (`NOT_IN_TIMELINE`, `EVICT_BANS`, `SPAN_BANS`; `validate.rs`'s `evict_bans`
+and `span_bans`). The table's verdict and the checker's agree in all 130. The shared refusal
+cases (`runner/aeiou/tests/refusals.json`, 236) hold 21 placement refusals, every one of which
+the table gives. The comparison was a script in the session's scratch, not a test of the
+repository; nothing yet keeps the table and the checkers together.
+
+**What the check found.** The first draft of this table gave the expressions `published`,
+`entry`, and `now` the effect `read`, with `probe`. That is not what the checkers do: both accept
+those expressions in a `submit` body and in an `on_evict` body, where `probe` is refused, and
+`aeiou dry-run` walks them there. So a statement's placement and an expression's are two rules,
+and the table above is the statements' alone. Two things follow, neither decided:
+
+- `probe` is refused in those two bodies though it changes nothing, and the reason the rules
+  give for the bodies ("it plans no time and changes no cache or timeline") does not cover it.
+  Either the ban on `probe` there is stricter than it needs to be, or the reason should say that
+  such a body makes no statement about the timeline at all.
+- What `now`, `published`, and `entry` evaluate to inside an `on_evict` body (the tick's
+  instant or the evicting store's, and the log as of when) is stated nowhere found in
+  `schema/README.md` or `runner/REFERENCE.md`, and no test of `tests/evict.rs` reads one there.
+  In a `submit` body the answer is given: the submitting lane's instant and bindings.
 
 What the table does not replace: the rules about names and declarations (a cache named once, a
 `release` naming a hold some `acquire` takes), about what an expression may read (a tier's
@@ -414,7 +440,8 @@ from a run.
 - Glossary: our term beside the familiar one (the describer and a disassembler, `dry-run` and
   `EXPLAIN`, the validator and a bytecode verifier).
 - Open decisions, listed once. So far: the stability of the planned-op stream (11); whether the
-  checkers' code follows section 5's table; whether the structural comparison is part of
+  checkers' code follows section 5's table; whether `probe` stays refused in a `submit` and an
+  `on_evict` body, and what the timeline's expressions mean in an `on_evict` body (5); whether the structural comparison is part of
   acceptance (20); a form for the policy check (20); whether time is judged (20); the six review
   suggestions below.
 
