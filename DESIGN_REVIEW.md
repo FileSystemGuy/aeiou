@@ -13047,7 +13047,12 @@ nothing, gives the answer on demand; CI's four jobs and their wait are unchanged
 `builder/tests/test_pins.py` holds the step to the matrix job and its place. The golden
 table covers every committed abstract that draws a size, `faiss_ivf_ondisk` with a
 `lognormal` list size and a `zipf` among them. Not yet run on aarch64: the first dispatch is
-the measurement. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
+the measurement. *A mistake in the first push (0b33e99), corrected the same hour:* the
+step was written `run: cargo test ... golden::` on one line, a plain YAML scalar that ends
+in `:` and is read as a mapping, so GitHub refused the whole release workflow (run
+43670544930); no tag was pushed while it stood. The command is in a block now, and
+`test_pins.py` refuses, on the text since no YAML parser is in the lock, any one-line `run:`
+holding `: `, a final `:`, or ` #`. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
 corrected in place.
 
 ## 4. Plan changes

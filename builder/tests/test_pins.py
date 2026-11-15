@@ -177,3 +177,18 @@ def test_the_release_holds_the_golden_hashes_on_each_architecture():
     assert rel.index("name: Build the runner") < rel.index(step) < rel.index("name: Assemble the tarball")
     job = rel[rel.index("  tarball:"):rel.index("  release:")]
     assert step in job and "runs-on: ${{ matrix.runner }}" in job   # in the matrix job, so on both legs
+
+
+def test_no_one_line_command_of_a_workflow_is_read_as_a_mapping():
+    """A `run:` written on its line is a plain YAML scalar, which ends at `: `, at a `:` that ends
+    the line, and at ` #`: `run: cargo test golden::` is a workflow GitHub refuses whole (run
+    43670544930, 2026-11-14, the release workflow unusable until the next push). A command with
+    any of the three goes in a block, `run: |`. No YAML parser is in the lock, so the rule is
+    held on the text."""
+    bad = []
+    for name, text in workflows().items():
+        for n, line in enumerate(text.splitlines(), 1):
+            m = re.match(r"\s*(?:- )?run: (?![|>'\"])(.*)$", line)
+            if m and (": " in m[1] or m[1].endswith(":") or " #" in m[1]):
+                bad.append(f"{name}:{n}: {m[1]}")
+    assert not bad, bad

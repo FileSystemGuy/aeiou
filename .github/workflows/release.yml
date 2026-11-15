@@ -83,7 +83,9 @@ jobs:
         # drawn sizes (lognormal, normal, zipf) go through libm's ln, sqrt, cos, exp, and pow, which no standard
         # holds to one answer on x86_64 and aarch64, so the recorded fingerprints and AST hashes are run on this
         # leg's hardware before its tarball is assembled (DESIGN_REVIEW.md §3.100, "The six suggestions decided")
-        run: cargo test --release --locked --test all golden::
+        # in a block: a plain scalar ending in `:` is read as a mapping, and the workflow is refused whole
+        run: |
+          cargo test --release --locked --test all golden::
 
       - name: Build the builder's wheel
         working-directory: builder
