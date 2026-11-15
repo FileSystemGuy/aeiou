@@ -4,8 +4,8 @@
 20. Every other section is still its outline entry, tagged as below. Decided by the user on
 2026-11-14: one document, the proposals inside it (each marked a proposal until decided), at the
 top level under this name. The draft sections are for the user's review and are not yet held to
-the code by any test; section 5's table was held to the Python checker once, by a script, on
-2026-11-14 (130 placements, all agreeing, after one correction the check forced). The reasoning is `DESIGN_REVIEW.md`
+the code by any test, but for section 5, whose two tables `builder/tests/test_architecture.py`
+holds to both checkers (2026-11-14). The reasoning is `DESIGN_REVIEW.md`
 §3.100; what remains is brief item 79.
 
 This document is a map and a rulebook, not a second reference. Where a definition already lives
@@ -210,8 +210,14 @@ and `nest`), V35's (an eviction body allows `op` alone), V36's for `submit` (the
 lists as the runner's (`NOT_IN_TIMELINE`, `EVICT_BANS`, `SPAN_BANS`; `validate.rs`'s `evict_bans`
 and `span_bans`). The table's verdict and the checker's agree in all 130. The shared refusal
 cases (`runner/aeiou/tests/refusals.json`, 236) hold 21 placement refusals, every one of which
-the table gives. The comparison was a script in the session's scratch, not a test of the
-repository; nothing yet keeps the table and the checkers together.
+the table gives. Since the same day a test keeps them together: `builder/tests/test_architecture.py` reads the
+two tables from this section, places every statement of the schema (43, and `parallel` not
+joined) in every context, 220 abstracts, and holds `Check`, and `aeiou check` when the runner is
+built, to refuse exactly the placements the tables refuse (68 of them). A statement the schema
+gains fails it until this section classifies it, and so does a ban list changed in a checker
+alone. So the wording of the two tables is read by a test: an effect is a backticked word in
+the first column, a statement a backticked name in the third, and a context is known by the
+words of its first column.
 
 **What the check found.** The first draft of this table gave the expressions `published`,
 `entry`, and `now` the effect `read`, with `probe`. That is not what the checkers do: both accept

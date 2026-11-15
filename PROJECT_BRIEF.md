@@ -1846,8 +1846,8 @@ numbers; the order is this note's.
     barriers, and item 72 (6)'s events; `span` everywhere, merged with `phase`; a
     quantile-table distribution; ops as table rows before item 58); (b) rules V30, V35, V36,
     and V34's placement restated in `schema/README.md` as section 5's table of effects and
-    contexts (held to the Python checker by a script on 2026-11-14, 130 placements agreeing; a
-    test keeping them together is not written), whether the checkers' code follows, and the two
+    contexts (held to both checkers since 2026-11-14 by `builder/tests/test_architecture.py`, which
+    reads the tables from the document: 220 placements), whether the checkers' code follows, and the two
     questions the check raised: `probe` refused in a `submit` and an `on_evict` body though it
     changes nothing, and what `now`, `published`, and `entry` mean in an `on_evict` body, where
     both checkers accept them and nothing defines or tests them; (c) the growth policy (a frozen core, capability added as map types and

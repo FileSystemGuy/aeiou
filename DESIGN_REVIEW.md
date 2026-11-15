@@ -12944,7 +12944,10 @@ abstracts, the table's verdict and the checker's equal in all, and the 21 placem
 the shared cases all given by it. The check corrected the draft: `published`, `entry`, and `now`
 are accepted in a `submit` and an `on_evict` body, where `probe` is refused, so expressions are
 not under the table; and it left two questions (brief item 79 (b)): why `probe` is refused there,
-and what those expressions mean in an `on_evict` body, which nothing defines or tests. Section 20 found that
+and what those expressions mean in an `on_evict` body, which nothing defines or tests. The
+script became a test the same day (the user's request), `builder/tests/test_architecture.py`:
+the tables read from the document, every statement of the schema in every context (220
+abstracts), both checkers held to them, a wrong table shown to be caught (three mutations). Section 20 found that
 acceptance is two checks today, the trace check (`compare --judge`) and a policy check against
 the application's own code that has no tool or recorded form. What remains is brief item 79.
 
