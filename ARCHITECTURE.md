@@ -350,7 +350,8 @@ as `order` expressions and changed what a `lookup` touches, and contract 0.22 re
 `published` and `entry` in two bodies where 0.21 accepted them; each was possible because one
 abstract, regenerated the same day, was the only user. The whole timeline family (23
 primitives, one abstract; "The review behind this outline") is provisional today; 0.19's,
-0.20's, and 0.21's pieces are not marked so in the history and would be. The 18 primitives no committed abstract uses are provisional
+0.20's, and 0.21's pieces are not marked so in the history and would be. The 16 primitives no committed abstract uses (~~18~~, corrected 2026-11-14: `normal` and `lognormal` size five
+mechanisms' datasets and are settled) are provisional
 too, and a candidate for removal is any of them a library function could emit (section 6's
 composites).
 
@@ -598,13 +599,20 @@ AST expressions (contract 0.18). Counted against the 14 committed ASTs:
 | Positional structure: `at`, `pick`, the `object` handle, `write` | 4 | 3 to 6 |
 | Timeline family: `timeline`, `publish`, `array`, `lookup`, `probe`, `touch`, `store`, `acquire`, `release`, `submit`, `span`, and 12 expressions (`prev`, `entry`, `published`, `fresh`, `shared`, `prefix`, `cat`, `seq_len`, `chunk_key`, `cached`, `tier`, `victim`) | 23 | 1 (`lmcache_local_disk_tiered`) |
 | Container and listing queries: `unit`, `units`, `inventory`, `dir`, `dirs`, `readdir` | 6 | 1 to 2 |
-| Unused by any committed abstract: `choose`, `put`, `trace`, `fallocate`, `fdatasync`, `rmdir`, `truncate`, `ftruncate`, `normal`, `lognormal`, `hotset`, `mixture`, `column`, `sum`, `unit_index`, `chunks`, `count`, `now` | 18 | 0 |
+| Size distributions of dataset definitions: `lognormal`, `normal` | 2 | 5 and 1 |
+| Unused by any committed abstract: `choose`, `put`, `trace`, `fallocate`, `fdatasync`, `rmdir`, `truncate`, `ftruncate`, `hotset`, `mixture`, `column`, `sum`, `unit_index`, `chunks`, `count`, `now` | 16 | 0 |
+
+*Corrected 2026-11-14:* the table as first written listed `normal` and `lognormal` among 18
+unused primitives. The count had missed dataset definitions: five committed ASTs draw a
+dataset's sizes from `lognormal` (`file_per_sample`, `tfrecord_stream`, `parquet_stream`, and
+both `lmcache_shared_fs` documents) and one from `normal` (`npy_per_sample`). The two are
+settled, not provisional, and those sizes are part of each dataset's id.
 
 The finding: the DSL is RISC at its edges (ops, expressions) and CISC in the middle (the
 concurrency constructs and the cache verbs). The session generator, the most complex thing
 written, needed no generator-specific runner primitive.
 
-Six suggestions, none decided:
+Six suggestions (decided 2026-11-14, after the list; none built):
 
 1. **Cache verbs take keys, not chunks of a sequence** (instruction set). `lookup`, `probe`,
    `touch`, `store` take `(seq, per, from, count)` today; brief item 75 said keys are opaque to
@@ -629,11 +637,29 @@ Six suggestions, none decided:
 5. **A quantile-table distribution** (instruction set). The tiered script builds inverse CDFs by
    hand in fixed point, two draws and about eight nodes a sample at about 40 sites. A
    piecewise-linear quantile table is what a fit produces and is integer-only; it would supplant
-   `normal`, `lognormal`, `hotset`, `mixture`. Untested risk: `rng.rs` computes normals with `ln`,
-   `sqrt`, `cos` in floating point, and releases are x86_64 and aarch64.
+   ~~`normal`, `lognormal`,~~ `hotset`, `mixture`. ~~Untested risk:~~ `rng.rs` computes normals with `ln`,
+   `sqrt`, `cos` in floating point, and releases are x86_64 and aarch64. *Corrected
+   2026-11-14:* `lognormal` and `normal` size the datasets of six committed ASTs, so the table
+   cannot supplant them without changing those datasets' ids (rung 6 of section 7), and the
+   floating-point risk is not the table's but today's: those sizes go through libm (`ln`,
+   `sqrt`, `cos`, `exp`), `DESIGN_REVIEW.md` records it as a caveat "rather than solved", and
+   the aarch64 release leg smoke-tests only, so the golden hashes are not known to hold there.
 6. **Ops as table rows** (the runner's internals). `fadvise` is named in 21 source files, about
    half capture-side; item 58 adds about 25 calls, item 61 object requests, item 76 possibly block
    commands. Not costed against the dispatch code.
+
+**Decided (the user, 2026-11-14, "agreed on all"; `DESIGN_REVIEW.md` §3.100, the note "The six
+suggestions decided"; none built).** In this order: the golden tests run on aarch64, to learn
+whether the drawn sizes differ today, then the quantile table added as a new distribution
+(rung 5, no fingerprint moved), committed datasets leaving `lognormal` only if that run shows
+a difference, and `normal` and `lognormal` kept; 1, the cache verbs over keys, a provisional
+piece reshaped (7.4), `lookup` becoming a builder function, accepted when the tiered
+abstract's fingerprint is unchanged; 4 in part, `span` outside a timeline, `phase` left as it
+is and not merged; 2 in part, an eviction body acting on a strictly lower tier (so a cascade
+ends), built with brief item 78 after 1, and entries carrying values and a trigger on tier
+state not built for want of a committed user. Deferred: 3, recorded as a constraint on brief
+item 72 (6) (events designed as the base, nothing existing lowered onto them until then, since
+`consume`'s position formula is defined through `loader`), and 6, costed when item 58 starts.
 
 Considered and not recommended now: functions in the AST (the tiered abstract's 380 lines of
 Python expand to a 1.6 MB AST, but Python functions already give the builder the reuse).

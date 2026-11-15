@@ -1844,7 +1844,14 @@ numbers; the order is this note's.
     six suggestions of the review (cache verbs over keys; an eviction body acting on another
     tier, and entries carrying values; one run-side synchronisation primitive under channels,
     barriers, and item 72 (6)'s events; `span` everywhere, merged with `phase`; a
-    quantile-table distribution; ops as table rows before item 58); (b) rules V30, V35, V36,
+    quantile-table distribution; ops as table rows before item 58), decided by the user on
+    2026-11-14 and none built (`DESIGN_REVIEW.md` §3.100, the note "The six suggestions decided"):
+    in order, the golden tests on aarch64 and then the quantile table as a new distribution
+    (`normal` and `lognormal` kept: they size six committed ASTs' datasets, which the review's
+    count of 18 unused primitives, now 16, had missed), the cache verbs over keys, `span`
+    outside a timeline with no merge into `phase`, an eviction body acting on a strictly lower
+    tier with item 78; the synchronisation primitive deferred as a constraint on item 72 (6),
+    ops as table rows deferred to item 58; (b) rules V30, V35, V36,
     and V34's placement restated in `schema/README.md` as section 5's table of effects and
     contexts (held to both checkers since 2026-11-14 by `builder/tests/test_architecture.py`, which
     reads the tables from the document: 220 placements, 230 since contract 0.22), whether the checkers' code follows ~~, and the two

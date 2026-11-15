@@ -13012,6 +13012,35 @@ taking the version out of the hash was not proposed, since the hash would no lon
 rules the document was checked under; (4) removing `choose`, `mixture`, and `hotset` waits on
 review suggestion 5.
 
+**The six suggestions decided, and the review's count corrected (2026-11-14, the user's
+"agreed on all, correct the lognormal count now").** Each suggestion was judged against
+section 7 of `ARCHITECTURE.md` (its rung, what it would declare, what it costs). Reading the
+committed ASTs for suggestion 5 showed the review's table wrong: it listed `normal` and
+`lognormal` among 18 primitives no committed abstract uses, having counted statements and
+expressions of bodies and missed dataset definitions. Five ASTs draw a dataset's sizes from
+`lognormal` and one from `normal`; 16 primitives are unused. Two things follow. The two
+distributions are settled, and replacing them in a committed dataset changes its id, rung 6.
+And the floating-point risk the review called untested for the quantile table is a risk of
+today's releases: the sizes go through libm (`ln`, `sqrt`, `cos`, `exp` in `rng.rs` and
+`eval.rs`), §3 above records that "rather than solved" for a corpus written on one host class
+and run on another, and the aarch64 leg of the release workflow smoke-tests only, so no
+golden hash has been checked there. Decided, none built: (5) run the golden tests on aarch64
+first, then add the quantile table as a new distribution, integer only, moving committed
+datasets off `lognormal` only if the aarch64 run shows a difference, and remove the unused
+`hotset`, `mixture`, and `choose` after; (1) cache verbs over keys, first of the contract
+changes, a reshaping 7.4 permits since one abstract uses them, `lookup` a builder function
+after it, accepted when the tiered abstract's fingerprint is unchanged; (4) `span` outside a
+timeline, since a span issues no ops, and no merge with `phase`, which most abstracts use and
+is settled; the cost not yet read from `span`'s definition; (2) an eviction body may act on
+another tier, with brief item 78 as its user and after (1), under one new refusal, a body
+acts only on a strictly lower tier, so a cascade ends; entries carrying values and a trigger
+on tier state wait for a committed user; (3) deferred and recorded as a constraint on item
+72 (6): events are designed as the base, and nothing existing is lowered onto them until
+they exist, `consume`'s position formula being defined through `loader`; (6) deferred, to be
+costed when item 58 starts. Which workflow runs the aarch64 golden tests, CI's or the
+release's, is not settled. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
+corrected in place.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
