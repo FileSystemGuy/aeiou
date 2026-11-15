@@ -12896,6 +12896,52 @@ chunk ops (gap 1) after it. Item 73's fix waits until the grid is done, since a 
 the simulations slows both. `gen6` built and measured 2026-11-12, the note "The sixth generator, in
 planned-time order"; the port resumes on it.)
 
+### 3.100 The DSL's primitives reviewed, and the model the review led to: a compiler, an instruction set, a microarchitecture (raised by the user and debated 2026-11-14; the document's shape decided, its proposals not)
+
+**The question.** After the tier's policies moved into AST expressions (contract 0.18, §3.99, the
+note "Tiers as general pieces"), which the user judged very effective, the user asked for a
+critical look at every primitive of the DSL: what could merge, what a more capable primitive could
+supplant, whether complex flexible primitives or simple combinable ones serve the builder and
+spare the runner a change for each development in the AI stack, which primitives serve one
+architecture only, and whether the virtual machine being built deserves a definition document.
+
+**The count** (every primitive of `schema/abstract-ast.schema.json` against the 14 committed
+ASTs): 109 primitives, 43 statements, 48 expressions, 9 distributions, 9 handles. About 35 are
+used by 10 to 14 abstracts; the timeline family, 23, by one (`lmcache_local_disk_tiered`); 18 by
+none. The table and the six suggestions are in `ARCHITECTURE.md`, "The review behind this
+outline"; none of the six is decided. The finding: the DSL is RISC at its edges (the ops, the
+expressions) and CISC in the middle (`loader`, `lookup`, cache verbs that take chunks of a
+sequence where brief item 75 said keys are opaque), and the session generator, the most complex
+thing written, needed no generator-specific primitive.
+
+**The model, in three steps.** (1) Claude proposed two machines, a planner and an executor, with
+a one-way wall between them, the rule "never learn from the run". (2) The user asked whether a
+compiler and a CPU's instruction set is the better pair. It is, and it absorbs the first: the
+builder and its library are the language, the AST the instruction set (the published, hashed
+contract, where RISC against CISC is decided), the planner and executor the microarchitecture
+under it, timing microarchitectural and never reaching architectural state. It also sorts every
+change by cost (library, instruction set, microarchitecture). Where it bends: timing is the
+product; the executor has no branches; the micro-ops (the trace file) are public; decode is lazy;
+the builder never optimises. (3) The user observed that a trace becomes an abstract through an
+agent, as a source file becomes instructions through a compiler, and asked what languages on
+virtual machines offer. A trace to an abstract is decompilation, not compilation (one trace, many
+abstracts, judgment needed), so what is specified is the acceptance test of each output
+(translation validation), not the agent's process. From managed runtimes: the verifier as a named
+stage, the split of instruction, intrinsic, and library, a conformance kit. Not taken: a
+general-purpose VM, which is `GRAMMAR_OPTIONS.md` Option C and gives up describing, bounding, and
+proving an abstract. The closest relative is eBPF: a small frozen core, a verifier, and growth by
+map types and helpers, each with a declared signature.
+
+**Decided by the user, 2026-11-14.** One document, `ARCHITECTURE.md` at the top level, with the
+proposals inside it and marked; three things taken from the analogy: the fit specification
+(Part IV), the eBPF growth policy (its section 7), and an idiom catalogue, each library function
+carrying its lowering and its trace signature (its section 17, to be costed). The outline was
+committed first (0cd8769), then Part 0 and sections 1, 5, 6, 15, and 20 drafted for the user's
+review. Section 5 derives rules V30, V35, V36, and V34's placement from ten effects and five
+contexts; it is checked against the text of `schema/README.md` §4 only. Section 20 found that
+acceptance is two checks today, the trace check (`compare --judge`) and a policy check against
+the application's own code that has no tool or recorded form. What remains is brief item 79.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

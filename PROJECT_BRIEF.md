@@ -1834,6 +1834,29 @@ numbers; the order is this note's.
     domain's engines (item 72 (5)). A case with both at the WG's sizes; a WG what-if, not a
     default.
 
+79. **`ARCHITECTURE.md`: the sections to write, and its proposals (raised by the user 2026-11-14,
+    `DESIGN_REVIEW.md` §3.100; the outline and Part 0, sections 1, 5, 6, 15, and 20 drafted the
+    same day, awaiting the user's review; nothing else started).** The document describes the
+    suite as a language (the builder and its library), an instruction set (the AST contract),
+    and a microarchitecture (the runner's planner and executor), with a fit specification for
+    the route from a trace to an abstract. To write: sections 2 to 4, 7 to 14, 16 to 19, 21,
+    22, and the appendix. To decide, each a proposal in the document and none decided: (a) the
+    six suggestions of the review (cache verbs over keys; an eviction body acting on another
+    tier, and entries carrying values; one run-side synchronisation primitive under channels,
+    barriers, and item 72 (6)'s events; `span` everywhere, merged with `phase`; a
+    quantile-table distribution; ops as table rows before item 58); (b) rules V30, V35, V36,
+    and V34's placement restated in `schema/README.md` as section 5's table of effects and
+    contexts, after it is held to the checkers' shared refusal cases, and whether the checkers'
+    code follows; (c) the growth policy (a frozen core, capability added as map types and
+    helpers with declared effects, no addition moving an existing fingerprint); (d) a
+    conformance kit; (e) how stable the planned-op stream (the trace file) is as an interface;
+    (f) the idiom catalogue, each library function carrying its lowering and its trace
+    signature so the digest names what the builder emits, to be costed first; (g) the fit
+    specification's gaps: a named, repeatable form for the policy check (an abstract's plan
+    against the application's own policy code), whether the structural comparison of digests is
+    part of acceptance, and whether time is judged. Related: item 48 (the fitting skill, whose
+    reference Part IV may become), item 75 (the tier, provisional until a second user).
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS

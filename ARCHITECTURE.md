@@ -1,19 +1,21 @@
 # ARCHITECTURE.md
 
-**Status: outline only (2026-11-14).** No section is written yet. This file holds the outline the
-user approved on 2026-11-14 and the review it came from, so neither is lost. Decided the same day:
-one document, the proposals inside it (each marked as a proposal until decided), at the top level
-under this name. Not yet done: the sections themselves, the entry in `CLAUDE.md`'s reading list,
-the dated note in `DESIGN_REVIEW.md`, and the brief items for the proposals.
+**Status: first sections drafted (2026-11-14).** Written: Part 0, and sections 1, 5, 6, 15, and
+20. Every other section is still its outline entry, tagged as below. Decided by the user on
+2026-11-14: one document, the proposals inside it (each marked a proposal until decided), at the
+top level under this name. The draft sections are for the user's review and are not yet held to
+the code by any test; section 5's table is derived from the text of `schema/README.md` §4 and
+has not been checked against the two checkers' refusal cases. The reasoning is `DESIGN_REVIEW.md`
+§3.100; what remains is brief item 79.
 
 This document is a map and a rulebook, not a second reference. Where a definition already lives
 elsewhere (`schema/README.md`, `runner/REFERENCE.md`, `builder/REFERENCE.md`), it points there and
-does not restate it.
+does not restate it; where the two disagree, the reference is right and this document is the bug.
 
-Each section below is tagged:
+Each section is tagged:
 
 - **exists**: points to current text.
-- **new**: writes down what is true today but unwritten.
+- **new**: writes down what is true today but was unwritten.
 - **proposal**: not built, not decided; needs the user's decision before it is stated as fact.
 
 ## The model in one table
@@ -35,108 +37,386 @@ microarchitecture under the instruction set.
 The closest relatives are eBPF (a small restricted instruction set, a verifier, growth by map
 types and helpers) and SQL (a planner and an executor, `EXPLAIN`), not Java or Python.
 
-## Outline
+## Part 0: The model
 
-### Part 0: The model
+### 0.1 The three layers (new)
 
-- **0.1 The three layers** (new). The language and its library (the Python builder), the
-  instruction set (the AST contract), the microarchitecture (the runner's planner, executor, and
-  backends). The table above.
-- **0.2 Where the analogy bends** (new). Timing is the product, not incidental; the executor has
-  no branches and no data-dependent behaviour; the planned-op stream is public where a CPU's
-  micro-ops are hidden; decode is lazy, a bounded horizon ahead of the executor; the builder lowers
-  and never rewrites, since the abstract is the application's call stream.
-- **0.3 Why the language is restricted** (new). Not general-purpose, as SQL and eBPF are not,
-  because describing, bounding, and proving an abstract is the point. A general VM (WebAssembly,
-  Lua) would end runner changes for generator logic and make the abstract opaque: no description
-  in prose, no proof it is finite, no op counts or write sets without running it, no `x @ i`.
-  Points to `GRAMMAR_OPTIONS.md` Option C.
-- **0.4 What each kind of change costs** (new). Library: nothing downstream. Instruction set:
-  every AST regenerated, every case relocked. Microarchitecture: no fingerprint moves and no
-  contract version.
+An abstract passes through three layers, each with its own specification and its own rate of
+change.
 
-### Part I: The instruction set
+1. **The language and its library** is the Python builder (`builder/REFERENCE.md`). A person or
+   an agent writes an authoring script; running it once emits an AST. Python functions are the
+   language's only means of abstraction: `lru()`, the format classes, a script's own helpers.
+   Python never runs the workload and never reaches a client node.
+2. **The instruction set** is the AST contract (`schema/README.md`, version 0.21). It is the
+   published artefact: hashed, pinned by a case's lock, the only thing the runner executes. Its
+   meaning is its architectural result, the op multiset and each op's planned time where the
+   abstract plans time. The definitions that fix that result bit for bit are
+   `runner/REFERENCE.md` §2.
+3. **The microarchitecture** is the runner's inside: a planner that walks the AST and produces
+   ops, an executor that issues them against real time, the I/O backends, and the coordinator
+   between hosts. It may change freely so long as the architectural result does not.
 
-- **1. Architectural state** (new). Four classes and what orders each: positional values (a pure
-  function of seed, actor, site, indices); a lane's carried values (`prev`); timeline state in
-  planned order (the published log, tiers, resources); and nothing else. The fingerprint as the
-  architectural result.
-- **2. The frozen core** (new, mostly exists). `let`, `loop`, `cond`, expressions, draws, handles,
-  the ops, `compute`, `parallel`. Points to `schema/README.md`.
-- **3. Maps** (new framing; one proposal). The state structures a timeline may declare: the tier,
-  the published log, the counted resource, the `array`. For each: its state, its order, what
-  bounds its memory.
-  - *Proposal:* the tier becomes a general keyed table (review suggestions 1 and 2 below).
-- **4. Helpers** (new). `probe`, `touch`, `store`, `lookup`, `acquire`, `release`, `publish`,
-  `submit`, `span`, each with a declared effect signature.
-- **5. The verifier** (new; one proposal). The effect classes: issues an op, moves the planned
-  clock, waits in planned time, reads or writes a map, spawns lanes, run-side synchronisation. A
-  table of which effects each context allows (a timeline's lane, a `span`, a `submit` body, an
-  `on_evict` body, outside a timeline).
-  - *Proposal:* rules V30 to V36 restated as derived from that table. Whether the two checkers'
-    code follows is a separate decision.
-- **6. Instruction, intrinsic, library** (new). The test: if the builder can lower it to existing
-  instructions with the same op set, it is library. An intrinsic is what could be library in
-  principle and the runner carries for a global order or efficient state (the tier's sorted victim
-  index). The current intrinsics, and which are candidates to leave (`loader`, `lookup`).
-- **7. The growth policy** (proposal). The core is frozen. Capability grows by adding a map type
-  or a helper with a declared signature. An addition never moves an existing fingerprint. A new
-  piece is provisional until a second workload uses it.
-- **8. The definitions fingerprints depend on** (exists). Points to `runner/REFERENCE.md` §2.
-- **9. The conformance kit** (proposal). A published set of small ASTs with their fingerprints and
-  the shared refusal cases, named as the definition of a correct runner. Largely the golden tests
-  and the two checkers' shared cases today.
+A fourth activity sits beside these and is not a layer: getting from a trace of a real
+application to an authoring script. That is Part IV.
 
-### Part II: The microarchitecture
+### 0.2 Where the analogy bends (new)
 
-- **10. The planner** (exists). The walk and its bounded horizon. Points to `runner/REFERENCE.md`
-  §2 and §4.
-- **11. The planned-op stream** (exists; one decision). The trace file (§13). *Decision needed:*
-  how stable this lower interface is.
-- **12. The executor** (exists). The issue rule (`max(plan + L, previous completion, edges)`),
-  lanes, lag, spans.
-- **13. Run-side synchronisation** (exists; one proposal). Channels, barriers, staging, validity
-  edges.
-  - *Proposal:* events (brief item 72 (6)) as the one base, the others lowered onto it inside the
-    runner (review suggestion 3).
-- **14. Backends and the coordinator** (exists). Points to `runner/REFERENCE.md` §6, §8, §9, §16.
-- **15. The wall** (new). Timing state never reaches architectural state: "never learn from the
-  run" (`DESIGN_REVIEW.md` §3.99) in this document's terms. What is reported, what is a gate
-  failure, what is never modelled.
+- **Timing is the product.** A processor exists for its results and its timing is incidental.
+  Here the results are fixed before the run and the timing of the system under test is what is
+  measured.
+- **The executor is less than a processor.** The stream it issues has no branches and no
+  behaviour that depends on data. It is closer to a score being played than to a program being
+  run. This is deliberate (section 15).
+- **The micro-ops are public.** A processor hides its micro-ops. The planned-op stream is the
+  trace file that `dry-run --emit-trace` writes and the `trace` node runs, so it is a second,
+  lower interface, whose stability is an open decision (section 11).
+- **Decode is lazy.** The planner never holds the whole stream, only a bounded horizon ahead of
+  the executor, since nothing per file or per op may be materialised.
+- **The compiler never optimises.** The abstract is the application's call stream, local calls
+  included, so the builder lowers and never rewrites.
 
-### Part III: The library
+### 0.3 Why the language is restricted (new)
 
-- **16. Lowering** (new, short). What a library function may and may not do.
-- **17. The idiom catalogue** (proposal, to be costed). Each library function carries its lowering
-  and its trace signature, so the digest names the idiom and the builder emits it. First entries:
-  Python's `open()` around one read or write (in eight abstracts today), the format classes'
-  readers. To be queued as a brief item; not designed here.
+The instruction set is not general-purpose, in the way SQL and eBPF are not. Loops are loop nodes
+with bounds that are expressions, draws are nodes keyed by position, parameters are references.
+That restriction is what lets tools that never run the workload say what it will do: the
+validator proves an abstract finite and its self-references well-founded; `dry-run` projects op
+counts, bytes, and write sets; the describer writes the abstract in prose; the lock narrows
+parameters; `x @ i` recomputes a value at another index because the value is a pure function of
+its position.
 
-### Part IV: The fit specification (a trace to an abstract)
+Embedding a general virtual machine (WebAssembly, Lua) would end changes to the runner for
+generator logic, and every one of those properties would go with it. This was Option C of
+`GRAMMAR_OPTIONS.md` §3, and the reason it was not taken still holds.
 
-- **18. Why this is decompilation** (new). One trace, many abstracts; judgment and outside sources
-  are needed; an agent does the work. So the specification is of the acceptance test, not of the
-  agent's process (translation validation).
-- **19. The artefacts in order** (exists, scattered). Trace, digest, interview answers, authoring
-  script, parameters, case, capture. Points to `builder/REFERENCE.md` §7 and §8.
-- **20. The acceptance test** (new, the core of this part). An abstract fits a trace when its own
-  emitted trace (`dry-run --emit-trace`), digested, compares (`aeiou-trace compare`) with the
-  original's digest within the capture's tolerances. What is compared; what a tolerance may and
-  may not excuse.
-- **21. Provenance** (exists as practice). Every claim tagged with its source and confidence;
-  primary sources before backfitting.
-- **22. What the agent may not do** (exists as rules). No emulator as a source, no trace listing
-  as an abstract, no dropped truncates, nothing learned from a run.
+### 0.4 What each kind of change costs (new)
 
-### Appendix
+| Change to | What it moves | What it costs |
+|---|---|---|
+| The library | Nothing, if the emitted AST is the same | A builder release |
+| One abstract's script | That abstract's AST hash, and its fingerprint if its ops changed | Its cases relocked, its shapes re-measured |
+| The instruction set, by addition | The contract version; no existing fingerprint | Every AST regenerated at the new version, every case relocked (hashes only) |
+| A definition a fingerprint depends on | Every fingerprint or every dataset id | A recorded decision (`CLAUDE.md`); to be avoided |
+| The microarchitecture | Nothing published | The runner's own tests |
+
+The aim of the growth policy (section 7) is that a new development in the AI stack lands in the
+first three rows and never in the fourth.
+
+## Part I: The instruction set
+
+### 1. Architectural state (new)
+
+Architectural state is everything the op set is computed from. There are three classes, and the
+property that matters about each is what orders it.
+
+**Positional values.** A draw at site `s`, inside loops with indices `(i1 ... in)`, on actor `a`,
+is `hash(seed, a, s, i1 ... in)` (`schema/README.md` §5). Everything built from draws, indices,
+parameters, and the actor id by expressions is positional: a pure function of where it stands.
+Dataset layouts are functions of `(dataset seed, id)`; a namespace's object sizes are computed
+from the writes' expressions. Positional state needs no order at all, which is why `x @ i` can
+recompute it anywhere, why actors may run in any interleaving, and why most abstracts need
+nothing else. Thirteen of the fourteen committed abstracts are purely positional.
+
+**A lane's carried values.** `prev` reads the value a `let` took in the loop's previous
+iteration, rather than recomputing it. It exists for values that depend on timeline state and so
+are not positional (V31). It is ordered by the lane's own sequence, and no other lane sees it.
+
+**Timeline state.** A `timeline` declares state its lanes share, and gives it the one thing
+shared state needs, a total order that does not come from the run: planned time, a tie going to
+the smaller lane key, with a tier's timed eviction before any lane's step at its instant and the
+worker lanes after every other lane at theirs. The state is:
+
+| State | Written by | Read by | Memory bounded by |
+|---|---|---|---|
+| Each lane's planned clock | `compute`; a wait for a resource, a `full: wait` tier, or a join | `now` | The live lanes |
+| The published log, by group | `publish` | `published`, `entry` | The entries published (a known gap: nothing bounds it but the abstract) |
+| A tier's entries and their attributes (`stored`, `touched`, `freed`, `hits`, `pos`, `size`), and which a lane holds | `lookup`, `store`, `touch`, `release`, an eviction | `probe`, the tier's `order` (through `cached`), its `evict` (through `tier`) | The tier's capacity, a parameter |
+| A resource's free units and its queue of waiting lanes | `acquire`, `release` | `acquire` | The live lanes |
+| An `array`, and a `store`'s `taken` | Where it stands, once | `elem`, `len` | Its count |
+
+**There is nothing else.** Outside a timeline, actors and the sub-actors of a `parallel` share no
+architectural state, because nothing orders them but the run. That is the reason a cache needs a
+timeline, and it is the test for any future shared state: name its order, and the order may not
+come from the run.
+
+**The architectural result** is the op multiset, which the fingerprint names (the sum of per-op
+hashes, order-independent), and, in a timeline, each op's planned time and lane. Issue order
+within a GPU outside a timeline is not architectural and is never hashed.
+
+### 2. The frozen core (new, mostly exists; not yet written)
+
+`let`, `loop`, `cond`, expressions, draws, handles, the ops, `compute`, `parallel`. Points to
+`schema/README.md` §2.
+
+### 3. Maps (new framing; one proposal; not yet written)
+
+The state structures a timeline may declare: the tier, the published log, the counted resource,
+the `array`. For each: its state, its order, what bounds its memory (the table in section 1 is
+the start).
+
+- *Proposal:* the tier becomes a general keyed table (review suggestions 1 and 2 below).
+
+### 4. Helpers (new; not yet written)
+
+`probe`, `touch`, `store`, `lookup`, `acquire`, `release`, `publish`, `submit`, `span`, each with
+a declared effect signature in section 5's terms.
+
+### 5. The verifier (new; one proposal)
+
+The validator's rules for timelines (V30 to V36) are written as lists: each context names the
+statements it may not hold. The lists are long, each new statement must be added to several, and
+the reason behind them is the same few properties each time. This section states the properties.
+
+**The effects.** Every statement has a set of effects; a body's effects are those of everything
+in it.
+
+| Effect | Meaning | Statements |
+|---|---|---|
+| `op` | Issues an op to the system under test | The POSIX ops (`open` to `readdir`) |
+| `time` | Moves the lane's clock (planned, in a timeline; a real delay outside one) | `compute` |
+| `wait` | May wait in planned time for another lane | `acquire`; `lookup` (on a `full: wait` tier); a joined `parallel` |
+| `read` | Reads timeline state | `probe`; the expressions `published`, `entry`, `now` |
+| `write` | Changes timeline state | `publish`, `lookup`, `touch`, `store`, `release` |
+| `fork` | Starts lanes that plan their own time | `parallel` |
+| `hand` | Hands ops to a worker lane | `submit` |
+| `measure` | Marks a measured region | `span` |
+| `sync` | Waits on another actor in real time | `channel`, `put`, `take`, `barrier`, `loader` |
+| `nest` | Opens a scope of its own | `timeline`, `trace` |
+
+`let`, `loop`, `cond`, `choose`, `phase`, and `array` have no effect of their own.
+
+**The contexts.** Each context allows a set of effects. The reason is in the last column.
+
+| Context | Allows | Why |
+|---|---|---|
+| An actor's body outside a timeline | `op`, `time`, `fork` (joined), `sync`, `nest` | No shared order exists, so no timeline state |
+| A timeline's lane | `op`, `time`, `wait`, `read`, `write`, `fork`, `hand`, `measure` | Lanes wait on one another only in planned time, so no `sync`; one planned order, so no `nest` |
+| A `span`'s body | `op`, `read`, `write`, `hand` | Its D is a storage wait, so nothing in it may move or wait on the planned clock |
+| A `submit`'s body | `op` | A worker's ops stand at the submitting lane's instant: it plans no time and changes no state |
+| A tier's `on_evict` body | `op` | The same, at the eviction's instant |
+
+Read against `schema/README.md` §4, this table gives V30's list (a timeline's lane lacks `sync`
+and `nest`), V35's (an eviction body allows `op` alone), V36's for `submit` (the same) and for
+`span` (no `time`, `wait`, or `fork`, and no `measure`, so no span in a span), and V34's rule that
+`acquire`, `release`, and `now` stand only in a timeline. It has not yet been checked against the
+checkers' shared refusal cases, which is the test of whether it is right.
+
+What the table does not replace: the rules about names and declarations (a cache named once, a
+`release` naming a hold some `acquire` takes), about what an expression may read (a tier's
+`order` reads only `cached` and parameters), about `@` and `prev` not reaching a value that is
+not positional, and the refusals made only when walked (a lane ending holding, a deadlock).
+
+- *Proposal:* restate V30, V35, V36, and the placement part of V34 in `schema/README.md` as this
+  table, each statement's effects beside its definition, so that a new statement declares its
+  effects once and every context's rule follows. Whether the two checkers' code is rewritten to
+  match is a separate decision; their messages and the shared refusal cases would not change.
+- *What the table exposes.* Review suggestion 2 (an eviction body acting on another tier) is the
+  `on_evict` context gaining `write`, and nothing else; suggestion 4 (`span` outside a timeline)
+  is the first context gaining `measure`.
+
+### 6. Instruction, intrinsic, library (new)
+
+Three places a capability can live, and the test for which.
+
+- **Library.** If a Python function over existing instructions emits the same ops, it is library.
+  It costs nothing downstream and needs no decision. Today: `lru()` (an `order` expression),
+  `timed()`, the format classes' readers (plain POSIX nodes), every script's helpers such as the
+  six calls of Python's `open()`.
+- **Intrinsic.** A capability the runner carries because it needs an order across lanes or
+  state kept efficiently, neither of which expressions can give. Today: the timeline and its
+  planned order; the tier (a sorted victim index) with `probe`, `touch`, `store`; the resource
+  with `acquire` and `release`; the published log; `workers` and `submit`; `span`; the Feistel
+  shuffle behind `consume`; `channel`, `put`, `take`, and `barrier`.
+- **Instruction.** The core that neither of the above can be reduced to: binding, loops,
+  conditions, expressions, positional draws, the ops, `compute`, `parallel`.
+
+The contract also carries composites, statements that could be lowered to others and are in the
+runner for historical reasons. None of these lowerings has been tested for an equal fingerprint;
+each is a candidate, not a finding.
+
+| Composite | Would lower to | What stands in the way |
+|---|---|---|
+| `loader` | `parallel`, `channel`, `put` | `consume`'s position formula and a run's step times are defined through the enclosing `loader` |
+| `lookup` | `probe`, `touch`, `store` | `hold` and waiting on a `full: wait` tier exist only on `lookup` |
+| `choose` | A draw and `cond` | Nothing known; no committed abstract uses it |
+| `mixture`, `hotset` | A draw and a `cond` between distributions | Nothing known; no committed abstract uses either |
+
+The rule this section proposes for the future: a composite is never added to the instruction
+set. A new intrinsic needs a reason from the definition above (an order, or state), stated where
+it is defined.
+
+### 7. The growth policy (proposal; not yet written)
+
+The core is frozen. Capability grows by adding a map type or a helper with a declared effect
+signature. An addition never moves an existing fingerprint. A new piece is provisional until a
+second workload uses it.
+
+### 8. The definitions fingerprints depend on (exists; not yet written)
+
+Points to `runner/REFERENCE.md` §2.
+
+### 9. The conformance kit (proposal; not yet written)
+
+A published set of small ASTs with their fingerprints and the shared refusal cases, named as the
+definition of a correct runner. Largely the golden tests and the two checkers' shared cases today.
+
+## Part II: The microarchitecture
+
+### 10. The planner (exists; not yet written)
+
+The walk and its bounded horizon. Points to `runner/REFERENCE.md` §2 and §4.
+
+### 11. The planned-op stream (exists; one decision; not yet written)
+
+The trace file (`runner/REFERENCE.md` §13). *Decision needed:* how stable this lower interface is.
+
+### 12. The executor (exists; not yet written)
+
+The issue rule (`max(plan + L, previous completion, edges)`), lanes, lag, spans.
+
+### 13. Run-side synchronisation (exists; one proposal; not yet written)
+
+Channels, barriers, staging, validity edges.
+
+- *Proposal:* events (brief item 72 (6)) as the one base, the others lowered onto it inside the
+  runner (review suggestion 3).
+
+### 14. Backends and the coordinator (exists; not yet written)
+
+Points to `runner/REFERENCE.md` §6, §8, §9, §16.
+
+### 15. The wall (new)
+
+One rule separates the two halves of the runner: **timing state never reaches architectural
+state.** It is the rule "never learn from the run" (decided 2026-11-10, `DESIGN_REVIEW.md` §3.99)
+stated for this document. A processor's pipeline may reorder and stall, and the program's result
+is the same; two systems under test may be fast and slow, and the op set they receive is the
+same.
+
+**What crosses from plan to run.** Each op with its lane; in a timeline its planned time, the
+marks of its spans, and the edges it must wait on (an earlier op on the same path, a worker
+lane's turn); the sizes the run is held to (a `workers`' staging).
+
+**What crosses from run to plan.** Nothing.
+
+**What the run alone decides** is when an op issues, never whether or what:
+
+- Outside a timeline, an actor issues its next op when the previous one completes; channels and
+  barriers hold it for another actor. The order of ops across actors follows the run, which is
+  why issue order is never hashed.
+- In a timeline, a lane's op issues at the latest of its planned time plus the lane's lag, the
+  completion of the lane's previous op, and its edges. Lag never shrinks.
+
+**What the run does with what it observes.** Each observation has exactly one of four fates, and
+none of them is to adapt.
+
+| Fate | Meaning | Examples |
+|---|---|---|
+| A reported number | The measurement the run exists for | Throughput, a span's D, each lane's lag, edge waits, a workers' backlog peak, an eviction batch's overage |
+| An invalid run (exit 1) | The run did not impose the workload, so its numbers mean nothing | A would-be drop (staging past its size); the benchmark host's own lateness past a p99 of 10 ms |
+| A valid run that did not pass (exit 3) | The workload was imposed and the system missed a case's constraint | A `result.` constraint not met; the lag ceiling crossed |
+| Never modelled | What a real application would have done differently | A router balancing on real queue depth, a store dropped because staging filled, a client timeout and retry |
+
+**The one exit.** A run may stop early at a certain failure (`--on-certain-failure stop`, the
+default): it leaves the planner, issues nothing more, and lets what is in flight complete. A
+stopped run has issued fewer ops than its abstract's set, so its fingerprint is not judged. This
+is the only way the run changes which ops issue, and it does so only by ending.
+
+**Why the wall is absolute.** If an observation changed the op set, a slower system would
+receive a different, usually easier, workload; the fingerprint would no longer name the
+workload; and no dry run could say what a run will do. The cost is accepted: real adaptive
+behaviour is outside the model, and a system that cannot keep up with the plan gets an invalid
+or failing run rather than a gentler one (revisited and kept by the user on 2026-11-14 for the
+would-be drop).
+
+## Part III: The library
+
+### 16. Lowering (new, short; not yet written)
+
+What a library function may and may not do.
+
+### 17. The idiom catalogue (proposal, to be costed; not yet written)
+
+Each library function carries its lowering and its trace signature, so the digest names the idiom
+and the builder emits it. First entries: Python's `open()` around one read or write (in eight
+abstracts today), the format classes' readers. Queued in brief item 79; not designed here.
+
+## Part IV: The fit specification (a trace to an abstract)
+
+### 18. Why this is decompilation (new; not yet written)
+
+One trace, many abstracts; judgment and outside sources are needed; an agent does the work. So
+the specification is of the acceptance test, not of the agent's process.
+
+### 19. The artefacts in order (exists, scattered; not yet written)
+
+Trace, digest, interview answers, authoring script, parameters, case, capture. Points to
+`builder/REFERENCE.md` §7 and §8.
+
+### 20. The acceptance test (new)
+
+A compiler is trusted because it was verified once. The route from a trace to an abstract cannot
+be: it takes judgment, it reads sources outside the trace, and an agent walks it. So each output
+is checked instead, and what must be specified is the check. The route may be anything; the
+check is deterministic and runs without the agent.
+
+**What exists today** is two checks of different kinds, and an abstract may need either or both.
+
+*The trace check: are these the application's calls?* The abstract's locality metrics at the
+fitted parameters (`aeiou dry-run --metrics-json`) are compared with the trace's
+(`aeiou-trace compare --judge`, `builder/REFERENCE.md` §7):
+
+- Each row (the op mix, request sizes, run lengths, reuse and its distance, popularity, fan-out
+  and depth) gets a verdict. Its allowed distance is its class's tolerance plus the abstract's
+  own distance from itself at other seeds (`--self`): an abstract is not asked to be nearer the
+  trace than it is to itself.
+- The pair is accepted only when at least one row was judged and none is outside.
+- A capture's tolerance file may do three things, each with a written reason: replace a class's
+  tolerance; list a row as `unseen`, one the trace cannot show, which is then not judged; record
+  a row as `outside`, which is printed with its reason and is still outside.
+- The verdict is recorded with the capture (its record `capture.toml` and its tolerance file,
+  `builder/REFERENCE.md` §7 and §8).
+
+*The policy check: does the plan decide as the application decides?* A trace shows what one run
+did, not the rule that produced it, so a stateful abstract (a cache, a queue) is held to the
+application's own policy code instead: the abstract's walk and the reference are driven by the
+same planned events and compared decision by decision. `lmcache_local_disk_tiered` was accepted
+this way, equal request by request and unlink by unlink to LMCache 0.5.5's own
+`LRUEvictionPolicy` and to the kit's simulation of vLLM's pool (`DESIGN_REVIEW.md` §3.99).
+
+**What a tolerance may not excuse.** A row outside stays outside whatever the reason; an
+`unseen` row is one the trace could not show, never one the abstract gets wrong; and nothing
+excuses a call the application makes and the abstract leaves out (a truncate is never dropped).
+
+**What is not specified yet** (each an open decision, listed in the appendix):
+
+- The structural comparison of two digests (`compare` on two `aeiou_digest: 2` documents, the run
+  side's from `dry-run --emit-trace`) exists and is not part of acceptance. Whether it should be
+  is undecided.
+- The policy check has no tool and no recorded form: each has been a script in a kit or the
+  scratch. A named, repeatable form for it is the largest gap in this part.
+- Nothing judges time: arrival, think time, and service time are fitted and never compared.
+- What an agent must hand over for a fit to be reviewable (section 21) is practice, not a
+  checked format.
+
+### 21. Provenance (exists as practice; not yet written)
+
+Every claim tagged with its source and confidence; primary sources before backfitting.
+
+### 22. What the agent may not do (exists as rules; not yet written)
+
+No emulator as a source, no trace listing as an abstract, no dropped truncates, nothing learned
+from a run.
+
+## Appendix (not yet written)
 
 - Glossary: our term beside the familiar one (the describer and a disassembler, `dry-run` and
   `EXPLAIN`, the validator and a bytecode verifier).
-- Open decisions, listed once.
-
-## Writing order
-
-The new sections first (0, 1, 5, 6, 15, 20), since the rest is pointers.
+- Open decisions, listed once. So far: the stability of the planned-op stream (11); whether the
+  checkers' code follows section 5's table; whether the structural comparison is part of
+  acceptance (20); a form for the policy check (20); whether time is judged (20); the six review
+  suggestions below.
 
 ## The review behind this outline (2026-11-14)
 

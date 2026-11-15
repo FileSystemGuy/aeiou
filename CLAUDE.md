@@ -9,6 +9,7 @@ Read these before any design or coding work:
 - `PROJECT_BRIEF.md`: original requirements, decisions made so far, open items
 - `NAPKIN_MATH.md`: DRAM/IOPS estimates, risk register, spikes, round-2 decisions (§8)
 - `GRAMMAR_OPTIONS.md`: abstract-language extension options
+- `ARCHITECTURE.md`: the suite as a language (the builder and its library), an instruction set (the AST contract), and a microarchitecture (the runner's planner and executor), with the fit specification for a trace to an abstract; a map that points to the references, in draft since 2026-11-14 (`DESIGN_REVIEW.md` §3.100, brief item 79), each section tagged exists, new, or proposal, and a proposal there is not a decision
 - `DESIGN_REVIEW.md`: the reasoning log, every design decision with its date, from the 2026-09-25 review behind the determinism rules below on
 - `RC1_BUG_LOG.md`: the release-candidate review's bugs (2026-10-14 to 10-16), append-only, each with where, how found, fix, and evidence; `FS_API_SWEEP.md`: the 2026-11-02 sweep of every Linux filesystem call and flag against every layer, its findings (41, and S-42 added after) the register their fixes update (`DESIGN_REVIEW.md` §3.93, brief items 57 and 58); `QUICKSTART.md`: the guide shipped in the release tarball (`.github/workflows/release.yml`)
 - `ABSTRACTS.md`: paper abstracts for the eight target workloads, and the constructs they surfaced (§9, all accepted 2026-09-30)
