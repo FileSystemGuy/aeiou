@@ -13052,7 +13052,14 @@ step was written `run: cargo test ... golden::` on one line, a plain YAML scalar
 in `:` and is read as a mapping, so GitHub refused the whole release workflow (run
 43670544930); no tag was pushed while it stood. The command is in a block now, and
 `test_pins.py` refuses, on the text since no YAML parser is in the lock, any one-line `run:`
-holding `: `, a final `:`, or ` #`. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
+holding `: `, a final `:`, or ` #`. *Measured the same day* (the dispatch, run 43670652758, at 33047ed): the 36
+golden tests pass on both legs, aarch64 on `ubuntu-22.04-arm` and x86_64, `golden_fingerprints`
+and `hashes_match_check_py` among them, so the recorded fingerprints, which cover every
+committed abstract that draws a size from `lognormal`, `normal`, or `zipf`, are the same on
+the two architectures at this glibc (2.35) and this Rust. What it does not show: every case's
+parameters (the golden table runs test-sized ones), another libm (a later glibc, musl), or a
+rounding boundary no golden draw happens to sit on. No committed dataset leaves `lognormal`
+on this evidence; the quantile table is added beside it. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
 corrected in place.
 
 ## 4. Plan changes
