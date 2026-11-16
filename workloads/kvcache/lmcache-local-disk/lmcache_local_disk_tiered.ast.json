@@ -30220,9 +30220,9 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk_tiered.py",
-      "sha256": "4fb016ef251d5468a557a86f102a5a5aa0b78a1aa3503347383403f83711f8a8",
+      "sha256": "619bcda52d2e3389817721f238a6eede38cada82d96bc0c30e5ce958cdb94c2b",
       "builder_version": "0.4.0",
-      "git": "9d05cef8f0a6"
+      "git": "cdbf501c87de"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
