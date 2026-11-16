@@ -147,19 +147,15 @@ def chunk_write(a, b):
 
 _n = [0]
 def inv(c, table, cls=None):
-    """The fit's inverse CDF, × 1e6: a segment by the grid's widths, then a point in it."""
+    """The fit's inverse CDF, × 1e6: the library's `quantile` over the table's rows in `tab`, a
+    segment by the grid's widths, then a point in it."""
     _n[0] += 1
-    s = c.draw("q%d_s" % _n[0], empirical(list(range(NG - 1)), widths))
-    f = c.draw("q%d_f" % _n[0], uniform(0, FR))
     b = off[table] + (0 if cls is None else cls * NG)
-    lo = P.tab[b + s]
-    return c.let("q%d" % _n[0], lo + (P.tab[b + s + 1] - lo) * f // FR)
+    return quantile(c, "q%d" % _n[0], P.tab, widths, at=b, points=FR)
 
 def inv_at(seg, frac, table):
     """inv() as one expression of a segment and a fraction drawn apart (an array's element)."""
-    b = off[table]
-    lo = P.tab[b + seg]
-    return lo + (P.tab[b + seg + 1] - lo) * frac // FR
+    return quantile_at(seg, frac, P.tab, at=off[table], points=FR)
 
 def blocks(x):                                  # a fixed-point token count in whole blocks
     return x // (S * BL)

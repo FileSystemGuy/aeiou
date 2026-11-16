@@ -184,6 +184,16 @@ or handles), `draw(dist)`, `x.at(i)` for `x @ i`, `gpu_id`, `actor_count`. `/` i
 **Distributions**: `const uniform uniform64 normal lognormal empirical zipf hotset mixture`;
 `none` is the null arm of a mixture.
 
+**Library draws** (functions over the nodes above, nothing of the contract; `ARCHITECTURE.md`
+7.1): `quantile(c, name, table, widths, at=0, points=1 << 16)` draws from a piecewise-linear
+quantile table, what a fit of a trace produces. `table` is an array parameter holding the
+values at the edges of `len(widths)` segments from index `at` on; a segment is drawn in
+proportion to its width (an `empirical`, bound as `name_s`), a point uniformly among `points`
+in it (`name_f`), and the value interpolated in integers is bound as `name`. Nothing in it is
+floating-point. `quantile_at(seg, point, table, at, points)` is the interpolation alone, for a
+segment and a point drawn apart (an array's element). The tiered KV abstract's about forty
+fitted draws are these (since 2026-11-15; its AST hash unchanged).
+
 **Units**: `KiB MiB GiB TiB KB MB GB`, `ns us ms s minute`; plain ints, so `105 * ms` is an int.
 
 ## 2. The one discipline

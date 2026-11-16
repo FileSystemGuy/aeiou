@@ -2112,3 +2112,55 @@ def test_entries_in_groups_serialize_and_validate():
     assert got["then"]["entry"]["group"] == {"index": "s"}
     assert ast["actors"]["gpu"]["body"][0]["timeline"]["body"][1]["stat"]["file"]["file"]["id"] == {"published": "tl"}
     validate(ast)
+
+
+def test_quantile_is_library_two_draws_and_a_let_over_existing_nodes():
+    """`quantile` is a library function (ARCHITECTURE.md 7.1, rung 2), not a distribution of the
+    contract: it emits a segment drawn by the grid's widths, a point drawn in it, and the
+    interpolation between two elements of an integer table, integers throughout, and the
+    nodes are the ones written by hand."""
+    def build(lib):
+        w = Workload("q")
+        P = w.params(tab=[0, 10, 30, 100, 5, 6, 9, 20], n=4)
+        with w.actor("gpu") as a:
+            with a.loop("i", P.n):
+                if lib:
+                    x = quantile(a, "x", P.tab, [1, 2, 1], at=4, points=1 << 8)
+                else:
+                    s = a.draw("x_s", empirical([0, 1, 2], [1, 2, 1]))
+                    f = a.draw("x_f", uniform(0, 1 << 8))
+                    lo = P.tab[4 + s]
+                    x = a.let("x", lo + (P.tab[4 + s + 1] - lo) * f // (1 << 8))
+                a.compute(x)
+        return w.build()
+    lib, hand = build(True), build(False)
+    assert lib == hand
+    validate(lib)
+    body = lib["actors"]["gpu"]["body"][0]["loop"]["body"]
+    assert [next(iter(n)) for n in body] == ["let", "let", "let", "compute"]
+    assert "quantile" not in json.dumps(lib)                 # nothing new in the document
+    # the expression alone, of a segment and a point drawn apart (an array's element)
+    w = Workload("q2")
+    P = w.params(tab=[0, 10, 30])
+    with w.actor("gpu") as a:
+        s = a.draw("s", uniform(0, 2))
+        f = a.draw("f", uniform(0, 16))
+        a.compute(quantile_at(s, f, P.tab, points=16))
+        lo = P.tab[0 + s]
+        a.compute(lo + (P.tab[0 + s + 1] - lo) * f // 16)
+    b = w.build()["actors"]["gpu"]["body"]
+    assert b[2] == b[3]
+    validate(w.build())
+
+
+@pytest.mark.parametrize("build, needle", [
+    (lambda a, P: quantile(a, "x", P.tab, []), "at least one segment"),
+    (lambda a, P: quantile(a, "x", P.tab, [1, 0, -1]), "widths"),
+    (lambda a, P: quantile(a, "x", P.tab, [1, 1], points=0), "points"),
+])
+def test_quantile_refuses_a_table_it_cannot_draw_from(build, needle):
+    w = Workload("q")
+    P = w.params(tab=[0, 10, 30])
+    with w.actor("gpu") as a:
+        with pytest.raises(BuildError, match=needle):
+            build(a, P)

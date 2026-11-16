@@ -13059,7 +13059,25 @@ committed abstract that draws a size from `lognormal`, `normal`, or `zipf`, are 
 the two architectures at this glibc (2.35) and this Rust. What it does not show: every case's
 parameters (the golden table runs test-sized ones), another libm (a later glibc, musl), or a
 rounding boundary no golden draw happens to sit on. No committed dataset leaves `lognormal`
-on this evidence; the quantile table is added beside it. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
+on this evidence; ~~the quantile table is added beside it.~~
+
+**The quantile table is library (2026-11-15, the user's "agree to 1").** Costing suggestion 5
+against section 7.1 reversed the recommendation made the day before. The tiered script's
+`inv()` already was a piecewise-linear quantile table in integers: an `empirical` draw of the
+segment by the grid's widths, a `uniform` draw of the point in it, and an interpolation
+between two elements of the array parameter `tab`. A distribution of the contract doing the
+same would be a composite, which 7.1 never adds. So `inv()`'s body moved to the builder as
+`quantile(c, name, table, widths, at, points)` and `quantile_at(...)` (`builder/aeiou/dists.py`,
+tests first in `test_builder.py`: the function's nodes equal the hand-written ones, the word
+`quantile` appears nowhere in the document, three refusals), the script keeps `inv()` as the
+wrapper that names the draws and finds a table's row, and the tiered abstract's AST hash is
+unchanged (b3cc8544…), so no lock, workload id, or fingerprint moved; the committed AST file
+changed in its provenance alone, the script's hash. What stays as it was: two draws and about
+eight nodes a sample at about forty sites, AST size and not correctness. Not done, and why: a
+dataset's `size` takes one distribution, and whether a library draw can stand there was not
+checked; no committed dataset needs a fitted table and `lognormal` holds on aarch64, so a
+contract distribution waits for a fit that needs one. Next on suggestion 5's tail: whether a
+library function can emit `hotset`, `mixture`, and `choose`, before any is removed. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
 corrected in place.
 
 ## 4. Plan changes

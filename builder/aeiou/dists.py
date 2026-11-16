@@ -216,6 +216,33 @@ def lru() -> list:
     return [cached("touched")]
 
 
+def quantile_at(seg, point, table, at=0, points: int = 1 << 16):
+    """The value of a piecewise-linear quantile table at segment `seg` and `point` of `points`
+    in it: `table[at + seg]` and the element after it, interpolated in integers. An expression,
+    for a segment and a point drawn apart (an array's element); `quantile` draws both."""
+    lo = table[at + seg]
+    return lo + (table[at + seg + 1] - lo) * point // points
+
+
+def quantile(c, name: str, table, widths, at=0, points: int = 1 << 16):
+    """A draw from a piecewise-linear quantile table, what a fit of a trace produces: `table`
+    (an array parameter) holds the values at the edges of `len(widths)` segments from index
+    `at` on, a segment is drawn in proportion to its width (the grid's steps in probability)
+    and a point uniformly in it, and the value is interpolated in integers. Library, not
+    contract (ARCHITECTURE.md 7.1): two draws, `name_s` and `name_f`, and the binding `name`
+    on the cursor `c`, over `empirical`, `uniform`, and array reads, nothing floating-point."""
+    widths = list(widths)
+    if not widths:
+        raise BuildError(f"quantile `{name}`: a table has at least one segment")
+    if any(isinstance(x, bool) or not isinstance(x, (int, float)) or x < 0 for x in widths) or not sum(widths) > 0:
+        raise BuildError(f"quantile `{name}`: widths are numbers, none below 0 and not all 0")
+    if isinstance(points, bool) or not isinstance(points, int) or points < 1:
+        raise BuildError(f"quantile `{name}`: points is a whole number of at least 1")
+    seg = c.draw(name + "_s", empirical(list(range(len(widths))), widths))
+    point = c.draw(name + "_f", uniform(0, points))
+    return c.let(name, quantile_at(seg, point, table, at, points))
+
+
 def tier(name: str, order=None, capacity=None, unit: str = "entries", full: str = "skip", evict: dict | None = None,
          on_evict=None) -> dict:
     """A tier of a timeline's cache (contracts 0.16 and 0.18, rule V33): at most `capacity`

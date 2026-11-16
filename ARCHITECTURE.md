@@ -269,7 +269,7 @@ Three places a capability can live, and the test for which.
 
 - **Library.** If a Python function over existing instructions emits the same ops, it is library.
   It costs nothing downstream and needs no decision. Today: `lru()` (an `order` expression),
-  `timed()`, the format classes' readers (plain POSIX nodes), every script's helpers such as the
+  `timed()`, `quantile()` (a draw from a fit's quantile table: two draws and an interpolation), the format classes' readers (plain POSIX nodes), every script's helpers such as the
   six calls of Python's `open()`.
 - **Intrinsic.** A capability the runner carries because it needs an order across lanes or
   state kept efficiently, neither of which expressions can give. Today: the timeline and its
@@ -417,7 +417,9 @@ decided").**
    yet** (brief item 80); until it is, the runner accepts its own version alone and every
    version regenerates every AST. The form of (b) is settled when it is built.
 4. Removing the unused composites (`choose`, `mixture`, `hotset`) waits for the decision on
-   review suggestion 5, the quantile table, which would replace two of them.
+   review suggestion 5, the quantile table, which would replace two of them. *Settled
+   2026-11-15:* suggestion 5 is library, `quantile()`, and no distribution was added; whether
+   a library function can emit each of the three is checked before any is removed.
 
 ### 8. The definitions fingerprints depend on (exists; not yet written)
 
@@ -650,9 +652,14 @@ Six suggestions (decided 2026-11-14, after the list; none built):
 
 **Decided (the user, 2026-11-14, "agreed on all"; `DESIGN_REVIEW.md` §3.100, the note "The six
 suggestions decided"; none built).** In this order: the golden tests run on aarch64, to learn
-whether the drawn sizes differ today, then the quantile table added as a new distribution
+whether the drawn sizes differ today (run 2026-11-14 by the release workflow, all 36 passing
+on both architectures), then ~~the quantile table added as a new distribution
 (rung 5, no fingerprint moved), committed datasets leaving `lognormal` only if that run shows
-a difference, and `normal` and `lognormal` kept; 1, the cache verbs over keys, a provisional
+a difference, and~~ the quantile table as a library function, `quantile()` in the builder,
+and no distribution added to the contract (the user, 2026-11-15: the tiered script's `inv()`
+already was one over `empirical`, `uniform`, and an array parameter, so 7.1 makes it rung 2;
+moved to the library with the tiered abstract's AST hash unchanged; a contract distribution
+waits for a dataset size that needs a fitted table), `normal` and `lognormal` kept; 1, the cache verbs over keys, a provisional
 piece reshaped (7.4), `lookup` becoming a builder function, accepted when the tiered
 abstract's fingerprint is unchanged; 4 in part, `span` outside a timeline, `phase` left as it
 is and not merged; 2 in part, an eviction body acting on a strictly lower tier (so a cascade
