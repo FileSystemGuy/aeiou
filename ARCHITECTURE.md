@@ -301,7 +301,7 @@ The rule this section proposes for the future: a composite is never added to the
 set. A new intrinsic needs a reason from the definition above (an order, or state), stated where
 it is defined.
 
-### 7. The growth policy (drafted and decided 2026-11-14; 7.5's version range not built yet)
+### 7. The growth policy (drafted and decided 2026-11-14; 7.5's version range ~~not built yet~~ built 2026-11-22)
 
 The question this section answers is the one the review began with: how does the suite take a
 new development in the AI stack without a change to the runner each time, and when a change to
@@ -379,10 +379,11 @@ results of every other workload from those before it.
   later kernel. It rests on 7.3: a document valid at version N is valid at N+1 and means the
   same. The builder would emit the lowest sufficient version, which needs each primitive's
   version recorded (the schema's descriptions carry it in prose today).
+  *Built 2026-11-22 (brief item 80):* the floor is 0.23, the schema's `ast` lists the versions read, the table `SINCE` in `schema/check.py` and `validate.rs` records what each version past the floor added as a test of a document, both checkers refuse a document that does not carry the lowest version that holds what it uses, and the builder stamps it. The floor is 0.23 and not lower because 0.23 removed two nodes: a 0.22 document may hold one.
 - *Proposal (b):* a change that 7.3 does not hold for (a narrowing such as 0.22, a reshaping
   such as 0.8's one dataset shape) raises the floor, or is confined to provisional pieces whose
   abstracts are regenerated alone. Which of the two is a decision; the second keeps settled
-  abstracts' hashes through every change.
+  abstracts' hashes through every change. *2026-11-22:* built with the first as its default, the floor raised; the second is not built and the decision is still the user's.
 - *Not proposed:* taking the version out of the hash. The hash would then no longer say which
   rules the document was checked under.
 - *The record, for scale:* of the eight versions 0.15 to 0.22, six only added (the history says
@@ -421,9 +422,9 @@ decided").**
    reshaping, and removal. The timeline family is declared provisional in `schema/README.md`
    §9.
 3. Proposal 7.5 (a) is accepted: the runner is to accept every contract version from a floor
-   up to its own, an abstract carrying the lowest version that holds what it uses. **Not built
+   up to its own, an abstract carrying the lowest version that holds what it uses. ~~**Not built
    yet** (brief item 80); until it is, the runner accepts its own version alone and every
-   version regenerates every AST. The form of (b) is settled when it is built.
+   version regenerates every AST.~~ Built 2026-11-22 (7.5). The form of (b) is settled when it is built: built with the floor raised as the default, the decision still the user's.
 4. Removing the unused composites (`choose`, `mixture`, `hotset`) waits for the decision on
    review suggestion 5, the quantile table, which would replace two of them. *Settled
    2026-11-15:* suggestion 5 is library, `quantile()`, and no distribution was added; whether

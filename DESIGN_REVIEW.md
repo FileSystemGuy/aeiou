@@ -13220,6 +13220,37 @@ out in the same version.
   item 80, the range of accepted versions, is still not built, so this version again changed
   every AST hash and workload id.
 
+**The version range built (2026-11-22, brief item 80; the user's "let's do item 80 first").**
+Asked for before review suggestion 4, since 4 and then 2 are additions and each version until
+now changed every AST hash, lock, and workload id (0.23 the ninth time). Choices made in the
+build:
+- *The floor is 0.23.* The brief left it open at "0.22, or lower"; 0.23 removed `lookup` and
+  `choose` and reshaped the cache statements, so a 0.22 document may hold what no checker
+  reads any more.
+- *A table of additions, as tests of a document.* The brief asked for each primitive's version
+  in a form a tool reads. Not every addition is a new key (suggestion 4 is a statement allowed
+  in a place it was refused), so the form is a row (version, what, a function of the document
+  that says whether it uses it), `SINCE`, written twice, in `schema/check.py` and in
+  `validate.rs`, as every rule is. The schema's `ast` lists the versions read, floor first.
+- *Exactly the lowest, held by both checkers.* A document under a version lower than what it
+  uses is refused, and so is one under a higher: were the second accepted, one abstract would
+  have a hash a version and a workload id each. The messages are one wording.
+- *The builder stamps it after the document is assembled*, from the same table through
+  `aeiou.validate`, so a script names no version.
+- *A change that is not an addition raises the floor*, the table emptied and every abstract
+  regenerated: the first of the two courses of `ARCHITECTURE.md` 7.5 (b), taken as the
+  default and written so in the comments. The second, such a change confined to provisional
+  pieces whose abstracts alone are regenerated, would need the meaning of a document to
+  depend on its version, and is not built. The decision between them was the user's to make
+  and is put to the user with this.
+- *What shows it works, and what does not yet.* No real version follows the floor, so the
+  tests set a stand-in beside it (0.99, having "added" `fsync`): a document without one
+  builds to the same bytes and is accepted, one with it carries 0.99, either under the
+  other's version is refused, and every committed AST that holds no `fsync` is read unchanged
+  (`test_builder.py`, two tests, red first; `cov_c1.rs`, written with the code and not seen
+  red). The first real exercise is contract 0.24.
+- *Nothing was regenerated:* every committed AST already carries 0.23, the floor.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

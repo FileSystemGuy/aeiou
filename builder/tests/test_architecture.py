@@ -135,7 +135,7 @@ def document(ctx: str, node: dict) -> dict:
         ordered["on_evict"] = {"lanes": 1, "body": [node]}
     if not (ctx == "lane" and "release" in node):
         tl["body"].append({"release": {"hold": "h0"}})
-    return {"ast": check.SCHEMA["properties"]["ast"]["const"], "name": "t", "params": {"n": {"default": 3}},
+    return {"ast": check.FLOOR, "name": "t", "params": {"n": {"default": 3}},
             "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}},
             "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 2}},
             "actors": {"gpu": {"body": [node] if ctx == "outside" else [{"timeline": tl}]}}}

@@ -232,12 +232,14 @@ pub fn resume_abstract(m: &Manifest, root: &str) -> Result<(String, Vec<String>)
             def.insert("protocol".into(), json!("s3"));
         }
     }
-    let doc = json!({
-        "ast": crate::ast::AST_VERSION,
+    let mut doc = json!({
+        "ast": crate::ast::AST_FLOOR,
         "name": m.provenance["abstract"].as_str().unwrap_or("resume"),
         "datasets": {name.clone(): dataset},
         "actors": {"resume": {"body": []}},
     });
+    // the lowest contract version that holds what the dataset's definition uses (brief item 80)
+    doc["ast"] = json!(crate::validate::lowest(&crate::ast::parse(&doc.to_string())?, crate::validate::SINCE).0);
     Ok((serde_json::to_string(&doc)?, vec![format!("{name}={root}")]))
 }
 

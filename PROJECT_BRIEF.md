@@ -1895,7 +1895,7 @@ numbers; the order is this note's.
     made; then suggestions 4 and the first half of 2 (with item 78), in that order.
 
 80. **A range of accepted contract versions (decided by the user 2026-11-14, `ARCHITECTURE.md`
-    §7.5, `DESIGN_REVIEW.md` §3.100; not built).** Today the runner accepts exactly its own
+    §7.5, `DESIGN_REVIEW.md` §3.100; ~~not built~~ built 2026-11-22, the note "The version range built").** Today the runner accepts exactly its own
     contract version, the version is inside the hashed document, and a case's workload id
     covers the AST hash, so every addition to the contract changes every AST hash, lock, and
     workload id though no fingerprint. To build: the runner and `schema/check.py` accept every
@@ -1904,7 +1904,13 @@ numbers; the order is this note's.
     (the schema's descriptions carry it in prose); a test that every committed AST is still
     accepted unchanged after an addition. To settle when built: the floor (0.22, or lower),
     and what a change that is not an addition does (raise the floor, or stay within
-    provisional pieces whose abstracts alone are regenerated).
+    provisional pieces whose abstracts alone are regenerated). *Built:* the floor is 0.23
+    (0.23 removed two nodes, so nothing lower); the table `SINCE` in `schema/check.py` and
+    `validate.rs`; both checkers refuse a version that is not the lowest the document could
+    carry; the builder stamps it; tests with a stand-in later version that every committed
+    AST not using the addition is read unchanged. **Not settled:** the second question; the
+    floor is raised by default, and confining a change to provisional pieces is not built.
+    **Not exercised yet** by a real addition: the first is contract 0.24, review suggestion 4.
 
 ## 7. Environment
 

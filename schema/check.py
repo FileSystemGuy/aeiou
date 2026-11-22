@@ -19,6 +19,45 @@ import jsonschema
 HERE = pathlib.Path(__file__).resolve().parent
 SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-8"))
 
+# The contract versions read (brief item 80; ARCHITECTURE.md 7.5): every one from the floor to
+# the latest, as the schema lists them. A document carries the lowest that holds what it uses,
+# so an addition changes the hash, the lock, and the workload id of no abstract without it.
+VERSIONS = list(SCHEMA["properties"]["ast"]["enum"])
+FLOOR = VERSIONS[0]
+
+# What each version past the floor added: (version, what, a test of a document that uses it).
+# An addition to the contract is a row here and in the runner's validate.rs, with the version
+# in the schema's list; a change that is not an addition (a removal, another meaning) raises
+# the floor to its version and empties the table, and every abstract is regenerated.
+SINCE: list = []
+
+
+def version_key(v: str):
+    """A version in order: `0.9` before `0.23`."""
+    return tuple(int(x) for x in v.split("."))
+
+
+def lowest(ast: dict):
+    """The lowest contract version that holds what the document uses, and the thing in it that
+    needs that version (None at the floor)."""
+    need, why = FLOOR, None
+    for version, what, used in SINCE:
+        if version_key(version) > version_key(need) and used(ast):
+            need, why = version, what
+    return need, why
+
+
+def version_error(ast: dict):
+    """Why the document's version is not the one it carries by that rule, or None."""
+    v = ast.get("ast")
+    need, why = lowest(ast)
+    if v not in VERSIONS or v == need:
+        return None                     # a version outside the list is the schema's refusal
+    if version_key(v) < version_key(need):
+        return f"version `{v}`, but the document holds {why}, which contract `{need}` added: it carries `{need}`"
+    return (f"version `{v}`, but the document holds nothing past contract `{need}`: an abstract carries the lowest "
+            f"version that holds what it uses, `{need}`")
+
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "phase", "trace", "timeline", "publish", "array",
            "acquire", "release", "probe", "touch", "store", "submit", "span"}
@@ -550,6 +589,9 @@ class Check:
     def run(self):
         for path, msg in int_range(self.ast):
             self.err(list(path), msg)
+        bad = version_error(self.ast)
+        if bad:
+            self.err(["ast"], bad)
         if "gpus" in self.params:
             self.err(["params"], "`gpus` is reserved and set by the runner")
         for pname, p in self.ast.get("params", {}).items():

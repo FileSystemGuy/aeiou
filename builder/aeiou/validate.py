@@ -53,6 +53,16 @@ def validate(ast: dict, name: str | None = None) -> None:
         raise BuildError("AST rejected:\n  " + "\n  ".join(errors))
 
 
+def floor_version() -> str:
+    """The lowest contract version the checkers read."""
+    return _load()[1].FLOOR
+
+
+def lowest_version(ast: dict) -> str:
+    """The lowest contract version that holds what the document uses (brief item 80)."""
+    return _load()[1].lowest(ast)[0]
+
+
 def op_counts(ast: dict):
     _, check = _load()
     chk = check.Check(ast, ast.get("name", "ast"))

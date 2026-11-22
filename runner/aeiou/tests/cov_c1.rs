@@ -59,10 +59,51 @@ fn op_codes_come_back_as_the_values_they_were_made_from() {
     assert!(std::panic::catch_unwind(|| Advice::from_code(9)).is_err());
 }
 
+/// Brief item 80: the runner reads every contract version from a floor to its own, and a
+/// document carries the lowest that holds what it uses, so an addition to the contract changes
+/// the hash of no abstract without it. A version outside the range is refused when read; one
+/// in it that is not the lowest, by the validator, in check.py's words.
 #[test]
-fn an_ast_of_another_contract_version_is_refused() {
-    let e = aeiou::ast::parse(r#"{"ast": "0.9", "name": "t", "actors": {}}"#).unwrap_err();
-    assert_eq!(e.to_string(), "ast version `0.9` is not `0.23`");
+fn an_ast_of_a_contract_version_outside_the_range_is_refused() {
+    use aeiou::ast::{version_key, AST_FLOOR, AST_VERSION};
+    use aeiou::validate::{lowest, version_error, Since, SINCE};
+    assert!(version_key(AST_FLOOR) <= version_key(AST_VERSION) && version_key("0.9") < version_key("0.23"));
+    assert_eq!(version_key("0.023"), None, "one spelling a version");
+    for v in ["0.9", "0.22", "1.0", "0.023", "x"] {
+        let e = aeiou::ast::parse(&format!(r#"{{"ast": "{v}", "name": "t", "actors": {{}}}}"#)).unwrap_err();
+        assert_eq!(e.to_string(), format!("ast version `{v}` is not one this runner reads, `{AST_FLOOR}` to `{AST_VERSION}`"));
+    }
+    assert!(SINCE.iter().all(|s| version_key(s.version) > version_key(AST_FLOOR) && version_key(s.version) <= version_key(AST_VERSION)));
+    // one version on, `0.99` having added `fsync`: a document without one keeps the floor, one
+    // with it carries 0.99, and either under the other's version is refused
+    fn uses_fsync(ast: &aeiou::ast::Ast) -> bool {
+        ast.actors.values().any(|a| a.body.iter().any(|n| n.kind() == "fsync"))
+    }
+    let later = [Since { version: "0.99", what: "an `fsync`", used: uses_fsync }];
+    let doc = |v: &str, sync: bool| {
+        let body = if sync { json!([{"fsync": {"file": {"object": {"namespace": "o", "fields": {"k": 0}}}}}]) } else { json!([]) };
+        let text = json!({"ast": AST_FLOOR, "name": "t", "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 2}},
+                          "actors": {"gpu": {"body": body}}}).to_string();
+        let mut ast = aeiou::ast::parse(&text).unwrap();
+        ast.ast = v.to_string();
+        ast
+    };
+    assert_eq!(lowest(&doc(AST_FLOOR, false), &later), (AST_FLOOR, None));
+    assert_eq!(lowest(&doc(AST_FLOOR, true), &later), ("0.99", Some("an `fsync`")));
+    assert_eq!(version_error(&doc(AST_FLOOR, false), &later), None);
+    assert_eq!(version_error(&doc("0.99", true), &later), None);
+    assert_eq!(version_error(&doc(AST_FLOOR, true), &later).unwrap(),
+        format!("version `{AST_FLOOR}`, but the document holds an `fsync`, which contract `0.99` added: it carries `0.99`"));
+    assert_eq!(version_error(&doc("0.99", false), &later).unwrap(),
+        format!("version `0.99`, but the document holds nothing past contract `{AST_FLOOR}`: an abstract carries the lowest version that holds what it uses, `{AST_FLOOR}`"));
+    // every committed abstract carries the lowest version it could, today and one version on
+    for name in ["dcp_save", "dcp_load", "file_per_sample", "diskann_search", "lmcache_local_disk_tiered", "hdf5_map"] {
+        let ast = aeiou::load(&crate::common::workload_ast(name)).unwrap().ast;
+        assert_eq!(version_error(&ast, SINCE), None, "{name}");
+        if !uses_fsync(&ast) {
+            assert_eq!(version_error(&ast, &later), None, "{name}");
+        }
+    }
 }
 
 /// A cloned draw keeps the site `sites::annotate` gave it, so a clone draws what the original does.

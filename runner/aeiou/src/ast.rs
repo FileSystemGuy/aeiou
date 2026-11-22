@@ -11,7 +11,19 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+/// The contract versions this runner reads (brief item 80; `ARCHITECTURE.md` 7.5): every one
+/// from the floor to its own. A document carries the lowest that holds what it uses
+/// (`validate::SINCE`), so an addition changes the hash of no abstract without it. A change
+/// that is not an addition raises the floor to its version.
+pub const AST_FLOOR: &str = "0.23";
 pub const AST_VERSION: &str = "0.23";
+
+/// A version in order (`0.9` before `0.23`), `None` for what is not one in its one spelling.
+pub fn version_key(v: &str) -> Option<(u32, u32)> {
+    let (a, b) = v.split_once('.')?;
+    let k = (a.parse().ok()?, b.parse().ok()?);
+    (format!("{}.{}", k.0, k.1) == v).then_some(k)
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1294,8 +1306,8 @@ pub enum TierUnit {
 /// Load an AST from JSON text: structural checks only. Semantic rules are `validate::check`.
 pub fn parse(text: &str) -> anyhow::Result<Ast> {
     let ast: Ast = serde_json::from_str(text)?;
-    if ast.ast != AST_VERSION {
-        anyhow::bail!("ast version `{}` is not `{}`", ast.ast, AST_VERSION);
+    if !version_key(&ast.ast).is_some_and(|k| version_key(AST_FLOOR) <= Some(k) && Some(k) <= version_key(AST_VERSION)) {
+        anyhow::bail!("ast version `{}` is not one this runner reads, `{}` to `{}`", ast.ast, AST_FLOOR, AST_VERSION);
     }
     Ok(ast)
 }

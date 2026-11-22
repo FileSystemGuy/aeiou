@@ -2254,3 +2254,79 @@ def test_quantile_refuses_a_table_it_cannot_draw_from(build, needle):
     with w.actor("gpu") as a:
         with pytest.raises(BuildError, match=needle):
             build(a, P)
+
+
+# ---- a range of contract versions (brief item 80; ARCHITECTURE.md 7.5) ----
+
+def _later_contract(monkeypatch):
+    """The contract as it would stand one version on, `0.99` having added `fsync`: the table
+    of what each version added and the versions the schema lists, in both places they are read."""
+    from aeiou.validate import _load
+    schema, check = _load()
+    def uses_fsync(ast):
+        return '"fsync"' in json.dumps(ast)
+    monkeypatch.setattr(check, "SINCE", check.SINCE + [("0.99", "an `fsync`", uses_fsync)])
+    monkeypatch.setattr(check, "VERSIONS", check.VERSIONS + ["0.99"])
+    for s in (schema, check.SCHEMA):
+        monkeypatch.setitem(s["properties"]["ast"], "enum", check.VERSIONS)
+    return check
+
+
+def _versioned(sync: bool):
+    w = Workload("v")
+    ns = w.namespace("o", pattern="o/{k}", fields={"k": "int"}, size="as_written", seed=2)
+    with w.actor("gpu") as a:
+        f = a.let("f", ns.object(k=0))
+        a.open(f, "WRONLY|CREAT")
+        a.write(f, 4096)
+        if sync:
+            a.fsync(f)
+        a.close(f)
+    return w
+
+
+def test_a_document_carries_the_lowest_version_that_holds_what_it_uses(monkeypatch):
+    """Brief item 80: both checkers read every contract version from a floor to their own, and a
+    document carries the lowest that holds what it uses, so an addition to the contract moves
+    the hash, the lock, and the workload id of no abstract that does not use it. The builder
+    stamps that version; a document carrying another, lower or higher, is refused."""
+    from aeiou.validate import _load
+    schema, check = _load()
+    assert check.VERSIONS == schema["properties"]["ast"]["enum"] and check.FLOOR == check.VERSIONS[0] == "0.23"
+    assert sorted(check.VERSIONS, key=check.version_key) == check.VERSIONS
+    assert all(v in check.VERSIONS[1:] for v, _, _ in check.SINCE)       # nothing is "added" at the floor
+    plain = _versioned(False).build()
+    assert plain["ast"] == check.FLOOR
+    check = _later_contract(monkeypatch)
+    # the same abstract, built by a builder one version on: the same document, the same hash
+    assert _versioned(False).build() == plain
+    synced = _versioned(True).build()
+    assert synced["ast"] == "0.99"
+    validate(plain), validate(synced)
+    with pytest.raises(BuildError, match=r"v: ast: version `0.23`, but the document holds an `fsync`, which contract `0.99` added"):
+        validate({**synced, "ast": "0.23"})
+    with pytest.raises(BuildError, match=r"v: ast: version `0.99`, but the document holds nothing past contract `0.23`: "
+                                         r"an abstract carries the lowest version that holds what it uses"):
+        validate({**plain, "ast": "0.99"})
+    with pytest.raises(BuildError, match="v: ast: "):                    # a version outside the range: the schema's refusal
+        validate({**plain, "ast": "0.22"})
+
+
+def test_every_committed_abstract_is_read_unchanged_one_version_on(monkeypatch):
+    """What item 80 is for: after an addition, every committed AST that does not use it is
+    accepted as it is, at the version it carries, and that version is the lowest it could."""
+    from aeiou.validate import _load
+    _, check = _load()
+    files = sorted((ROOT / "workloads").rglob("*.ast.json"))
+    assert len(files) >= 14
+    docs = [json.loads(f.read_text(encoding="utf-8")) for f in files]
+    for later in (False, True):
+        if later:
+            check = _later_contract(monkeypatch)
+        for f, d in zip(files, docs):
+            d = {k: v for k, v in d.items() if k != "provenance"}
+            if later and '"fsync"' in json.dumps(d):
+                continue                                                  # it uses the addition: regenerated, and it alone
+            assert d["ast"] == check.lowest(d)[0], f.name
+            validate(d)
+    assert any('"fsync"' in json.dumps(d) for d in docs)                  # the stand-in addition is used by some

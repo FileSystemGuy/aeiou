@@ -239,7 +239,6 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.23"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -485,7 +484,8 @@ class Workload:
     def build(self, validate: bool = True) -> dict:
         """The AST as a plain dict (no provenance). Validates against the schema and the
         semantic rules unless `validate=False`."""
-        ast = {"ast": self.AST_VERSION, "name": self.name}
+        from .validate import lowest_version, floor_version
+        ast = {"ast": floor_version(), "name": self.name}
         if self.doc:
             ast["doc"] = self.doc
         if self.posix:
@@ -503,6 +503,9 @@ class Workload:
         if not self._actors:
             raise BuildError(f"workload {self.name}: no actors")
         ast["actors"] = {k: _ast_deep(v) for k, v in self._actors.items()}
+        # the lowest contract version that holds what the abstract uses (brief item 80), so an
+        # addition to the contract changes the hash of no abstract that does not use it
+        ast["ast"] = lowest_version(ast)
         if self.lint:
             _lint(ast)
         if validate:

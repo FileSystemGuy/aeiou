@@ -37,6 +37,43 @@ pub fn protocols(ast: &Ast, traces: bool) -> Protocols {
     Protocols { posix: posix || !s3, s3 }
 }
 
+/// What a contract version past the floor added (brief item 80): the version, the thing in a
+/// document that needs it, and the test of a document that uses it. An addition to the
+/// contract is a row here and in `schema/check.py`'s `SINCE`.
+pub struct Since {
+    pub version: &'static str,
+    pub what: &'static str,
+    pub used: fn(&Ast) -> bool,
+}
+
+pub const SINCE: &[Since] = &[];
+
+/// The lowest contract version that holds what the document uses, and the thing in it that
+/// needs that version (`None` at the floor).
+pub fn lowest(ast: &Ast, since: &[Since]) -> (&'static str, Option<&'static str>) {
+    let mut need = (AST_FLOOR, None);
+    for s in since {
+        if version_key(s.version) > version_key(need.0) && (s.used)(ast) {
+            need = (s.version, Some(s.what));
+        }
+    }
+    need
+}
+
+/// Why the document's version is not the one it carries by that rule, in `check.py`'s words.
+pub fn version_error(ast: &Ast, since: &[Since]) -> Option<String> {
+    let (need, why) = lowest(ast, since);
+    let v = ast.ast.as_str();
+    if v == need {
+        return None;
+    }
+    Some(if version_key(v) < version_key(need) {
+        format!("version `{v}`, but the document holds {}, which contract `{need}` added: it carries `{need}`", why.unwrap_or("something"))
+    } else {
+        format!("version `{v}`, but the document holds nothing past contract `{need}`: an abstract carries the lowest version that holds what it uses, `{need}`")
+    })
+}
+
 pub fn check(ast: &Ast) -> Vec<String> {
     let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()), direct: Vec::new() };
     c.run();
@@ -755,6 +792,9 @@ impl<'a> Checker<'a> {
 
     fn run(&mut self) {
         let ast = self.ast;
+        if let Some(bad) = version_error(ast, SINCE) {
+            self.err(&vec!["ast".into()], bad);
+        }
         if !is_ident(&ast.name) {
             self.err(&vec!["name".into()], "not an identifier");
         }
