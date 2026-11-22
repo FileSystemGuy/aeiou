@@ -240,12 +240,15 @@ cov() {
     ebpf_tools
     minio=$(fetch minio) || exit 1
     llvm=$(fetch llvm-cov) || exit 1
+    nextest=$(fetch nextest) || exit 1
     if without_ebpf; then
-        set -- -- --skip capture_ebpf::
+        set -- -E 'not test(/^capture_ebpf::/)'
     else
         set --
     fi
-    (cd "$ROOT/runner" && env -u AEIOU_WITHOUT TEST_MINIO_BIN=$minio "$llvm" llvm-cov --release --locked --workspace --all-targets --summary-only \
+    # under nextest, as `check runner` runs the suite: runner/.config/nextest.toml gives the
+    # timeline tests every slot, which a `cargo test`, its tests threads of one process, cannot
+    (cd "$ROOT/runner" && env -u AEIOU_WITHOUT TEST_MINIO_BIN=$minio PATH="$(dirname "$nextest"):$PATH" "$llvm" llvm-cov nextest --release --locked --workspace --all-targets --summary-only \
         --no-default-ignore-filename-regex --ignore-filename-regex '/\.cargo/|/rustc/|/\.rustup/' "$@")
     rust_build
     py_sync

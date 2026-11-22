@@ -12453,6 +12453,9 @@ the whole module, 31 tests of which nine run a timeline, so a run added there ne
 the others are validator tests of milliseconds. Not covered: `./dev.sh cov` runs the suite under
 `cargo llvm-cov`, threads of one process, where nextest's file is not read; whether either failure was a coverage run was not recorded,
 and if one fails there, the answer is `cargo llvm-cov nextest`. The rule itself is unchanged.
+*One did, the same day:* `timeline::a_run_writes_its_series` under `./dev.sh cov`, 10.486 ms over
+12 ops. `cov` now runs `cargo llvm-cov nextest`, with dev.sh's pinned nextest on its `PATH`, so the
+file above applies to it; held by the same test of `test_pins.py` (red first).
 
 *The series and the planned trace (2026-11-14, step 5's last part).* The note's per-second report,
 the edge waits, and `--emit-trace`'s planned `t`. The per-second report put to the user: a whole

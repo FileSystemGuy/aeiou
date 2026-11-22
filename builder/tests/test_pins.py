@@ -206,3 +206,7 @@ def test_the_timeline_tests_run_with_nothing_beside_them():
     assert (ROOT / "runner" / "aeiou" / "tests" / "all.rs").read_text(encoding="utf-8").count("mod timeline;") == 1
     dev = (ROOT / "dev.sh").read_text(encoding="utf-8")
     assert '"$nextest" nextest run --release --locked "$@"' in dev
+    # coverage runs the same suite, so under nextest too (2026-11-22: under `cargo test`, the
+    # tests threads of one process, `timeline::a_run_writes_its_series` was late by 0.5 ms)
+    cov = dev[dev.index("\ncov() {"):]
+    assert '"$llvm" llvm-cov nextest --release' in cov and 'PATH="$(dirname "$nextest"):$PATH"' in cov
