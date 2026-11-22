@@ -230,7 +230,7 @@ each is a recorded decision and the golden tests pin them.
   release. An entry keeps `stored`, `touched`, `freed` (those counts), `hits`, `pos` (its index,
   first occurrence, in the sequence of the lookup that last found or stored it), `size` (one, or
   the lookup's `size` in a tier of bytes), and the holds on it. An entry no lane holds is in the
-  victim order under the key (its `order` values, its `stored`), the values computed with
+  victim order under the key (its `order` values, its `stored`, then, since 2026-11-22, its `pos` and its key, so that entries equal in the order, the chunks of one `store` or `touch` under an order without `pos`, are each a victim, least `pos` first; before, one of them took the others' place and they were never evicted), the values computed with
   `cached` reading the entry when it is stored, looked up, or released, never in between. A
   `lookup` computes its sequence's keys, counts the leading ones held (the hit, bound to
   `bind`), and takes each key once, at its first index: ~~every key in order: held, it is

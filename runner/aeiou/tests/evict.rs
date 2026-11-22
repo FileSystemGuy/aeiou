@@ -172,6 +172,28 @@ fn probe_touch_and_store_work_over_a_range() {
     assert_eq!(walk(body), ["d/0", "d/2", "d/3"]);
 }
 
+/// Entries equal in a tier's order are still each a victim (found 2026-11-22): a store's chunks
+/// share its event, so under an order of `touched` alone they tied, and the victim order, keyed
+/// by the order's values and the event stored at, kept one of them; the others were never
+/// evicted and a touch of one took another's place. Ties go by `pos`, least first.
+#[test]
+fn entries_equal_in_the_order_are_each_a_victim() {
+    let lru = json!([{"name": "t", "order": [cached("touched")], "capacity": 2}]);
+    // A's two chunks fill the tier in one event; C evicts A's first, D its second
+    let body = json!([tl(lru.clone(), json!([
+        let_("a", shared(1, 2)), let_("c", shared(2, 1)),
+        store(r("a"), 0, 2), store(r("c"), 0, 1),
+        probe(r("a"), 0, "a0"), probe(r("a"), 1, "a1"), stat(r("a0")), stat(r("a1")),
+        store(shared(3, 1), 0, 1),
+        probe(r("a"), 1, "b1"), probe(r("c"), 0, "c0"), stat(r("b1")), stat(r("c0"))]))]);
+    assert_eq!(walk(body), ["d/0", "d/1", "d/0", "d/1"]);
+    // a touch of both, one event again, leaves both victims: two stores evict both
+    let body = json!([tl(lru, json!([
+        let_("a", shared(1, 2)), store(r("a"), 0, 2), touch(r("a"), 0, 2),
+        store(shared(2, 2), 0, 2), probe(r("a"), 0, "a0"), probe(r("a"), 1, "a1"), stat(r("a0")), stat(r("a1"))]))]);
+    assert_eq!(walk(body), ["d/0", "d/0"]);
+}
+
 /// `store`'s `bind` is the leading run of the range held after it: a store a full tier with
 /// timed eviction skips is the planned drop (Q5), and `fail` refuses the walk instead.
 #[test]

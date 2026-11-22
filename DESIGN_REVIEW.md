@@ -13132,6 +13132,23 @@ was then built and run.
   digest's word `choose` (a selection with replacement, against `consume`) is its own
   vocabulary and is untouched.
 
+**A defect found on the way to suggestion 1: entries equal in a tier's order (2026-11-22).**
+Costing `lookup` as a builder function over `store` (suggestion 1, decided below) asked what
+orders the chunks of one `store`, which share its event. The victim order was a map keyed by
+(the `order` values, `stored`); a `store` or `touch` gives every chunk of the statement one
+`stored` or `touched`, so under an order without `pos` (the builder's `lru()`, `touched`
+alone) its chunks had one key and the map kept the last. Shown on the released runner: a tier
+of two entries, A's two chunks stored in one event, then C, then D, left A's first chunk held
+and C evicted; the entries dropped from the map were never victims, `unheld` still counted
+them, and a touch of one removed another's place. A `lookup` counted an event a key, so it
+never tied, which is why contract 0.16's tests did not meet it; `store` and `touch` came in
+0.19. The committed abstract's two orders both end in `pos`, and its fingerprint is the same
+with the fix (`agentx-tiered`, seed 1: f1e4daacc73ad66f before and after). Fixed: the key is
+(order values, `stored`, `pos`, the entry's key), so entries equal in the order are each a
+victim, least `pos` first, the order a `lookup`'s chunks had. Test first,
+`evict::entries_equal_in_the_order_are_each_a_victim` (red: `["d/1", "d/0", "d/0", "d/0"]`).
+Not a change of contract: no document that walked correctly walks differently.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

@@ -268,8 +268,13 @@ struct Ent {
     hits: i64,
     pos: i64,
     holds: u32,
-    ord: Option<(Vec<i64>, u64)>,
+    ord: Option<Place>,
 }
+
+/// An entry's place in its tier's victim order: its `order` values, then the event count it
+/// was stored at, then its `pos`, then its key, so entries equal in the order (the chunks of
+/// one store under an order without `pos`) are each a victim, least `pos` first (2026-11-22).
+type Place = (Vec<i64>, u64, i64, i64);
 
 impl Ent {
     /// The values `cached` reads, in `CachedAttr`'s order.
@@ -294,7 +299,7 @@ struct Tier<'a> {
     unheld: i64,
     stamp: i64,
     entries: HashMap<i64, Ent>,
-    victims: std::collections::BTreeMap<(Vec<i64>, u64), i64>,
+    victims: std::collections::BTreeMap<Place, i64>,
 }
 
 /// A counted resource of a timeline (contract 0.18): its capacity and the units held.
@@ -2656,7 +2661,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     } else if e.holds == 0 {
                         let order = t.order.unwrap_or(&[]);
                         if !order.is_empty() {
-                            let o = (self.order_of(order, e.attrs())?, e.stored as u64);
+                            let o = (self.order_of(order, e.attrs())?, e.stored as u64, e.pos, k);
                             t.victims.insert(o.clone(), k);
                             t.unheld += e.size;
                             e.ord = Some(o);
@@ -2684,7 +2689,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         e.holds = 1;
                         held.push(k);
                     } else if let Some(order) = t.order {
-                        let o = (self.order_of(order, e.attrs())?, e.stored as u64);
+                        let o = (self.order_of(order, e.attrs())?, e.stored as u64, e.pos, k);
                         t.victims.insert(o.clone(), k);
                         t.unheld += unit;
                         e.ord = Some(o);
@@ -2739,7 +2744,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     if e.holds == 0 {
                         if let Some(old) = e.ord.take() {
                             t.victims.remove(&old);
-                            let o = (self.order_of(t.order.expect("an entry in the victim order has an order"), e.attrs())?, e.stored as u64);
+                            let o = (self.order_of(t.order.expect("an entry in the victim order has an order"), e.attrs())?, e.stored as u64, e.pos, k);
                             t.victims.insert(o.clone(), k);
                             e.ord = Some(o);
                         }
@@ -2793,7 +2798,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     }
                     let mut e = Ent { size: unit, stored: now, touched: now, freed: now, hits: 0, pos: pos as i64, holds: 0, ord: None };
                     if let Some(order) = t.order {
-                        let o = (self.order_of(order, e.attrs())?, e.stored as u64);
+                        let o = (self.order_of(order, e.attrs())?, e.stored as u64, e.pos, k);
                         t.victims.insert(o.clone(), k);
                         t.unheld += unit;
                         e.ord = Some(o);
@@ -2875,7 +2880,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                             if e.holds == 0 {
                                 e.freed = now;
                                 if let Some(order) = t.order {
-                                    let o = (self.order_of(order, e.attrs())?, e.stored as u64);
+                                    let o = (self.order_of(order, e.attrs())?, e.stored as u64, e.pos, k);
                                     t.victims.insert(o.clone(), k);
                                     t.unheld += e.size;
                                     e.ord = Some(o);
