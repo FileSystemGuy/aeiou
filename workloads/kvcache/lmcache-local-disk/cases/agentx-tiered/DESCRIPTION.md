@@ -6,7 +6,7 @@ mechanism's README) or what a storage system should do about it.
 
 ## In brief
 
-One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2 and G3 (LMCache's), G3 the directory under test. In the catalog it is `kvcache/lmcache-local-disk`: application `vllm-lmcache`, format `lmcache-chunks`, phase inference, domain ai. Not yet decided between the two; the case's README says why (`agentx-tiered`: agentic data, a llm model), its parameters holding at 1 GPU. Not traced yet. It writes the objects of `kv`, each 32 MiB. The one `gpu` actor: lanes planned together: 40 in parallel, each: compute for `arrive × 1000000`; for each `i` below `nm`: when `i ≥ 1`, nothing; for each `m_r` below `m_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `m_w` below `len(m_t3)`: on a worker lane, open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `m_api × 1000000`; `nb` in parallel, each: when `pos = i and bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_r` below `s_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s_w` below `len(s_t3)`: on a worker lane, open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; when `pos = i and not bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_r` below `s_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s_w` below `len(s_t3)`: on a worker lane, open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; compute for `m_idle × 1000000`. Measured by dry run at 1 GPU (1,208,100 ops: 201,350 close, 201,350 fstat, 201,350 ioctl, 201,350 lseek, 201,350 open, 115,491 read, 85,859 write; 3.5 TiB read, 2.6 TiB written): read runs: large (32 MiB); write runs: large (32 MiB); read requests: large (32 MiB); write requests: large (32 MiB); share of bytes read: mixed (74.4%); metadata ops per data op: high (3); reads its own writes: yes; share of bytes read that are re-reads: repeated (88.4%); share of accessed bytes on the most accessed 1% of bytes: uniform (8.99%).
+One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2 and G3 (LMCache's), G3 the directory under test. In the catalog it is `kvcache/lmcache-local-disk`: application `vllm-lmcache`, format `lmcache-chunks`, phase inference, domain ai. Not yet decided between the two; the case's README says why (`agentx-tiered`: agentic data, a llm model), its parameters holding at 1 GPU. Not traced yet. It writes the objects of `kv`, each 32 MiB. The one `gpu` actor: lanes planned together: 40 in parallel, each: compute for `arrive × 1000000`; for each `i` below `nm`: when `i ≥ 1`, nothing; for each `m_r` below `m_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `m_w` below `len(m_t3)`: on a worker lane, open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `m_api × 1000000`; `nb` in parallel, each: when `pos = i and bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_r` below `s_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s_w` below `len(s_t3)`: on a worker lane, open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; when `pos = i and not bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_r` below `s_hit`: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s_w` below `len(s_t3)`: on a worker lane, open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; compute for `m_idle × 1000000`. Measured by dry run at 1 GPU (1,644,030 ops: 274,005 close, 274,005 fstat, 274,005 ioctl, 274,005 lseek, 274,005 open, 186,137 read, 87,868 write; 5.7 TiB read, 2.7 TiB written): read runs: large (32 MiB); write runs: large (32 MiB); read requests: large (32 MiB); write requests: large (32 MiB); share of bytes read: mixed (74.1%); metadata ops per data op: high (3); reads its own writes: yes; share of bytes read that are re-reads: repeated (87.7%); share of accessed bytes on the most accessed 1% of bytes: uniform (9.28%).
 
 ## The account
 
@@ -67,7 +67,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
 
 ### The `gpu` actor (1 instances)
 
-- A timeline `tl`: its lanes, this one and every parallel sub-actor in it, planned together and taken in planned order. Its cache `lm`: tier `g2`, evicting, every 1 s of planned time, when `tier.used × 10 ≥ (g2_bytes div chunk_bytes) × 8`, `max(1, tier.entries × 2 div 10)` entries least by (cached.touched, −cached.pos), holding at most 15,680 entries; a store past it is dropped; tier `g3`, evicting, every 1 s of planned time, when `tier.used × 10 ≥ (g3_bytes div chunk_bytes) × 8`, `max(1, tier.entries × 2 div 10)` entries least by (cached.touched, −cached.pos), holding at most 228,881 entries; a store past it is dropped. Its cache `gpu`: tier `g1`, evicting past 21,125 entries the entry least by (cached.freed, −cached.pos); a lookup that finds no room waits for a release. Its resource `slots` of 16 (`slots`) units. Its workers `store`: 4 (`store_lanes`) worker lanes, staging 490 GiB (`g2_bytes`).
+- A timeline `tl`: its lanes, this one and every parallel sub-actor in it, planned together and taken in planned order. Its cache `lm`: tier `g2`, evicting, every 1 s of planned time, when `tier.used × 10 ≥ (g2_bytes div chunk_bytes) × 8`, `max(1, tier.entries × 2 div 10)` entries least by (cached.touched, −cached.pos), holding at most 15,680 entries; a store past it is dropped; tier `g3`, evicting, every 1 s of planned time, when `tier.used × 10 ≥ (g3_bytes div chunk_bytes) × 8`, `max(1, tier.entries × 2 div 10)` entries least by (cached.touched, −cached.pos), holding at most 228,881 entries; a store past it is dropped. Its cache `gpu`: tier `g1`, evicting past 21,125 entries the entry least by (cached.freed, −cached.pos); a store that finds no room waits for a release. Its resource `slots` of 16 (`slots`) units. Its workers `store`: 4 (`store_lanes`) worker lanes, staging 490 GiB (`g2_bytes`).
   - Each victim of tier `g3`, on 4 (`evict_lanes`) eviction lanes at its eviction's planned time:
     - `unlink` the object of `kv` named by key = `victim`.
   - 40 (`sessions`) in parallel, `sess` = 0 onward, joined at the end:
@@ -240,10 +240,11 @@ The API the traced application used: `posix` sync (none declared); a run under a
       - `q33` = `tab[377 + q33_s] + ((tab[377 + q33_s + 1] − tab[377 + q33_s]) × q33_f div 65536)`.
       - `m_idle` = `(if m_lg then q32 else q33) div 1000`.
       - Takes 1 units of `slots` as `slot`, waiting in planned time while they are not free, first come first.
-      - Looks up `cat(m_seq, fresh(⌈m_out / 64⌉))` in tier `g1` of cache `gpu`, by chunks of 1 blocks: `m_gh` is the leading chunks held; those held are then touched, the others stored. The lane holds them under `kv` until it releases it, so none is evicted meanwhile.
+      - `m_gs` = `cat(m_seq, fresh(⌈m_out / 64⌉))`.
+      - Stores, of the `seq_len(m_gs) div 1` keys `chunk_key(m_gs, j, 1)`, `j` from `0`, in tier `g1` of cache `gpu`, those it lacks, those held touched first, as one event; `m_gh` is the leading ones held before it. The lane holds them under `kv` until it releases it, so none is evicted meanwhile.
       - `m_nch` = `seq_len(m_seq) div per`.
-      - Probes `m_seq` from chunk `0` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks: `m_h2` is the leading chunks held, nothing changed.
-      - Probes `m_seq` from chunk `m_h2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks: `m_h3` is the leading chunks held, nothing changed.
+      - Probes the `seq_len(m_seq) div per` keys `chunk_key(m_seq, j, per)`, `j` from `0`, in tier `g2` of cache `lm`: `m_h2` is the leading ones held, nothing changed.
+      - Probes the `max(0, (seq_len(m_seq) div per) − min(m_h2, seq_len(m_seq) div per))` keys `chunk_key(m_seq, j, per)`, `j` from `min(m_h2, seq_len(m_seq) div per)`, in tier `g3` of cache `lm`: `m_h3` is the leading ones held, nothing changed.
       - `m_hit` = `m_h2 + m_h3`.
       - `m_first` = `max(m_h2, min(m_gh × 64, seq_len(m_seq) × 64 − 1) div (64 × per))`.
       - Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:
@@ -261,12 +262,12 @@ The API the traced application used: `posix` sync (none declared); a run under a
             - `fstat` `m_rf`.
             - `read` `m_rf`: 32 MiB (`chunk_bytes`) at the file position.
             - `close` `m_rf`.
-      - Touches `m_seq`'s chunks `m_first` to `m_first` + `max(0, m_hit − m_first)` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
-      - Stores `m_seq`'s chunks `m_hit` to `m_hit` + `m_nch − m_hit` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it lacks, as one event; `m_t2` is the indices of the chunks it stored.
-      - Stores `m_seq`'s chunks in `m_t2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks, those it lacks and those held stored again, as one event; `m_t3` is the indices of the chunks it stored.
+      - Touches those of the `max(0, min(m_hit − m_first, (seq_len(m_seq) div per) − min(m_first, seq_len(m_seq) div per)))` keys `chunk_key(m_seq, j, per)`, `j` from `min(m_first, seq_len(m_seq) div per)`, that are held in tier `g3` of cache `lm`, as one event.
+      - Stores, of the `max(0, min(m_nch − m_hit, (seq_len(m_seq) div per) − min(m_hit, seq_len(m_seq) div per)))` keys `chunk_key(m_seq, j, per)`, `j` from `min(m_hit, seq_len(m_seq) div per)`, in tier `g2` of cache `lm`, those it lacks, as one event; `m_t2` is the indices it stored.
+      - Stores, of the `len(m_t2)` keys `chunk_key(m_seq, m_t2[j], per)`, `j` from `0`, in tier `g3` of cache `lm`, those it lacks and those held stored again, as one event; `m_t3` is the indices it stored.
       - For `m_w` from 0 while below `len(m_t3)`:
         - On a worker lane of `store`, at this lane's planned time:
-          - `m_wf` is the object of `kv` named by key = `chunk_key(m_seq, m_t3[m_w], per)`.
+          - `m_wf` is the object of `kv` named by key = `chunk_key(m_seq, m_t2[m_t3[m_w]], per)`.
           - If `direct = false` (true here):
             - `open` `m_wf` (WRONLY|CREAT|TRUNC|CLOEXEC).
             - `fstat` `m_wf`.
@@ -279,7 +280,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
             - `write` `m_wf`: 32 MiB (`chunk_bytes`) at the file position.
             - `close` `m_wf`.
       - Computes for `m_api × 1000000`, no I/O.
-      - Touches `m_seq`'s chunks `0` to `0` + `seq_len(m_seq) div per` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
+      - Touches those of the `seq_len(m_seq) div per` keys `chunk_key(m_seq, j, per)`, `j` from `0`, that are held in tier `g2` of cache `lm`, as one event.
       - Releases `kv`.
       - Releases `slot`.
       - `nb` in parallel, `b` = 0 onward, joined at the end:
@@ -444,10 +445,11 @@ The API the traced application used: `posix` sync (none declared); a run under a
               - `q54` = `tab[464 + q54_s] + ((tab[464 + q54_s + 1] − tab[464 + q54_s]) × q54_f div 65536)`.
               - `s_idle` = `(if s_lg then q53 else q54) div 1000`.
               - Takes 1 units of `slots` as `slot`, waiting in planned time while they are not free, first come first.
-              - Looks up `cat(s_seq, fresh(⌈s_out / 64⌉))` in tier `g1` of cache `gpu`, by chunks of 1 blocks: `s_gh` is the leading chunks held; those held are then touched, the others stored. The lane holds them under `kv` until it releases it, so none is evicted meanwhile.
+              - `s_gs` = `cat(s_seq, fresh(⌈s_out / 64⌉))`.
+              - Stores, of the `seq_len(s_gs) div 1` keys `chunk_key(s_gs, j, 1)`, `j` from `0`, in tier `g1` of cache `gpu`, those it lacks, those held touched first, as one event; `s_gh` is the leading ones held before it. The lane holds them under `kv` until it releases it, so none is evicted meanwhile.
               - `s_nch` = `seq_len(s_seq) div per`.
-              - Probes `s_seq` from chunk `0` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks: `s_h2` is the leading chunks held, nothing changed.
-              - Probes `s_seq` from chunk `s_h2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks: `s_h3` is the leading chunks held, nothing changed.
+              - Probes the `seq_len(s_seq) div per` keys `chunk_key(s_seq, j, per)`, `j` from `0`, in tier `g2` of cache `lm`: `s_h2` is the leading ones held, nothing changed.
+              - Probes the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, in tier `g3` of cache `lm`: `s_h3` is the leading ones held, nothing changed.
               - `s_hit` = `s_h2 + s_h3`.
               - `s_first` = `max(s_h2, min(s_gh × 64, seq_len(s_seq) × 64 − 1) div (64 × per))`.
               - Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:
@@ -465,12 +467,12 @@ The API the traced application used: `posix` sync (none declared); a run under a
                     - `fstat` `s_rf`.
                     - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
                     - `close` `s_rf`.
-              - Touches `s_seq`'s chunks `s_first` to `s_first` + `max(0, s_hit − s_first)` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
-              - Stores `s_seq`'s chunks `s_hit` to `s_hit` + `s_nch − s_hit` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it lacks, as one event; `s_t2` is the indices of the chunks it stored.
-              - Stores `s_seq`'s chunks in `s_t2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks, those it lacks and those held stored again, as one event; `s_t3` is the indices of the chunks it stored.
+              - Touches those of the `max(0, min(s_hit − s_first, (seq_len(s_seq) div per) − min(s_first, seq_len(s_seq) div per)))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_first, seq_len(s_seq) div per)`, that are held in tier `g3` of cache `lm`, as one event.
+              - Stores, of the `max(0, min(s_nch − s_hit, (seq_len(s_seq) div per) − min(s_hit, seq_len(s_seq) div per)))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_hit, seq_len(s_seq) div per)`, in tier `g2` of cache `lm`, those it lacks, as one event; `s_t2` is the indices it stored.
+              - Stores, of the `len(s_t2)` keys `chunk_key(s_seq, s_t2[j], per)`, `j` from `0`, in tier `g3` of cache `lm`, those it lacks and those held stored again, as one event; `s_t3` is the indices it stored.
               - For `s_w` from 0 while below `len(s_t3)`:
                 - On a worker lane of `store`, at this lane's planned time:
-                  - `s_wf` is the object of `kv` named by key = `chunk_key(s_seq, s_t3[s_w], per)`.
+                  - `s_wf` is the object of `kv` named by key = `chunk_key(s_seq, s_t2[s_t3[s_w]], per)`.
                   - If `direct = false` (true here):
                     - `open` `s_wf` (WRONLY|CREAT|TRUNC|CLOEXEC).
                     - `fstat` `s_wf`.
@@ -483,7 +485,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
                     - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
                     - `close` `s_wf`.
               - Computes for `s_api × 1000000`, no I/O.
-              - Touches `s_seq`'s chunks `0` to `0` + `seq_len(s_seq) div per` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
+              - Touches those of the `seq_len(s_seq) div per` keys `chunk_key(s_seq, j, per)`, `j` from `0`, that are held in tier `g2` of cache `lm`, as one event.
               - Releases `kv`.
               - Releases `slot`.
               - Computes for `s_idle × 1000000`, no I/O.
@@ -647,10 +649,11 @@ The API the traced application used: `posix` sync (none declared); a run under a
               - `q75` = `tab[464 + q75_s] + ((tab[464 + q75_s + 1] − tab[464 + q75_s]) × q75_f div 65536)`.
               - `s_idle` = `(if s_lg then q74 else q75) div 1000`.
               - Takes 1 units of `slots` as `slot`, waiting in planned time while they are not free, first come first.
-              - Looks up `cat(s_seq, fresh(⌈s_out / 64⌉))` in tier `g1` of cache `gpu`, by chunks of 1 blocks: `s_gh` is the leading chunks held; those held are then touched, the others stored. The lane holds them under `kv` until it releases it, so none is evicted meanwhile.
+              - `s_gs` = `cat(s_seq, fresh(⌈s_out / 64⌉))`.
+              - Stores, of the `seq_len(s_gs) div 1` keys `chunk_key(s_gs, j, 1)`, `j` from `0`, in tier `g1` of cache `gpu`, those it lacks, those held touched first, as one event; `s_gh` is the leading ones held before it. The lane holds them under `kv` until it releases it, so none is evicted meanwhile.
               - `s_nch` = `seq_len(s_seq) div per`.
-              - Probes `s_seq` from chunk `0` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks: `s_h2` is the leading chunks held, nothing changed.
-              - Probes `s_seq` from chunk `s_h2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks: `s_h3` is the leading chunks held, nothing changed.
+              - Probes the `seq_len(s_seq) div per` keys `chunk_key(s_seq, j, per)`, `j` from `0`, in tier `g2` of cache `lm`: `s_h2` is the leading ones held, nothing changed.
+              - Probes the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, in tier `g3` of cache `lm`: `s_h3` is the leading ones held, nothing changed.
               - `s_hit` = `s_h2 + s_h3`.
               - `s_first` = `max(s_h2, min(s_gh × 64, seq_len(s_seq) × 64 − 1) div (64 × per))`.
               - Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:
@@ -668,12 +671,12 @@ The API the traced application used: `posix` sync (none declared); a run under a
                     - `fstat` `s_rf`.
                     - `read` `s_rf`: 32 MiB (`chunk_bytes`) at the file position.
                     - `close` `s_rf`.
-              - Touches `s_seq`'s chunks `s_first` to `s_first` + `max(0, s_hit − s_first)` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
-              - Stores `s_seq`'s chunks `s_hit` to `s_hit` + `s_nch − s_hit` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it lacks, as one event; `s_t2` is the indices of the chunks it stored.
-              - Stores `s_seq`'s chunks in `s_t2` in tier `g3` of cache `lm`, by chunks of 4 (`per`) blocks, those it lacks and those held stored again, as one event; `s_t3` is the indices of the chunks it stored.
+              - Touches those of the `max(0, min(s_hit − s_first, (seq_len(s_seq) div per) − min(s_first, seq_len(s_seq) div per)))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_first, seq_len(s_seq) div per)`, that are held in tier `g3` of cache `lm`, as one event.
+              - Stores, of the `max(0, min(s_nch − s_hit, (seq_len(s_seq) div per) − min(s_hit, seq_len(s_seq) div per)))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_hit, seq_len(s_seq) div per)`, in tier `g2` of cache `lm`, those it lacks, as one event; `s_t2` is the indices it stored.
+              - Stores, of the `len(s_t2)` keys `chunk_key(s_seq, s_t2[j], per)`, `j` from `0`, in tier `g3` of cache `lm`, those it lacks and those held stored again, as one event; `s_t3` is the indices it stored.
               - For `s_w` from 0 while below `len(s_t3)`:
                 - On a worker lane of `store`, at this lane's planned time:
-                  - `s_wf` is the object of `kv` named by key = `chunk_key(s_seq, s_t3[s_w], per)`.
+                  - `s_wf` is the object of `kv` named by key = `chunk_key(s_seq, s_t2[s_t3[s_w]], per)`.
                   - If `direct = false` (true here):
                     - `open` `s_wf` (WRONLY|CREAT|TRUNC|CLOEXEC).
                     - `fstat` `s_wf`.
@@ -686,7 +689,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
                     - `write` `s_wf`: 32 MiB (`chunk_bytes`) at the file position.
                     - `close` `s_wf`.
               - Computes for `s_api × 1000000`, no I/O.
-              - Touches `s_seq`'s chunks `0` to `0` + `seq_len(s_seq) div per` in tier `g2` of cache `lm`, by chunks of 4 (`per`) blocks that it holds, as one event.
+              - Touches those of the `seq_len(s_seq) div per` keys `chunk_key(s_seq, j, per)`, `j` from `0`, that are held in tier `g2` of cache `lm`, as one event.
               - Releases `kv`.
               - Releases `slot`.
               - Computes for `s_idle × 1000000`, no I/O.
@@ -696,7 +699,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
 
 From `aeiou dry-run --metrics-json` at 1 GPU, the median of seeds 1, 2, 3; the seeds differ on read_share, reread, skew.
 
-Ops in all (seed 1): 1,208,100: 201,350 `close`, 201,350 `fstat`, 201,350 `ioctl`, 201,350 `lseek`, 201,350 `open`, 115,491 `read`, 85,859 `write`; 3.5 TiB read, 2.6 TiB written.
+Ops in all (seed 1): 1,644,030: 274,005 `close`, 274,005 `fstat`, 274,005 `ioctl`, 274,005 `lseek`, 274,005 `open`, 186,137 `read`, 87,868 `write`; 5.7 TiB read, 2.7 TiB written.
 
 | Attribute | Class | Value |
 |---|---|---|
@@ -704,8 +707,8 @@ Ops in all (seed 1): 1,208,100: 201,350 `close`, 201,350 `fstat`, 201,350 `ioctl
 | `run_length_write` (write runs) | large | 32 MiB |
 | `request_size_read` (read requests) | large | 32 MiB |
 | `request_size_write` (write requests) | large | 32 MiB |
-| `read_share` (share of bytes read) | mixed | 74.4% |
+| `read_share` (share of bytes read) | mixed | 74.1% |
 | `metadata` (metadata ops per data op) | high | 3 |
 | `reads_own_writes` (reads its own writes) | yes | yes |
-| `reread` (share of bytes read that are re-reads) | repeated | 88.4% |
-| `skew` (share of accessed bytes on the most accessed 1% of bytes) | uniform | 8.99% |
+| `reread` (share of bytes read that are re-reads) | repeated | 87.7% |
+| `skew` (share of accessed bytes on the most accessed 1% of bytes) | uniform | 9.28% |

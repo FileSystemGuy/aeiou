@@ -87,17 +87,15 @@ A body is an array of statements: sixteen control forms and eighteen operations.
 | `barrier {scope}` | `global`, `host`, or a named group. |
 | `compute {ns}` | Emulated compute, scaled by the runner's `--time-scale`. |
 | `cond {if, then, else}` | A conditional over indices, parameters, bindings, and the actor id. |
-| `choose {arms: [{weight, body}]}` | Run one arm, chosen positionally by weight. |
 | `phase {name, body}` | A statistics label; no effect on execution or the fingerprint. |
 | `trace {file, sha256}` | A captured trace of a real application, executed literally, one lane per traced task; for calibration, never comparable across systems as a scored workload. The file is **aeiou-trace**(1) `export`'s. |
 | `timeline {name, caches, resources, workers, body}` | Lanes planned together (contract 0.15): the body's main line and every sub-actor of a `parallel` in it, each with a planned clock that `compute` moves. The lane planned soonest takes the next step, a tie going to the smaller lane key; a lane runs until its next `compute`. **aeiou check** and **aeiou dry-run** walk it; **aeiou run** issues its lanes' ops at their planned times plus each lane's lag (since 2026-11-13). Its `caches` (contract 0.16), each `{name, tiers}`, a tier `{name, order, capacity, unit: entries|bytes, full: skip|wait|fail, evict, on_evict}` (contract 0.18: the entry no lane holds whose `order` values, over `cached`, are least evicted first; contract 0.19: `evict {every, when, count}` evicts at planned ticks instead of at store, `when` and `count` over `tier`, and `on_evict {lanes, body}` runs `body` for each victim, `victim` its key, on eviction lanes, V35), and its `resources` (contract 0.18), each `{name, capacity}`, are walked with its lanes in planned order; a lane that waits resumes at the planned time of the release that lets it on (V33, V34). Its `workers` (contract 0.20), each `{name, lanes, staging}`, take the bodies of its lanes' `submit`s (V36). |
 | `publish {timeline, group, values}` | An entry of the enclosing timeline: these values at this lane's planned time, in group `group` (contract 0.17; 0 when absent) (V30). |
-| `lookup {cache, tier, seq, per, bind, size, hold}` | The leading whole chunks of `per` blocks of `seq` held in a tier of a cache of the enclosing timeline, bound to `bind`; the chunks held then touched, the others stored (contract 0.16, V33); with `hold`, all of them this lane's until its `release` (contract 0.18, V34). |
 | `acquire {resource, n, hold}` | `n` units of a resource of the enclosing timeline, this lane's until its `release`; the lane waits while they are not free, first come first (contract 0.18, V34). |
 | `release {hold}` | What this lane holds under `hold`, given back (contract 0.18, V34). |
-| `probe {cache, tier, seq, per, from, bind}` | The leading whole chunks of `seq` from chunk `from` held in a tier, bound to `bind`; nothing changed (contract 0.19, V33). |
-| `touch {cache, tier, seq, per, from, count \| chunks}` | The chunks `from` to `from + count`, or those an array `chunks` holds, that a tier holds, touched as one event (contract 0.19, V33). |
-| `store {cache, tier, seq, per, from, count \| chunks, size, present, bind, taken}` | The chunks `from` to `from + count`, or those an array `chunks` holds, that a tier lacks (with `present: renew`, all of them), stored as one event; with `bind`, the leading run held after it; with `taken`, an array of the indices it stored (contract 0.19, V33). |
+| `probe {cache, tier, keys, bind}` | The longest leading run of `keys` held in a tier, bound to `bind`; nothing changed (contract 0.19, V33). `keys {index, from, count, key}` (contract 0.23) is a key range: `key`, an integer, computed with `index` at `from` (0 when absent), `from + 1`, and so on, `count` of them; `chunk_key` gives the key of a sequence's chunk. |
+| `touch {cache, tier, keys}` | Those of `keys` a tier holds, touched as one event (contract 0.19, V33; a key range since contract 0.23). |
+| `store {cache, tier, keys, size, present, hold, found, bind, taken}` | Those of `keys` a tier lacks, stored as one event; those it holds left (`present: keep`), stored again (`renew`), or touched first (`touch`, contract 0.23, a lookup that stores what it missed, which on a tier that waits when full waits before it changes anything). With `hold` (only with `present: touch`, V34), what it touched and stored is this lane's until its `release`. `found` binds the leading run held before it, `bind` the one after, `taken` an array of the indices stored (contract 0.19, V33; a key range since contract 0.23). |
 | `submit {workers, body}` | `body` run on a worker lane of the timeline's `workers` at this lane's planned time, worker lane (submission ordinal mod `lanes`); its ops those of the body written inline, so the fingerprint does not move (contract 0.20, V36). |
 | `span {name, staging, body}` | A measured part of a lane: a run reports its D, a request's own storage wait, by `name`; nothing in the plan (contract 0.20, V36). With `staging` (contract 0.21), the timeline's workers whose staging its reads draw on while in flight. |
 | `array {name, count, index, value}` | `count` values computed once, each with `index` bound as a loop index, read with `elem` and `len` (V32). |
@@ -249,8 +247,8 @@ these, and the builder enforces most of them at construction:
   whose definition reads `prev`.
 - **V32** An `array` is never inside a loop and never named as a parameter.
 - **V33** A cache is declared once in its timeline, with tiers named once each, an `lru` tier
-  with a `capacity` and a `none` tier without; a `lookup` names a cache of its timeline and a
-  tier of it, gives `size` exactly when the tier counts bytes, and its binding is named by no
+  with a `capacity` and a `none` tier without; a `probe`, `touch`, or `store` names a cache of its timeline and a
+  tier of it and acts on a key range (contract 0.23), a `store` gives `size` exactly when the tier counts bytes, and the binding of a `probe` or a `store` is named by no
   `@` and no `prev`; a `seq` is read where a sequence is, never as a number.
 
 ## PARAMETER FILES

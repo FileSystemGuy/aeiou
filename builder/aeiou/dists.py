@@ -168,7 +168,7 @@ CACHED = ("stored", "touched", "freed", "hits", "pos", "size")
 def cached(attr: str) -> Expr:
     """An attribute of the entry a tier's `order` is computed for (contract 0.18, rule V33):
     `stored`, `touched`, `freed` (the tier's event counts when it was stored, last looked up,
-    and last released), `hits`, `pos` (its index in the sequence of the lookup that last found
+    and last released), `hits`, `pos` (its index in the key range of the statement that last touched
     or stored it), or `size`."""
     from .nodes import Plain
     if attr not in CACHED:
@@ -212,8 +212,11 @@ def timed(every, when, count) -> dict:
 
 
 def lru() -> list:
-    """The order that evicts the entry looked up longest ago first: `[cached("touched")]`."""
-    return [cached("touched")]
+    """The order that evicts the entry looked up longest ago first, and of the entries one
+    statement touched or stored, which share its event, the one of the least index first:
+    `[cached("touched"), cached("pos")]` (`pos` since contract 0.23, when a lookup became one
+    event; before, it counted an event a key, in index order)."""
+    return [cached("touched"), cached("pos")]
 
 
 def quantile_at(seg, point, table, at=0, points: int = 1 << 16):

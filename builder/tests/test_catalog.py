@@ -360,7 +360,6 @@ def every_kind() -> dict:
             {"loop": {"index": "j", "from": 1, "to": p("n"), "step": 2, "body": [{"compute": {"ns": 5000}}]}}]}},
         {"take": {"channel": "ld"}},
         {"barrier": {"scope": "global"}}, {"barrier": {"scope": "host"}}, {"barrier": {"scope": "pair"}},
-        {"choose": {"arms": [{"weight": 3, "body": [{"stat": {"file": r("f")}}]}, {"weight": 1, "body": []}]}},
         {"cond": {"if": p("on"), "then": [{"fsync": {"file": r("f")}}], "else": [{"fdatasync": {"file": r("f")}}]}},
         {"phase": {"name": "p1", "body": [{"trace": {"file": "app.trace", "sha256": "ab" * 32}}]}},
         {"loop": {"index": "i", "to": {"dirs": "ds"}, "body": [
@@ -376,7 +375,7 @@ def every_kind() -> dict:
             {"mkdir": {"dir": r("h")}}, {"readdir": {"dir": r("h"), "repeat": "until_end"}}, {"rmdir": {"dir": r("h")}},
             {"rename": {"from": r("o"), "to": r("o")}}]}},
     ]
-    return {"ast": "0.22", "name": "every_kind", "doc": "Every kind.",
+    return {"ast": "0.23", "name": "every_kind", "doc": "Every kind.",
             "params": {"n": {"default": 8, "unit": "bytes"}, "on": {"default": False}, "arr": {"default": [1, 2, 3]}},
             "datasets": {"ds": {"pattern": "d/{id div 4}/f{id}", "layout": "compound", "access": "map", "count": 100,
                                 "samples_per_file": 5, "size": {"const": 4096}, "seed": 1,
@@ -391,7 +390,7 @@ def test_every_kind_is_put_in_words():
     text = d.paragraph([]) + "\n" + "\n".join(describe.Describer(every_kind(), {}, 2).account())
     assert "{'" not in text and "None" not in text, text
     for words in ("the next sample of `ds` from the shuffle", "Zipf over the ids of `ds`", "90% of draws over the hottest 10%",
-                  "a mixture: 25% none; 75% always 1", "One of these, chosen by a positional draw", "Replays the captured trace",
+                  "a mixture: 25% none; 75% always 1", "Replays the captured trace",
                   "`rename` `o` to `o`", "For each of the 5 directories `i` of `ds`", "`fallocate`", "If `on` (false here: skipped)",
                   "Otherwise (taken here)", "Waits at the barrier `pair`", "2 requests of 8 bytes (`n`) at offset 0"):
         assert words in text, words

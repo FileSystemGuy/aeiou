@@ -262,11 +262,12 @@ def chain(c, tl, i, who, n, first, cls, extra):
 def admit(c, tag, sq, out):
     """A slot, then the prompt and its reply's blocks held in G1; the blocks G1 already held."""
     c.acquire("slots", 1, "slot")
-    return c.lookup("gpu", "g1", cat(sq, fresh(ceil_div(out, BL))), 1, tag + "gh", hold="kv")
+    gs = c.let(tag + "gs", cat(sq, fresh(ceil_div(out, BL))))
+    return c.lookup("gpu", "g1", chunk_keys(gs, 1), tag + "gh", hold="kv")
 
 
 def finish(c, sq):
-    c.touch("lm", "g2", sq, P.per, 0, seq_len(sq) // P.per)        # LMCache touches every chunk at a request's end
+    c.touch("lm", "g2", chunk_keys(sq, P.per))                      # LMCache touches every chunk at a request's end
     c.release("kv")
     c.release("slot")
 
@@ -276,8 +277,8 @@ def chunk_ops(c, tag, sq, gh):
     (loaded, and touched in G3) from the chunk holding the tokens the GPU held; the chunks past both hits
     stored in G2, and those G2 newly took stored in G3, each file G3 took written."""
     n = c.let(tag + "nch", seq_len(sq) // P.per)
-    h2 = c.probe("lm", "g2", sq, P.per, 0, tag + "h2")
-    h3 = c.probe("lm", "g3", sq, P.per, h2, tag + "h3")
+    h2 = c.probe("lm", "g2", chunk_keys(sq, P.per), tag + "h2")
+    h3 = c.probe("lm", "g3", chunk_keys(sq, P.per, h2), tag + "h3")
     hit = c.let(tag + "hit", h2 + h3)
     first = c.let(tag + "first", max_(h2, min_(gh * BL, seq_len(sq) * BL - 1) // (BL * P.per)))
     # D: the request's own storage wait; its reads load into G2, the pool the pending stores
@@ -285,12 +286,12 @@ def chunk_ops(c, tag, sq, gh):
     with c.span("load", staging="store"):
         with c.loop(tag + "r", hit, start=first) as j:
             chunk_read(c, c.let(tag + "rf", kv.object(key=chunk_key(sq, j, P.per))))
-    c.touch("lm", "g3", sq, P.per, first, max_(0, hit - first))
-    t2 = c.store("lm", "g2", sq, P.per, hit, n - hit, taken=tag + "t2")        # what G2 newly took
-    t3 = c.store("lm", "g3", sq, P.per, chunks=t2, present="renew", taken=tag + "t3")
+    c.touch("lm", "g3", chunk_keys(sq, P.per, first, hit - first))
+    t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")   # what G2 newly took: chunk indices
+    t3 = c.store("lm", "g3", chunk_keys(sq, P.per, chunks=t2), present="renew", taken=tag + "t3")   # indices into t2
     with c.loop(tag + "w", t3.len) as j:
         with c.submit("store"):                                     # on a store worker, never the request's lane
-            chunk_write(c, c.let(tag + "wf", kv.object(key=chunk_key(sq, t3[j], P.per))))
+            chunk_write(c, c.let(tag + "wf", kv.object(key=chunk_key(sq, t2[t3[j]], P.per))))
 
 
 def sub_agents(bt, tl, s, cls, spl, psub, join):

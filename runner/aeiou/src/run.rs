@@ -3016,11 +3016,6 @@ fn barrier_scopes(ast: &Ast) -> Result<HashMap<String, Vec<String>>> {
                         walk(b, nested, out)?;
                     }
                 }
-                Node::Choose { arms, .. } => {
-                    for a in arms {
-                        walk(&a.body, nested, out)?;
-                    }
-                }
                 _ => {}
             }
         }

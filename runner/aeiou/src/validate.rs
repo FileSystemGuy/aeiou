@@ -233,7 +233,7 @@ struct ActorState<'a> {
     /// V35, V36 (contract 0.22): checking a body that only issues ops, an `on_evict`'s or a
     /// `submit`'s, with its rule: it reads no state of its timeline (`published`, `entry`).
     op_body: Option<(&'static str, &'static str)>,
-    /// V34: the enclosing timeline's resources, and the holds its `acquire`s and `lookup`s name.
+    /// V34: the enclosing timeline's resources, and the holds its `acquire`s and `store`s name.
     resources: HashSet<&'a str>,
     holds: BTreeSet<&'a str>,
     /// V36: the enclosing timeline's workers, and the span being checked.
@@ -450,7 +450,7 @@ fn evict_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
     for (i, n) in nodes.iter().enumerate() {
         let np = p(pp, &[&i.to_string()]);
         match n {
-            Node::Compute { .. } | Node::Lookup { .. } | Node::Probe { .. } | Node::Touch { .. } | Node::Store { .. } | Node::Acquire { .. }
+            Node::Compute { .. } | Node::Probe { .. } | Node::Touch { .. } | Node::Store { .. } | Node::Acquire { .. }
             | Node::Release { .. } | Node::Publish { .. } | Node::Parallel { .. } | Node::Loader { .. } | Node::Channel { .. } | Node::Put { .. }
             | Node::Take { .. } | Node::Barrier { .. } | Node::Timeline { .. } | Node::Trace { .. } | Node::Submit { .. } | Node::Span { .. } => out.push((np, n.kind())),
             Node::Loop { body, .. } | Node::Phase { body, .. } => evict_bans(body, &p(&np, &[n.kind(), "body"]), out),
@@ -460,7 +460,6 @@ fn evict_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
                     evict_bans(b, &p(&np, &["cond", "else"]), out);
                 }
             }
-            Node::Choose { arms, .. } => arms.iter().enumerate().for_each(|(j, a)| evict_bans(&a.body, &p(&np, &["choose", "arms", &j.to_string(), "body"]), out)),
             _ => {}
         }
     }
@@ -473,7 +472,7 @@ fn span_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
     for (i, n) in nodes.iter().enumerate() {
         let np = p(pp, &[&i.to_string()]);
         match n {
-            Node::Compute { .. } | Node::Parallel { .. } | Node::Acquire { .. } | Node::Lookup { .. } => out.push((np, n.kind())),
+            Node::Compute { .. } | Node::Parallel { .. } | Node::Acquire { .. } | Node::Store { present: Present::Touch, .. } => out.push((np, n.kind())),
             Node::Loop { body, .. } | Node::Phase { body, .. } => span_bans(body, &p(&np, &[n.kind(), "body"]), out),
             Node::Cond { then, otherwise, .. } => {
                 span_bans(then, &p(&np, &["cond", "then"]), out);
@@ -481,17 +480,16 @@ fn span_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
                     span_bans(b, &p(&np, &["cond", "else"]), out);
                 }
             }
-            Node::Choose { arms, .. } => arms.iter().enumerate().for_each(|(j, a)| span_bans(&a.body, &p(&np, &["choose", "arms", &j.to_string(), "body"]), out)),
             _ => {}
         }
     }
 }
 
-/// V34: the holds the `acquire`s and `lookup`s of a timeline's body name, anywhere in it.
+/// V34: the holds the `acquire`s and `store`s of a timeline's body name, anywhere in it.
 fn holds<'a>(nodes: &'a [Node], out: &mut BTreeSet<&'a str>) {
     for n in nodes {
         match n {
-            Node::Acquire { hold, .. } | Node::Lookup { hold: Some(hold), .. } => {
+            Node::Acquire { hold, .. } | Node::Store { hold: Some(hold), .. } => {
                 out.insert(hold.as_str());
             }
             Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Span { body, .. } => holds(body, out),
@@ -501,7 +499,6 @@ fn holds<'a>(nodes: &'a [Node], out: &mut BTreeSet<&'a str>) {
                     holds(b, out);
                 }
             }
-            Node::Choose { arms, .. } => arms.iter().for_each(|a| holds(&a.body, out)),
             _ => {}
         }
     }
@@ -573,7 +570,6 @@ fn publishes<'a>(nodes: &'a [Node], name: &str, out: &mut BTreeSet<&'a str>) {
                     publishes(b, name, out);
                 }
             }
-            Node::Choose { arms, .. } => arms.iter().for_each(|a| publishes(&a.body, name, out)),
             _ => {}
         }
     }
@@ -656,11 +652,6 @@ fn channel_sites<'a>(nodes: &'a [Node], path: &P, in_loop: bool, out: &mut HashM
                 channel_sites(then, &p(&pp, &["then"]), in_loop, out);
                 if let Some(b) = otherwise {
                     channel_sites(b, &p(&pp, &["else"]), in_loop, out);
-                }
-            }
-            Node::Choose { arms, .. } => {
-                for (j, arm) in arms.iter().enumerate() {
-                    channel_sites(&arm.body, &p(&pp, &["arms", &j.to_string(), "body"]), in_loop, out);
                 }
             }
             _ => {}
@@ -1296,17 +1287,6 @@ impl<'a> Checker<'a> {
                     self.body(b, &p(pp, &["else"]), scope, st);
                 }
             }
-            Node::Choose { arms, .. } => {
-                if arms.is_empty() {
-                    self.err(&p(pp, &["arms"]), "at least one arm");
-                }
-                for (i, arm) in arms.iter().enumerate() {
-                    if !(arm.weight >= 0.0) {
-                        self.err(&p(pp, &["arms", &i.to_string(), "weight"]), "negative weight");
-                    }
-                    self.body(&arm.body, &p(pp, &["arms", &i.to_string(), "body"]), scope, st);
-                }
-            }
             Node::Phase { name, body } => {
                 self.expr(name, &p(pp, &["name"]), scope, st, None);
                 self.body(body, &p(pp, &["body"]), scope, st);
@@ -1520,56 +1500,18 @@ impl<'a> Checker<'a> {
                 st.holds.clear();
                 st.workers.clear();
             }
-            Node::Lookup { cache, tier, seq, per, bind, size, hold } => {
-                if !is_ident(bind) {
-                    self.err(&p(pp, &["bind"]), "not an identifier");
-                }
-                if hold.as_ref().is_some_and(|h| !is_ident(h)) {
-                    self.err(&p(pp, &["hold"]), "not an identifier");
-                }
-                let unit = match st.caches.get(cache.as_str()) {
-                    None => {
-                        self.err(pp, format!("lookup: no timeline declares cache `{cache}` around it (V33)"));
-                        None
-                    }
-                    Some(tiers) => match tiers.iter().find(|(n, _, _)| n == tier) {
-                        None => {
-                            self.err(pp, format!("lookup: cache `{cache}` has no tier `{tier}` (V33)"));
-                            None
-                        }
-                        Some((_, u, _)) => Some(*u),
-                    },
-                };
-                match (unit, size) {
-                    (Some(TierUnit::Bytes), None) => self.err(pp, format!("lookup: tier `{tier}` counts bytes, so the lookup needs a `size` (V33)")),
-                    (Some(TierUnit::Entries), Some(_)) => self.err(pp, format!("lookup: tier `{tier}` counts entries, so the lookup takes no `size` (V33)")),
-                    _ => {}
-                }
-                self.expr(seq, &p(pp, &["seq"]), scope, st, None);
-                self.seq_arg(seq, "lookup", &p(pp, &["seq"]), scope);
-                for (k, e) in [("per", Some(per)), ("size", size.as_ref())] {
-                    if let Some(e) = e {
-                        self.expr(e, &p(pp, &[k]), scope, st, None);
-                        self.int(e, &p(pp, &[k]), scope);
-                    }
-                }
-                scope.bind(bind, &LOOKUP_DEF, true, Some("int"), (None, None));
-                scope.unpositional.insert(bind.as_str(), "V33");
-            }
-            Node::Probe { cache, tier, seq, per, from, bind } => {
-                self.range_stmt("probe", cache, tier, seq, per, &[("from", from)], pp, scope, st);
+            Node::Probe { cache, tier, keys, bind } => {
+                self.keys_stmt("probe", cache, tier, keys, pp, scope, st);
                 if !is_ident(bind) {
                     self.err(&p(pp, &["bind"]), "not an identifier");
                 }
                 scope.bind(bind, &LOOKUP_DEF, true, Some("int"), (None, None));
                 scope.unpositional.insert(bind.as_str(), "V33");
             }
-            Node::Touch { cache, tier, seq, per, from, count, chunks } => {
-                let ints = self.chosen("touch", from, count, chunks, pp, scope);
-                self.range_stmt("touch", cache, tier, seq, per, &ints, pp, scope, st);
+            Node::Touch { cache, tier, keys } => {
+                self.keys_stmt("touch", cache, tier, keys, pp, scope, st);
             }
-            Node::Store { cache, tier, seq, per, from, count, chunks, size, bind, present: _, taken } => {
-                let ints = self.chosen("store", from, count, chunks, pp, scope);
+            Node::Store { cache, tier, keys, size, present, hold, found, bind, taken } => {
                 if let Some(a) = taken {
                     if !is_ident(a) {
                         self.err(&p(pp, &["taken"]), "not an identifier");
@@ -1578,26 +1520,36 @@ impl<'a> Checker<'a> {
                         self.err(&p(pp, &["taken"]), format!("store: `taken` `{a}` has the name of a parameter, which `elem` and `len` also read (V32)"));
                     }
                 }
-                if let Some((unit, full)) = self.range_stmt("store", cache, tier, seq, per, &ints, pp, scope, st) {
+                if let Some((unit, full)) = self.keys_stmt("store", cache, tier, keys, pp, scope, st) {
                     match (unit, size) {
                         (TierUnit::Bytes, None) => self.err(pp, format!("store: tier `{tier}` counts bytes, so the store needs a `size` (V33)")),
                         (TierUnit::Entries, Some(_)) => self.err(pp, format!("store: tier `{tier}` counts entries, so the store takes no `size` (V33)")),
                         _ => {}
                     }
-                    if full == Full::Wait {
-                        self.err(pp, format!("store: tier `{tier}` waits when full, which only a `lookup` decides before it changes anything (V33)"));
+                    if full == Full::Wait && *present != Present::Touch {
+                        self.err(pp, format!("store: tier `{tier}` waits when full, which only a store of `present: touch` decides before it changes anything (V33)"));
+                    }
+                }
+                if let Some(h) = hold {
+                    if !is_ident(h) {
+                        self.err(&p(pp, &["hold"]), "not an identifier");
+                    }
+                    if *present != Present::Touch {
+                        self.err(pp, format!("store: `hold` `{h}` holds what a store of `present: touch` touches and stores, and this one is not (V34)"));
                     }
                 }
                 if let Some(e) = size {
                     self.expr(e, &p(pp, &["size"]), scope, st, None);
                     self.int(e, &p(pp, &["size"]), scope);
                 }
-                if let Some(b) = bind {
-                    if !is_ident(b) {
-                        self.err(&p(pp, &["bind"]), "not an identifier");
+                for (k, b) in [("found", found), ("bind", bind)] {
+                    if let Some(b) = b {
+                        if !is_ident(b) {
+                            self.err(&p(pp, &[k]), "not an identifier");
+                        }
+                        scope.bind(b, &LOOKUP_DEF, true, Some("int"), (None, None));
+                        scope.unpositional.insert(b.as_str(), "V33");
                     }
-                    scope.bind(b, &LOOKUP_DEF, true, Some("int"), (None, None));
-                    scope.unpositional.insert(b.as_str(), "V33");
                 }
                 if let Some(a) = taken {
                     scope.arrays.insert(a.as_str());
@@ -1621,7 +1573,7 @@ impl<'a> Checker<'a> {
                 Some((t, _)) => {
                     if !st.holds.contains(hold.as_str()) {
                         let t = *t;
-                        self.err(pp, format!("release: no `acquire` or `lookup` of timeline `{t}` holds `{hold}` (V34)"));
+                        self.err(pp, format!("release: no `acquire` or `store` of timeline `{t}` holds `{hold}` (V34)"));
                     }
                 }
             },
@@ -2210,7 +2162,11 @@ impl<'a> Checker<'a> {
     /// enclosing timeline, its `seq` a sequence, its integers integers; the tier's unit and
     /// `full`, when it is declared.
     #[allow(clippy::too_many_arguments)]
-    fn range_stmt(&mut self, what: &str, cache: &str, tier: &str, seq: &'a Expr, per: &'a Expr, ints: &[(&str, &'a Expr)], pp: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) -> Option<(TierUnit, Full)> {
+    /// V33 (contract 0.23): a `probe`, `touch`, or `store` names a cache of its timeline and a
+    /// tier of it, and acts on a key range: `from` and `count` integers, `key` an integer
+    /// read with the range's `index` in scope, as an `array`'s value is. The tier's unit and
+    /// what it does when full, when the names are found.
+    fn keys_stmt(&mut self, what: &str, cache: &str, tier: &str, keys: &'a Keys, pp: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) -> Option<(TierUnit, Full)> {
         let found = match st.caches.get(cache) {
             None => {
                 self.err(pp, format!("{what}: no timeline declares cache `{cache}` around it (V33)"));
@@ -2224,32 +2180,20 @@ impl<'a> Checker<'a> {
                 Some((_, u, f)) => Some((*u, *f)),
             },
         };
-        self.expr(seq, &p(pp, &["seq"]), scope, st, None);
-        self.seq_arg(seq, what, &p(pp, &["seq"]), scope);
-        self.expr(per, &p(pp, &["per"]), scope, st, None);
-        self.int(per, &p(pp, &["per"]), scope);
-        for (k, e) in ints {
-            self.expr(e, &p(pp, &[k]), scope, st, None);
-            self.int(e, &p(pp, &[k]), scope);
+        let kp = p(pp, &["keys"]);
+        if !is_ident(&keys.index) {
+            self.err(&p(&kp, &["index"]), "not an identifier");
         }
-        found
-    }
-
-    /// V33 (contract 0.19): a `touch` or `store` acts on `from` and `count`, or on the chunks
-    /// an array `chunks` names, one of an `array`, a `store`'s `taken`, or a parameter array of
-    /// integers; the integers it reads, for `range_stmt`.
-    fn chosen(&mut self, what: &str, from: &'a Option<Expr>, count: &'a Option<Expr>, chunks: &'a Option<String>, pp: &P, scope: &Scope<'a>) -> Vec<(&'static str, &'a Expr)> {
-        match (from, count, chunks) {
-            (Some(f), Some(c), None) => return vec![("from", f), ("count", c)],
-            (None, None, Some(a)) => {
-                if !scope.arrays.contains(a.as_str()) {
-                    self.array(a, what, &p(pp, &["chunks"]), true);
-                }
+        for (k, e) in [("from", keys.from.as_ref()), ("count", Some(&keys.count))] {
+            if let Some(e) = e {
+                self.expr(e, &p(&kp, &[k]), scope, st, None);
+                self.int(e, &p(&kp, &[k]), scope);
             }
-            (_, _, Some(_)) => self.err(pp, format!("{what}: `chunks` in place of `from` and `count`, not beside them (V33)")),
-            _ => self.err(pp, format!("{what}: a range needs `from` and `count`, or `chunks` (V33)")),
         }
-        [("from", from), ("count", count)].into_iter().filter_map(|(k, e)| e.as_ref().map(|e| (k, e))).collect()
+        let inner = scope.with_index(&keys.index, true, None);
+        self.expr(&keys.key, &p(&kp, &["key"]), &inner, st, None);
+        self.int(&keys.key, &p(&kp, &["key"]), &inner);
+        found
     }
 
     fn seq_arg(&mut self, e: &Expr, what: &str, path: &P, scope: &Scope<'a>) {
@@ -2449,7 +2393,7 @@ impl<'a> Checker<'a> {
                     Some(_) => {}
                 }
                 if scope.unpositional.get(name.as_str()) == Some(&"V33") {
-                    self.err(path, format!("prev: `{name}` is bound by a `lookup`, not a `let` (V31)"));
+                    self.err(path, format!("prev: `{name}` is bound by a `probe` or a `store`, not a `let` (V31)"));
                 }
                 self.expr(init, &p(path, &["init"]), scope, st, None);
             }
@@ -2571,7 +2515,7 @@ impl<'a> Checker<'a> {
             self.err(path, format!("`{name} @` names a binding of this loop body, so its index must be {{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1"));
         }
         if scope.unpositional.get(name) == Some(&"V33") {
-            self.err(path, format!("`{name} @`: it is bound by a `lookup`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)"));
+            self.err(path, format!("`{name} @`: it is bound by a `probe` or a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)"));
         } else if let Some(rule) = scope.unpositional.get(name) {
             self.err(path, format!("`{name} @`: its definition reads `published`, `entry`, `now`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})"));
         }

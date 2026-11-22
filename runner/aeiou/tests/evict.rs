@@ -21,7 +21,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.22", "name": "t", "params": {"cap": {"default": 10}},
+    json!({"ast": "0.23", "name": "t", "params": {"cap": {"default": 10}},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -94,19 +94,19 @@ fn shared(id: i64, n: i64) -> Value {
 }
 
 fn probe(s: Value, from: i64, bind: &str) -> Value {
-    json!({"probe": {"cache": "c", "tier": "t", "seq": s, "per": 1, "from": from, "bind": bind}})
+    json!({"probe": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(from), None), "bind": bind}})
 }
 
 fn touch(s: Value, from: i64, count: i64) -> Value {
-    json!({"touch": {"cache": "c", "tier": "t", "seq": s, "per": 1, "from": from, "count": count}})
+    json!({"touch": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(from), Some(json!(count)))}})
 }
 
 fn store(s: Value, from: i64, count: i64) -> Value {
-    json!({"store": {"cache": "c", "tier": "t", "seq": s, "per": 1, "from": from, "count": count}})
+    json!({"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(from), Some(json!(count)))}})
 }
 
 fn store_bind(s: Value, from: i64, count: i64, bind: &str) -> Value {
-    json!({"store": {"cache": "c", "tier": "t", "seq": s, "per": 1, "from": from, "count": count, "bind": bind}})
+    json!({"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(from), Some(json!(count))), "bind": bind}})
 }
 
 /// The key of chunk `j` of `s`, one block a chunk, folded into the dataset's ids.
@@ -194,6 +194,68 @@ fn entries_equal_in_the_order_are_each_a_victim() {
     assert_eq!(walk(body), ["d/0", "d/0"]);
 }
 
+/// A key is an integer and the cache knows nothing of where it came from (contract 0.23): `key`
+/// is computed with the range's index at `from`, `from + 1`, and so on, and an entry's `pos` is
+/// that index.
+#[test]
+fn keys_are_integers_computed_at_each_index_from_from() {
+    let keys = |index: &str, from: i64, count: i64, key: Value| json!({"index": index, "from": from, "count": count, "key": key});
+    let j = || json!({"index": "j"});
+    let lmc = json!([{"name": "t", "order": [cached("touched"), {"neg": cached("pos")}], "capacity": 3}]);
+    // keys 105, 106, 107 at indices 5, 6, 7; a probe of 105 to 108, the index itself the key, finds 3
+    let body = json!([tl(lmc.clone(), json!([
+        {"store": {"cache": "c", "tier": "t", "keys": keys("j", 5, 3, json!({"add": [j(), 100]}))}},
+        {"probe": {"cache": "c", "tier": "t", "keys": keys("j", 105, 4, j()), "bind": "h"}}, stat(r("h")),
+        // one more evicts the entry of the greatest `pos`, key 107 at index 7
+        {"store": {"cache": "c", "tier": "t", "keys": keys("j", 0, 1, json!(999))}},
+        {"probe": {"cache": "c", "tier": "t", "keys": keys("j", 105, 4, j()), "bind": "h2"}}, stat(r("h2")),
+        {"probe": {"cache": "c", "tier": "t", "keys": keys("j", 107, 1, j()), "bind": "h3"}}, stat(r("h3"))]))]);
+    assert_eq!(walk(body), ["d/3", "d/2", "d/0"]);
+    // `from` left out is 0; a key that comes twice is acted on once, at its first index
+    let body = json!([tl(lmc, json!([
+        {"store": {"cache": "c", "tier": "t", "keys": {"index": "j", "count": 4, "key": {"div": [j(), 2]}}, "taken": "tk"}},
+        stat(json!({"len": "tk"})), stat(elem("tk", 0)), stat(elem("tk", 1))]))]);
+    assert_eq!(walk(body), ["d/2", "d/0", "d/2"]);
+    // a draw in a key is one at each index, as an array's value is: four keys, not one
+    let body = json!([tl(json!([{"name": "t"}]), json!([
+        {"store": {"cache": "c", "tier": "t", "keys": {"index": "j", "count": 4, "key": {"draw": {"uniform64": {}}}}, "taken": "tk"}},
+        stat(json!({"len": "tk"}))]))]);
+    assert_eq!(walk(body), ["d/4"]);
+    walk_fails(json!([tl(json!([{"name": "t"}]), json!([{"touch": {"cache": "c", "tier": "t", "keys": {"index": "j", "count": -1, "key": 0}}}]))]), "touch: count -1");
+}
+
+/// A store of `present: touch` (contract 0.23) is a lookup that stores what it missed: the keys
+/// the tier holds touched, the others stored, one event; `found` the leading run held before
+/// it, `bind` the one after, `taken` the indices stored.
+#[test]
+fn a_store_that_touches_is_a_lookup_that_stores_what_it_missed() {
+    let lru = |cap: i64| json!([{"name": "t", "order": [cached("touched"), cached("pos")], "capacity": cap}]);
+    let all = |s: Value, extra: Value| {
+        let mut n = json!({"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(0), None), "present": "touch"});
+        for (k, v) in extra.as_object().unwrap() {
+            n[k] = v.clone();
+        }
+        json!({"store": n})
+    };
+    let body = json!([tl(lru(9), json!([
+        let_("a", shared(1, 4)), store(r("a"), 0, 2),
+        all(r("a"), json!({"found": "f", "bind": "b", "taken": "tk"})),
+        stat(r("f")), stat(r("b")), stat(json!({"len": "tk"})), stat(elem("tk", 0)), stat(elem("tk", 1))]))]);
+    assert_eq!(walk(body), ["d/2", "d/4", "d/2", "d/2", "d/3"]);
+    // what it found is touched: B, stored after A, goes before A's chunks when C needs room
+    let body = json!([tl(lru(3), json!([
+        let_("a", shared(1, 2)), let_("b", shared(2, 1)),
+        store(r("a"), 0, 2), store(r("b"), 0, 1), all(r("a"), json!({})), store(shared(3, 1), 0, 1),
+        probe(r("a"), 0, "ha"), probe(r("b"), 0, "hb"), stat(r("ha")), stat(r("hb"))]))]);
+    assert_eq!(walk(body), ["d/2", "d/0"]);
+    // held, what it touched and stored is no victim until the release: C finds no room and is dropped
+    let body = json!([tl(lru(2), json!([
+        let_("a", shared(1, 2)), store(r("a"), 0, 1), all(r("a"), json!({"hold": "p"})),
+        store_bind(shared(3, 1), 0, 1, "c1"), {"release": {"hold": "p"}}, store_bind(shared(3, 1), 0, 1, "c2"),
+        stat(r("c1")), stat(r("c2"))]))]);
+    assert_eq!(walk(body), ["d/0", "d/1"]);
+}
+
 /// `store`'s `bind` is the leading run of the range held after it: a store a full tier with
 /// timed eviction skips is the planned drop (Q5), and `fail` refuses the walk instead.
 #[test]
@@ -236,7 +298,7 @@ fn timed_eviction_runs_on_the_planned_grid() {
     assert_eq!(walk(body), ["d/5"]);
     // a held entry is not a victim: a lookup holding A's chunks spares them
     let body = json!([tl(timed(json!({})), json!([
-        let_("a", shared(1, 2)), {"lookup": {"cache": "c", "tier": "t", "seq": r("a"), "per": 1, "bind": "x", "hold": "p"}},
+        let_("a", shared(1, 2)), {"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), None), "present": "touch", "found": "x", "hold": "p"}},
         store(shared(2, 7), 0, 7), compute(100), {"release": {"hold": "p"}},
         probe(r("a"), 0, "h"), probe(shared(2, 7), 0, "h2"), stat(r("h")), stat(r("h2"))]))]);
     assert_eq!(walk(body), ["d/2", "d/6"]);
@@ -310,12 +372,12 @@ fn eviction_used_wrongly_is_refused_when_walked() {
     walk_fails(json!([stat(json!({"victim": {}}))]), "victim: outside a tier's `on_evict` body (V35)");
     walk_fails(json!([stat(json!({"tier": "used"}))]), "tier `used`: outside a tier's `evict` (V33)");
     walk_fails(json!([probe(shared(1, 1), 0, "h")]), "probe: no timeline declares cache `c` around it (V33)");
-    walk_fails(json!([tl(timed(json!({})), json!([{"touch": {"cache": "c", "tier": "u", "seq": shared(1, 1), "per": 1, "from": 0, "count": 1}}]))]),
+    walk_fails(json!([tl(timed(json!({})), json!([{"touch": {"cache": "c", "tier": "u", "keys": crate::common::chunk_keys(shared(1, 1), json!(1), json!(0), Some(json!(1)))}}]))]),
         "touch: cache `c` has no tier `u` (V33)");
     fails(json!([tl(timed(json!({"evict": {"every": 0, "when": true, "count": 1}})), json!([]))]),
         "tier `t` of cache `c`: evict every 0 ns");
     fails(json!([tl(timed(json!({"on_evict": {"lanes": 0, "body": []}})), json!([]))]), "tier `t` of cache `c`: on_evict lanes 0");
-    fails(json!([tl(timed(json!({})), json!([store(shared(1, 1), -1, 1)]))]), "store: from -1");
+    fails(json!([tl(timed(json!({})), json!([store(shared(1, 1), -1, 1)]))]), "chunk_key: chunk -1 of a sequence of 1 whole chunks of 1");
 }
 
 // ---------------------------------------------------------------- the checkers (V33, V35)
@@ -352,14 +414,14 @@ fn the_validator_holds_eviction_and_ranges_to_their_rules() {
     has(json!([tl(timed(json!({"full": "skip"})), json!([{"loop": {"index": "i", "to": 2, "body": [probe(shared(1, 1), 0, "h"),
         stat(json!({"cond": {"if": {"gt": [{"index": "i"}, 0]}, "then": {"at": {"ref": "h", "index": {"sub": [{"index": "i"}, 1]}}}, "else": 0}}))]}}]))]), "V33");
     has(json!([tl(json!([{"name": "t", "order": [cached("freed")], "capacity": 4, "full": "wait"}]), json!([store(shared(1, 1), 0, 1)]))]),
-        "store: tier `t` waits when full, which only a `lookup` decides before it changes anything (V33)");
+        "store: tier `t` waits when full, which only a store of `present: touch` decides before it changes anything (V33)");
     has(json!([tl(json!([{"name": "t", "unit": "bytes", "capacity": 4}]), json!([store(shared(1, 1), 0, 1)]))]),
         "store: tier `t` counts bytes, so the store needs a `size` (V33)");
-    has(json!([tl(timed(json!({})), json!([{"store": {"cache": "c", "tier": "t", "seq": shared(1, 1), "per": 1, "from": 0, "count": 1, "size": 3}}]))]),
+    has(json!([tl(timed(json!({})), json!([{"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(shared(1, 1), json!(1), json!(0), Some(json!(1))), "size": 3}}]))]),
         "store: tier `t` counts entries, so the store takes no `size` (V33)");
-    has(json!([tl(timed(json!({})), json!([{"probe": {"cache": "d", "tier": "t", "seq": shared(1, 1), "per": 1, "from": 0, "bind": "h"}}]))]),
+    has(json!([tl(timed(json!({})), json!([{"probe": {"cache": "d", "tier": "t", "keys": crate::common::chunk_keys(shared(1, 1), json!(1), json!(0), None), "bind": "h"}}]))]),
         "probe: no timeline declares cache `d` around it (V33)");
-    has(json!([tl(timed(json!({})), json!([{"probe": {"cache": "c", "tier": "t", "seq": 3, "per": 1, "from": 0, "bind": "h"}}]))]), "probe");
+    has(json!([tl(timed(json!({})), json!([{"probe": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(json!(3), json!(1), json!(0), None), "bind": "h"}}]))]), "probe");
     let ok = json!([let_("base", json!(7)), tl(timed(json!({"capacity": {"param": "cap"}, "on_evict": {"lanes": 4, "body": [
         let_("f", victim_id()), {"cond": {"if": {"gt": [r("f"), 0]}, "then": [stat(r("f"))], "else": [stat(r("base"))]}}]}})), json!([
         let_("a", shared(1, 10)), probe(r("a"), 0, "h2"), probe(r("a"), 0, "h3"),
@@ -376,15 +438,23 @@ fn tiers_tu(cap_u: i64) -> Value {
 }
 
 fn store_in(tier: &str, s: Value, extra: Value) -> Value {
-    let mut n = json!({"cache": "c", "tier": tier, "seq": s, "per": 1});
-    for (k, v) in extra.as_object().unwrap() {
-        n[k] = v.clone();
+    // `from` and `count`, or `chunks`, of `extra` are the store's keys over `s`
+    let e = extra.as_object().unwrap();
+    let keys = match e.get("chunks") {
+        Some(a) => crate::common::chunk_keys_of(s, json!(1), a.as_str().unwrap()),
+        None => crate::common::chunk_keys(s, json!(1), e.get("from").cloned().unwrap_or(json!(0)), e.get("count").cloned()),
+    };
+    let mut n = json!({"cache": "c", "tier": tier, "keys": keys});
+    for (k, v) in e {
+        if !["chunks", "from", "count"].contains(&k.as_str()) {
+            n[k] = v.clone();
+        }
     }
     json!({"store": n})
 }
 
 fn probe_in(tier: &str, s: Value, from: i64, bind: &str) -> Value {
-    json!({"probe": {"cache": "c", "tier": tier, "seq": s, "per": 1, "from": from, "bind": bind}})
+    json!({"probe": {"cache": "c", "tier": tier, "keys": crate::common::chunk_keys(s, json!(1), json!(from), None), "bind": bind}})
 }
 
 fn elem(a: &str, i: i64) -> Value {
@@ -414,12 +484,12 @@ fn a_store_binds_the_chunks_it_took_and_a_store_of_chunks_acts_on_those() {
     let body = json!([tl(tiers_tu(4), json!([
         let_("a", shared(1, 4)), {"array": {"name": "pick", "count": 2, "index": "k", "value": {"mul": [{"index": "k"}, 2]}}},
         store_in("u", r("a"), json!({"from": 0, "count": 4})),
-        {"touch": {"cache": "c", "tier": "u", "seq": r("a"), "per": 1, "chunks": "pick"}},
+        {"touch": {"cache": "c", "tier": "u", "keys": crate::common::chunk_keys_of(r("a"), json!(1), "pick")}},
         store_in("u", shared(2, 2), json!({"from": 0, "count": 2})),
         probe_in("u", r("a"), 0, "h0"), probe_in("u", r("a"), 2, "h2"), stat(r("h0")), stat(r("h2"))]))]);
     assert_eq!(walk(body), ["d/1", "d/1"]);
     // a parameter array names chunks too
-    let doc_ = json!({"ast": "0.22", "name": "t", "params": {"some": {"default": [1, 3]}},
+    let doc_ = json!({"ast": "0.23", "name": "t", "params": {"some": {"default": [1, 3]}},
         "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000000, "size": {"const": 1}, "seed": 1}},
         "actors": {"gpu": {"body": [tl(tiers_tu(9), json!([
             let_("a", shared(1, 4)), store_in("u", r("a"), json!({"chunks": "some", "taken": "tk"})),
@@ -446,7 +516,7 @@ fn a_renewing_store_makes_a_held_chunk_new_and_takes_it() {
     assert_eq!(run("keep"), ["d/0", "d/0", "d/1"]);
     // a chunk a lane holds is left as it is, renewed or not
     let body = json!([tl(tiers_tu(9), json!([
-        let_("a", shared(1, 2)), {"lookup": {"cache": "c", "tier": "u", "seq": r("a"), "per": 1, "bind": "x", "hold": "p"}},
+        let_("a", shared(1, 2)), {"store": {"cache": "c", "tier": "u", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), None), "present": "touch", "found": "x", "hold": "p"}},
         {"array": {"name": "both", "count": 2, "index": "k", "value": {"index": "k"}}},
         store_in("u", r("a"), json!({"chunks": "both", "present": "renew", "taken": "tk"})), {"release": {"hold": "p"}},
         store_in("u", r("a"), json!({"chunks": "both", "present": "renew", "taken": "tk2"})),
@@ -458,13 +528,11 @@ fn a_renewing_store_makes_a_held_chunk_new_and_takes_it() {
 fn chunks_used_wrongly_are_refused_when_walked() {
     let arr = |vals: Value| json!({"array": {"name": "x", "count": 1, "index": "k", "value": vals}});
     fails(json!([tl(tiers_tu(9), json!([arr(json!(5)), store_in("u", shared(1, 3), json!({"chunks": "x"}))]))]),
-        "store: chunk 5, outside the sequence's 3 chunks");
+        "chunk_key: chunk 5 of a sequence of 3 whole chunks of 1");
     fails(json!([tl(tiers_tu(9), json!([arr(json!(-1)), store_in("u", shared(1, 3), json!({"chunks": "x"}))]))]),
-        "store: chunk -1, outside the sequence's 3 chunks");
+        "chunk_key: chunk -1 of a sequence of 3 whole chunks of 1");
     walk_fails(json!([tl(tiers_tu(9), json!([store_in("u", shared(1, 3), json!({"chunks": "nope"}))]))]),
         "unknown parameter array `nope`");
-    walk_fails(json!([tl(tiers_tu(9), json!([store_in("u", shared(1, 3), json!({}))]))]),
-        "store: a range needs `from` and `count`, or `chunks` (V33)");
 }
 
 #[test]
@@ -474,10 +542,14 @@ fn the_validator_holds_taken_chunks_and_present_to_their_rules() {
         assert!(e.iter().any(|m| m.contains(needle)), "wanted `{needle}` for {body}:\n{e:#?}");
     };
     let arr = json!({"array": {"name": "x", "count": 1, "index": "k", "value": 0}});
-    has(json!([tl(tiers_tu(9), json!([arr, store_in("u", shared(1, 3), json!({"chunks": "x", "from": 0, "count": 1}))]))]),
-        "store: `chunks` in place of `from` and `count`, not beside them (V33)");
-    has(json!([tl(tiers_tu(9), json!([{"touch": {"cache": "c", "tier": "u", "seq": shared(1, 3), "per": 1, "from": 0}}]))]),
-        "touch: a range needs `from` and `count`, or `chunks` (V33)");
+    // a hold is a store's that touches; a key is an integer, read with the range's index in scope
+    has(json!([tl(tiers_tu(9), json!([arr, {"store": {"cache": "c", "tier": "u", "keys": {"index": "j", "count": 1, "key": {"index": "j"}}, "hold": "p"}}, {"release": {"hold": "p"}}]))]),
+        "store: `hold` `p` holds what a store of `present: touch` touches and stores, and this one is not (V34)");
+    has(json!([tl(tiers_tu(9), json!([{"touch": {"cache": "c", "tier": "u", "keys": {"index": "j", "count": 1, "key": shared(1, 3)}}}]))]),
+        "expected an integer, got a seq (V27)");
+    has(json!([tl(tiers_tu(9), json!([{"touch": {"cache": "c", "tier": "u", "keys": {"index": "j", "count": 1, "key": {"index": "j"}}}}, json!({"compute": {"ns": {"index": "j"}}})]))]),
+        "index `j` not in scope");
+    has(json!([tl(tiers_tu(9), json!([{"touch": {"cache": "c", "tier": "u", "keys": {"index": "1j", "count": 1, "key": 0}}}]))]), "not an identifier");
     has(json!([tl(tiers_tu(9), json!([store_in("u", shared(1, 3), json!({"chunks": "nope"}))]))]), "unknown parameter array `nope`");
     has(json!([tl(tiers_tu(9), json!([store_in("u", shared(1, 3), json!({"from": 0, "count": 1, "taken": "cap"}))]))]),
         "store: `taken` `cap` has the name of a parameter, which `elem` and `len` also read (V32)");
@@ -490,7 +562,7 @@ fn the_validator_holds_taken_chunks_and_present_to_their_rules() {
         let_("a", shared(1, 4)),
         store_in("t", r("a"), json!({"from": 0, "count": 4, "taken": "tk"})),
         store_in("u", r("a"), json!({"chunks": "tk", "present": "renew", "taken": "tk3"})),
-        {"touch": {"cache": "c", "tier": "u", "seq": r("a"), "per": 1, "chunks": "tk3"}},
+        {"touch": {"cache": "c", "tier": "u", "keys": crate::common::chunk_keys_of(r("a"), json!(1), "tk3")}},
         {"loop": {"index": "j", "to": {"len": "tk3"}, "body": [stat(elem("tk3", 0))]}}]}}]))]);
     assert_eq!(refused(ok.clone()), Vec::<String>::new());
     assert_eq!(walk(ok), ["d/0", "d/0", "d/0", "d/0"]);

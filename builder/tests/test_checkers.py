@@ -20,7 +20,7 @@ ROOT = HERE.parent.parent
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 _, check = _load()
 
-BASE = {"ast": "0.22", "name": "t",
+BASE = {"ast": "0.23", "name": "t",
         "params": {"n": {"default": 4}},
         "datasets": {"d": {"pattern": "d/{id}", "layout": "whole", "access": "map", "count": 8, "size": {"const": 10}, "seed": 1},
                      "arr": {"pattern": "a/v.bin", "layout": "array", "access": "indexed", "count": 4, "size": {"const": 4}, "slot": 4, "seed": 5},
@@ -154,11 +154,11 @@ def test_both_checkers_refuse_at_one_path_in_one_wording(name, tmp_path):
 
 @pytest.mark.parametrize("edit", [
     body({"channel": {"name": "c", "capacity": 2}},
-         {"choose": {"arms": [{"weight": 1, "body": [{"put": {"channel": "c", "seq": 0}}, {"take": {"channel": "c"}}]}]}}),
+         {"cond": {"if": {"eq": [1, 1]}, "then": [{"put": {"channel": "c", "seq": 0}}, {"take": {"channel": "c"}}]}}),
     body({"read": {"file": PICK, "len": 4, "repeat": {"param": "n"}}}),
     body(loop({"let": {"name": "x", "value": {"at": {"ref": "x", "index": {"sub": [{"index": "i"}, {"draw": {"empirical": {"values": [1, 2], "weights": [1, 1]}}}]}}}}})),
     ds(size={"mixture": [{"weight": 1, "dist": {"zipf": {"s": 1.1}}}, {"weight": 1, "dist": {"const": 3}}]}),
-], ids=["channels in a choose arm", "a read repeat of an expression", "at of a draw of at least 1", "a mixture with an arm of no known least"])
+], ids=["channels in a cond arm", "a read repeat of an expression", "at of a draw of at least 1", "a mixture with an arm of no known least"])
 def test_both_checkers_accept(edit, tmp_path):
     doc = copy.deepcopy(BASE)
     edit(doc)

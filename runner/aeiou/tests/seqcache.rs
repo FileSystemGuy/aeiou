@@ -21,7 +21,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.22", "name": "t", "params": {},
+    json!({"ast": "0.23", "name": "t", "params": {},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -105,7 +105,7 @@ fn small(k: Value) -> Value {
 }
 
 fn lookup(seq: Value, bind: &str) -> Value {
-    json!({"lookup": {"cache": "lm", "tier": "disk", "seq": seq, "per": 4, "bind": bind}})
+    json!({"store": {"cache": "lm", "tier": "disk", "keys": crate::common::chunk_keys(seq, json!(4), json!(0), None), "present": "touch", "found": bind}})
 }
 
 fn tl(tiers: Value, body: Value) -> Value {
@@ -227,7 +227,7 @@ fn an_lru_tier_evicts_the_entry_used_longest_ago() {
 #[test]
 fn a_tier_in_bytes_evicts_by_the_sizes_stored() {
     let tiers = json!([{"name": "disk", "order": [{"cached": "touched"}], "capacity": 10, "unit": "bytes"}]);
-    let lk = |s: Value, b: &str| json!({"lookup": {"cache": "lm", "tier": "disk", "seq": s, "per": 4, "bind": b, "size": 4}});
+    let lk = |s: Value, b: &str| json!({"store": {"cache": "lm", "tier": "disk", "keys": crate::common::chunk_keys(s, json!(4), json!(0), None), "present": "touch", "found": b, "size": 4}});
     let body = json!([tl(tiers, json!([
         let_("a", fresh(8)), let_("b", fresh(4)),
         lk(r("a"), "h0"), lk(r("a"), "h1"), lk(r("b"), "h2"), lk(r("a"), "h3"),
@@ -271,9 +271,9 @@ fn the_validator_holds_seqs_caches_and_lookups_to_their_rules() {
         let e = refused(body.clone());
         assert!(e.iter().any(|m| m.contains(needle)), "wanted `{needle}` for {body}:\n{e:#?}");
     };
-    has(json!([lookup(fresh(4), "h")]), "lookup: no timeline declares cache `lm` around it (V33)");
-    has(json!([{"timeline": {"name": "tl", "body": [lookup(fresh(4), "h")]}}]), "lookup: no timeline declares cache `lm` around it (V33)");
-    has(json!([tl(json!([{"name": "mem"}]), json!([lookup(fresh(4), "h")]))]), "lookup: cache `lm` has no tier `disk` (V33)");
+    has(json!([lookup(fresh(4), "h")]), "store: no timeline declares cache `lm` around it (V33)");
+    has(json!([{"timeline": {"name": "tl", "body": [lookup(fresh(4), "h")]}}]), "store: no timeline declares cache `lm` around it (V33)");
+    has(json!([tl(json!([{"name": "mem"}]), json!([lookup(fresh(4), "h")]))]), "store: cache `lm` has no tier `disk` (V33)");
     has(json!([tl(json!([{"name": "disk", "order": [{"cached": "touched"}]}]), json!([]))]), "tier `disk`: an `order` with no `capacity`, so nothing is ever evicted (V33)");
     has(json!([tl(json!([{"name": "disk", "full": "wait"}]), json!([]))]), "tier `disk`: `full` `wait` with no `capacity`, so it is never full (V33)");
     has(json!([tl(json!([{"name": "disk", "order": [], "capacity": 4}]), json!([]))]), "tier `disk`: an empty `order` (V33)");
@@ -282,21 +282,21 @@ fn the_validator_holds_seqs_caches_and_lookups_to_their_rules() {
     has(json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": unbounded()}, {"name": "lm", "tiers": unbounded()}], "body": []}}]),
         "cache `lm` declared twice (V33)");
     has(json!([tl(json!([{"name": "disk", "order": [{"cached": "touched"}], "capacity": 8, "unit": "bytes"}]), json!([lookup(fresh(4), "h")]))]),
-        "lookup: tier `disk` counts bytes, so the lookup needs a `size` (V33)");
-    has(json!([tl(unbounded(), json!([{"lookup": {"cache": "lm", "tier": "disk", "seq": fresh(4), "per": 4, "bind": "h", "size": 4}}]))]),
-        "lookup: tier `disk` counts entries, so the lookup takes no `size` (V33)");
+        "store: tier `disk` counts bytes, so the store needs a `size` (V33)");
+    has(json!([tl(unbounded(), json!([{"store": {"cache": "lm", "tier": "disk", "keys": crate::common::chunk_keys(fresh(4), json!(4), json!(0), None), "present": "touch", "found": "h", "size": 4}}]))]),
+        "store: tier `disk` counts entries, so the store takes no `size` (V33)");
     // `@` naming a lookup's binding, `prev` of one
     has(json!([tl(unbounded(), json!([{"loop": {"index": "i", "to": 2, "body": [
         lookup(fresh(4), "h"),
         let_("y", json!({"cond": {"if": {"gt": [{"index": "i"}, 0]}, "then": {"at": {"ref": "h", "index": {"sub": [{"index": "i"}, 1]}}}, "else": 0}}))]}}]))]), "(V33)");
     has(json!([tl(unbounded(), json!([{"loop": {"index": "i", "to": 2, "body": [
-        lookup(fresh(4), "h"), let_("y", json!({"prev": {"ref": "h", "init": 0}}))]}}]))]), "prev: `h` is bound by a `lookup`, not a `let` (V31)");
+        lookup(fresh(4), "h"), let_("y", json!({"prev": {"ref": "h", "init": 0}}))]}}]))]), "prev: `h` is bound by a `probe` or a `store`, not a `let` (V31)");
     // a seq where a number goes, a number where a seq goes
     has(json!([stat(json!({"add": [fresh(1), 1]}))]), "seq");
     has(json!([stat(json!({"seq_len": 3}))]), "seq_len: expected a seq, got int");
     has(json!([stat(json!({"seq_len": prefix(json!(3), 1)}))]), "prefix: expected a seq, got int");
     has(json!([stat(json!({"seq_len": cat(fresh(1), json!(2))}))]), "cat: expected a seq, got int");
-    has(json!([tl(unbounded(), json!([lookup(json!(5), "h")]))]), "lookup: expected a seq, got int");
+    has(json!([tl(unbounded(), json!([lookup(json!(5), "h")]))]), "seq_len: expected a seq, got int");
     let ok = json!([tl(unbounded(), json!([
         {"loop": {"index": "i", "to": 2, "body": [
             let_("s", cat(prefix(json!({"prev": {"ref": "s", "init": shared(1, 4)}}), 4), fresh(4))),
@@ -331,11 +331,11 @@ fn the_walk_refuses_what_the_validator_would() {
         Ok(ops) => panic!("walked {body}, wanted `{needle}`: {ops:?}"),
         Err(e) => assert!(e.contains(needle), "wanted `{needle}` in:\n{e}"),
     };
-    no(json!([lookup(fresh(4), "h")]), "lookup: no timeline declares cache `lm` around it (V33)");
-    no(json!([tl(json!([{"name": "mem"}]), json!([lookup(fresh(4), "h")]))]), "lookup: cache `lm` has no tier `disk` (V33)");
+    no(json!([lookup(fresh(4), "h")]), "store: no timeline declares cache `lm` around it (V33)");
+    no(json!([tl(json!([{"name": "mem"}]), json!([lookup(fresh(4), "h")]))]), "store: cache `lm` has no tier `disk` (V33)");
     no(json!([tl(json!([{"name": "disk", "order": [{"cached": "touched"}], "capacity": -1}]), json!([]))]), "tier `disk` of cache `lm`: capacity -1");
-    no(json!([tl(unbounded(), json!([{"lookup": {"cache": "lm", "tier": "disk", "seq": fresh(4), "per": 0, "bind": "h"}}]))]), "lookup: `per` 0, not positive");
-    no(json!([tl(unbounded(), json!([lookup(json!(3), "h")]))]), "lookup: expected a seq, got int");
+    no(json!([tl(unbounded(), json!([{"store": {"cache": "lm", "tier": "disk", "keys": {"index": "j", "count": 1, "key": {"chunk_key": {"seq": fresh(4), "chunk": {"index": "j"}, "per": 0}}}, "present": "touch", "found": "h"}}]))]), "chunk_key: `per` 0, not positive");
+    no(json!([tl(unbounded(), json!([lookup(json!(3), "h")]))]), "seq_len: expected a seq, got int");
     no(json!([stat(json!({"seq_len": cat(fresh(1), json!(2))}))]), "cat: expected a seq, got int");
     no(json!([stat(json!({"seq_len": prefix(json!(3), 1)}))]), "prefix: expected a seq, got int");
     no(json!([stat(json!({"chunk_key": {"seq": 3, "chunk": 0, "per": 4}}))]), "chunk_key: expected a seq, got int");

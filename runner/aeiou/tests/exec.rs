@@ -9,7 +9,7 @@ use aeiou::plan::{Plan, Record};
 use serde_json::{json, Value};
 
 fn model(body: Value) -> &'static Model<'static> {
-    let doc = json!({"ast": "0.22", "name": "t",
+    let doc = json!({"ast": "0.23", "name": "t",
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
            "actors": {"gpu": {"count": 1, "body": body}}}).to_string();
@@ -159,7 +159,7 @@ fn an_eviction_batch_overrunning_its_tick_delays_the_next() {
         "on_evict": {"lanes": 1, "body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"mod": [{"victim": {}}, 1000]}}}}}]},
         "evict": {"every": 100, "when": true, "count": 2}}]);
     let body = json!([{"let": {"name": "a", "value": {"shared": {"id": 1, "n": 4}}}},
-        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 4}}, compute(250)]);
+        {"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(4)))}}, compute(250)]);
     let ast = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
     // each unlink-like stat takes 80: the batch at 100 ends at 260, the one at 200 starts at 260
     let (ops, st) = run(ast, |_, _| 80);
@@ -195,7 +195,7 @@ fn an_eviction_at_a_store_waits_for_the_storing_lane() {
     let tiers = json!([{"name": "t", "order": [{"cached": "touched"}, {"neg": {"cached": "pos"}}], "capacity": 2,
         "on_evict": {"lanes": 1, "body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"mod": [{"victim": {}}, 1000]}}}}}]}}]);
     let body = json!([stat(1), {"let": {"name": "a", "value": {"shared": {"id": 1, "n": 3}}}},
-        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 3}}]);
+        {"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(3)))}}]);
     let ast = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
     let (ops, st) = run(ast, |r, _| if &*r.path == "d/1" { 50 } else { 1 });
     assert_eq!(ops.len(), 2);
@@ -440,7 +440,7 @@ fn a_series_counts_eviction_batches_by_planned_second() {
     let tiers = json!([{"name": "t", "order": [{"cached": "stored"}], "capacity": 1, "evict": {"every": s, "when": {"gt": [{"tier": "entries"}, 0]}, "count": 1},
         "on_evict": {"lanes": 1, "body": [stat(7)]}}]);
     let body = json!([{"let": {"name": "a", "value": {"shared": {"id": 1, "n": 2}}}},
-        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 1}}, compute(3 * s), stat(1)]);
+        {"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(1)))}}, compute(3 * s), stat(1)]);
     let doc = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
     let opts = aeiou::exec::TimelineOpts { series: true, ..Default::default() };
     let (_, st) = run_with(doc, &opts, |_, _| 10);
@@ -480,7 +480,7 @@ fn eviction_batches_report_their_duration_and_overage() {
         "on_evict": {"lanes": 1, "body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"mod": [{"victim": {}}, 1000]}}}}}]},
         "evict": {"every": s, "when": {"gt": [{"tier": "entries"}, 0]}, "count": 2}}]);
     let body = json!([{"let": {"name": "a", "value": {"shared": {"id": 1, "n": 4}}}},
-        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 4}}, compute(5 * s)]);
+        {"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(4)))}}, compute(5 * s)]);
     let ast = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
     let opts = aeiou::exec::TimelineOpts { series: true, ..Default::default() };
     // each victim's stat takes 0.8 s: the batch at 1 s ends at 2.6 s, 0.6 s past the next's
@@ -507,7 +507,7 @@ fn eviction_ops_before_their_tick_are_not_due() {
         "on_evict": {"lanes": 1, "body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"mod": [{"victim": {}}, 1000]}}}}}]},
         "evict": {"every": 2 * s, "when": {"gt": [{"tier": "entries"}, 0]}, "count": 1}}]);
     let body = json!([{"let": {"name": "a", "value": {"shared": {"id": 1, "n": 1}}}},
-        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 1}}, compute(s + s / 2), stat(9), compute(s)]);
+        {"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(1)))}}, compute(s + s / 2), stat(9), compute(s)]);
     let ast = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
     let opts = aeiou::exec::TimelineOpts { series: true, ..Default::default() };
     // the batch at 2 s is pushed by 1.5 s (the horizon 1 s); at 1.5 s the body's stat is the one live lane

@@ -20,7 +20,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-8"))
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
-           "compute", "cond", "choose", "phase", "trace", "timeline", "publish", "array", "lookup",
+           "compute", "cond", "phase", "trace", "timeline", "publish", "array",
            "acquire", "release", "probe", "touch", "store", "submit", "span"}
 # V30: what a timeline's lanes may not hold: they are planned, never waiting on one another
 NOT_IN_TIMELINE = {"loader", "channel", "put", "take", "barrier", "trace"}
@@ -290,25 +290,19 @@ def publishes(nodes, name, out):
         elif kind == "cond":
             publishes(a["then"], name, out)
             publishes(a.get("else", []), name, out)
-        elif kind == "choose":
-            for arm in a["arms"]:
-                publishes(arm["body"], name, out)
 
 
 def holds(nodes, out):
-    """V34: the holds the `acquire`s and `lookup`s of a timeline's body name, anywhere in it."""
+    """V34: the holds the `acquire`s and `store`s of a timeline's body name, anywhere in it."""
     for node in nodes:
         kind, a = next(iter(node.items()))
-        if kind == "acquire" or (kind == "lookup" and "hold" in a):
+        if kind == "acquire" or (kind == "store" and "hold" in a):
             out.add(a["hold"])
         elif kind in ("loop", "parallel", "loader", "phase", "span"):
             holds(a["body"], out)
         elif kind == "cond":
             holds(a["then"], out)
             holds(a.get("else", []), out)
-        elif kind == "choose":
-            for arm in a["arms"]:
-                holds(arm["body"], out)
 
 
 # V33: what a tier's `order` may read through: arithmetic, comparisons, logic, and `cond`
@@ -343,7 +337,7 @@ def plan_reads(e, also):
 
 # V35: what an `on_evict` body may not hold: anything that plans time, holds, or changes a cache
 # or a timeline (a body issues its victim's ops at its tick)
-EVICT_BANS = {"compute", "lookup", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
+EVICT_BANS = {"compute", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
               "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
 
 
@@ -360,14 +354,12 @@ def evict_bans(nodes, p, out):
         elif kind == "cond":
             evict_bans(a["then"], np + ["cond", "then"], out)
             evict_bans(a.get("else", []), np + ["cond", "else"], out)
-        elif kind == "choose":
-            for j, arm in enumerate(a["arms"]):
-                evict_bans(arm["body"], np + ["choose", "arms", j, "body"], out)
 
 
 # V36: what a `span` may not hold: what moves the lane's planned clock or waits in planned time,
-# which D, a storage wait, must not include (a `submit`'s body is a worker's, not the span's)
-SPAN_BANS = {"compute", "parallel", "acquire", "lookup"}
+# which D, a storage wait, must not include (a `submit`'s body is a worker's, not the span's); a
+# `store` of `present: touch` may wait for its tier (contract 0.23)
+SPAN_BANS = {"compute", "parallel", "acquire"}
 
 
 def span_bans(nodes, p, out):
@@ -376,16 +368,13 @@ def span_bans(nodes, p, out):
     for i, node in enumerate(nodes):
         kind, a = next(iter(node.items()))
         np = p + [i]
-        if kind in SPAN_BANS:
+        if kind in SPAN_BANS or (kind == "store" and a.get("present") == "touch"):
             out.append((np, kind))
         elif kind in ("loop", "phase"):
             span_bans(a["body"], np + [kind, "body"], out)
         elif kind == "cond":
             span_bans(a["then"], np + ["cond", "then"], out)
             span_bans(a.get("else", []), np + ["cond", "else"], out)
-        elif kind == "choose":
-            for j, arm in enumerate(a["arms"]):
-                span_bans(arm["body"], np + ["choose", "arms", j, "body"], out)
 
 
 def param_refs(x, out: set):
@@ -441,7 +430,7 @@ class Check:
         # V35, V36 (contract 0.22): checking a body that only issues ops, an `on_evict`'s or a
         # `submit`'s, with its rule: it reads no state of its timeline (`published`, `entry`)
         self.op_body = None
-        # V34: the enclosing timeline's resources, and the holds its `acquire`s and `lookup`s name
+        # V34: the enclosing timeline's resources, and the holds its `acquire`s and `store`s name
         self.resources = set()
         self.holds = set()
         # V36: the enclosing timeline's workers, and the span being checked
@@ -944,9 +933,6 @@ class Check:
             if kind == "cond":
                 self.channel_sites(a["then"], p + ["then"], in_loop)
                 self.channel_sites(a.get("else", []), p + ["else"], in_loop)
-            elif kind == "choose":
-                for j, arm in enumerate(a["arms"]):
-                    self.channel_sites(arm["body"], p + ["arms", j, "body"], in_loop)
             elif kind in ("loop", "parallel", "loader", "phase", "submit", "span"):
                 self.channel_sites(a["body"], p + ["body"], in_loop or kind == "loop")
 
@@ -1051,10 +1037,6 @@ class Check:
         self.body(a["then"], p + ["then"], scope)
         if "else" in a:
             self.body(a["else"], p + ["else"], scope)
-
-    def n_choose(self, a, p, scope):
-        for i, arm in enumerate(a["arms"]):
-            self.body(arm["body"], p + ["arms", i, "body"], scope)
 
     def n_phase(self, a, p, scope):
         self.expr(a["name"], p + ["name"], scope)
@@ -1225,40 +1207,17 @@ class Check:
         self.typed(a["n"], p + ["n"], scope)
 
     def n_release(self, a, p, scope):
-        """V34: a `release` names a hold an `acquire` or `lookup` of its timeline takes."""
+        """V34: a `release` names a hold an `acquire` or `store` of its timeline takes."""
         if self.timeline is None:
             self.err(p, "release: outside a timeline, where nothing is planned (V34)")
         elif a["hold"] not in self.holds:
-            self.err(p, f"release: no `acquire` or `lookup` of timeline `{self.timeline[0]}` holds `{a['hold']}` (V34)")
+            self.err(p, f"release: no `acquire` or `store` of timeline `{self.timeline[0]}` holds `{a['hold']}` (V34)")
 
-    def n_lookup(self, a, p, scope):
-        """V33: a `lookup` names a tier of a cache its timeline declares, gives a `size` exactly
-        when the tier counts bytes, and binds the walk's value, which `@` cannot recompute."""
-        cache, tier = a["cache"], a["tier"]
-        unit = None
-        if cache not in self.caches:
-            self.err(p, f"lookup: no timeline declares cache `{cache}` around it (V33)")
-        elif tier not in self.caches[cache]:
-            self.err(p, f"lookup: cache `{cache}` has no tier `{tier}` (V33)")
-        else:
-            unit = self.caches[cache][tier][0]
-        if unit == "bytes" and "size" not in a:
-            self.err(p, f"lookup: tier `{tier}` counts bytes, so the lookup needs a `size` (V33)")
-        if unit == "entries" and "size" in a:
-            self.err(p, f"lookup: tier `{tier}` counts entries, so the lookup takes no `size` (V33)")
-        self.expr(a["seq"], p + ["seq"], scope)
-        self.seq_arg(a["seq"], "lookup", p + ["seq"], scope)
-        for k in ("per", "size"):
-            if k in a:
-                self.expr(a[k], p + [k], scope)
-                self.typed(a[k], p + [k], scope)
-        scope.bind(a["bind"], 0, True, "int")
-        scope.unpositional[a["bind"]] = "V33"
-
-    def range_stmt(self, what, a, ints, p, scope):
-        """V33 (contract 0.19): a `probe`, `touch`, or `store`: its cache and tier declared by
-        the enclosing timeline, its `seq` a sequence, its integers integers; the tier's unit and
-        `full`, when it is declared."""
+    def keys_stmt(self, what, a, p, scope):
+        """V33 (contract 0.23): a `probe`, `touch`, or `store` names a cache of its timeline and a
+        tier of it, and acts on a key range: `from` and `count` integers, `key` an integer read
+        with the range's `index` in scope, as an `array`'s value is. The tier's unit and `full`,
+        when it is declared. As the runner's `keys_stmt`."""
         cache, tier = a["cache"], a["tier"]
         found = None
         if cache not in self.caches:
@@ -1267,59 +1226,47 @@ class Check:
             self.err(p, f"{what}: cache `{cache}` has no tier `{tier}` (V33)")
         else:
             found = self.caches[cache][tier]
-        self.expr(a["seq"], p + ["seq"], scope)
-        self.seq_arg(a["seq"], what, p + ["seq"], scope)
-        for k in ("per",) + ints:
-            self.expr(a[k], p + [k], scope)
-            self.typed(a[k], p + [k], scope)
+        keys, kp = a["keys"], p + ["keys"]
+        for k in ("from", "count"):
+            if k in keys:
+                self.expr(keys[k], kp + [k], scope)
+                self.typed(keys[k], kp + [k], scope)
+        inner = scope.with_index(keys["index"], True, None)
+        self.expr(keys["key"], kp + ["key"], inner)
+        self.typed(keys["key"], kp + ["key"], inner)
         return found
 
     def n_probe(self, a, p, scope):
-        self.range_stmt("probe", a, ("from",), p, scope)
+        self.keys_stmt("probe", a, p, scope)
         scope.bind(a["bind"], 0, True, "int")
         scope.unpositional[a["bind"]] = "V33"
 
-    def chosen(self, what, a, p, scope):
-        """V33 (contract 0.19): a `touch` or `store` acts on `from` and `count`, or on the chunks
-        an array `chunks` names, one of an `array`, a `store`'s `taken`, or a parameter array of
-        integers; the integers it reads, for `range_stmt`."""
-        has = "from" in a, "count" in a, "chunks" in a
-        if has == (False, False, True):
-            name = a["chunks"]
-            if name not in scope.arrays:
-                if name not in self.params:
-                    self.err(p + ["chunks"], f"unknown parameter array `{name}`")
-                else:
-                    self.array(name, what, p + ["chunks"], numbers=True)
-        elif has[2]:
-            self.err(p, f"{what}: `chunks` in place of `from` and `count`, not beside them (V33)")
-        elif has[:2] != (True, True):
-            self.err(p, f"{what}: a range needs `from` and `count`, or `chunks` (V33)")
-        return tuple(k for k in ("from", "count") if k in a)
-
     def n_touch(self, a, p, scope):
-        self.range_stmt("touch", a, self.chosen("touch", a, p, scope), p, scope)
+        self.keys_stmt("touch", a, p, scope)
 
     def n_store(self, a, p, scope):
         tier = a["tier"]
-        ints = self.chosen("store", a, p, scope)
+        touch = a.get("present") == "touch"
         if "taken" in a and a["taken"] in self.params:
             self.err(p + ["taken"], f"store: `taken` `{a['taken']}` has the name of a parameter, which `elem` and `len` also read (V32)")
-        found = self.range_stmt("store", a, ints, p, scope)
+        found = self.keys_stmt("store", a, p, scope)
         if found is not None:
             unit, full = found
             if unit == "bytes" and "size" not in a:
                 self.err(p, f"store: tier `{tier}` counts bytes, so the store needs a `size` (V33)")
             if unit == "entries" and "size" in a:
                 self.err(p, f"store: tier `{tier}` counts entries, so the store takes no `size` (V33)")
-            if full == "wait":
-                self.err(p, f"store: tier `{tier}` waits when full, which only a `lookup` decides before it changes anything (V33)")
+            if full == "wait" and not touch:
+                self.err(p, f"store: tier `{tier}` waits when full, which only a store of `present: touch` decides before it changes anything (V33)")
+        if "hold" in a and not touch:
+            self.err(p, f"store: `hold` `{a['hold']}` holds what a store of `present: touch` touches and stores, and this one is not (V34)")
         if "size" in a:
             self.expr(a["size"], p + ["size"], scope)
             self.typed(a["size"], p + ["size"], scope)
-        if "bind" in a:
-            scope.bind(a["bind"], 0, True, "int")
-            scope.unpositional[a["bind"]] = "V33"
+        for k in ("found", "bind"):
+            if k in a:
+                scope.bind(a[k], 0, True, "int")
+                scope.unpositional[a[k]] = "V33"
         if "taken" in a:
             scope.arrays.add(a["taken"])
             scope.taken.add(a["taken"])
@@ -1603,7 +1550,7 @@ class Check:
             elif not s.loop_body:
                 self.err(p, f"prev: `{name}` is not bound directly in a loop's body, so it has no previous iteration (V31)")
             if scope.lookup_unpositional(name) == "V33":
-                self.err(p, f"prev: `{name}` is bound by a `lookup`, not a `let` (V31)")
+                self.err(p, f"prev: `{name}` is bound by a `probe` or a `store`, not a `let` (V31)")
             self.expr(a["init"], p + ["init"], scope)
         elif k == "fresh":
             self.expr(a, p + ["fresh"], scope)
@@ -1720,7 +1667,7 @@ class Check:
                             f"{{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1")
         rule = scope.lookup_unpositional(name)
         if rule == "V33":
-            self.err(p, f"`{name} @`: it is bound by a `lookup`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)")
+            self.err(p, f"`{name} @`: it is bound by a `probe` or a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)")
         elif rule:
             self.err(p, f"`{name} @`: its definition reads `published`, `entry`, `now`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})")
         # of two `let`s of one name in this body, which one an `at` reads is not defined

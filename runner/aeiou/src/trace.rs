@@ -620,11 +620,6 @@ pub fn refs(ast: &Ast) -> Vec<(&str, &str, &str)> {
                         body(o, template, out);
                     }
                 }
-                Node::Choose { arms, .. } => {
-                    for a in arms {
-                        body(&a.body, template, out);
-                    }
-                }
                 _ => {}
             }
         }

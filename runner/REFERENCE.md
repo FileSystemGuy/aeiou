@@ -49,7 +49,7 @@ aeiou/src/
   ast.rs       the contract as serde types (externally tagged, deny_unknown_fields)
   canon.rs     canonical form and SHA-256, byte-identical to check.py::canonical
   validate.rs  rules V1–V29 and the schema's structural constraints, ported from check.py
-  sites.rs     draw sites: the JSON pointer of every draw / pick / choose, hashed
+  sites.rs     draw sites: the JSON pointer of every draw / pick, hashed
   pattern.rs   path patterns: {id div 1300:05}, {id div files_per_directory:05}, {conv:016x}, {name}
   rng.rs       positional keys, SplitMix64 words, the 4-round Feistel permutation
   eval.rs      the resolved model: parameters, datasets (sizes, layouts, names), namespaces, distributions
@@ -144,8 +144,8 @@ each is a recorded decision and the golden tests pin them.
 
 - **Key of a positional draw.** `xxh3_64(actor ‖ site ‖ i₁ ‖ … ‖ iₙ, seed = --seed)` over
   little-endian 64-bit words, where `site = xxh3_64(JSON pointer of the node)` and `i₁…iₙ`
-  are the enclosing loop, `parallel`, and `loader` indices, outermost first. A `choose` uses
-  the statement's pointer; a `pick` uses the handle's.
+  are the enclosing loop, `parallel`, and `loader` indices, outermost first, and the index of a key range (contract 0.23) or an `array` a draw stands in. ~~A `choose` uses
+  the statement's pointer;~~ (the `choose` node left the contract in 0.23) A `pick` uses the handle's.
 - **Words of a key.** The SplitMix64 sequence started at the key. A draw takes as many words
   as it needs, in order (a mixture arm then its value; two for Box–Muller).
 - **Distributions.** `uniform`: `lo + word mod (hi − lo)`. `uniform64`: the word. `normal`
@@ -288,6 +288,29 @@ each is a recorded decision and the golden tests pin them.
   body runs for it) and stores it as if absent, in the same event; with `taken`, it binds in its
   scope level an array of the indices of the chunks it stored, renewed ones included, in the
   order acted on. Bindings of a probe and a store are refused under `x @ i` (V33).
+- **Key ranges, and the store that touches** (contract 0.23, V33 and V34; `vm.rs`'s `keys`).
+  What the two entries above say of a `lookup` and of ranges is superseded here. A `probe`,
+  `touch`, or `store` evaluates its range's `from` (0 when absent) and `count` (refused when
+  negative), then `key` once for each index `from`, `from + 1`, ..., with the range's `index`
+  bound as a loop's is, so a draw or a `fresh` in `key` is positioned by it; each result, an
+  integer, is a key, and the index is the `pos` the entry gets. Nothing is cut at a
+  sequence's end: `chunk_key` refuses a chunk its sequence lacks. (The common key, `chunk_key`
+  of a bound sequence at the range's index with a literal, parameter, or bound `per`, is read
+  from the sequence's keys computed once; the values and the refusal are the same.) A key
+  that comes twice is acted on once, at its first index. A `store` of `present: touch` is the
+  lookup of contracts 0.16 to 0.22 as one statement and one event: on a tier whose `full` is
+  `wait` or `fail` it first counts the new entries' size against the free capacity plus the
+  victims' (less those it found) and parks the lane, or fails, before anything changes, the
+  statement to run again; then every key the tier holds is touched (with `hold`, held, and out
+  of the victim order), and then every other key stored, evicting the least victim while
+  there is no room. `found` is the leading run held, counted on the pass that goes on, so a
+  lane that waited binds what it finds when it is let in; `bind` the leading run held after;
+  both counted only when named. The tier counts one event for the statement, where a `lookup`
+  counted one a key: `touched` and `stored` are equal for a statement's keys and `pos` tells
+  them apart, which the victim order's key (its `order` values, `stored`, `pos`, the key)
+  takes after `stored`, so an order of `touched` alone evicts a statement's keys in index
+  order after any entry stored earlier. A `taken` holds the indices stored, which for a range
+  over an array's elements are indices into that array.
 - **Workers, submit, and span** (contract 0.20, V36; `vm.rs`'s `tl_step`). A timeline's
   `workers` `lanes` and `staging` are evaluated when it starts (positive). A `submit` makes a
   lane of the timeline at the submitting lane's planned time, whose key is (the workers' index

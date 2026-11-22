@@ -62,7 +62,7 @@ fn op_codes_come_back_as_the_values_they_were_made_from() {
 #[test]
 fn an_ast_of_another_contract_version_is_refused() {
     let e = aeiou::ast::parse(r#"{"ast": "0.9", "name": "t", "actors": {}}"#).unwrap_err();
-    assert_eq!(e.to_string(), "ast version `0.9` is not `0.22`");
+    assert_eq!(e.to_string(), "ast version `0.9` is not `0.23`");
 }
 
 /// A cloned draw keeps the site `sites::annotate` gave it, so a clone draws what the original does.
@@ -101,7 +101,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(params: Value, datasets: Value, namespaces: Value, body: Value) -> String {
-    json!({"ast": "0.22", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
+    json!({"ast": "0.23", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
 }
 
 /// One plain dataset `d` of ten one-byte files.
@@ -151,12 +151,20 @@ fn stat(ds: &str, id: i64) -> Value {
 
 // ---------------------------------------------------------------- statements
 
-/// `choose` takes an arm by a positional draw at its site: in proportion to the weights, never
-/// an arm of weight 0, the same arms again for the same seed, others for another.
+/// The `choose` and `lookup` nodes left the contract in 0.23 (the builder writes a draw and a
+/// `cond` an arm for the first, a `store` of `present: touch` for the second): a document
+/// holding one is refused when it is read. The arm drawn, as the builder writes it, is taken in
+/// proportion to the weights, never an arm of weight 0, the same again for the same seed.
 #[test]
-fn choose_takes_its_arms_by_weight_and_position() {
-    let body = json!([{"loop": {"index": "i", "to": 400, "body": [{"choose": {"arms": [
-        {"weight": 3, "body": [stat("d", 0)]}, {"weight": 1, "body": [stat("d", 1)]}, {"weight": 0, "body": [stat("d", 2)]}]}}]}}]);
+fn choose_and_lookup_are_no_longer_nodes_and_a_drawn_arm_goes_by_weight() {
+    for gone in [json!({"choose": {"arms": [{"weight": 1, "body": []}]}}), json!({"lookup": {"cache": "c", "tier": "t", "seq": {"fresh": 1}, "per": 1, "bind": "h"}})] {
+        let kind = gone.as_object().unwrap().keys().next().unwrap().clone();
+        let e = aeiou::ast::parse(&doc(json!({}), d(), json!({}), json!([gone]))).unwrap_err().to_string();
+        assert!(e.contains(&format!("unknown variant `{kind}`")), "{e}");
+    }
+    let arm = |i: i64| json!({"cond": {"if": {"eq": [{"ref": "arm"}, i]}, "then": [stat("d", i)]}});
+    let body = json!([{"loop": {"index": "i", "to": 400, "body": [
+        {"let": {"name": "arm", "value": {"draw": {"empirical": {"values": [0, 1, 2], "weights": [3, 1, 0]}}}}}, arm(0), arm(1), arm(2)]}}]);
     let text = doc(json!({}), d(), json!({}), body);
     let ops = walk(&text);
     let n = |p: &str| ops.iter().filter(|o| o.starts_with(&format!("stat {p} "))).count();
@@ -165,8 +173,6 @@ fn choose_takes_its_arms_by_weight_and_position() {
     assert!((260..340).contains(&n("d/0")), "{} of 400 at weight 3 of 4", n("d/0"));
     assert_eq!(walk_with(&text, 1, 1).unwrap(), ops, "the same seed");
     assert_ne!(walk_with(&text, 1, 2).unwrap(), ops, "another seed");
-    let zero = json!([{"choose": {"arms": [{"weight": 0, "body": [stat("d", 0)]}]}}]);
-    fails(&doc(json!({}), d(), json!({}), zero), "choose: total weight is zero");
 }
 
 /// The ops on a handle the committed abstracts do not issue: `ftruncate`, `fallocate` (with

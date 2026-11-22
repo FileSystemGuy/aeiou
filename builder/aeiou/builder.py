@@ -239,7 +239,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.22"
+    AST_VERSION = "0.23"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -703,9 +703,9 @@ class _Frame:
 
 # V36 (contract 0.20): what a `submit` body may not hold (it only issues its ops on a worker
 # lane), and what a `span` may not (what moves or waits on the planned clock), as check.py
-SUBMIT_BANS = {"compute", "lookup", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
+SUBMIT_BANS = {"compute", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
                "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
-SPAN_BANS = {"compute", "parallel", "acquire", "lookup"}
+SPAN_BANS = {"compute", "parallel", "acquire"}       # and a store of present: touch, which may wait
 
 
 class Cursor:
@@ -742,7 +742,7 @@ class Cursor:
                     raise BuildError(f"a `{kind}` in a `submit` body, which only issues its ops on a worker lane (V36)")
                 break
             if f.kind == "span":
-                if kind in SPAN_BANS:
+                if kind in SPAN_BANS or (kind == "store" and node["store"].get("present") == "touch"):
                     raise BuildError(f"a `{kind}` in span `{f.label}`: a span measures storage waits, never planned time (V36)")
                 break
             if f.kind in ("timeline", "on_evict"):
@@ -1000,82 +1000,54 @@ class Cursor:
         node["values"] = {check_ident(k, "entry key"): ast_of(lift(v, f"publish {k}")) for k, v in values.items()}
         self._emit({"publish": node})
 
-    def lookup(self, cache: str, tier: str, seq, per, bind: str, size=None, hold: str | None = None) -> Ref:
-        """The longest run of `seq`'s leading whole chunks of `per` blocks held in `tier` of
-        `cache` of the enclosing timeline, bound to `bind`; every chunk then touched in order,
-        those not held stored (contract 0.16, rule V33). `size`, one chunk's bytes, exactly when
-        the tier counts bytes. With `hold` (contract 0.18, rule V34), the chunks found and stored
-        are this lane's under that name until `release(hold)`, never victims meanwhile. Returns
-        the binding, which `@` and `prev` may not read."""
-        check_ident(bind, "binding")
-        if not any(f.kind == "timeline" for f in self._frames):
-            raise BuildError(f"lookup: no timeline declares cache {cache!r} around it (V33)")
-        node = {"cache": check_ident(cache, "cache"), "tier": check_ident(tier, "tier"),
-                "seq": ast_of(lift(seq, "lookup seq")), "per": ast_of(lift(per, "lookup per")), "bind": bind}
-        if size is not None:
-            node["size"] = ast_of(lift(size, "lookup size"))
-        if hold is not None:
-            node["hold"] = check_ident(hold, "hold")
-        self._emit({"lookup": node})
-        self._top.bindings[bind] = None
-        return Ref(bind)
-
-    def _range(self, what: str, cache: str, tier: str, seq, per) -> dict:
+    def _keys(self, what: str, cache: str, tier: str, keys) -> dict:
         if not any(f.kind == "timeline" for f in self._frames):
             raise BuildError(f"{what}: no timeline declares cache {cache!r} around it (V33)")
-        return {"cache": check_ident(cache, "cache"), "tier": check_ident(tier, "tier"),
-                "seq": ast_of(lift(seq, f"{what} seq")), "per": ast_of(lift(per, f"{what} per"))}
+        if not isinstance(keys, Keys):
+            raise BuildError(f"{what}: its keys are a key range, keys(...) or chunk_keys(...), not {type(keys).__name__} (V33)")
+        return {"cache": check_ident(cache, "cache"), "tier": check_ident(tier, "tier"), "keys": keys.node}
 
-    def probe(self, cache: str, tier: str, seq, per, frm, bind: str) -> Ref:
-        """The longest run of `seq`'s whole chunks of `per` blocks from chunk `frm` held in `tier`
-        of `cache`, bound to `bind`; nothing changed (contract 0.19, rule V33). Returns the
-        binding, which `@` and `prev` may not read."""
+    def probe(self, cache: str, tier: str, keys, bind: str) -> Ref:
+        """The longest leading run of `keys` (a key range, `keys(...)` or `chunk_keys(...)`) held
+        in `tier` of `cache`, bound to `bind`; nothing changed (contract 0.19, keys 0.23, rule
+        V33). Returns the binding, which `@` and `prev` may not read."""
         check_ident(bind, "binding")
-        node = self._range("probe", cache, tier, seq, per)
-        node["from"] = ast_of(lift(frm, "probe from"))
+        node = self._keys("probe", cache, tier, keys)
         node["bind"] = bind
         self._emit({"probe": node})
         self._top.bindings[bind] = None
         return Ref(bind)
 
-    def _chosen(self, what: str, node: dict, frm, count, chunks):
-        """A `touch` or `store`'s chunks: `frm` and `count`, or the array `chunks` (an `array`'s
-        ArrayRef, a store's `taken`, or a parameter array's name), not both (contract 0.19, V33)."""
-        if chunks is not None:
-            if frm is not None or count is not None:
-                raise BuildError(f"{what}: `chunks` in place of `from` and `count`, not beside them (V33)")
-            node["chunks"] = check_ident(chunks.name if isinstance(chunks, ArrayRef) else chunks, "chunks")
-        elif frm is None or count is None:
-            raise BuildError(f"{what}: a range needs `from` and `count`, or `chunks` (V33)")
-        else:
-            node["from"] = ast_of(lift(frm, f"{what} from"))
-            node["count"] = ast_of(lift(count, f"{what} count"))
+    def touch(self, cache: str, tier: str, keys):
+        """Those of `keys` that `tier` of `cache` holds, touched as one event (contract 0.19,
+        keys 0.23, rule V33)."""
+        self._emit({"touch": self._keys("touch", cache, tier, keys)})
 
-    def touch(self, cache: str, tier: str, seq, per, frm=None, count=None, *, chunks=None):
-        """The chunks `frm` to `frm + count`, or those whose indices the array `chunks` holds, that
-        `tier` of `cache` holds, touched as one event (contract 0.19, rule V33)."""
-        node = self._range("touch", cache, tier, seq, per)
-        self._chosen("touch", node, frm, count, chunks)
-        self._emit({"touch": node})
-
-    def store(self, cache: str, tier: str, seq, per, frm=None, count=None, size=None, bind: str | None = None, *,
-              chunks=None, present: str | None = None, taken: str | None = None):
-        """The chunks `frm` to `frm + count`, or those whose indices the array `chunks` holds, that
-        `tier` of `cache` lacks, stored as one event, `size` each in a tier that counts bytes;
-        with `present="renew"`, those it holds stored again as if absent (contract 0.19, rule V33).
-        With `bind`, the leading run of the range held after it (a planned drop leaves it short);
-        with `taken`, an array of the indices of the chunks it stored. Returns the binding's Ref,
-        the ArrayRef of `taken`, both as a pair, or None."""
-        node = self._range("store", cache, tier, seq, per)
-        self._chosen("store", node, frm, count, chunks)
+    def store(self, cache: str, tier: str, keys, size=None, *, present: str | None = None, hold: str | None = None,
+              found: str | None = None, bind: str | None = None, taken: str | None = None):
+        """Those of `keys` that `tier` of `cache` lacks, stored as one event, `size` each in a
+        tier that counts bytes; those it holds left (`present="keep"`, the default), stored
+        again as if absent (`"renew"`), or touched (`"touch"`, contract 0.23), before anything
+        is stored. With `hold` (only with `present="touch"`, rule V34), what it touched and
+        stored is this lane's until `release(hold)`. With `found`, the leading run of the keys
+        held before it changed anything; with `bind`, the leading run held after it (a planned
+        drop leaves it short); with `taken`, an array of the indices it stored. Returns the
+        Refs of `found` and `bind` and the ArrayRef of `taken`, those given, one alone or a
+        tuple in that order, or None (contract 0.19, keys 0.23, rule V33)."""
+        node = self._keys("store", cache, tier, keys)
         if size is not None:
             node["size"] = ast_of(lift(size, "store size"))
         if present is not None:
-            if present not in ("keep", "renew"):
-                raise BuildError(f"store present: one of keep, renew, not {present!r}")
+            if present not in ("keep", "renew", "touch"):
+                raise BuildError(f"store present: one of keep, renew, touch, not {present!r}")
             node["present"] = present
-        if bind is not None:
-            node["bind"] = check_ident(bind, "binding")
+        if hold is not None:
+            if present != "touch":
+                raise BuildError(f"store: `hold` {hold!r} holds what a store of present=\"touch\" touches and stores (V34)")
+            node["hold"] = check_ident(hold, "hold")
+        for k, b in (("found", found), ("bind", bind)):
+            if b is not None:
+                node[k] = check_ident(b, "binding")
         if taken is not None:
             check_ident(taken, "taken")
             if taken in self.wl._param_specs:
@@ -1083,12 +1055,22 @@ class Cursor:
             node["taken"] = taken
         self._emit({"store": node})
         out = []
-        if bind is not None:
-            self._top.bindings[bind] = None
-            out.append(Ref(bind))
+        for b in (found, bind):
+            if b is not None:
+                self._top.bindings[b] = None
+                out.append(Ref(b))
         if taken is not None:
             out.append(ArrayRef(taken))
         return None if not out else out[0] if len(out) == 1 else tuple(out)
+
+    def lookup(self, cache: str, tier: str, keys, bind: str, size=None, hold: str | None = None) -> Ref:
+        """A lookup that stores what it missed: the longest leading run of `keys` held in
+        `tier` of `cache`, bound to `bind`; the keys it holds touched, the others stored, and
+        with `hold` all of them this lane's until `release(hold)`. On a tier that waits when
+        full it waits, before it changes anything, until all of it fits. Library, not contract
+        (ARCHITECTURE.md 7.1; the `lookup` node of contracts 0.16 to 0.22): one `store` of
+        `present="touch"` with `found`."""
+        return self.store(cache, tier, keys, size, present="touch", hold=hold, found=bind)
 
     def acquire(self, resource: str, n, hold: str):
         """`n` units of a resource of the enclosing timeline, this lane's under `hold` until
@@ -1473,6 +1455,54 @@ class TimelineGroup:
 
     def entry(self, index, key: str) -> Expr:
         return Entry(self.name, index, key, self.gid)
+
+
+class Keys:
+    """A key range of a `probe`, `touch`, or `store` (contract 0.23): made by `keys` or
+    `chunk_keys`."""
+
+    def __init__(self, node: dict):
+        self.node = node
+
+
+def keys(index: str, count, key, frm=0) -> Keys:
+    """The key range of `count` keys from index `frm`: `key`, a function of the index (or an
+    expression that reads `Index(index)`), computed at each. The cache knows a key as an
+    integer; an entry's `pos` is its index (contract 0.23, rule V33)."""
+    idx = Index(check_ident(index, "keys index"))
+    k = key(idx) if callable(key) else key
+    node = {"index": index}
+    if not (isinstance(frm, int) and not isinstance(frm, bool) and frm == 0):
+        node["from"] = ast_of(lift(frm, "keys from"))
+    node["count"] = ast_of(lift(count, "keys count"))
+    node["key"] = ast_of(lift(k, "keys key"))
+    return Keys(node)
+
+
+def chunk_keys(seq, per, frm=0, count=None, *, chunks=None, index: str = "j", clip: bool = True) -> Keys:
+    """The keys of whole chunks of `per` blocks of the sequence `seq`, a binding: chunks `frm`
+    to `frm + count` (to the sequence's end with no `count`), cut at the sequence's end unless
+    `clip=False`, each one's `pos` its chunk index; or the chunks whose indices the array
+    `chunks` holds (an `array`'s or a `taken`'s ArrayRef, or a parameter array's name), in its
+    order, each one's `pos` its index in the array. Library over `keys` and `chunk_key`."""
+    from .dists import chunk_key, seq_len, min_, max_
+    if not isinstance(seq, Ref):
+        raise BuildError("chunk_keys: the sequence is a binding (let it first): written in the key, its expression "
+                         "would be computed again at every index")
+    if chunks is not None:
+        if count is not None or not (isinstance(frm, int) and frm == 0):
+            raise BuildError("chunk_keys: `chunks` in place of `frm` and `count`, not beside them")
+        arr = chunks if isinstance(chunks, ArrayRef) else ArrayRef(check_ident(chunks, "chunks"))
+        return keys(index, arr.len, lambda j: chunk_key(seq, arr[j], per))
+    n = seq_len(seq) // per
+    zero = isinstance(frm, int) and not isinstance(frm, bool) and frm == 0
+    if clip and not zero:
+        frm = min_(frm, n)
+    if count is None:
+        count = n if zero else max_(0, n - frm)
+    elif clip:
+        count = max_(0, min_(count, n if zero else n - frm))
+    return keys(index, count, lambda j: chunk_key(seq, j, per), frm=frm)
 
 
 class ArrayRef:

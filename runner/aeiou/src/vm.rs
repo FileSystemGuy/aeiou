@@ -6,7 +6,7 @@
 //!
 //! Definitions the runner fixes here (`schema/README.md` §5 leaves them to it):
 //! - a draw at site `s` inside frames with indices `i₁ … iₙ` is `Words(position_key(seed,
-//!   actor, s, [i₁ … iₙ]))`; a `choose` is the same with the statement's site;
+//!   actor, s, [i₁ … iₙ]))`;
 //! - `consume` position: with the enclosing `loader` (else the innermost loop) as the batch
 //!   frame, `b` is the row-major ordinal of the frames down to and including it, `j` and `B`
 //!   the ordinal and the product of the frames inside it; an epoch is `N div (G·B)` batches
@@ -1614,6 +1614,12 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         if per <= 0 {
             return other(format!("{what}: `per` {per}, not positive"));
         }
+        // a key range asks for the same sequence's keys at every index: the latest first
+        if let Some((q, p, keys)) = self.key_memo.last() {
+            if Arc::ptr_eq(q, s) && *p == per {
+                return Ok(keys.clone());
+            }
+        }
         if let Some(i) = self.key_memo.iter().position(|(q, p, _)| Arc::ptr_eq(q, s) && *p == per) {
             let m = self.key_memo.remove(i);
             let keys = m.2.clone();
@@ -1652,68 +1658,65 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         true
     }
 
-    /// A `probe`, `touch`, or `store`'s keys, one a whole chunk of `seq`, and its range, `from`
-    /// to `from + count` cut at the sequence's end (contract 0.19).
-    fn range(&mut self, s: &'a Expr, per: &'a Expr, from: &'a Expr, count: Option<&'a Expr>, what: &str) -> ER<(Vec<i64>, usize, usize)> {
-        let s = self.seq_of(s, what)?;
-        let per = self.expr(per)?.as_int()?;
-        let from = self.expr(from)?.as_int()?;
-        if from < 0 {
-            return other(format!("{what}: from {from}, below the first chunk"));
+    /// A `probe`, `touch`, or `store`'s keys with their indices (contract 0.23): `key` with the
+    /// range's `index` bound to `from`, `from + 1`, ..., `count` of them, as an `array`'s value
+    /// is computed.
+    fn keys(&mut self, keys: &'a Keys, what: &str) -> ER<Vec<(i64, i64)>> {
+        let from = match &keys.from {
+            Some(e) => self.expr(e)?.as_int()?,
+            None => 0,
+        };
+        let n = self.expr(&keys.count)?.as_int()?;
+        if n < 0 {
+            return other(format!("{what}: count {n}"));
         }
-        let count = match count {
-            Some(c) => {
-                let n = self.expr(c)?.as_int()?;
-                if n < 0 {
-                    return other(format!("{what}: count {n}"));
-                }
-                Some(n)
-            }
-            None => None,
-        };
-        let keys: Vec<i64> = self.chunk_keys(&s, per, what)?.iter().map(|h| seq::key(*h)).collect();
-        let n = keys.len();
-        let from = (from as u64).min(n as u64) as usize;
-        let to = match count {
-            Some(c) => (from as u64).saturating_add(c as u64).min(n as u64) as usize,
-            None => n,
-        };
-        Ok((keys, from, to))
-    }
-
-    /// A `touch` or `store`'s keys and the indices of the chunks it acts on, in order: `from`
-    /// to `from + count` cut at the sequence's end, or the elements of the array `chunks`
-    /// (contract 0.19).
-    fn chosen(&mut self, s: &'a Expr, per: &'a Expr, from: Option<&'a Expr>, count: Option<&'a Expr>, chunks: Option<&'a str>, what: &str) -> ER<(Vec<i64>, Vec<usize>)> {
-        match (from, count, chunks) {
-            (Some(f), Some(c), None) => {
-                let (keys, from, to) = self.range(s, per, f, Some(c), what)?;
-                Ok((keys, (from..to).collect()))
-            }
-            (None, None, Some(name)) => {
-                let vals: Vec<Value<'a>> = match self.computed(name) {
-                    Some(a) => a.to_vec(),
-                    None => match self.array(name, what) {
-                        Ok(a) => a.iter().map(Value::from_pvalue).collect(),
-                        Err(_) => return other(format!("{what}: no array `{name}` in scope")),
-                    },
+        if from.checked_add(n).is_none() {
+            return other(format!("{what}: {n} keys from {from} pass 2^63-1"));
+        }
+        // the common key, `chunk_key` of a bound sequence at the range's index: the sequence's
+        // keys computed once and read at each index, the values and the refusal `chunk_key` gives
+        if let (true, Expr::Node(k)) = (n > 0, &keys.key) {
+            if let ExprNode::ChunkKey { seq: seq @ Expr::Node(sn), chunk: Expr::Node(cn), per } = &**k {
+                let bound = matches!(&**sn, ExprNode::Ref(_));
+                let at_index = matches!(&**cn, ExprNode::Index(i) if *i == keys.index);
+                let fixed = match per {
+                    Expr::Lit(_) => true,
+                    Expr::Node(pn) => matches!(&**pn, ExprNode::Param(_) | ExprNode::Ref(_)),
                 };
-                let s = self.seq_of(s, what)?;
-                let per = self.expr(per)?.as_int()?;
-                let keys: Vec<i64> = self.chunk_keys(&s, per, what)?.iter().map(|h| seq::key(*h)).collect();
-                let mut idx = Vec::with_capacity(vals.len());
-                for v in vals {
-                    let i = v.as_int()?;
-                    if i < 0 || i as u64 >= keys.len() as u64 {
-                        return other(format!("{what}: chunk {i}, outside the sequence's {} chunks", keys.len()));
+                if bound && at_index && fixed {
+                    let s = self.seq_of(seq, "chunk_key")?;
+                    let per = self.expr(per)?.as_int()?;
+                    let all = self.chunk_keys(&s, per, "chunk_key")?;
+                    let mut got = Vec::with_capacity(n as usize);
+                    for c in from..from + n {
+                        match usize::try_from(c).ok().and_then(|i| all.get(i)) {
+                            Some(h) => got.push((seq::key(*h), c)),
+                            None => return other(format!("chunk_key: chunk {c} of a sequence of {} whole chunks of {per}", all.len())),
+                        }
                     }
-                    idx.push(i as usize);
+                    return Ok(got);
                 }
-                Ok((keys, idx))
             }
-            (_, _, Some(_)) => other(format!("{what}: `chunks` in place of `from` and `count`, not beside them (V33)")),
-            _ => other(format!("{what}: a range needs `from` and `count`, or `chunks` (V33)")),
         }
+        self.frames.push(Frame { name: keys.index.as_str(), idx: from, from, step: 1, iters: n, loader: false });
+        self.depth = self.frames.len();
+        let mut got = Vec::with_capacity(n as usize);
+        let mut r = Ok(());
+        for j in 0..n {
+            // a frame's `idx` is the index's value
+            self.frames.last_mut().unwrap().idx = from + j;
+            match self.expr(&keys.key).and_then(|v| Ok(v.as_int()?)) {
+                Ok(k) => got.push((k, from + j)),
+                Err(e) => {
+                    r = Err(e);
+                    break;
+                }
+            }
+        }
+        self.frames.pop();
+        self.depth = self.frames.len();
+        r?;
+        Ok(got)
     }
 
     /// The enclosing timeline, for a statement that names one of its caches (V33).
@@ -2578,169 +2581,38 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 tl.lock().unwrap().entries.entry(group).or_default().push((self.clock, got));
                 Ok(None)
             }
-            Node::Lookup { cache, tier, seq: s, per, bind, size, hold } => {
-                let s = self.seq_of(s, "lookup")?;
-                let per = self.expr(per)?.as_int()?;
-                let size = match size {
-                    Some(e) => self.expr(e)?.as_int()?,
-                    None => 1,
-                };
-                let keys = self.chunk_keys(&s, per, "lookup")?;
-                let Some(tl) = self.tl.clone() else {
-                    return other(format!("lookup: no timeline declares cache `{cache}` around it (V33)"));
-                };
-                if let Some(h) = hold {
-                    self.not_held(h, "lookup")?;
-                }
-                let mut guard = tl.lock().unwrap();
-                let g = &mut *guard;
-                let w: Waitable<'a> = (cache.as_str(), tier.as_str());
-                let Some(t) = g.tiers.get_mut(&w) else {
-                    return other(format!("lookup: cache `{cache}` has no tier `{tier}` (V33)"));
-                };
-                let keys: Vec<i64> = keys.iter().map(|h| seq::key(*h)).collect();
-                let hit = keys.iter().take_while(|k| t.entries.contains_key(k)).count();
-                // the keys once each, with the index each first comes at
-                let mut seen = std::collections::HashSet::with_capacity(keys.len());
-                let uniq: Vec<(i64, i64)> = keys.iter().enumerate().filter(|(_, k)| seen.insert(**k)).map(|(i, k)| (*k, i as i64)).collect();
-                let unit = if t.bytes { size } else { 1 };
-                if let (Some(cap), Full::Wait | Full::Fail) = (t.capacity, t.full) {
-                    // the whole lookup fits, or it waits (or fails) before it changes anything
-                    let mut need = 0i64;
-                    let mut found_unheld = 0i64;
-                    for (k, _) in &uniq {
-                        match t.entries.get(k) {
-                            None => need += unit,
-                            Some(e) if e.holds == 0 && t.order.is_some() => found_unheld += e.size,
-                            Some(_) => {}
-                        }
-                    }
-                    let free = cap - t.used + if t.order.is_some() && !t.timed { t.unheld - found_unheld } else { 0 };
-                    let waiting = g.waiters.get(&w).is_some_and(|q| q.front().is_some_and(|&l| l != self.lane));
-                    if need > cap {
-                        return other(format!("lookup: {need} of new entries in tier `{tier}` of cache `{cache}`, past its capacity {cap}, can never fit"));
-                    }
-                    if need > free || (waiting && t.full == Full::Wait) {
-                        if t.full == Full::Fail {
-                            return other(format!("lookup: tier `{tier}` of cache `{cache}` is full: {need} more past its capacity {cap} (full: fail)"));
-                        }
-                        let q = g.waiters.entry(w).or_default();
-                        if !q.contains(&self.lane) {
-                            q.push_back(self.lane);
-                        }
-                        return Ok(Some(Next::Block));
-                    }
-                    let q = g.waiters.entry(w).or_default();
-                    if q.front() == Some(&self.lane) {
-                        q.pop_front();
-                        if !q.is_empty() {
-                            g.wake.push((w, self.clock));
-                        }
-                    }
-                }
-                let t = g.tiers.get_mut(&w).unwrap();
-                let present: std::collections::HashSet<i64> = uniq.iter().filter(|(k, _)| t.entries.contains_key(k)).map(|(k, _)| *k).collect();
-                let mut held = Vec::new();
-                let mut gone = Vec::new();
-                // the keys held first, then the others stored, each in order
-                for &(k, pos) in &uniq {
-                    let Some(e) = t.entries.get_mut(&k) else { continue };
-                    t.stamp += 1;
-                    e.touched = t.stamp;
-                    e.hits += 1;
-                    e.pos = pos;
-                    if e.holds == 0 {
-                        if let Some(old) = e.ord.take() {
-                            t.victims.remove(&old);
-                            t.unheld -= e.size;
-                        }
-                    }
-                    if hold.is_some() {
-                        e.holds += 1;
-                        held.push(k);
-                    } else if e.holds == 0 {
-                        let order = t.order.unwrap_or(&[]);
-                        if !order.is_empty() {
-                            let o = (self.order_of(order, e.attrs())?, e.stored as u64, e.pos, k);
-                            t.victims.insert(o.clone(), k);
-                            t.unheld += e.size;
-                            e.ord = Some(o);
-                        }
-                    }
-                }
-                for &(k, pos) in &uniq {
-                    if present.contains(&k) {
-                        continue;
-                    }
-                    if let Some(cap) = t.capacity {
-                        if unit > cap {
-                            continue;
-                        }
-                        if !Self::make_room(t, unit, cap, &mut gone) {
-                            match t.full {
-                                Full::Skip => continue,
-                                _ => return other(format!("lookup: tier `{tier}` of cache `{cache}` found no room it had counted")),
-                            }
-                        }
-                    }
-                    t.stamp += 1;
-                    let mut e = Ent { size: unit, stored: t.stamp, touched: t.stamp, freed: t.stamp, hits: 0, pos, holds: 0, ord: None };
-                    if hold.is_some() {
-                        e.holds = 1;
-                        held.push(k);
-                    } else if let Some(order) = t.order {
-                        let o = (self.order_of(order, e.attrs())?, e.stored as u64, e.pos, k);
-                        t.victims.insert(o.clone(), k);
-                        t.unheld += unit;
-                        e.ord = Some(o);
-                    }
-                    t.used += unit;
-                    t.entries.insert(k, e);
-                }
-                if t.on_evict && !gone.is_empty() {
-                    g.evicted.push((w, self.clock, gone));
-                }
-                drop(guard);
-                if let Some(h) = hold {
-                    self.holds.push((h.as_str(), Hold::Tier { cache: cache.as_str(), tier: tier.as_str(), keys: held }));
-                }
-                let level = self.scopes.last_mut().unwrap();
-                level.bindings.insert(bind.as_str(), Binding { value: Value::Int(hit as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
-                Ok(None)
-            }
-            Node::Probe { cache, tier, seq: s, per, from, bind } => {
-                let (keys, from, _) = self.range(s, per, from, None, "probe")?;
+            Node::Probe { cache, tier, keys, bind } => {
+                let ks = self.keys(keys, "probe")?;
                 let tl = self.cache_of(cache, "probe")?;
                 let g = tl.lock().unwrap();
                 let Some(t) = g.tiers.get(&(cache.as_str(), tier.as_str())) else {
                     return other(format!("probe: cache `{cache}` has no tier `{tier}` (V33)"));
                 };
-                let hit = keys.iter().skip(from).take_while(|k| t.entries.contains_key(k)).count();
+                let hit = ks.iter().take_while(|(k, _)| t.entries.contains_key(k)).count();
                 drop(g);
                 let level = self.scopes.last_mut().unwrap();
                 level.bindings.insert(bind.as_str(), Binding { value: Value::Int(hit as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
                 Ok(None)
             }
-            Node::Touch { cache, tier, seq: s, per, from, count, chunks } => {
-                let (keys, idx) = self.chosen(s, per, from.as_ref(), count.as_ref(), chunks.as_deref(), "touch")?;
+            Node::Touch { cache, tier, keys } => {
+                let ks = self.keys(keys, "touch")?;
                 let tl = self.cache_of(cache, "touch")?;
                 let mut guard = tl.lock().unwrap();
                 let Some(t) = guard.tiers.get_mut(&(cache.as_str(), tier.as_str())) else {
                     return other(format!("touch: cache `{cache}` has no tier `{tier}` (V33)"));
                 };
-                // one event for the statement: `pos` orders the chunks it touches
+                // one event for the statement: `pos` orders the keys it touches
                 t.stamp += 1;
                 let now = t.stamp;
                 let mut seen = std::collections::HashSet::new();
-                for &pos in &idx {
-                    let k = keys[pos];
+                for &(k, pos) in &ks {
                     if !seen.insert(k) {
                         continue;
                     }
                     let Some(e) = t.entries.get_mut(&k) else { continue };
                     e.touched = now;
                     e.hits += 1;
-                    e.pos = pos as i64;
+                    e.pos = pos;
                     if e.holds == 0 {
                         if let Some(old) = e.ord.take() {
                             t.victims.remove(&old);
@@ -2752,13 +2624,16 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 Ok(None)
             }
-            Node::Store { cache, tier, seq: s, per, from, count, chunks, size, bind, present, taken } => {
-                let (keys, idx) = self.chosen(s, per, from.as_ref(), count.as_ref(), chunks.as_deref(), "store")?;
+            Node::Store { cache, tier, keys, size, present, hold, found, bind, taken } => {
+                let ks = self.keys(keys, "store")?;
                 let size = match size {
                     Some(e) => self.expr(e)?.as_int()?,
                     None => 1,
                 };
                 let tl = self.cache_of(cache, "store")?;
+                if let Some(h) = hold {
+                    self.not_held(h, "store")?;
+                }
                 let mut guard = tl.lock().unwrap();
                 let g = &mut *guard;
                 let w: Waitable<'a> = (cache.as_str(), tier.as_str());
@@ -2766,19 +2641,89 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     return other(format!("store: cache `{cache}` has no tier `{tier}` (V33)"));
                 };
                 let unit = if t.bytes { size } else { 1 };
+                // the keys once each, at the index each first comes at
+                let mut seen = std::collections::HashSet::with_capacity(ks.len());
+                let uniq: Vec<(i64, i64)> = ks.iter().filter(|(k, _)| seen.insert(*k)).copied().collect();
+                // the leading runs are counted only for a binding that reads them
+                let before = if found.is_some() { ks.iter().take_while(|(k, _)| t.entries.contains_key(k)).count() } else { 0 };
+                if *present == Present::Touch {
+                    if let (Some(cap), Full::Wait | Full::Fail) = (t.capacity, t.full) {
+                        // the whole store fits, or it waits (or fails) before it changes anything
+                        let mut need = 0i64;
+                        let mut found_unheld = 0i64;
+                        for (k, _) in &uniq {
+                            match t.entries.get(k) {
+                                None => need += unit,
+                                Some(e) if e.holds == 0 && t.order.is_some() => found_unheld += e.size,
+                                Some(_) => {}
+                            }
+                        }
+                        let free = cap - t.used + if t.order.is_some() && !t.timed { t.unheld - found_unheld } else { 0 };
+                        let waiting = g.waiters.get(&w).is_some_and(|q| q.front().is_some_and(|&l| l != self.lane));
+                        if need > cap {
+                            return other(format!("store: {need} of new entries in tier `{tier}` of cache `{cache}`, past its capacity {cap}, can never fit"));
+                        }
+                        if need > free || (waiting && t.full == Full::Wait) {
+                            if t.full == Full::Fail {
+                                return other(format!("store: tier `{tier}` of cache `{cache}` is full: {need} more past its capacity {cap} (full: fail)"));
+                            }
+                            let q = g.waiters.entry(w).or_default();
+                            if !q.contains(&self.lane) {
+                                q.push_back(self.lane);
+                            }
+                            return Ok(Some(Next::Block));
+                        }
+                        let q = g.waiters.entry(w).or_default();
+                        if q.front() == Some(&self.lane) {
+                            q.pop_front();
+                            if !q.is_empty() {
+                                g.wake.push((w, self.clock));
+                            }
+                        }
+                    }
+                }
+                let t = g.tiers.get_mut(&w).unwrap();
+                // one event for the statement: `pos` orders the keys it touches and stores
                 t.stamp += 1;
                 let now = t.stamp;
                 let mut gone = Vec::new();
                 let mut took = Vec::new();
-                let mut seen = std::collections::HashSet::new();
-                for &pos in &idx {
-                    let k = keys[pos];
-                    if !seen.insert(k) {
+                let mut held = Vec::new();
+                let mut touched = std::collections::HashSet::new();
+                if *present == Present::Touch {
+                    // the keys held first, touched (and held, out of the victim order) before
+                    // any room is made, so a store never evicts what it found
+                    for &(k, pos) in &uniq {
+                        let Some(e) = t.entries.get_mut(&k) else { continue };
+                        touched.insert(k);
+                        e.touched = now;
+                        e.hits += 1;
+                        e.pos = pos;
+                        if e.holds == 0 {
+                            if let Some(old) = e.ord.take() {
+                                t.victims.remove(&old);
+                                if hold.is_some() {
+                                    t.unheld -= e.size;
+                                } else {
+                                    let o = (self.order_of(t.order.expect("an entry in the victim order has an order"), e.attrs())?, e.stored as u64, e.pos, k);
+                                    t.victims.insert(o.clone(), k);
+                                    e.ord = Some(o);
+                                }
+                            }
+                        }
+                        if hold.is_some() {
+                            e.holds += 1;
+                            held.push(k);
+                        }
+                    }
+                }
+                for &(k, pos) in &uniq {
+                    if touched.contains(&k) {
                         continue;
                     }
                     if let Some(e) = t.entries.get(&k) {
                         // renew: the held entry goes, without being a victim, and is stored new
-                        if *present == Present::Keep || e.holds > 0 {
+                        if *present != Present::Renew || e.holds > 0 {
                             continue;
                         }
                         let e = t.entries.remove(&k).expect("held");
@@ -2790,14 +2735,19 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     }
                     if let Some(cap) = t.capacity {
                         if !Self::make_room(t, unit, cap, &mut gone) {
-                            match t.full {
-                                Full::Fail => return other(format!("store: tier `{tier}` of cache `{cache}` is full: past its capacity {cap} (full: fail)")),
+                            match (*present, t.full) {
+                                (Present::Touch, Full::Skip) => continue,
+                                (Present::Touch, _) => return other(format!("store: tier `{tier}` of cache `{cache}` found no room it had counted")),
+                                (_, Full::Fail) => return other(format!("store: tier `{tier}` of cache `{cache}` is full: past its capacity {cap} (full: fail)")),
                                 _ => continue,
                             }
                         }
                     }
-                    let mut e = Ent { size: unit, stored: now, touched: now, freed: now, hits: 0, pos: pos as i64, holds: 0, ord: None };
-                    if let Some(order) = t.order {
+                    let mut e = Ent { size: unit, stored: now, touched: now, freed: now, hits: 0, pos, holds: 0, ord: None };
+                    if hold.is_some() {
+                        e.holds = 1;
+                        held.push(k);
+                    } else if let Some(order) = t.order {
                         let o = (self.order_of(order, e.attrs())?, e.stored as u64, e.pos, k);
                         t.victims.insert(o.clone(), k);
                         t.unheld += unit;
@@ -2805,16 +2755,21 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     }
                     t.used += unit;
                     t.entries.insert(k, e);
-                    took.push(Value::Int(pos as i64));
+                    took.push(Value::Int(pos));
                 }
-                let held = idx.iter().take_while(|&&i| t.entries.contains_key(&keys[i])).count();
+                let after = if bind.is_some() { ks.iter().take_while(|(k, _)| t.entries.contains_key(k)).count() } else { 0 };
                 if t.on_evict && !gone.is_empty() {
                     g.evicted.push((w, self.clock, gone));
                 }
                 drop(guard);
+                if let Some(h) = hold {
+                    self.holds.push((h.as_str(), Hold::Tier { cache: cache.as_str(), tier: tier.as_str(), keys: held }));
+                }
                 let level = self.scopes.last_mut().unwrap();
-                if let Some(b) = bind {
-                    level.bindings.insert(b.as_str(), Binding { value: Value::Int(held as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
+                for (name, n) in [(found, before), (bind, after)] {
+                    if let Some(b) = name {
+                        level.bindings.insert(b.as_str(), Binding { value: Value::Int(n as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
+                    }
                 }
                 if let Some(a) = taken {
                     level.arrays.insert(a.as_str(), Arc::from(took));
@@ -2984,24 +2939,6 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 } else if let Some(b) = otherwise {
                     self.push_body(b);
                 }
-                Ok(None)
-            }
-            Node::Choose { arms, site } => {
-                let total: f64 = arms.iter().map(|a| a.weight).sum();
-                if total <= 0.0 {
-                    return other("choose: total weight is zero");
-                }
-                let u = Words::new(self.draw_key(site.get())).next_f64() * total;
-                let mut acc = 0.0;
-                let mut chosen = arms.len() - 1;
-                for (i, arm) in arms.iter().enumerate() {
-                    acc += arm.weight;
-                    if u < acc {
-                        chosen = i;
-                        break;
-                    }
-                }
-                self.push_body(&arms[chosen].body);
                 Ok(None)
             }
             Node::Submit { workers, body } => {
@@ -3511,7 +3448,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.22", "name": "t",
+                r#"{{"ast": "0.23", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

@@ -1,5 +1,5 @@
 {
-  "ast": "0.22",
+  "ast": "0.23",
   "name": "npy_per_sample",
   "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
   "params": {
@@ -1061,10 +1061,10 @@
       "script": "npy_per_sample.py",
       "sha256": "1b96bb02d702a08494e6ad9ff4a8ac2a12245eeeb771cdaf557d1ea4cdb480aa",
       "builder_version": "0.4.0",
-      "git": "9d05cef8f0a6"
+      "git": "f8938ebf103a"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "1d541cb7ca6488d88ec4188c9a3b641a6c6804f718bfdc3b5fabf9b6f0b6978c"
+    "ast_sha256": "cf23af25720ffa5de0714cd63d59cf8fa46a5d0e1dc0a5603c0d4ced26cc1583"
   }
 }

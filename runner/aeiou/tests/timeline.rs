@@ -24,7 +24,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(params: Value, body: Value) -> String {
-    json!({"ast": "0.22", "name": "t", "params": params,
+    json!({"ast": "0.23", "name": "t", "params": params,
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -308,7 +308,7 @@ fn run_issues_a_timeline_on_every_backend() {
         json!({"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}}),
         json!({"submit": {"workers": "w", "body": write}}), json!({"compute": {"ns": 50_000_000}})];
     session.extend(read.as_array().unwrap().iter().cloned());
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "workers": [{"name": "w", "lanes": 2, "staging": 1 << 20}],
             "body": [{"parallel": {"index": "k", "width": 3, "body": session}}]}}]}}}).to_string();
@@ -343,7 +343,7 @@ fn run_issues_a_timeline_on_every_backend() {
     assert_eq!(r.status.code(), Some(2), "{err}");
     assert!(err.contains("a timeline's planned clock is the workload"), "{err}");
     // an op outside the timeline of an actor whose body has one is not issued yet
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [
             {"let": {"name": "g", "value": {"object": {"namespace": "kv", "fields": {"key": 9}}}}},
@@ -370,7 +370,7 @@ fn blocking_timeline_lanes_reuse_their_threads() {
         {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
         {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}},
         {"compute": {"ns": 300_000_000}}]);
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl",
             "body": [{"loop": {"index": "k", "to": 5, "body": [{"parallel": {"index": "j", "width": 1, "body": session}}]}}]}}]}}}).to_string();
@@ -391,7 +391,7 @@ fn blocking_timeline_lanes_reuse_their_threads() {
 #[test]
 fn a_failing_op_on_a_blocking_timeline_lane_ends_the_run() {
     let rf = |n: &str| json!({"ref": n});
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 2, "body": [
             {"compute": {"ns": {"mul": [{"index": "k"}, 50_000_000]}}},
@@ -416,7 +416,7 @@ fn a_failing_op_on_a_blocking_timeline_lane_ends_the_run() {
 #[test]
 fn a_blocking_timeline_over_many_paths_retires_them() {
     let rf = |n: &str| json!({"ref": n});
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 0, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"loop": {"index": "k", "to": 1500, "body": [
             {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
@@ -442,7 +442,7 @@ fn a_run_reports_its_spans_and_lag() {
         {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}},
         {"compute": {"ns": 20_000_000}},
         {"span": {"name": "load", "body": [{"open": {"file": rf("f"), "flags": ["RDONLY"]}}, {"read": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]}}]);
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 3, "body": session}}]}}]}}}).to_string();
     let dir = crate::common::tmpdir("timeline", "spans");
@@ -472,19 +472,19 @@ fn a_run_reports_its_spans_and_lag() {
 }
 
 /// The spans an abstract declares, wherever its timelines' lanes hold them: in a loop, a branch of
-/// a `cond` or a `choose`, a `parallel`, or a `phase` (what a constraint's `result.span.SPAN.` is
+/// a `cond`, a `parallel`, or a `phase` (what a constraint's `result.span.SPAN.` is
 /// checked against when the lock is read).
 #[test]
 fn an_abstracts_span_names_are_found_anywhere_in_its_timelines() {
     let st = json!({"stat": {"file": {"file": {"dataset": "d", "id": 1}}}});
     let sp = |n: &str| json!({"span": {"name": n, "body": [st.clone()]}});
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [
             {"loop": {"index": "i", "to": 2, "body": [sp("a")]}},
             {"cond": {"if": {"eq": [1, 1]}, "then": [sp("b")], "else": [sp("c")]}},
             {"cond": {"if": {"eq": [1, 1]}, "then": [st.clone()]}},
-            {"choose": {"arms": [{"weight": 1, "body": [sp("d")]}]}},
+            {"cond": {"if": {"eq": [1, 2]}, "then": [], "else": [{"cond": {"if": {"eq": [1, 1]}, "then": [sp("d")]}}]}},
             {"parallel": {"index": "k", "width": 1, "body": [{"phase": {"name": "p", "body": [sp("e")]}}]}}]}}]}}}).to_string();
     let loaded = aeiou::load_str(&text).unwrap_or_else(|e| panic!("{e:#}"));
     assert_eq!(loaded.ast.span_names().into_iter().collect::<Vec<_>>(), ["a", "b", "c", "d", "e"]);
@@ -501,7 +501,7 @@ fn a_would_be_drop_makes_the_run_invalid() {
         {"submit": {"workers": "store", "body": [{"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]}}]);
     let mut body: Vec<Value> = store(1).as_array().unwrap().clone();
     body.extend(store(2).as_array().unwrap().iter().cloned());
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "workers": [{"name": "store", "lanes": 2, "staging": 4096}], "body": body}}]}}}).to_string();
     let dir = crate::common::tmpdir("timeline", "drop");
@@ -538,7 +538,7 @@ fn the_lag_ceiling_stops_a_run_that_then_did_not_pass() {
         body.push(json!({"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": k}}}}}));
         body.extend([json!({"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}), json!({"write": {"file": rf("f"), "len": 4096}}), json!({"close": {"file": rf("f")}})]);
     }
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": body}}]}}}).to_string();
     let dir = crate::common::tmpdir("timeline", "ceiling");
@@ -567,7 +567,7 @@ fn the_lag_ceiling_stops_a_run_that_then_did_not_pass() {
     assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("--lag-ceiling 0: a number of seconds above 0"), "{err}");
     // no timeline: passed over
-    let plain = json!({"ast": "0.22", "name": "t", "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+    let plain = json!({"ast": "0.23", "name": "t", "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": 1}}}}},
             {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"close": {"file": rf("f")}}]}}}).to_string();
     std::fs::write(&ast, plain).unwrap();
@@ -595,7 +595,7 @@ fn a_run_writes_its_series() {
         {"compute": {"ns": {"mul": [{"index": "k"}, 400_000_000]}}},
         {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
         {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]);
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 4, "body": session}}]}}]}}}).to_string();
     let dir = crate::common::tmpdir("timeline", "series");
@@ -627,7 +627,7 @@ fn a_run_writes_its_series() {
         .args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("x").to_str().unwrap(), "--series", dir.join("no/such/dir/s.jsonl").to_str().unwrap()]).output().unwrap();
     assert_eq!(r.status.code(), Some(2), "{}", String::from_utf8_lossy(&r.stderr));
     assert!(String::from_utf8_lossy(&r.stderr).contains("cannot write the series there"));
-    let plain = json!({"ast": "0.22", "name": "t", "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+    let plain = json!({"ast": "0.23", "name": "t", "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": 1}}}}},
             {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"close": {"file": rf("f")}}]}}}).to_string();
     std::fs::write(&ast, plain).unwrap();
@@ -651,11 +651,11 @@ fn a_run_reports_its_worker_and_eviction_lanes() {
     let tiers = json!([{"name": "t", "order": [{"cached": "touched"}, {"neg": {"cached": "pos"}}], "capacity": 100,
         "on_evict": {"lanes": 1, "body": victim}, "evict": {"every": 200_000_000, "when": {"gt": [{"tier": "entries"}, 0]}, "count": 1}}]);
     let mut body: Vec<Value> = vec![json!({"let": {"name": "a", "value": {"shared": {"id": 1, "n": 2}}}}),
-        json!({"store": {"cache": "lm", "tier": "t", "seq": rf("a"), "per": 1, "from": 0, "count": 2}})];
+        json!({"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(rf("a"), json!(1), json!(0), Some(json!(2)))}})];
     body.extend(store(1).as_array().unwrap().iter().cloned());
     body.extend(store(2).as_array().unwrap().iter().cloned());
     body.push(json!({"compute": {"ns": 1_000_000_000}}));
-    let text = json!({"ast": "0.22", "name": "t",
+    let text = json!({"ast": "0.23", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}],
             "workers": [{"name": "store", "lanes": 1, "staging": 1 << 20}], "body": body}}]}}}).to_string();

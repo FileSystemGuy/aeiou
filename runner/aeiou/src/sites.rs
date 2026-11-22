@@ -1,5 +1,5 @@
 //! Site annotation. A draw's site is its structural path in the tree, the JSON pointer of the
-//! object that holds the `draw`, `pick`, or `choose` key (`schema/README.md` §1, "No site
+//! object that holds the `draw` or `pick` key (`schema/README.md` §1, "No site
 //! ids"). This walk mirrors the JSON structure exactly and stores `rng::site_hash(pointer)`
 //! in each node's `site` cell.
 
@@ -268,6 +268,15 @@ fn body(nodes: &[Node], p: &mut Path) {
     }
 }
 
+/// The expressions of a key range (contract 0.23).
+fn keys_of(keys: &Keys, k: &str, p: &mut Path) {
+    if let Some(e) = &keys.from {
+        p.with(&[k, "keys", "from"], |p| expr(e, p));
+    }
+    p.with(&[k, "keys", "count"], |p| expr(&keys.count, p));
+    p.with(&[k, "keys", "key"], |p| expr(&keys.key, p));
+}
+
 fn node(n: &Node, p: &mut Path) {
     let k = n.kind();
     match n {
@@ -328,28 +337,9 @@ fn node(n: &Node, p: &mut Path) {
         Node::Submit { body: b, .. } | Node::Span { body: b, .. } => p.with(&[k, "body"], |p| body(b, p)),
         Node::Acquire { n, .. } => p.with(&[k, "n"], |p| expr(n, p)),
         Node::Release { .. } => {}
-        Node::Probe { seq, per, from, .. } => {
-            for (f, e) in [("seq", seq), ("per", per), ("from", from)] {
-                p.with(&[k, f], |p| expr(e, p));
-            }
-        }
-        Node::Touch { seq, per, from, count, .. } => {
-            for (f, e) in [("seq", Some(seq)), ("per", Some(per)), ("from", from.as_ref()), ("count", count.as_ref())] {
-                if let Some(e) = e {
-                    p.with(&[k, f], |p| expr(e, p));
-                }
-            }
-        }
-        Node::Store { seq, per, from, count, size, .. } => {
-            for (f, e) in [("seq", Some(seq)), ("per", Some(per)), ("from", from.as_ref()), ("count", count.as_ref()), ("size", size.as_ref())] {
-                if let Some(e) = e {
-                    p.with(&[k, f], |p| expr(e, p));
-                }
-            }
-        }
-        Node::Lookup { seq, per, size, .. } => {
-            p.with(&[k, "seq"], |p| expr(seq, p));
-            p.with(&[k, "per"], |p| expr(per, p));
+        Node::Probe { keys, .. } | Node::Touch { keys, .. } => keys_of(keys, k, p),
+        Node::Store { keys, size, .. } => {
+            keys_of(keys, k, p);
             if let Some(e) = size {
                 p.with(&[k, "size"], |p| expr(e, p));
             }
@@ -371,12 +361,6 @@ fn node(n: &Node, p: &mut Path) {
             p.with(&[k, "then"], |p| body(then, p));
             if let Some(b) = otherwise {
                 p.with(&[k, "else"], |p| body(b, p));
-            }
-        }
-        Node::Choose { arms, site } => {
-            site.set(site_hash(&p.pointer()));
-            for (i, arm) in arms.iter().enumerate() {
-                p.with(&[k, "arms", &i.to_string(), "body"], |p| body(&arm.body, p));
             }
         }
         Node::Phase { name, body: b } => {

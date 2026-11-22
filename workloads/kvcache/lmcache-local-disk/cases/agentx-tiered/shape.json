@@ -4,9 +4,9 @@
   "runs": [
     {
       "ast": "lmcache_local_disk_tiered",
-      "ast_sha256": "5a75a51f32125fd58df6c5f6ffef74a1c344d124c1fb4b1e2625a9232a55b77e",
+      "ast_sha256": "4458de782191ff43b25892738d4e665c46207c5f05ad1dfbb60e48071eb53344",
       "params": "case.lock.json",
-      "params_sha256": "cc9c0557d816724e83ec1f90a87e8f132139ae45ba1ac54282cab9fc5aaa3468",
+      "params_sha256": "ae5a95e896761b5d742fbc451db9355b01235336bb8553b91b00b51cd5fc2a42",
       "gpus": 1,
       "seeds": [
         1,
@@ -20,18 +20,18 @@
         "reread",
         "skew"
       ],
-      "ops": 1208100,
+      "ops": 1644030,
       "counts": {
-        "close": 201350,
-        "fstat": 201350,
-        "ioctl": 201350,
-        "lseek": 201350,
-        "open": 201350,
-        "read": 115491,
-        "write": 85859
+        "close": 274005,
+        "fstat": 274005,
+        "ioctl": 274005,
+        "lseek": 274005,
+        "open": 274005,
+        "read": 186137,
+        "write": 87868
       },
-      "bytes_read": 3875234906112,
-      "bytes_written": 2880949977088,
+      "bytes_read": 6245721309184,
+      "bytes_written": 2948360830976,
       "datasets": [],
       "attributes": {
         "run_length_read": {
@@ -55,8 +55,8 @@
           "class": "large"
         },
         "read_share": {
-          "value": 0.74361,
-          "spread": 0.247802,
+          "value": 0.741225,
+          "spread": 0.159169,
           "class": "mixed"
         },
         "metadata": {
@@ -70,13 +70,13 @@
           "class": "yes"
         },
         "reread": {
-          "value": 0.884103,
-          "spread": 0.118385,
+          "value": 0.876998,
+          "spread": 0.0758655,
           "class": "repeated"
         },
         "skew": {
-          "value": 0.0899113,
-          "spread": 0.0490546,
+          "value": 0.0928373,
+          "spread": 0.0545557,
           "class": "uniform"
         }
       }

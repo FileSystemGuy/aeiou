@@ -1,5 +1,5 @@
 {
-  "ast": "0.22",
+  "ast": "0.23",
   "name": "lmcache_local_disk_tiered",
   "doc": "One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2 and G3 (LMCache's), G3 the directory under test.",
   "params": {
@@ -14966,10 +14966,9 @@
                             }
                           },
                           {
-                            "lookup": {
-                              "cache": "gpu",
-                              "tier": "g1",
-                              "seq": {
+                            "let": {
+                              "name": "m_gs",
+                              "value": {
                                 "cat": [
                                   {
                                     "ref": "m_seq"
@@ -14985,10 +14984,40 @@
                                     }
                                   }
                                 ]
+                              }
+                            }
+                          },
+                          {
+                            "store": {
+                              "cache": "gpu",
+                              "tier": "g1",
+                              "keys": {
+                                "index": "j",
+                                "count": {
+                                  "div": [
+                                    {
+                                      "seq_len": {
+                                        "ref": "m_gs"
+                                      }
+                                    },
+                                    1
+                                  ]
+                                },
+                                "key": {
+                                  "chunk_key": {
+                                    "seq": {
+                                      "ref": "m_gs"
+                                    },
+                                    "chunk": {
+                                      "index": "j"
+                                    },
+                                    "per": 1
+                                  }
+                                }
                               },
-                              "per": 1,
-                              "bind": "m_gh",
-                              "hold": "kv"
+                              "present": "touch",
+                              "hold": "kv",
+                              "found": "m_gh"
                             }
                           },
                           {
@@ -15012,13 +15041,34 @@
                             "probe": {
                               "cache": "lm",
                               "tier": "g2",
-                              "seq": {
-                                "ref": "m_seq"
+                              "keys": {
+                                "index": "j",
+                                "count": {
+                                  "div": [
+                                    {
+                                      "seq_len": {
+                                        "ref": "m_seq"
+                                      }
+                                    },
+                                    {
+                                      "param": "per"
+                                    }
+                                  ]
+                                },
+                                "key": {
+                                  "chunk_key": {
+                                    "seq": {
+                                      "ref": "m_seq"
+                                    },
+                                    "chunk": {
+                                      "index": "j"
+                                    },
+                                    "per": {
+                                      "param": "per"
+                                    }
+                                  }
+                                }
                               },
-                              "per": {
-                                "param": "per"
-                              },
-                              "from": 0,
                               "bind": "m_h2"
                             }
                           },
@@ -15026,14 +15076,80 @@
                             "probe": {
                               "cache": "lm",
                               "tier": "g3",
-                              "seq": {
-                                "ref": "m_seq"
-                              },
-                              "per": {
-                                "param": "per"
-                              },
-                              "from": {
-                                "ref": "m_h2"
+                              "keys": {
+                                "index": "j",
+                                "from": {
+                                  "min": [
+                                    {
+                                      "ref": "m_h2"
+                                    },
+                                    {
+                                      "div": [
+                                        {
+                                          "seq_len": {
+                                            "ref": "m_seq"
+                                          }
+                                        },
+                                        {
+                                          "param": "per"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "count": {
+                                  "max": [
+                                    0,
+                                    {
+                                      "sub": [
+                                        {
+                                          "div": [
+                                            {
+                                              "seq_len": {
+                                                "ref": "m_seq"
+                                              }
+                                            },
+                                            {
+                                              "param": "per"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "min": [
+                                            {
+                                              "ref": "m_h2"
+                                            },
+                                            {
+                                              "div": [
+                                                {
+                                                  "seq_len": {
+                                                    "ref": "m_seq"
+                                                  }
+                                                },
+                                                {
+                                                  "param": "per"
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "key": {
+                                  "chunk_key": {
+                                    "seq": {
+                                      "ref": "m_seq"
+                                    },
+                                    "chunk": {
+                                      "index": "j"
+                                    },
+                                    "per": {
+                                      "param": "per"
+                                    }
+                                  }
+                                }
                               },
                               "bind": "m_h3"
                             }
@@ -15273,29 +15389,94 @@
                             "touch": {
                               "cache": "lm",
                               "tier": "g3",
-                              "seq": {
-                                "ref": "m_seq"
-                              },
-                              "per": {
-                                "param": "per"
-                              },
-                              "from": {
-                                "ref": "m_first"
-                              },
-                              "count": {
-                                "max": [
-                                  0,
-                                  {
-                                    "sub": [
-                                      {
-                                        "ref": "m_hit"
-                                      },
-                                      {
-                                        "ref": "m_first"
-                                      }
-                                    ]
+                              "keys": {
+                                "index": "j",
+                                "from": {
+                                  "min": [
+                                    {
+                                      "ref": "m_first"
+                                    },
+                                    {
+                                      "div": [
+                                        {
+                                          "seq_len": {
+                                            "ref": "m_seq"
+                                          }
+                                        },
+                                        {
+                                          "param": "per"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "count": {
+                                  "max": [
+                                    0,
+                                    {
+                                      "min": [
+                                        {
+                                          "sub": [
+                                            {
+                                              "ref": "m_hit"
+                                            },
+                                            {
+                                              "ref": "m_first"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "sub": [
+                                            {
+                                              "div": [
+                                                {
+                                                  "seq_len": {
+                                                    "ref": "m_seq"
+                                                  }
+                                                },
+                                                {
+                                                  "param": "per"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "min": [
+                                                {
+                                                  "ref": "m_first"
+                                                },
+                                                {
+                                                  "div": [
+                                                    {
+                                                      "seq_len": {
+                                                        "ref": "m_seq"
+                                                      }
+                                                    },
+                                                    {
+                                                      "param": "per"
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "key": {
+                                  "chunk_key": {
+                                    "seq": {
+                                      "ref": "m_seq"
+                                    },
+                                    "chunk": {
+                                      "index": "j"
+                                    },
+                                    "per": {
+                                      "param": "per"
+                                    }
                                   }
-                                ]
+                                }
                               }
                             }
                           },
@@ -15303,24 +15484,94 @@
                             "store": {
                               "cache": "lm",
                               "tier": "g2",
-                              "seq": {
-                                "ref": "m_seq"
-                              },
-                              "per": {
-                                "param": "per"
-                              },
-                              "from": {
-                                "ref": "m_hit"
-                              },
-                              "count": {
-                                "sub": [
-                                  {
-                                    "ref": "m_nch"
-                                  },
-                                  {
-                                    "ref": "m_hit"
+                              "keys": {
+                                "index": "j",
+                                "from": {
+                                  "min": [
+                                    {
+                                      "ref": "m_hit"
+                                    },
+                                    {
+                                      "div": [
+                                        {
+                                          "seq_len": {
+                                            "ref": "m_seq"
+                                          }
+                                        },
+                                        {
+                                          "param": "per"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "count": {
+                                  "max": [
+                                    0,
+                                    {
+                                      "min": [
+                                        {
+                                          "sub": [
+                                            {
+                                              "ref": "m_nch"
+                                            },
+                                            {
+                                              "ref": "m_hit"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "sub": [
+                                            {
+                                              "div": [
+                                                {
+                                                  "seq_len": {
+                                                    "ref": "m_seq"
+                                                  }
+                                                },
+                                                {
+                                                  "param": "per"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "min": [
+                                                {
+                                                  "ref": "m_hit"
+                                                },
+                                                {
+                                                  "div": [
+                                                    {
+                                                      "seq_len": {
+                                                        "ref": "m_seq"
+                                                      }
+                                                    },
+                                                    {
+                                                      "param": "per"
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "key": {
+                                  "chunk_key": {
+                                    "seq": {
+                                      "ref": "m_seq"
+                                    },
+                                    "chunk": {
+                                      "index": "j"
+                                    },
+                                    "per": {
+                                      "param": "per"
+                                    }
                                   }
-                                ]
+                                }
                               },
                               "taken": "m_t2"
                             }
@@ -15329,13 +15580,30 @@
                             "store": {
                               "cache": "lm",
                               "tier": "g3",
-                              "seq": {
-                                "ref": "m_seq"
+                              "keys": {
+                                "index": "j",
+                                "count": {
+                                  "len": "m_t2"
+                                },
+                                "key": {
+                                  "chunk_key": {
+                                    "seq": {
+                                      "ref": "m_seq"
+                                    },
+                                    "chunk": {
+                                      "elem": {
+                                        "array": "m_t2",
+                                        "index": {
+                                          "index": "j"
+                                        }
+                                      }
+                                    },
+                                    "per": {
+                                      "param": "per"
+                                    }
+                                  }
+                                }
                               },
-                              "per": {
-                                "param": "per"
-                              },
-                              "chunks": "m_t2",
                               "present": "renew",
                               "taken": "m_t3"
                             }
@@ -15365,9 +15633,14 @@
                                                     },
                                                     "chunk": {
                                                       "elem": {
-                                                        "array": "m_t3",
+                                                        "array": "m_t2",
                                                         "index": {
-                                                          "index": "m_w"
+                                                          "elem": {
+                                                            "array": "m_t3",
+                                                            "index": {
+                                                              "index": "m_w"
+                                                            }
+                                                          }
                                                         }
                                                       }
                                                     },
@@ -15518,24 +15791,33 @@
                             "touch": {
                               "cache": "lm",
                               "tier": "g2",
-                              "seq": {
-                                "ref": "m_seq"
-                              },
-                              "per": {
-                                "param": "per"
-                              },
-                              "from": 0,
-                              "count": {
-                                "div": [
-                                  {
-                                    "seq_len": {
-                                      "ref": "m_seq"
+                              "keys": {
+                                "index": "j",
+                                "count": {
+                                  "div": [
+                                    {
+                                      "seq_len": {
+                                        "ref": "m_seq"
+                                      }
+                                    },
+                                    {
+                                      "param": "per"
                                     }
-                                  },
-                                  {
-                                    "param": "per"
+                                  ]
+                                },
+                                "key": {
+                                  "chunk_key": {
+                                    "seq": {
+                                      "ref": "m_seq"
+                                    },
+                                    "chunk": {
+                                      "index": "j"
+                                    },
+                                    "per": {
+                                      "param": "per"
+                                    }
                                   }
-                                ]
+                                }
                               }
                             }
                           },
@@ -22286,10 +22568,9 @@
                                                     }
                                                   },
                                                   {
-                                                    "lookup": {
-                                                      "cache": "gpu",
-                                                      "tier": "g1",
-                                                      "seq": {
+                                                    "let": {
+                                                      "name": "s_gs",
+                                                      "value": {
                                                         "cat": [
                                                           {
                                                             "ref": "s_seq"
@@ -22305,10 +22586,40 @@
                                                             }
                                                           }
                                                         ]
+                                                      }
+                                                    }
+                                                  },
+                                                  {
+                                                    "store": {
+                                                      "cache": "gpu",
+                                                      "tier": "g1",
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "count": {
+                                                          "div": [
+                                                            {
+                                                              "seq_len": {
+                                                                "ref": "s_gs"
+                                                              }
+                                                            },
+                                                            1
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_gs"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": 1
+                                                          }
+                                                        }
                                                       },
-                                                      "per": 1,
-                                                      "bind": "s_gh",
-                                                      "hold": "kv"
+                                                      "present": "touch",
+                                                      "hold": "kv",
+                                                      "found": "s_gh"
                                                     }
                                                   },
                                                   {
@@ -22332,13 +22643,34 @@
                                                     "probe": {
                                                       "cache": "lm",
                                                       "tier": "g2",
-                                                      "seq": {
-                                                        "ref": "s_seq"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "count": {
+                                                          "div": [
+                                                            {
+                                                              "seq_len": {
+                                                                "ref": "s_seq"
+                                                              }
+                                                            },
+                                                            {
+                                                              "param": "per"
+                                                            }
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
+                                                          }
+                                                        }
                                                       },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": 0,
                                                       "bind": "s_h2"
                                                     }
                                                   },
@@ -22346,14 +22678,80 @@
                                                     "probe": {
                                                       "cache": "lm",
                                                       "tier": "g3",
-                                                      "seq": {
-                                                        "ref": "s_seq"
-                                                      },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": {
-                                                        "ref": "s_h2"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "from": {
+                                                          "min": [
+                                                            {
+                                                              "ref": "s_h2"
+                                                            },
+                                                            {
+                                                              "div": [
+                                                                {
+                                                                  "seq_len": {
+                                                                    "ref": "s_seq"
+                                                                  }
+                                                                },
+                                                                {
+                                                                  "param": "per"
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "count": {
+                                                          "max": [
+                                                            0,
+                                                            {
+                                                              "sub": [
+                                                                {
+                                                                  "div": [
+                                                                    {
+                                                                      "seq_len": {
+                                                                        "ref": "s_seq"
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "param": "per"
+                                                                    }
+                                                                  ]
+                                                                },
+                                                                {
+                                                                  "min": [
+                                                                    {
+                                                                      "ref": "s_h2"
+                                                                    },
+                                                                    {
+                                                                      "div": [
+                                                                        {
+                                                                          "seq_len": {
+                                                                            "ref": "s_seq"
+                                                                          }
+                                                                        },
+                                                                        {
+                                                                          "param": "per"
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
+                                                          }
+                                                        }
                                                       },
                                                       "bind": "s_h3"
                                                     }
@@ -22593,29 +22991,94 @@
                                                     "touch": {
                                                       "cache": "lm",
                                                       "tier": "g3",
-                                                      "seq": {
-                                                        "ref": "s_seq"
-                                                      },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": {
-                                                        "ref": "s_first"
-                                                      },
-                                                      "count": {
-                                                        "max": [
-                                                          0,
-                                                          {
-                                                            "sub": [
-                                                              {
-                                                                "ref": "s_hit"
-                                                              },
-                                                              {
-                                                                "ref": "s_first"
-                                                              }
-                                                            ]
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "from": {
+                                                          "min": [
+                                                            {
+                                                              "ref": "s_first"
+                                                            },
+                                                            {
+                                                              "div": [
+                                                                {
+                                                                  "seq_len": {
+                                                                    "ref": "s_seq"
+                                                                  }
+                                                                },
+                                                                {
+                                                                  "param": "per"
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "count": {
+                                                          "max": [
+                                                            0,
+                                                            {
+                                                              "min": [
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "ref": "s_hit"
+                                                                    },
+                                                                    {
+                                                                      "ref": "s_first"
+                                                                    }
+                                                                  ]
+                                                                },
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "div": [
+                                                                        {
+                                                                          "seq_len": {
+                                                                            "ref": "s_seq"
+                                                                          }
+                                                                        },
+                                                                        {
+                                                                          "param": "per"
+                                                                        }
+                                                                      ]
+                                                                    },
+                                                                    {
+                                                                      "min": [
+                                                                        {
+                                                                          "ref": "s_first"
+                                                                        },
+                                                                        {
+                                                                          "div": [
+                                                                            {
+                                                                              "seq_len": {
+                                                                                "ref": "s_seq"
+                                                                              }
+                                                                            },
+                                                                            {
+                                                                              "param": "per"
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
                                                           }
-                                                        ]
+                                                        }
                                                       }
                                                     }
                                                   },
@@ -22623,24 +23086,94 @@
                                                     "store": {
                                                       "cache": "lm",
                                                       "tier": "g2",
-                                                      "seq": {
-                                                        "ref": "s_seq"
-                                                      },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": {
-                                                        "ref": "s_hit"
-                                                      },
-                                                      "count": {
-                                                        "sub": [
-                                                          {
-                                                            "ref": "s_nch"
-                                                          },
-                                                          {
-                                                            "ref": "s_hit"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "from": {
+                                                          "min": [
+                                                            {
+                                                              "ref": "s_hit"
+                                                            },
+                                                            {
+                                                              "div": [
+                                                                {
+                                                                  "seq_len": {
+                                                                    "ref": "s_seq"
+                                                                  }
+                                                                },
+                                                                {
+                                                                  "param": "per"
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "count": {
+                                                          "max": [
+                                                            0,
+                                                            {
+                                                              "min": [
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "ref": "s_nch"
+                                                                    },
+                                                                    {
+                                                                      "ref": "s_hit"
+                                                                    }
+                                                                  ]
+                                                                },
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "div": [
+                                                                        {
+                                                                          "seq_len": {
+                                                                            "ref": "s_seq"
+                                                                          }
+                                                                        },
+                                                                        {
+                                                                          "param": "per"
+                                                                        }
+                                                                      ]
+                                                                    },
+                                                                    {
+                                                                      "min": [
+                                                                        {
+                                                                          "ref": "s_hit"
+                                                                        },
+                                                                        {
+                                                                          "div": [
+                                                                            {
+                                                                              "seq_len": {
+                                                                                "ref": "s_seq"
+                                                                              }
+                                                                            },
+                                                                            {
+                                                                              "param": "per"
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
                                                           }
-                                                        ]
+                                                        }
                                                       },
                                                       "taken": "s_t2"
                                                     }
@@ -22649,13 +23182,30 @@
                                                     "store": {
                                                       "cache": "lm",
                                                       "tier": "g3",
-                                                      "seq": {
-                                                        "ref": "s_seq"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "count": {
+                                                          "len": "s_t2"
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "elem": {
+                                                                "array": "s_t2",
+                                                                "index": {
+                                                                  "index": "j"
+                                                                }
+                                                              }
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
+                                                          }
+                                                        }
                                                       },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "chunks": "s_t2",
                                                       "present": "renew",
                                                       "taken": "s_t3"
                                                     }
@@ -22685,9 +23235,14 @@
                                                                             },
                                                                             "chunk": {
                                                                               "elem": {
-                                                                                "array": "s_t3",
+                                                                                "array": "s_t2",
                                                                                 "index": {
-                                                                                  "index": "s_w"
+                                                                                  "elem": {
+                                                                                    "array": "s_t3",
+                                                                                    "index": {
+                                                                                      "index": "s_w"
+                                                                                    }
+                                                                                  }
                                                                                 }
                                                                               }
                                                                             },
@@ -22838,24 +23393,33 @@
                                                     "touch": {
                                                       "cache": "lm",
                                                       "tier": "g2",
-                                                      "seq": {
-                                                        "ref": "s_seq"
-                                                      },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": 0,
-                                                      "count": {
-                                                        "div": [
-                                                          {
-                                                            "seq_len": {
-                                                              "ref": "s_seq"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "count": {
+                                                          "div": [
+                                                            {
+                                                              "seq_len": {
+                                                                "ref": "s_seq"
+                                                              }
+                                                            },
+                                                            {
+                                                              "param": "per"
                                                             }
-                                                          },
-                                                          {
-                                                            "param": "per"
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
                                                           }
-                                                        ]
+                                                        }
                                                       }
                                                     }
                                                   },
@@ -29586,10 +30150,9 @@
                                                     }
                                                   },
                                                   {
-                                                    "lookup": {
-                                                      "cache": "gpu",
-                                                      "tier": "g1",
-                                                      "seq": {
+                                                    "let": {
+                                                      "name": "s_gs",
+                                                      "value": {
                                                         "cat": [
                                                           {
                                                             "ref": "s_seq"
@@ -29605,10 +30168,40 @@
                                                             }
                                                           }
                                                         ]
+                                                      }
+                                                    }
+                                                  },
+                                                  {
+                                                    "store": {
+                                                      "cache": "gpu",
+                                                      "tier": "g1",
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "count": {
+                                                          "div": [
+                                                            {
+                                                              "seq_len": {
+                                                                "ref": "s_gs"
+                                                              }
+                                                            },
+                                                            1
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_gs"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": 1
+                                                          }
+                                                        }
                                                       },
-                                                      "per": 1,
-                                                      "bind": "s_gh",
-                                                      "hold": "kv"
+                                                      "present": "touch",
+                                                      "hold": "kv",
+                                                      "found": "s_gh"
                                                     }
                                                   },
                                                   {
@@ -29632,13 +30225,34 @@
                                                     "probe": {
                                                       "cache": "lm",
                                                       "tier": "g2",
-                                                      "seq": {
-                                                        "ref": "s_seq"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "count": {
+                                                          "div": [
+                                                            {
+                                                              "seq_len": {
+                                                                "ref": "s_seq"
+                                                              }
+                                                            },
+                                                            {
+                                                              "param": "per"
+                                                            }
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
+                                                          }
+                                                        }
                                                       },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": 0,
                                                       "bind": "s_h2"
                                                     }
                                                   },
@@ -29646,14 +30260,80 @@
                                                     "probe": {
                                                       "cache": "lm",
                                                       "tier": "g3",
-                                                      "seq": {
-                                                        "ref": "s_seq"
-                                                      },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": {
-                                                        "ref": "s_h2"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "from": {
+                                                          "min": [
+                                                            {
+                                                              "ref": "s_h2"
+                                                            },
+                                                            {
+                                                              "div": [
+                                                                {
+                                                                  "seq_len": {
+                                                                    "ref": "s_seq"
+                                                                  }
+                                                                },
+                                                                {
+                                                                  "param": "per"
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "count": {
+                                                          "max": [
+                                                            0,
+                                                            {
+                                                              "sub": [
+                                                                {
+                                                                  "div": [
+                                                                    {
+                                                                      "seq_len": {
+                                                                        "ref": "s_seq"
+                                                                      }
+                                                                    },
+                                                                    {
+                                                                      "param": "per"
+                                                                    }
+                                                                  ]
+                                                                },
+                                                                {
+                                                                  "min": [
+                                                                    {
+                                                                      "ref": "s_h2"
+                                                                    },
+                                                                    {
+                                                                      "div": [
+                                                                        {
+                                                                          "seq_len": {
+                                                                            "ref": "s_seq"
+                                                                          }
+                                                                        },
+                                                                        {
+                                                                          "param": "per"
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
+                                                          }
+                                                        }
                                                       },
                                                       "bind": "s_h3"
                                                     }
@@ -29893,29 +30573,94 @@
                                                     "touch": {
                                                       "cache": "lm",
                                                       "tier": "g3",
-                                                      "seq": {
-                                                        "ref": "s_seq"
-                                                      },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": {
-                                                        "ref": "s_first"
-                                                      },
-                                                      "count": {
-                                                        "max": [
-                                                          0,
-                                                          {
-                                                            "sub": [
-                                                              {
-                                                                "ref": "s_hit"
-                                                              },
-                                                              {
-                                                                "ref": "s_first"
-                                                              }
-                                                            ]
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "from": {
+                                                          "min": [
+                                                            {
+                                                              "ref": "s_first"
+                                                            },
+                                                            {
+                                                              "div": [
+                                                                {
+                                                                  "seq_len": {
+                                                                    "ref": "s_seq"
+                                                                  }
+                                                                },
+                                                                {
+                                                                  "param": "per"
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "count": {
+                                                          "max": [
+                                                            0,
+                                                            {
+                                                              "min": [
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "ref": "s_hit"
+                                                                    },
+                                                                    {
+                                                                      "ref": "s_first"
+                                                                    }
+                                                                  ]
+                                                                },
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "div": [
+                                                                        {
+                                                                          "seq_len": {
+                                                                            "ref": "s_seq"
+                                                                          }
+                                                                        },
+                                                                        {
+                                                                          "param": "per"
+                                                                        }
+                                                                      ]
+                                                                    },
+                                                                    {
+                                                                      "min": [
+                                                                        {
+                                                                          "ref": "s_first"
+                                                                        },
+                                                                        {
+                                                                          "div": [
+                                                                            {
+                                                                              "seq_len": {
+                                                                                "ref": "s_seq"
+                                                                              }
+                                                                            },
+                                                                            {
+                                                                              "param": "per"
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
                                                           }
-                                                        ]
+                                                        }
                                                       }
                                                     }
                                                   },
@@ -29923,24 +30668,94 @@
                                                     "store": {
                                                       "cache": "lm",
                                                       "tier": "g2",
-                                                      "seq": {
-                                                        "ref": "s_seq"
-                                                      },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": {
-                                                        "ref": "s_hit"
-                                                      },
-                                                      "count": {
-                                                        "sub": [
-                                                          {
-                                                            "ref": "s_nch"
-                                                          },
-                                                          {
-                                                            "ref": "s_hit"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "from": {
+                                                          "min": [
+                                                            {
+                                                              "ref": "s_hit"
+                                                            },
+                                                            {
+                                                              "div": [
+                                                                {
+                                                                  "seq_len": {
+                                                                    "ref": "s_seq"
+                                                                  }
+                                                                },
+                                                                {
+                                                                  "param": "per"
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "count": {
+                                                          "max": [
+                                                            0,
+                                                            {
+                                                              "min": [
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "ref": "s_nch"
+                                                                    },
+                                                                    {
+                                                                      "ref": "s_hit"
+                                                                    }
+                                                                  ]
+                                                                },
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "div": [
+                                                                        {
+                                                                          "seq_len": {
+                                                                            "ref": "s_seq"
+                                                                          }
+                                                                        },
+                                                                        {
+                                                                          "param": "per"
+                                                                        }
+                                                                      ]
+                                                                    },
+                                                                    {
+                                                                      "min": [
+                                                                        {
+                                                                          "ref": "s_hit"
+                                                                        },
+                                                                        {
+                                                                          "div": [
+                                                                            {
+                                                                              "seq_len": {
+                                                                                "ref": "s_seq"
+                                                                              }
+                                                                            },
+                                                                            {
+                                                                              "param": "per"
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
                                                           }
-                                                        ]
+                                                        }
                                                       },
                                                       "taken": "s_t2"
                                                     }
@@ -29949,13 +30764,30 @@
                                                     "store": {
                                                       "cache": "lm",
                                                       "tier": "g3",
-                                                      "seq": {
-                                                        "ref": "s_seq"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "count": {
+                                                          "len": "s_t2"
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "elem": {
+                                                                "array": "s_t2",
+                                                                "index": {
+                                                                  "index": "j"
+                                                                }
+                                                              }
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
+                                                          }
+                                                        }
                                                       },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "chunks": "s_t2",
                                                       "present": "renew",
                                                       "taken": "s_t3"
                                                     }
@@ -29985,9 +30817,14 @@
                                                                             },
                                                                             "chunk": {
                                                                               "elem": {
-                                                                                "array": "s_t3",
+                                                                                "array": "s_t2",
                                                                                 "index": {
-                                                                                  "index": "s_w"
+                                                                                  "elem": {
+                                                                                    "array": "s_t3",
+                                                                                    "index": {
+                                                                                      "index": "s_w"
+                                                                                    }
+                                                                                  }
                                                                                 }
                                                                               }
                                                                             },
@@ -30138,24 +30975,33 @@
                                                     "touch": {
                                                       "cache": "lm",
                                                       "tier": "g2",
-                                                      "seq": {
-                                                        "ref": "s_seq"
-                                                      },
-                                                      "per": {
-                                                        "param": "per"
-                                                      },
-                                                      "from": 0,
-                                                      "count": {
-                                                        "div": [
-                                                          {
-                                                            "seq_len": {
-                                                              "ref": "s_seq"
+                                                      "keys": {
+                                                        "index": "j",
+                                                        "count": {
+                                                          "div": [
+                                                            {
+                                                              "seq_len": {
+                                                                "ref": "s_seq"
+                                                              }
+                                                            },
+                                                            {
+                                                              "param": "per"
                                                             }
-                                                          },
-                                                          {
-                                                            "param": "per"
+                                                          ]
+                                                        },
+                                                        "key": {
+                                                          "chunk_key": {
+                                                            "seq": {
+                                                              "ref": "s_seq"
+                                                            },
+                                                            "chunk": {
+                                                              "index": "j"
+                                                            },
+                                                            "per": {
+                                                              "param": "per"
+                                                            }
                                                           }
-                                                        ]
+                                                        }
                                                       }
                                                     }
                                                   },
@@ -30220,12 +31066,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk_tiered.py",
-      "sha256": "619bcda52d2e3389817721f238a6eede38cada82d96bc0c30e5ce958cdb94c2b",
+      "sha256": "afdeca69822f5b0cc20d841c6707db2e0b9591525b0de7eca58be0345152b411",
       "builder_version": "0.4.0",
-      "git": "cdbf501c87de"
+      "git": "f8938ebf103a-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "b3cc8544321032fa0c26dd418cdf587cd2ba3c24f0206ad8c892b088984e7d36"
+    "ast_sha256": "c8862d5d8b88763faff4f98809a8e4186cd2e34f41d4a9e13d80faaa99f2bc38"
   }
 }

@@ -550,7 +550,7 @@ times plus each lane's lag under `--posix io_uring` and `libaio`, and (step 4) u
 backends, the tiered abstract's declared API included, a thread each live lane. Step 5's first
 part (2026-11-14): each `span`'s D, from its launch to its last op's completion, and the body
 lanes' final lag, in the text and JSON reports and as `result.span.SPAN.*` and `result.lag.*`
-for a case's constraints. Contract 0.22 (2026-11-14, `DESIGN_REVIEW.md` §3.100): a `submit`
+for a case's constraints. Contract 0.23 (2026-11-22, `DESIGN_REVIEW.md` §3.100): `probe`, `touch`, and `store` act on key ranges, a key any integer, `store` does what `lookup` did (`present: touch`, `hold`, `found`), and the `lookup` and `choose` nodes are builder functions. Contract 0.22 (2026-11-14, `DESIGN_REVIEW.md` §3.100): a `submit`
 body and an eviction body read no `published` and no `entry`. Contract 0.21 (the same day): a span's `staging`, the workers whose
 staging its reads draw on while in flight, so staging counts loads beside pending stores; a run
 whose staging overflowed (a store would have been dropped) is invalid, and so is one whose host

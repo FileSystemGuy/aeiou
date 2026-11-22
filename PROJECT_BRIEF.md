@@ -1872,9 +1872,10 @@ numbers; the order is this note's.
     every version changes every AST hash and so every workload id though no fingerprint; and
     removing the unused composites (`choose`, `mixture`, `hotset`) (checked and decided
     2026-11-22, `DESIGN_REVIEW.md` §3.100, the note "The three unused composites": the builder
-    emits `choose` as a draw and `cond`s; **not done yet, with the next contract version:**
+    emits `choose` as a draw and `cond`s; ~~**not done yet, with the next contract version:**
     the `choose` node taken out of the schema, the runner, `describe.py`, and the manual
-    page; `mixture` and `hotset` stay, the first for dataset sizes, the second a primitive);
+    page~~ the node removed in contract 0.23, the same day; `mixture` and `hotset` stay, the
+    first for dataset sizes, the second a primitive);
     (d) a
     conformance kit; (e) how stable the planned-op stream (the trace file) is as an interface;
     (f) the idiom catalogue, each library function carrying its lowering and its trace
@@ -1883,6 +1884,15 @@ numbers; the order is this note's.
     against the application's own policy code), whether the structural comparison of digests is
     part of acceptance, and whether time is judged. Related: item 48 (the fitting skill, whose
     reference Part IV may become), item 75 (the tier, provisional until a second user).
+
+    *Review suggestion 1 built (2026-11-22, contract 0.23; `DESIGN_REVIEW.md` §3.100, the note
+    "Suggestion 1 built"):* `probe`, `touch`, and `store` over key ranges; `store` with
+    `present: touch`, `hold`, and `found` in place of the `lookup` node; `lookup()`,
+    `choose()`, `keys()`, and `chunk_keys()` in the builder. The tiered case's fingerprint
+    changed for one added `let` and the user accepted the new sample on the evidence of equal
+    planned traces. **Not done yet:** a second user of the cache (DiskANN's node cache, an
+    epoch cache, a local disk cache over an object store), the reason the suggestion was
+    made; then suggestions 4 and the first half of 2 (with item 78), in that order.
 
 80. **A range of accepted contract versions (decided by the user 2026-11-14, `ARCHITECTURE.md`
     §7.5, `DESIGN_REVIEW.md` §3.100; not built).** Today the runner accepts exactly its own

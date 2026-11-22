@@ -134,14 +134,14 @@ per)` (a sequence is not a number: `+` on one is refused by V27, use `cat`);
 `c.timeline(name, caches={"lm": [tier("disk", lru(), capacity=..., unit="bytes"), ...]})`, a
 ~~`tier(name, evict="none"|"lru", capacity=None, unit="entries"|"bytes")`~~ `tier(name,
 order=None, capacity=None, unit="entries"|"bytes", full="skip"|"wait"|"fail")` (contract 0.18)
-checked as it is made; and `c.lookup(cache, tier, seq, per, bind, size=None, hold=None)`,
-returning the binding of the leading chunks held (V33). The builder refuses a `lookup` outside a
+checked as it is made; and ~~`c.lookup(cache, tier, seq, per, bind, size=None, hold=None)`~~ `c.lookup(cache, tier, keys, bind, size=None, hold=None)`,
+returning the binding of the leading keys held (V33; library since contract 0.23, below). The builder refuses a `lookup` outside a
 timeline and a cache without tiers.
 Since contract 0.17: `tl.group(g)`, a group of the timeline's entries, with `.published` and
 `.entry(n, key)` counted within it, and `c.publish(tl.group(g), ...)` putting an entry there.
 Since contract 0.18 (the same day, brief items 72 and 75): a tier's `order`, a list of integer
 expressions over `cached(attr)` (`stored`, `touched`, `freed`, `hits`, `pos`, `size`) and
-parameters, least evicted first (`lru()` is `[cached("touched")]`; vLLM's free queue
+parameters, least evicted first (`lru()` is ~~`[cached("touched")]`~~ `[cached("touched"), cached("pos")]` since contract 0.23, when a statement's keys came to share one event; vLLM's free queue
 `[cached("freed"), -cached("pos")]`), never a held entry; `full`, what a store finding no room
 and no victim does; `c.timeline(..., resources={"slots": 16})`; `c.acquire(resource, n, hold)`
 and `c.release(hold)` (V34); a `lookup`'s `hold`; and `now()`, the lane's planned time (V30).
@@ -166,8 +166,24 @@ timelines"): `c.timeline(..., workers={"store": (lanes, staging)})`, a timeline'
 those it would issue here, so the fingerprint does not move); and `with c.span("load"):`, the
 part of a lane whose D a run measures (V36). The builder refuses a `submit` or `span` outside a
 timeline, a `submit` naming workers its timeline does not declare, a span inside a span, a
-`compute`, `parallel`, `acquire`, or `lookup` in a span, and in a `submit` body anything but ops
+`compute`, `parallel`, `acquire`, or a store that touches (a `lookup`) in a span, and in a `submit` body anything but ops
 and the statements around them (what V35 bans in an eviction body, and `submit` and `span`).
+Since contract 0.23 (2026-11-22, `DESIGN_REVIEW.md` §3.100, the note "Suggestion 1 built") the
+cache statements take a key range, made by one of two library functions: `keys(index, count,
+key, frm=0)`, `key` a function of the index (`keys("j", 4, lambda j: j * 7)`), for keys of
+any origin; and `chunk_keys(seq, per, frm=0, count=None, *, chunks=None, index="j",
+clip=True)`, the keys of a bound sequence's whole chunks, cut at its end as the runner cut them
+until 0.22 (the `min` and `max` are written into the range; `clip=False` leaves them out), or
+of the chunks whose indices an array holds. `c.probe(cache, tier, keys, bind)`,
+`c.touch(cache, tier, keys)`, and `c.store(cache, tier, keys, size=None, *, present=None,
+hold=None, found=None, bind=None, taken=None)`, which returns the Refs of `found` and `bind`
+and the ArrayRef of `taken`, those given, in that order. `c.lookup(...)` is one such store
+with `present="touch"` and `found=bind`. Two things an author meets: the sequence is bound by
+`c.let` first (its expression, written in the key, would be computed at every index, and a
+`fresh` in it would be other blocks each time), and a `taken` of a store over
+`chunk_keys(seq, per, chunks=t2)` holds indices into `t2`, so the chunk is `t2[t3[j]]`. The
+builder refuses keys that are no key range, a `hold` on a store that does not touch, and an
+unbound sequence.
 Since contract 0.22 (2026-11-14) a `submit` body and an eviction body read no `tl.published`
 and no `tl.entry(...)`, refused by the checker when the abstract is built (V35, V36): bind the
 value with `c.let` before the `submit` and read that; `now()` in either is the body's planned

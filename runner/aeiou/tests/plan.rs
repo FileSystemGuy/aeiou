@@ -9,7 +9,7 @@ use aeiou::vm::{actor_counts, op_hash, run_actor, Control, Op, OpCtx, Sink};
 use serde_json::{json, Value};
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.22", "name": "t",
+    json!({"ast": "0.23", "name": "t",
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
            "actors": {"gpu": {"count": 1, "body": body}}}).to_string()
@@ -195,7 +195,7 @@ fn eviction_lanes_persist_across_batches() {
         "on_evict": {"lanes": 2, "body": [stat(json!({"mod": [{"victim": {}}, 1000]}))]},
         "evict": {"every": 100, "when": true, "count": 3}}]);
     let body = json!([{"let": {"name": "a", "value": {"shared": {"id": 1, "n": 6}}}},
-        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 6}}, compute(json!(250))]);
+        {"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(6)))}}, compute(json!(250))]);
     let ast = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
     let recs = records(ast);
     assert_eq!(recs.len(), 6, "two batches of three");
@@ -331,7 +331,7 @@ fn lane_events_come_before_the_ops_they_order() {
         {"parallel": {"index": "k", "width": 2, "body": [compute(json!({"mul": [{"index": "k"}, 10]})), stat(json!({"index": "k"}))]}},
         {"submit": {"workers": "w", "body": [stat(json!(5))]}},
         {"let": {"name": "a", "value": {"shared": {"id": 1, "n": 3}}}},
-        {"store": {"cache": "lm", "tier": "t", "seq": r("a"), "per": 1, "from": 0, "count": 3}},
+        {"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(3)))}},
         {"span": {"name": "s", "body": [stat(json!(9))]}}]);
     let p = planned(json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}],
         "workers": [{"name": "w", "lanes": 2, "staging": 4096}], "body": body}}]));

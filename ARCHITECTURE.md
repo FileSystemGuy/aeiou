@@ -131,7 +131,7 @@ worker lanes after every other lane at theirs. The state is:
 |---|---|---|---|
 | Each lane's planned clock | `compute`; a wait for a resource, a `full: wait` tier, or a join | `now` | The live lanes |
 | The published log, by group | `publish` | `published`, `entry` | The entries published (a known gap: nothing bounds it but the abstract) |
-| A tier's entries and their attributes (`stored`, `touched`, `freed`, `hits`, `pos`, `size`), and which a lane holds | `lookup`, `store`, `touch`, `release`, an eviction | `probe`, the tier's `order` (through `cached`), its `evict` (through `tier`) | The tier's capacity, a parameter |
+| A tier's entries and their attributes (`stored`, `touched`, `freed`, `hits`, `pos`, `size`), and which a lane holds | `store`, `touch`, `release`, an eviction | `probe`, the tier's `order` (through `cached`), its `evict` (through `tier`) | The tier's capacity, a parameter |
 | A resource's free units and its queue of waiting lanes | `acquire`, `release` | `acquire` | The live lanes |
 | An `array`, and a `store`'s `taken` | Where it stands, once | `elem`, `len` | Its count |
 
@@ -159,7 +159,7 @@ the start).
 
 ### 4. Helpers (new; not yet written)
 
-`probe`, `touch`, `store`, `lookup`, `acquire`, `release`, `publish`, `submit`, `span`, each with
+`probe`, `touch`, `store`, `acquire`, `release`, `publish`, `submit`, `span`, each with
 a declared effect signature in section 5's terms.
 
 ### 5. The verifier (new; one proposal)
@@ -175,16 +175,16 @@ in it.
 |---|---|---|
 | `op` | Issues an op to the system under test | The POSIX ops (`open` to `readdir`) |
 | `time` | Moves the lane's clock (planned, in a timeline; a real delay outside one) | `compute` |
-| `wait` | May wait in planned time for another lane | `acquire`; `lookup` (on a `full: wait` tier) |
+| `wait` | May wait in planned time for another lane | `acquire`; a store of `present: touch` (on a `full: wait` tier; ~~`lookup`~~, a builder function over it since contract 0.23) |
 | `read` | Reads timeline state | `probe`; the expressions `published` and `entry` |
-| `write` | Changes timeline state | `publish`, `lookup`, `touch`, `store`, `release` |
+| `write` | Changes timeline state | `publish`, `touch`, `store`, `release` |
 | `fork` | Starts lanes that plan their own time | `parallel` (joined, or with `join: false`) |
 | `hand` | Hands ops to a worker lane | `submit` |
 | `measure` | Marks a measured region | `span` |
 | `sync` | Waits on another actor in real time | `channel`, `put`, `take`, `barrier`, `loader` |
 | `nest` | Opens a scope of its own | `timeline`, `trace` |
 
-`let`, `loop`, `cond`, `choose`, `phase`, and `array` have no effect of their own. Two expressions
+`let`, `loop`, `cond`, `phase`, and `array` have no effect of their own. Two expressions
 carry an effect, and give it to the statement they stand in: `published` and `entry` read the
 timeline's log (contract 0.22; see "What the check found" below). `now` carries none: it is the
 lane's own clock, accepted wherever a timeline encloses it.
@@ -286,8 +286,8 @@ each is a candidate, not a finding.
 | Composite | Would lower to | What stands in the way |
 |---|---|---|
 | `loader` | `parallel`, `channel`, `put` | `consume`'s position formula and a run's step times are defined through the enclosing `loader` |
-| `lookup` | `probe`, `touch`, `store` | `hold` and waiting on a `full: wait` tier exist only on `lookup` |
-| `choose` | A draw and `cond` | ~~Nothing known; no committed abstract uses it~~ Nothing: the builder emits the lowering since 2026-11-22 (`choose(name)`, a draw of the arm's index over an `empirical` and a `cond` an arm), and the node leaves the contract with the next version |
+| ~~`lookup`~~ | ~~`probe`, `touch`, `store`~~ One `store` of `present: touch` with `found` | ~~`hold` and waiting on a `full: wait` tier exist only on `lookup`~~ Lowered and removed in contract 0.23 (2026-11-22): `store` took `hold`, the wait, and the hit count before the store (`found`), since a `probe` before a store that waits would bind a count gone stale; shown equal by the planned trace of the tiered case, line for line |
+| `choose` | A draw and `cond` | ~~Nothing known; no committed abstract uses it~~ Nothing: the builder emits the lowering since 2026-11-22 (`choose(name)`, a draw of the arm's index over an `empirical` and a `cond` an arm), and the node left the contract in 0.23, the same day |
 | ~~`mixture`, `hotset`~~ `mixture` | A draw and a `cond` between distributions | ~~Nothing known; no committed abstract uses either~~ Lowers in a `draw` and in a `pick`'s `dist`; not in a dataset's `size`, which is one distribution resolved once and drawn per id from the dataset seed, with no site a `cond` could be evaluated at, and `empirical` holds literals alone, so two `lognormal` modes of file sizes have no other form. It stays |
 
 *Corrected 2026-11-22 (read from `eval.rs`, `vm.rs`, and `schema/README.md`; no lowering was
@@ -404,6 +404,7 @@ needed them.
 | 0.20 | `workers`, `submit`, `span` | 4 and 3 | A map (staging) and two helpers; a new context |
 | 0.21 | A span's `staging` | 3 | A key on an existing helper |
 | 0.22 | A refusal | none | A provisional piece narrowed (7.4) |
+| 0.23 | Key ranges on `probe`, `touch`, `store`; `store`'s `present: touch`, `hold`, `found`; `lookup` and `choose` removed | none | A provisional piece reshaped (7.4) and two composites lowered to the library (7.1); added 2026-11-22, after the two observations below were written |
 
 Two things the table shows. Contexts (a body with its own allowed effects) were added three
 times and are as much a part of the growth as maps and helpers, so 7.2's first item matters
@@ -429,7 +430,8 @@ decided").**
    a library function can emit each of the three is checked before any is removed. *Checked
    and decided 2026-11-22 (the user's "proceed as recommended"):* `choose` can, and the builder
    emits the lowering now; its node leaves the contract with the next contract version, not
-   in a version of its own, since every version regenerates every AST until item 80 is built.
+   in a version of its own, since every version regenerates every AST until item 80 is built
+   (it left in 0.23, the same day, with suggestion 1).
    `mixture` cannot where a dataset's `size` stands, and `hotset` cannot at all; both stay
    (section 6's table, corrected).
 
@@ -626,14 +628,17 @@ The finding: the DSL is RISC at its edges (ops, expressions) and CISC in the mid
 concurrency constructs and the cache verbs). The session generator, the most complex thing
 written, needed no generator-specific runner primitive.
 
-Six suggestions (decided 2026-11-14, after the list; none built):
+Six suggestions (decided 2026-11-14, after the list; ~~none built~~ 5 built 2026-11-15 as a library function, 1 built 2026-11-22 as contract 0.23):
 
 1. **Cache verbs take keys, not chunks of a sequence** (instruction set). `lookup`, `probe`,
    `touch`, `store` take `(seq, per, from, count)` today; brief item 75 said keys are opaque to
    the cache. A key range (an index, a count, a key expression), `chunk_key(seq, j, per)` one such
    expression. With `hold` and `full: wait` on `store`, `lookup` becomes a builder function. Gives
    the cache its second user (DiskANN's node cache, an epoch cache, a local disk cache over an
-   object store).
+   object store). *Built 2026-11-22, contract 0.23:* `keys {index, from, count, key}` on `probe`,
+   `touch`, and `store`; `store` with `present: touch`, `hold`, and `found` in place of the
+   `lookup` node, the builder's `lookup()` over it; the range's cut at a sequence's end and the
+   chunks of an array moved to the builder's `chunk_keys`. No second user is written yet.
 2. **An eviction body may act on another tier; entries carry values** (instruction set).
    `on_evict` bodies are barred from every cache statement today, so "evicted from G2, written to
    G3" cannot be said: Dynamo's cascade (item 76), G3 with G4 (item 78), S3-FIFO. Entries carrying
@@ -672,8 +677,8 @@ and no distribution added to the contract (the user, 2026-11-15: the tiered scri
 already was one over `empirical`, `uniform`, and an array parameter, so 7.1 makes it rung 2;
 moved to the library with the tiered abstract's AST hash unchanged; a contract distribution
 waits for a dataset size that needs a fitted table), `normal` and `lognormal` kept; 1, the cache verbs over keys, a provisional
-piece reshaped (7.4), `lookup` becoming a builder function, accepted when the tiered
-abstract's fingerprint is unchanged; 4 in part, `span` outside a timeline, `phase` left as it
+piece reshaped (7.4), `lookup` becoming a builder function, ~~accepted when the tiered
+abstract's fingerprint is unchanged~~ built 2026-11-22 and accepted by the user on other evidence, the planned trace of the tiered case equal line for line between the old node on the old runner and the new store on the new one, the fingerprint itself having moved for a `let` the new form needs (a statement added moves every later draw site of its body); 4 in part, `span` outside a timeline, `phase` left as it
 is and not merged; 2 in part, an eviction body acting on a strictly lower tier (so a cascade
 ends), built with brief item 78 after 1, and entries carrying values and a trigger on tier
 state not built for want of a committed user. Deferred: 3, recorded as a constraint on brief

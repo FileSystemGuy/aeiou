@@ -25,7 +25,7 @@ from .dists import (const, uniform, uniform64, normal, lognormal, empirical, zip
                     mixture, none, draw, when, ceil_div, min_, max_,
                     fresh, shared, prefix, cat, seq_len, chunk_key, tier, cached, now, lru,
                     tier_attr, victim, timed, quantile, quantile_at)
-from .builder import Workload, Cursor, Dataset, Namespace, gpu_id, actor_count, st_blksize  # noqa: E402
+from .builder import Workload, Cursor, Dataset, Namespace, gpu_id, actor_count, st_blksize, keys, chunk_keys  # noqa: E402
 from .units import KiB, MiB, GiB, TiB, KB, MB, GB, ns, us, ms, s, minute  # noqa: E402
 
 __all__ = [
@@ -34,6 +34,6 @@ __all__ = [
     "const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture",
     "none", "draw", "when", "ceil_div", "min_", "max_",
     "fresh", "shared", "prefix", "cat", "seq_len", "chunk_key", "tier", "cached", "now", "lru",
-    "tier_attr", "victim", "timed", "quantile", "quantile_at",
+    "tier_attr", "victim", "timed", "quantile", "quantile_at", "keys", "chunk_keys",
     "KiB", "MiB", "GiB", "TiB", "KB", "MB", "GB", "ns", "us", "ms", "s", "minute",
 ]

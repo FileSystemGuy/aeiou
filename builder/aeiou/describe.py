@@ -31,8 +31,8 @@ from .pattern import Pattern
 # The kinds the schema defines (`schema/abstract-ast.schema.json`); a test holds these to it.
 OPS = ("open", "close", "read", "write", "lseek", "ioctl", "fadvise", "fstat", "stat", "fsync", "fdatasync",
        "unlink", "truncate", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
-STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond", "choose",
-              "phase", "trace", "timeline", "publish", "array", "lookup", "acquire", "release", "probe", "touch",
+STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond",
+              "phase", "trace", "timeline", "publish", "array", "acquire", "release", "probe", "touch",
               "store", "submit", "span") + OPS
 DISTS = ("const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture")
 EXPRS = ("param", "index", "ref", "at", "actor", "draw", "elem", "len", "sum", "size", "offset", "unit_index", "units",
@@ -650,7 +650,7 @@ class Describer:
             keep = (f"evicting, every {self.value(ev['every'], 'ns')} of planned time, when `{self.sym(ev['when'])}`, "
                     f"`{self.sym(ev['count'])}` entries least by ({', '.join(self.sym(e) for e in t['order'])}), "
                     f"holding at most {cap}")
-        full = {"skip": "", "wait": "; a lookup that finds no room waits for a release", "fail": "; a lookup that finds no room fails"}[t.get("full", "skip")]
+        full = {"skip": "", "wait": "; a store that finds no room waits for a release", "fail": "; a store that finds no room fails"}[t.get("full", "skip")]
         if "evict" in t and t.get("full", "skip") == "skip":
             full = "; a store past it is dropped"
         return f"tier `{t['name']}`, {keep}{full}"
@@ -682,29 +682,23 @@ class Describer:
                                    f"{self.value(t['on_evict']['lanes'], 'count')} eviction lanes at its eviction's planned time:")
                         out += self.body(t["on_evict"]["body"], depth + 2)
             return out + self.body(a["body"], depth + 1)
-        if k == "lookup":
-            held = (f" The lane holds them under `{a['hold']}` until it releases it, so none is evicted meanwhile."
-                    if "hold" in a else "")
-            return [pad + f"Looks up `{self.sym(a['seq'])}` in tier `{a['tier']}` of cache `{a['cache']}`, by chunks of "
-                    f"{self.value(a['per'], 'count')} blocks: `{a['bind']}` is the leading chunks held; those held are then "
-                    "touched, the others stored." + held]
         if k in ("probe", "touch", "store"):
-            rng = (f"from chunk `{self.sym(a['from'])}`" if k == "probe" else
-                   f"chunks in `{a['chunks']}`" if "chunks" in a else
-                   f"chunks `{self.sym(a['from'])}` to `{self.sym(a['from'])}` + `{self.sym(a['count'])}`")
-            what = {"probe": f"Probes `{self.sym(a['seq'])}` {rng}", "touch": f"Touches `{self.sym(a['seq'])}`'s {rng}",
-                    "store": f"Stores `{self.sym(a['seq'])}`'s {rng}"}[k]
+            ks = a["keys"]
+            rng = (f"the {self.value(ks['count'], 'count')} keys `{self.sym(ks['key'])}`, `{ks['index']}` from "
+                   f"`{self.sym(ks.get('from', 0))}`,")
+            where = f"in tier `{a['tier']}` of cache `{a['cache']}`"
             if k == "probe":
-                tail = f": `{a['bind']}` is the leading chunks held, nothing changed."
-            elif k == "touch":
-                tail = " that it holds, as one event."
-            else:
-                tail = (" that it lacks, as one event" if a.get("present") != "renew" else
-                        ", those it lacks and those held stored again, as one event")
-                tail += "".join(f"; `{a[k]}` is " + t for k, t in (("bind", "the leading chunks held after it"),
-                                                                   ("taken", "the indices of the chunks it stored")) if k in a) + "."
-            return [pad + f"{what} in tier `{a['tier']}` of cache `{a['cache']}`, by chunks of "
-                    f"{self.value(a['per'], 'count')} blocks{tail}"]
+                return [pad + f"Probes {rng} {where}: `{a['bind']}` is the leading ones held, nothing changed."]
+            if k == "touch":
+                return [pad + f"Touches those of {rng} that are held {where}, as one event."]
+            tail = {"keep": "those it lacks, as one event", "renew": "those it lacks and those held stored again, as one event",
+                    "touch": "those it lacks, those held touched first, as one event"}[a.get("present", "keep")]
+            tail += "".join(f"; `{a[k]}` is " + t for k, t in (("found", "the leading ones held before it"),
+                                                               ("bind", "the leading ones held after it"),
+                                                               ("taken", "the indices it stored")) if k in a) + "."
+            if "hold" in a:
+                tail += f" The lane holds them under `{a['hold']}` until it releases it, so none is evicted meanwhile."
+            return [pad + f"Stores, of {rng} {where}, {tail}"]
         if k == "acquire":
             return [pad + f"Takes {self.value(a['n'], 'count')} units of `{a['resource']}` as `{a['hold']}`, "
                     "waiting in planned time while they are not free, first come first."]
@@ -750,12 +744,6 @@ class Describer:
             out = [pad + f"If `{self.sym(a['if'])}`{here}:"] + self.body(a["then"], depth + 1)
             if a.get("else"):
                 out += [pad + f"Otherwise{other}:"] + self.body(a["else"], depth + 1)
-            return out
-        if k == "choose":
-            total = sum(arm["weight"] for arm in a["arms"]) or 1
-            out = [pad + "One of these, chosen by a positional draw:"]
-            for arm in a["arms"]:
-                out += ["  " * (depth + 1) + f"- With probability {_pct(arm['weight'] / total)}:"] + self.body(arm["body"], depth + 2)
             return out
         if k == "phase":
             return [pad + f"Phase {self.label(a['name'])}:"] + self.body(a["body"], depth + 1)
@@ -913,9 +901,6 @@ class Describer:
             inner, other = self.gist(a["then"]), self.gist(a.get("else") or [])
             s = f"when `{self.sym(a['if'])}`, {inner or 'nothing'}"
             return s + (f", otherwise {other}" if other else "")
-        if k == "choose":
-            total = sum(arm["weight"] for arm in a["arms"]) or 1
-            return "one of: " + "; ".join(f"({_pct(arm['weight'] / total)}) {self.gist(arm['body']) or 'nothing'}" for arm in a["arms"])
         if k == "take":
             return f"take a batch from `{a['channel']}`" if a["channel"] in self.loaders else f"take an item from `{a['channel']}`"
         if k == "put":
@@ -929,7 +914,7 @@ class Describer:
         if k == "timeline":
             inner = self.gist(a["body"])
             return f"lanes planned together: {inner}" if inner else ""
-        return ""                                       # a channel's declaration, a publish, an array, a lookup
+        return ""                                       # a channel's declaration, a publish, an array, a probe, touch, or store
 
     def handle_gist(self, h, pending: str | None = None) -> str:
         """A handle in a few words; `pending` is the one the last binding named, no op between."""

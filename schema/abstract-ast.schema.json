@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.22",
+      "const": "0.23",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -1609,37 +1609,6 @@
           },
           "description": "Statement conditional; the test may use only loop indices, parameters, bindings, and the actor id."
         },
-        "choose": {
-          "type": "object",
-          "required": [
-            "arms"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "arms": {
-              "type": "array",
-              "minItems": 1,
-              "items": {
-                "type": "object",
-                "required": [
-                  "weight",
-                  "body"
-                ],
-                "additionalProperties": false,
-                "properties": {
-                  "weight": {
-                    "type": "number",
-                    "minimum": 0
-                  },
-                  "body": {
-                    "$ref": "#/$defs/body"
-                  }
-                }
-              }
-            }
-          },
-          "description": "Run one arm, chosen positionally by weight (the selection construct)."
-        },
         "phase": {
           "type": "object",
           "required": [
@@ -2125,41 +2094,6 @@
           },
           "description": "`count` values computed once, where the node stands, each with `index` bound as a loop index (so its draws are positional), read with `elem` and `len` as a parameter array is; never inside a loop, never the name of a parameter (contract 0.15, rule V32)."
         },
-        "lookup": {
-          "type": "object",
-          "required": [
-            "cache",
-            "tier",
-            "seq",
-            "per",
-            "bind"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "cache": {
-              "$ref": "#/$defs/ident"
-            },
-            "tier": {
-              "$ref": "#/$defs/ident"
-            },
-            "seq": {
-              "$ref": "#/$defs/expr"
-            },
-            "per": {
-              "$ref": "#/$defs/expr"
-            },
-            "bind": {
-              "$ref": "#/$defs/ident"
-            },
-            "size": {
-              "$ref": "#/$defs/expr"
-            },
-            "hold": {
-              "$ref": "#/$defs/ident"
-            }
-          },
-          "description": "The longest run of `seq`'s leading whole chunks of `per` blocks held in a tier of a cache of the enclosing timeline, bound to `bind` as an integer; then the chunks the tier holds touched, in order, and the others stored, in order (contract 0.18; 0.16 interleaved them), each `size` in a tier that counts bytes, exactly then. With `hold` (contract 0.18, rule V34), the chunks found and stored are held by this lane under that name until its `release`, never victims meanwhile. Not positional: `@` and `prev` may not reach `bind`."
-        },
         "acquire": {
           "type": "object",
           "required": [
@@ -2237,9 +2171,7 @@
           "required": [
             "cache",
             "tier",
-            "seq",
-            "per",
-            "from",
+            "keys",
             "bind"
           ],
           "additionalProperties": false,
@@ -2250,28 +2182,21 @@
             "tier": {
               "$ref": "#/$defs/ident"
             },
-            "seq": {
-              "$ref": "#/$defs/expr"
-            },
-            "per": {
-              "$ref": "#/$defs/expr"
-            },
-            "from": {
-              "$ref": "#/$defs/expr"
+            "keys": {
+              "$ref": "#/$defs/keys"
             },
             "bind": {
               "$ref": "#/$defs/ident"
             }
           },
-          "description": "The longest run of `seq`'s whole chunks of `per` blocks from chunk `from` held in a tier of a cache of the enclosing timeline, bound to `bind` as an integer; nothing changed (contract 0.19, rule V33). Not positional: `@` and `prev` may not reach `bind`."
+          "description": "The longest leading run of `keys` held in a tier of a cache of the enclosing timeline, bound to `bind` as an integer; nothing changed (contract 0.19; a key range since contract 0.23; rule V33). Not positional: `@` and `prev` may not reach `bind`."
         },
         "touch": {
           "type": "object",
           "required": [
             "cache",
             "tier",
-            "seq",
-            "per"
+            "keys"
           ],
           "additionalProperties": false,
           "properties": {
@@ -2281,31 +2206,18 @@
             "tier": {
               "$ref": "#/$defs/ident"
             },
-            "seq": {
-              "$ref": "#/$defs/expr"
-            },
-            "per": {
-              "$ref": "#/$defs/expr"
-            },
-            "from": {
-              "$ref": "#/$defs/expr"
-            },
-            "count": {
-              "$ref": "#/$defs/expr"
-            },
-            "chunks": {
-              "$ref": "#/$defs/ident"
+            "keys": {
+              "$ref": "#/$defs/keys"
             }
           },
-          "description": "The chunks `from` to `from + count` (cut at the sequence's end), or those whose indices the array `chunks` holds (an `array`, a `store`'s `taken`, or a parameter array; an index outside the sequence refused), that a tier holds, touched as one event: `touched` the same for all, `pos` each chunk's index; the others ignored (contract 0.19, rule V33). `from` and `count` together, or `chunks` alone."
+          "description": "Those of `keys` a tier holds, touched as one event: the same `touched` for all, `pos` each one's index (contract 0.19; a key range since contract 0.23; rule V33)."
         },
         "store": {
           "type": "object",
           "required": [
             "cache",
             "tier",
-            "seq",
-            "per"
+            "keys"
           ],
           "additionalProperties": false,
           "properties": {
@@ -2315,20 +2227,8 @@
             "tier": {
               "$ref": "#/$defs/ident"
             },
-            "seq": {
-              "$ref": "#/$defs/expr"
-            },
-            "per": {
-              "$ref": "#/$defs/expr"
-            },
-            "from": {
-              "$ref": "#/$defs/expr"
-            },
-            "count": {
-              "$ref": "#/$defs/expr"
-            },
-            "chunks": {
-              "$ref": "#/$defs/ident"
+            "keys": {
+              "$ref": "#/$defs/keys"
             },
             "size": {
               "$ref": "#/$defs/expr"
@@ -2336,8 +2236,15 @@
             "present": {
               "enum": [
                 "keep",
-                "renew"
+                "renew",
+                "touch"
               ]
+            },
+            "hold": {
+              "$ref": "#/$defs/ident"
+            },
+            "found": {
+              "$ref": "#/$defs/ident"
             },
             "bind": {
               "$ref": "#/$defs/ident"
@@ -2346,7 +2253,7 @@
               "$ref": "#/$defs/ident"
             }
           },
-          "description": "The chunks `from` to `from + count` (cut at the sequence's end), or those whose indices the array `chunks` holds (an `array`, a `store`'s `taken`, or a parameter array; an index outside the sequence refused), that a tier lacks, stored as one event, each `size` in a tier that counts bytes, exactly then; those it holds left as they are, or, with `present: renew`, stored again as if absent (a new entry; a chunk a lane holds is left as it is). A tier with timed eviction makes no room at store, so a chunk past its capacity is what `full` says (`skip`: a planned drop). With `bind`, the leading run of the range held after it; with `taken`, an array of the indices of the chunks it stored, in the order acted on, read with `len` and `elem` after the store (contract 0.19, rule V33; not the name of a parameter, V32); not on a tier whose `full` is `wait`. `from` and `count` together, or `chunks` alone. Not positional: `@` and `prev` may not reach `bind`."
+          "description": "Those of `keys` a tier lacks, stored as one event (the same `stored` for all, `pos` each one's index), `size` each exactly when the tier counts bytes. Those it holds are left as they are (`present: keep`, the default), stored again as if absent (`renew`: a new entry, taken; one a lane holds is left), or touched in the same event before anything is stored (`touch`, contract 0.23). With `hold` (contract 0.23, rule V34; only with `present: touch`), the entries it touched and stored are this lane's under that name until its `release`, never victims meanwhile. On a tier whose `full` is `wait` or `fail`, a store of `present: touch` decides before it changes anything: all it would store fits, or the lane waits in planned time (or the walk fails); a tier of `full: wait` takes no other store. With `found`, the leading run of the keys held before it changed anything, bound as an integer; with `bind`, the leading run held after it, short by a planned drop; with `taken`, an array of the indices it stored, in the order acted on, read with `len` and `elem` after it. `found` and `bind` are not positional. A lookup that stores what it missed, the `lookup` node of contracts 0.16 to 0.22, is a store of `present: touch` with `found` (contract 0.19; a key range since contract 0.23; rule V33)."
         }
       }
     },
@@ -2573,6 +2480,30 @@
         }
       },
       "description": "A timeline's store workers (contract 0.20, rule V36): `lanes` worker lanes (positive; parameters and literals only) the `submit`s naming it go to, by submission ordinal, and `staging` (positive bytes; parameters and literals only), what their bodies may have issued or queued and not completed in a run before a store would have been dropped, a gate failure."
+    },
+    "keys": {
+      "type": "object",
+      "required": [
+        "index",
+        "count",
+        "key"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "$ref": "#/$defs/ident"
+        },
+        "from": {
+          "$ref": "#/$defs/expr"
+        },
+        "count": {
+          "$ref": "#/$defs/expr"
+        },
+        "key": {
+          "$ref": "#/$defs/expr"
+        }
+      },
+      "description": "A key range (contract 0.23, rule V33), what a `probe`, `touch`, or `store` acts on: `key`, an integer, computed with `index` bound to `from` (0 when absent), `from + 1`, and so on, `count` of them, as an `array`'s value is computed (so a draw or a `fresh` in `key` is one at each index). The cache knows a key as an integer and nothing of where it came from; `chunk_key` is one expression that gives one. An entry's `pos` is the index it was last touched or stored at. A key that comes twice is acted on once, at its first index."
     }
   }
 }

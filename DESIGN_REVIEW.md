@@ -13152,6 +13152,74 @@ victim, least `pos` first, the order a `lookup`'s chunks had. Test first,
 `evict::entries_equal_in_the_order_are_each_a_victim` (red: `["d/1", "d/0", "d/0", "d/0"]`).
 Not a change of contract: no document that walked correctly walks differently.
 
+**Suggestion 1 built: contract 0.23, the cache statements over keys (2026-11-22; the user's
+"proceed as you recommended" on the shape, and "accept the new sample" on the fingerprint).**
+What was put to the user and agreed before any edit: a key range `keys {index, from, count,
+key}` on `probe`, `touch`, and `store`, an entry's `pos` its index; `lookup` lowered through a
+third value of `store`'s `present`, `touch`; and the `choose` node, lowered the same morning,
+out in the same version.
+- *Why `present: touch` and not `touch` then `store`.* A lookup decides, on a tier that waits,
+  whether all it would store fits before it changes anything, and it touches (and with `hold`
+  holds) what it found before it makes room, so the room is never made of what it found. A
+  `touch` followed by a `store` touches before the wait; a `store` first can evict what the
+  `touch` was about to find. So the two are one statement: `store` with `present: touch`
+  touches the keys held, then stores the others, one event.
+- *`found`, added while building.* A `probe` before a store that waits binds the hit count of
+  the moment the lane began to wait; the node bound it on the pass that went on. So `store`
+  takes `found`, the leading run held before it changed anything, counted on that pass, and
+  the builder's `lookup()` is one store, not a probe and a store. Told to the user with the
+  result.
+- *`hold` only with `present: touch`, and a `full: wait` tier only such a store.* Both are
+  what the node did and no more; a hold on a store that leaves what it finds would hold part
+  of its range, which nothing needs yet. A provisional piece can widen (7.4).
+- *One event, not one a key.* The node counted an event at every key; `store` and `touch`
+  count one a statement and let `pos` tell the keys apart. With the tie in the victim order
+  fixed (the note above), an order ending in `pos` gives the node's order, and the builder's
+  `lru()` became `[touched, pos]`. Not the same for an order of `touched` alone over entries
+  found: they go by `stored` and then `pos`, where the node went by index. No committed order
+  is such.
+- *The range's cut and the arrays moved to the builder.* The runner cut `from` and `count` at
+  the sequence's end and took an array of chunk indices; with keys it does neither.
+  `chunk_keys(seq, per, frm, count, chunks=, clip=)` writes the `min` and `max`, or a key that
+  reads the array's element. A `taken` then holds indices of the range, so over an array's
+  chunks it holds indices into the array: the tiered script's writes name `t2[t3[j]]`.
+- *A key is computed at each index, as an array's value is.* So a `fresh` in a key is other
+  blocks at each index, and `chunk_keys` takes a bound sequence and refuses an expression.
+  The alternative, an index that is no position for draws with the sequence cached for the
+  statement, was offered to the user with the result and not taken: it would make a key range
+  unlike an `array`, to save one `let`.
+- *The acceptance test, as decided, failed, and what was shown instead.* The tiered case's
+  fingerprint was to be unchanged. It is not: f1e4daacc73ad66f became 91d6c72e27c00fa8
+  (seed 1, one GPU, the case's parameters). The cause is the `let` that binds the G1 lookup's
+  sequence, `cat(sq, fresh(...))`: a statement added to a body moves every later statement's
+  JSON pointer, a draw's site is its pointer, so every draw after it is another draw. Shown
+  on the 0.22 runner with the committed AST and that one `let` added by hand: the same
+  91d6c72e27c00fa8. Then the stronger comparison: the planned trace (`dry-run --emit-trace`)
+  of that 0.22 form on the 0.22 runner and of the 0.23 form on the 0.23 runner are equal from
+  the second line to the last, 1,644,030 lines (the first, the header, lists the same
+  creates). So the verbs do what the node did, on this workload, and the fingerprint is
+  another sample of it. How far samples of it lie apart: the committed abstract's opens at
+  seeds 1 to 5 were 201,350, 720,964, 522,036, 922,756, and 270,805; the new form's at seed 1,
+  274,005. The user accepted the new sample.
+- *A mistake made and found by the trace comparison.* The first build gave a third
+  fingerprint: a range's frame held the iteration number where a frame's `idx` is the index's
+  value, so a range from chunk 2 read the keys of chunks 0 on. The first differing line of the
+  two traces (a read of a file never written) showed it; `evict::keys_are_integers_computed_
+  at_each_index_from_from` now holds a range that starts past 0.
+- *Cost.* The dry run of the case, 1.64 million ops: user CPU 13.2 to 14.5 s before and 13.6
+  to 14.1 s after over four runs each, on a host whose wall times moved by 3 s between
+  identical runs. Two things were done for it: the common key, `chunk_key` of a bound
+  sequence at the range's index, is read from the sequence's keys computed once, and a
+  store's leading runs are counted only for a binding that reads them.
+- *What changed for a reader of 0.22.* A document holding `lookup`, `choose`, or a cache
+  statement is not a 0.23 document. Every committed AST was regenerated (14), every lock
+  re-locked, every shape re-measured; no dataset id moved and one fingerprint did, above.
+  The shared refusal cases were converted (four dropped with the forms they refused, four
+  added for the new rules; parse-level refusals of the removed nodes are in `cov_c1.rs`).
+- *Not done.* No second user of the cache is written (the reason for suggestion 1); brief
+  item 80, the range of accepted versions, is still not built, so this version again changed
+  every AST hash and workload id.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

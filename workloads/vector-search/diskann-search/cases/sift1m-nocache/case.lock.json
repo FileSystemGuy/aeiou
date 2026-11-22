@@ -5,7 +5,7 @@
     {
       "name": "diskann_search",
       "abstract": "vector-search/diskann-search/diskann_search.ast.json",
-      "ast_sha256": "46b3c04b78075e98f4bd4b666afa3ede1b5c64218ae210ce03993cc83fbb2e95",
+      "ast_sha256": "bd8e5862827c8f118d306735a8d29a41f9cdc0b2eb31aadaf0eeb9f06857fc40",
       "params": {
         "beam": {"default": 4},
         "cache_batch": {"default": 8},

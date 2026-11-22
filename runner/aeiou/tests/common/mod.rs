@@ -2,6 +2,7 @@
 //! the tests' scratch directories.
 #![allow(dead_code)]
 
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -243,4 +244,24 @@ impl aeiou::endpoint::Place for TempDir {
     fn at(&self, rel: &str) -> PathBuf {
         self.0.join(rel)
     }
+}
+
+/// The key range (contract 0.23) of whole chunks of `per` blocks of the sequence `s`: from chunk
+/// `from`, `count` of them or to its end, cut at the sequence's end, each one's `pos` its chunk
+/// index, as the builder's `chunk_keys` writes it. The range's index is `j`.
+pub fn chunk_keys(s: Value, per: Value, from: Value, count: Option<Value>) -> Value {
+    let n = json!({"div": [{"seq_len": s.clone()}, per.clone()]});
+    let from = json!({"min": [from, n.clone()]});
+    let left = json!({"sub": [n, from.clone()]});
+    let count = match count {
+        Some(c) => json!({"max": [0, {"min": [c, left]}]}),
+        None => left,
+    };
+    json!({"index": "j", "from": from, "count": count, "key": {"chunk_key": {"seq": s, "chunk": {"index": "j"}, "per": per}}})
+}
+
+/// The key range of the chunks of `s` whose indices the array `array` holds, in its order, each
+/// one's `pos` its index in the array.
+pub fn chunk_keys_of(s: Value, per: Value, array: &str) -> Value {
+    json!({"index": "j", "count": {"len": array}, "key": {"chunk_key": {"seq": s, "chunk": {"elem": {"array": array, "index": {"index": "j"}}}, "per": per}}})
 }

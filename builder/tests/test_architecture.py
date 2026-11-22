@@ -43,7 +43,7 @@ O = {"object": {"namespace": "o", "fields": {"k": 0}}}
 DIR = {"dir": {"dataset": "d", "id": 0}}
 SEQ = {"shared": {"id": 1, "n": 2}}
 STAT = {"stat": {"file": F}}
-CACHE = {"cache": "c", "tier": "u", "seq": SEQ, "per": 1}
+CACHE = {"cache": "c", "tier": "u", "keys": {"index": "j", "count": 2, "key": {"chunk_key": {"seq": SEQ, "chunk": {"index": "j"}, "per": 1}}}}
 
 # one small instance of every statement of the schema; a body holds one `stat`, so a statement
 # that only encloses others shows the effect `op` alone
@@ -51,7 +51,6 @@ INSTANCES = {
     "let": {"name": "x", "value": 1},
     "loop": {"index": "i", "to": 1, "body": [STAT]},
     "cond": {"if": True, "then": [STAT]},
-    "choose": {"arms": [{"weight": 1, "body": [STAT]}]},
     "phase": {"name": "p", "body": [STAT]},
     "array": {"name": "arr", "count": 2, "index": "ai", "value": 1},
     "compute": {"ns": 1},
@@ -64,10 +63,9 @@ INSTANCES = {
     "trace": {"file": "t.jsonl", "sha256": "0" * 64},
     "timeline": {"name": "t2", "body": []},
     "publish": {"timeline": "tl", "values": {"a": 1}},
-    "lookup": {**CACHE, "bind": "b"},
-    "probe": {**CACHE, "from": 0, "bind": "b"},
-    "touch": {**CACHE, "from": 0, "count": 1},
-    "store": {**CACHE, "from": 0, "count": 1},
+    "probe": {**CACHE, "bind": "b"},
+    "touch": {**CACHE},
+    "store": {**CACHE},
     "acquire": {"resource": "r", "n": 1, "hold": "h"},
     "release": {"hold": "h0"},
     "submit": {"workers": "w", "body": [STAT]},
@@ -149,6 +147,8 @@ def placements():
     for kind in sorted(KINDS):
         yield kind, {kind: copy.deepcopy(INSTANCES[kind])}
     yield "parallel join:false", {"parallel": {**INSTANCES["parallel"], "join": False}}
+    # a store that touches what it finds decides, on a tier that waits, before it changes anything
+    yield "store present:touch", {"store": {**copy.deepcopy(INSTANCES["store"]), "present": "touch", "found": "b"}}
     for name, e in sorted(EXPRS.items()):
         yield f"{name} (expression)", {"stat": {"file": {"file": {"dataset": "d", "id": e}}}}
 
@@ -158,7 +158,9 @@ def by_table(name, node, ctx, effects, allows, joined_only):
     eff = set(effects[kind])
     if name.endswith(" (expression)"):
         eff |= effects[name.split()[0]]
-    if kind in ("submit", "span", "loop", "cond", "choose", "phase"):
+    if name == "store present:touch":
+        eff.add("wait")
+    if kind in ("submit", "span", "loop", "cond", "phase"):
         eff.add("op")                                   # the `stat` in its body
     if name == "parallel join:false" and joined_only[ctx]:
         return True

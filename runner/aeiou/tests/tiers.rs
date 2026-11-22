@@ -20,7 +20,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.22", "name": "t", "params": {"cap": {"default": 4}},
+    json!({"ast": "0.23", "name": "t", "params": {"cap": {"default": 4}},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -95,11 +95,11 @@ fn cached(a: &str) -> Value {
 
 /// A lookup of `s`, one key a block, in tier `t` of cache `c`.
 fn lk(s: Value, bind: &str) -> Value {
-    json!({"lookup": {"cache": "c", "tier": "t", "seq": s, "per": 1, "bind": bind}})
+    json!({"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(0), None), "present": "touch", "found": bind}})
 }
 
 fn lk_hold(s: Value, bind: &str, hold: &str) -> Value {
-    json!({"lookup": {"cache": "c", "tier": "t", "seq": s, "per": 1, "bind": bind, "hold": hold}})
+    json!({"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(0), None), "present": "touch", "found": bind, "hold": hold}})
 }
 
 fn release(hold: &str) -> Value {
@@ -192,10 +192,10 @@ fn held_entries_are_not_victims() {
     assert_eq!(walk(body), ["d/2", "d/0"]);
     fails(json!([tl(tier(json!([cached("touched")]), 2, "fail"), json!([
         lk_hold(shared(1, 2), "a0", "p"), lk(shared(2, 1), "b0"), release("p")]))]),
-        "lookup: tier `t` of cache `c` is full: 1 more past its capacity 2 (full: fail)");
+        "store: tier `t` of cache `c` is full: 1 more past its capacity 2 (full: fail)");
     // a lookup larger than the tier can never fit, whether it would wait or fail
     fails(json!([tl(tier(json!([cached("touched")]), 2, "wait"), json!([lk(shared(1, 3), "a")]))]),
-        "lookup: 3 of new entries in tier `t` of cache `c`, past its capacity 2, can never fit");
+        "store: 3 of new entries in tier `t` of cache `c`, past its capacity 2, can never fit");
     // a tier with no order evicts nothing: full past its capacity
     fails(json!([tl(json!([{"name": "t", "capacity": 2, "full": "fail"}]), json!([lk(shared(1, 2), "a"), lk(shared(2, 1), "b")]))]),
         "is full: 1 more past its capacity 2 (full: fail)");
@@ -207,7 +207,7 @@ fn held_entries_are_not_victims() {
 #[test]
 fn a_full_tier_makes_a_lane_wait_for_a_release() {
     let body = json!([tl(tier(json!([cached("freed")]), 4, "wait"), json!([lanes(3, json!([
-        {"lookup": {"cache": "c", "tier": "t", "seq": {"fresh": 3}, "per": 1, "bind": "h", "hold": "p"}},
+        {"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(json!({"fresh": 3}), json!(1), json!(0), None), "present": "touch", "found": "h", "hold": "p"}},
         stat(now()), compute(json!(10)), release("p")]))]))]);
     // three lanes at 0, 1, 2 each holding 3 of 4 entries for 10: admitted at 0, 10, 20
     assert_eq!(walk(body), ["d/0", "d/10", "d/20"]);
@@ -252,7 +252,7 @@ fn holds_used_wrongly_are_refused_when_walked() {
         "acquire: this lane holds `a` already; `release` it first (V34)");
     fails(json!([tl_res(slots.clone(), json!([acquire("s", 1, "a"), release("a"), release("a")]))]), "release: this lane holds no `a` (V34)");
     fails(json!([tl(tier(json!([cached("touched")]), 4, "skip"), json!([lk_hold(shared(1, 1), "x", "a"), lk_hold(shared(1, 1), "y", "a"), release("a")]))]),
-        "lookup: this lane holds `a` already; `release` it first (V34)");
+        "store: this lane holds `a` already; `release` it first (V34)");
     fails(json!([tl_res(json!([{"name": "s", "capacity": -1}]), json!([]))]), "resource `s`: capacity -1");
     // what the validator refuses, refused by the walk too
     walk_fails(json!([acquire("s", 1, "a")]), "acquire: outside a timeline, where nothing is planned (V34)");
@@ -291,7 +291,7 @@ fn the_validator_holds_orders_holds_and_resources_to_their_rules() {
     has(json!([acquire("s", 1, "a")]), "acquire: outside a timeline, where nothing is planned (V34)");
     has(json!([release("a")]), "release: outside a timeline, where nothing is planned (V34)");
     has(json!([tl_res(json!([]), json!([acquire("s", 1, "a"), release("a")]))]), "acquire: no timeline declares resource `s` around it (V34)");
-    has(json!([tl_res(json!([{"name": "s", "capacity": 1}]), json!([release("b")]))]), "release: no `acquire` or `lookup` of timeline `tl` holds `b` (V34)");
+    has(json!([tl_res(json!([{"name": "s", "capacity": 1}]), json!([release("b")]))]), "release: no `acquire` or `store` of timeline `tl` holds `b` (V34)");
     has(json!([tl_res(json!([{"name": "s", "capacity": 1}, {"name": "s", "capacity": 2}]), json!([]))]), "resource `s` declared twice (V34)");
     has(json!([tl_res(json!([{"name": "s", "capacity": "x"}]), json!([]))]), "expected an integer");
     has(json!([tl_res(json!([{"name": "s", "capacity": 1}]), json!([acquire("s", 1, "a b"), release("a b")]))]), "not an identifier");

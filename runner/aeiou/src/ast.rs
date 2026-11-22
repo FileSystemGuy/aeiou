@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.22";
+pub const AST_VERSION: &str = "0.23";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,7 +72,6 @@ impl Ast {
                             walk(o, out);
                         }
                     }
-                    Node::Choose { arms, .. } => arms.iter().for_each(|a| walk(&a.body, out)),
                     _ => {}
                 }
             }
@@ -91,7 +90,6 @@ pub fn body_has_timeline(nodes: &[Node]) -> bool {
         Node::Timeline { .. } => true,
         Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Submit { body, .. } | Node::Span { body, .. } => body_has_timeline(body),
         Node::Cond { then, otherwise, .. } => body_has_timeline(then) || otherwise.as_deref().is_some_and(body_has_timeline),
-        Node::Choose { arms, .. } => arms.iter().any(|a| body_has_timeline(&a.body)),
         _ => false,
     })
 }
@@ -996,11 +994,18 @@ pub struct FileOp {
     pub expect: Expect,
 }
 
+/// The keys a `probe`, `touch`, or `store` acts on (contract 0.23, rule V33): `key` evaluated
+/// with `index` bound to `from`, `from + 1`, ..., `count` of them, as an `array`'s value is.
+/// The cache knows a key as an integer and nothing of where it came from; `chunk_key` is one
+/// expression that gives one. `from` is 0 when not given.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ChooseArm {
-    pub weight: f64,
-    pub body: Body,
+pub struct Keys {
+    pub index: String,
+    #[serde(default)]
+    pub from: Option<Expr>,
+    pub count: Expr,
+    pub key: Expr,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1016,7 +1021,6 @@ pub enum Node {
     Barrier { scope: String },
     Compute { ns: Expr },
     Cond { #[serde(rename = "if")] test: Expr, then: Body, #[serde(default, rename = "else")] otherwise: Option<Body> },
-    Choose { arms: Vec<ChooseArm>, #[serde(skip)] site: Site },
     Phase { name: Expr, body: Body },
     Trace { file: String, sha256: String },
     /// Lanes planned together, taken in planned order (contract 0.15, rule V30).
@@ -1049,43 +1053,36 @@ pub enum Node {
     Publish { timeline: String, #[serde(default)] group: Option<Expr>, values: std::collections::BTreeMap<String, Expr> },
     /// `count` values computed once, each with `index` bound as a loop's (rule V32).
     Array { name: String, count: Expr, index: String, value: Expr },
-    /// The longest run of `seq`'s leading chunks found in a tier of a cache of the enclosing
-    /// timeline, bound to `bind`; those touched, the rest stored (contract 0.16, rule V33).
-    /// With `hold` (contract 0.18, rule V34), the entries found and stored are held by this lane
-    /// under that name until a `release` of it: a held entry is never a victim.
-    Lookup { cache: String, tier: String, seq: Expr, per: Expr, bind: String, #[serde(default)] size: Option<Expr>, #[serde(default)] hold: Option<String> },
     /// `n` units of a resource of the enclosing timeline, held by this lane under `hold` until a
     /// `release`; the lane waits while they are not free (contract 0.18, rule V34).
     Acquire { resource: String, n: Expr, hold: String },
     /// What this lane holds under `hold`, given back (contract 0.18, rule V34).
     Release { hold: String },
-    /// The longest run of `seq`'s whole chunks from chunk `from` held in a tier, bound to `bind`;
-    /// nothing changed (contract 0.19, rule V33).
-    Probe { cache: String, tier: String, seq: Expr, per: Expr, from: Expr, bind: String },
-    /// The chunks `from` to `from + count`, or those an array `chunks` names, that a tier holds,
-    /// touched, as one event (contract 0.19, rule V33).
-    Touch { cache: String, tier: String, seq: Expr, per: Expr, #[serde(default)] from: Option<Expr>, #[serde(default)] count: Option<Expr>, #[serde(default)] chunks: Option<String> },
-    /// The chunks `from` to `from + count`, or those an array `chunks` names, that a tier lacks
-    /// (with `present: renew`, all of them), stored, as one event; with `bind`, the leading run of
-    /// the range held after it; with `taken`, an array of the indices of the chunks it stored
-    /// (contract 0.19, rule V33).
+    /// The longest leading run of `keys` held in a tier of a cache of the enclosing timeline,
+    /// bound to `bind`; nothing changed (contract 0.19; keys contract 0.23; rule V33).
+    Probe { cache: String, tier: String, keys: Keys, bind: String },
+    /// Those of `keys` a tier holds, touched, as one event (contract 0.19; keys 0.23; rule V33).
+    Touch { cache: String, tier: String, keys: Keys },
+    /// Those of `keys` a tier lacks, stored, as one event; those it holds left (`present:
+    /// keep`), stored again (`renew`), or touched (`touch`, contract 0.23). With `hold`
+    /// (contract 0.23, rule V34; only with `present: touch`), what it touched and stored is this
+    /// lane's until a `release`. With `found`, the leading run of the keys held before it
+    /// changed anything; with `bind`, the leading run held after it; with `taken`, an array of
+    /// the indices it stored (contract 0.19; keys 0.23; rule V33).
     Store {
         cache: String,
         tier: String,
-        seq: Expr,
-        per: Expr,
-        #[serde(default)]
-        from: Option<Expr>,
-        #[serde(default)]
-        count: Option<Expr>,
-        #[serde(default)]
-        chunks: Option<String>,
+        keys: Keys,
         #[serde(default)]
         size: Option<Expr>,
         #[serde(default)]
-        bind: Option<String>,
-        #[serde(default)]
         present: Present,
+        #[serde(default)]
+        hold: Option<String>,
+        #[serde(default)]
+        found: Option<String>,
+        #[serde(default)]
+        bind: Option<String>,
         #[serde(default)]
         taken: Option<String>,
     },
@@ -1125,7 +1122,6 @@ impl Node {
             Node::Barrier { .. } => "barrier",
             Node::Compute { .. } => "compute",
             Node::Cond { .. } => "cond",
-            Node::Choose { .. } => "choose",
             Node::Phase { .. } => "phase",
             Node::Trace { .. } => "trace",
             Node::Timeline { .. } => "timeline",
@@ -1133,7 +1129,6 @@ impl Node {
             Node::Span { .. } => "span",
             Node::Publish { .. } => "publish",
             Node::Array { .. } => "array",
-            Node::Lookup { .. } => "lookup",
             Node::Acquire { .. } => "acquire",
             Node::Release { .. } => "release",
             Node::Probe { .. } => "probe",
@@ -1166,8 +1161,8 @@ impl Node {
             self,
             Node::Let { .. } | Node::Loop { .. } | Node::Parallel { .. } | Node::Channel { .. } | Node::Put { .. }
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
-                | Node::Cond { .. } | Node::Choose { .. } | Node::Phase { .. } | Node::Trace { .. }
-                | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. } | Node::Lookup { .. }
+                | Node::Cond { .. } | Node::Phase { .. } | Node::Trace { .. }
+                | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. }
                 | Node::Acquire { .. } | Node::Release { .. } | Node::Probe { .. } | Node::Touch { .. } | Node::Store { .. }
                 | Node::Submit { .. } | Node::Span { .. }
         )
@@ -1240,6 +1235,9 @@ pub enum Present {
     Keep,
     /// Stored again, as if it were absent: a new entry, and taken.
     Renew,
+    /// Touched, in the store's event, before anything is stored (contract 0.23): what a lookup
+    /// that stores what it missed does.
+    Touch,
 }
 
 /// What a store does when the tier has no room and no victim left (contract 0.18).
