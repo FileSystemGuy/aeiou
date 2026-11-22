@@ -192,3 +192,17 @@ def test_no_one_line_command_of_a_workflow_is_read_as_a_mapping():
             if m and (": " in m[1] or m[1].endswith(":") or " #" in m[1]):
                 bad.append(f"{name}:{n}: {m[1]}")
     assert not bad, bad
+
+
+def test_the_timeline_tests_run_with_nothing_beside_them():
+    """A timeline's run is invalid when the host issues its ops late (p99 past 10 ms,
+    DESIGN_REVIEW.md §3.99 point 7), and the tests of `runner/aeiou/tests/timeline.rs` run real
+    timelines of a few ops, where the p99 is the worst op: beside the rest of the suite on every
+    core about one such run in twelve was late (2026-11-15), alone none of 150. So nextest gives
+    each of them every test slot, and the suite's job is the one that reads this file."""
+    conf = tomllib.loads((ROOT / "runner" / ".config" / "nextest.toml").read_text(encoding="utf-8"))
+    alone = [o for o in conf["profile"]["default"]["overrides"] if o.get("threads-required") == "num-test-threads"]
+    assert [o["filter"] for o in alone] == ["binary(all) & test(/^timeline::/)"]
+    assert (ROOT / "runner" / "aeiou" / "tests" / "all.rs").read_text(encoding="utf-8").count("mod timeline;") == 1
+    dev = (ROOT / "dev.sh").read_text(encoding="utf-8")
+    assert '"$nextest" nextest run --release --locked "$@"' in dev

@@ -12436,6 +12436,24 @@ the build:
   over, with a warning, from the environment or a config file, as `--threads` is under a blocking
   backend; `--on-certain-failure` defaults to `stop` and needs neither.
 
+*The rule met the suite: the timeline tests run alone (measured 2026-11-15, decided 2026-11-22,
+the user's "agree to 1").* `timeline::run_issues_a_timeline_on_every_backend` failed two of three
+full local checks on 2026-11-15 with a lateness p99 past 10 ms, and passed alone. Its timeline
+holds 18 ops, so its p99 is its worst op. Measured on the 20-core development host (WSL2): alone,
+p99 typically 3.1 ms, worst 6.3, none of 150 runs past 10 ms; beside 20 busy loops, typically 0.2
+to 0.8 ms, worst 6.3, none of 150; beside the runner's suite on every core, 6 of 365 runs invalid
+(10.5, 12.6, 12.6, 16.8, 25.2, and 167.8 ms), about 8% of a test of five backends. So the suite,
+hundreds of processes started and ended, makes the host late where plain CPU load does not, and
+the rule did what it is for: it called a run on a host that could not keep the plan invalid. Three
+answers were put to the user: (1) the tests of `timeline.rs` take every nextest slot, so nothing
+runs beside them; (2) lateness judged only from 100 timeline ops up, which changes the validity
+rule for every short run to cure a test; (3) a higher limit, the same objection and worse. The
+user chose (1): `runner/.config/nextest.toml`, held by `builder/tests/test_pins.py`. The filter is
+the whole module, 31 tests of which nine run a timeline, so a run added there needs no list kept;
+the others are validator tests of milliseconds. Not covered: `./dev.sh cov` runs the suite under
+`cargo llvm-cov`, threads of one process, where nextest's file is not read; whether either failure was a coverage run was not recorded,
+and if one fails there, the answer is `cargo llvm-cov nextest`. The rule itself is unchanged.
+
 *The series and the planned trace (2026-11-14, step 5's last part).* The note's per-second report,
 the edge waits, and `--emit-trace`'s planned `t`. The per-second report put to the user: a whole
 `agentx-tiered` run is about 400,000 seconds of planned time; the user chose a file of its own,

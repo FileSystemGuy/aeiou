@@ -1,0 +1,10 @@
+# cargo-nextest's configuration for the runner's suite (`./dev.sh check runner`).
+#
+# The tests of aeiou/tests/timeline.rs run real timelines, which `aeiou run` judges invalid when
+# the host issues their ops late (p99 past 10 ms, DESIGN_REVIEW.md §3.99 point 7). They hold a
+# few ops, so the p99 is the worst one, and beside the rest of the suite on every core about one
+# such run in twelve was late (2026-11-15; alone, none of 150). Each takes every test slot, so
+# nothing of the suite runs beside it. Held by builder/tests/test_pins.py.
+[[profile.default.overrides]]
+filter = 'binary(all) & test(/^timeline::/)'
+threads-required = 'num-test-threads'
