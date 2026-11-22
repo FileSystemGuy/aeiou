@@ -1228,6 +1228,9 @@ pub(crate) struct Shared {
     pub(crate) mmap_stats: Arc<MmapStats>,
     /// `--series FILE`: a timeline's seconds, a JSON line each, from every actor of this host.
     pub(crate) series: Option<Mutex<std::io::BufWriter<std::fs::File>>>,
+    /// When this host's run state was made: what a span outside a timeline counts its start
+    /// from, for its five-minute windows (contract 0.24).
+    pub(crate) origin: Instant,
 }
 
 impl Shared {
@@ -1519,6 +1522,8 @@ pub(crate) struct ActorState {
     /// is sleeping began.
     pub(crate) step: Option<OpenStep>,
     pub(crate) compute_from: Option<Instant>,
+    /// The spans outside a timeline this actor is in, with when it reached each (contract 0.24).
+    pub(crate) spans: Vec<(&'static str, Instant)>,
 }
 
 impl ActorState {
@@ -1539,6 +1544,7 @@ impl ActorState {
             pace: None,
             step: None,
             compute_from: None,
+            spans: Vec::new(),
         }
     }
 
@@ -1650,6 +1656,20 @@ impl ActorState {
     /// `settle` for a line of a `trace` node: a call its file shows failing (`expect` is its
     /// traced errno) that succeeds here is counted, to be warned of, never refused (§3.93
     /// item 5); in an abstract, an `expect` is an error allowed, and success is the rule.
+    /// A `span` outside a timeline begins or ends (contract 0.24): its D, the elapsed time from
+    /// the instant this actor reached it to now, its body's last op completed and every
+    /// `parallel` in it joined, recorded under its name with its start on the run's clock.
+    pub(crate) fn span(&mut self, sh: &Shared, begin: Option<&'static str>) {
+        match begin {
+            Some(name) => self.spans.push((name, Instant::now())),
+            None => {
+                let (name, at) = self.spans.pop().expect("a span's end follows its begin");
+                let start = at.saturating_duration_since(sh.origin).as_nanos() as i64;
+                self.st.spans.entry(name.to_string()).or_default().push((start, at.elapsed().as_nanos() as i64));
+            }
+        }
+    }
+
     pub(crate) fn settle_line(&mut self, op: &Op, ctx: &OpCtx, r: std::io::Result<i64>, ns: u64) -> Result<()> {
         if let (Ok(_), Some(e)) = (&r, op.expect.first()) {
             *self.st.unreproduced_errors.entry(format!("{} {e}", op.kind.name())).or_insert(0) += 1;
@@ -2287,6 +2307,11 @@ impl Sink<'static, 'static> for Runner {
         self.a.check_align(&self.sh, op)?;
         let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, op);
         self.a.settle(op, ctx, r, ns)
+    }
+
+    fn span(&mut self, begin: Option<&'static str>) -> Result<()> {
+        self.a.span(&self.sh, begin);
+        Ok(())
     }
 
     fn control(&mut self, c: Control<'static>, ctx: &OpCtx) -> Result<()> {
@@ -3223,6 +3248,7 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
             Some(p) => Some(Mutex::new(std::io::BufWriter::new(std::fs::File::create(p).with_context(|| format!("--series {}", p.display()))?))),
             None => None,
         },
+        origin: Instant::now(),
     });
 
     crate::backend::open_files_reset();
@@ -3424,12 +3450,13 @@ fn us(ns: u64) -> String {
     }
 }
 
-/// A timeline's spans and lag (brief item 72 (7) step 5): each span name's D, from its launch to
-/// its last op's completion, and the final L of the body lanes that issued ops.
+/// A run's spans and a timeline's lag (brief item 72 (7) step 5): each span name's D, from its
+/// launch to its last op's completion (outside a timeline, contract 0.24, the elapsed time of its
+/// body), and the final L of the body lanes that issued ops.
 fn write_timeline(out: &mut impl Write, s: &Stats) -> std::io::Result<()> {
     let t = |ns: i64| us(ns.max(0) as u64);
     if !s.spans.is_empty() {
-        writeln!(out, "timeline spans (D: sum/p50/p99/max; the worst {}-minute window's p99 by planned start):", crate::exec::WINDOW_NS / 60_000_000_000)?;
+        writeln!(out, "spans (D: sum/p50/p99/max; the worst {}-minute window's p99 by start, planned in a timeline, the run's clock outside one):", crate::exec::WINDOW_NS / 60_000_000_000)?;
         for (name, ds) in &s.spans {
             let m = crate::exec::summarize(ds);
             writeln!(out, "  {:<10} {:>9} {:>9} {:>9} {:>9}   window p99 {} of {} window(s)   n={}", name, t(m.sum), t(m.p50), t(m.p99), t(m.max), t(m.window_p99), m.windows.len(), m.count)?;

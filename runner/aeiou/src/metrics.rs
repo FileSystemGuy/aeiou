@@ -1068,6 +1068,7 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
                     }
                     _ => return Ok(false),
                 },
+                Some(Event::Span(_)) => {}
                 Some(Event::Op(op, ctx)) => {
                     // a timeline's op: its executor lane, at its planned time
                     sink.lane = match at {

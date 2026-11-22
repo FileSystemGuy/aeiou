@@ -16,7 +16,7 @@ use serde::Deserialize;
 /// (`validate::SINCE`), so an addition changes the hash of no abstract without it. A change
 /// that is not an addition raises the floor to its version.
 pub const AST_FLOOR: &str = "0.23";
-pub const AST_VERSION: &str = "0.23";
+pub const AST_VERSION: &str = "0.24";
 
 /// A version in order (`0.9` before `0.23`), `None` for what is not one in its one spelling.
 pub fn version_key(v: &str) -> Option<(u32, u32)> {

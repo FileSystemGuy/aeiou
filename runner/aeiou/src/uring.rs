@@ -1721,6 +1721,7 @@ impl<E: Engine> Loop<E> {
                         }
                     }
                 }
+                Some(Event::Span(begin)) => t.io.a.span(&sh, begin),
                 Some(Event::Fork(kind)) => {
                     let snap = vm.snapshot();
                     vm.accept_fork();

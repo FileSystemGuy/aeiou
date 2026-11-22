@@ -1894,6 +1894,14 @@ numbers; the order is this note's.
     epoch cache, a local disk cache over an object store), the reason the suggestion was
     made; then suggestions 4 and the first half of 2 (with item 78), in that order.
 
+    *Review suggestion 4 built (2026-11-22, contract 0.24; the note "Suggestion 4 built"):* a
+    `span` outside a timeline, the elapsed time of its body, ops and a joined `parallel`,
+    reported as a timeline's spans are; a separate statement from `phase`, as the user
+    decided again that day. **Not done yet:** no committed abstract or case uses one (a
+    model's load, a checkpoint's write, a query: the user's to choose; `diskann_search` would
+    take a new sample, its region holding draws). Next of the review: the first half of
+    suggestion 2, with item 78.
+
 80. **A range of accepted contract versions (decided by the user 2026-11-14, `ARCHITECTURE.md`
     §7.5, `DESIGN_REVIEW.md` §3.100; ~~not built~~ built 2026-11-22, the note "The version range built").** Today the runner accepts exactly its own
     contract version, the version is inside the hashed document, and a case's workload id
@@ -1910,7 +1918,8 @@ numbers; the order is this note's.
     carry; the builder stamps it; tests with a stand-in later version that every committed
     AST not using the addition is read unchanged. **Not settled:** the second question; the
     floor is raised by default, and confining a change to provisional pieces is not built.
-    **Not exercised yet** by a real addition: the first is contract 0.24, review suggestion 4.
+    ~~**Not exercised yet** by a real addition: the first is contract 0.24, review suggestion 4.~~
+    Exercised the same day by contract 0.24: no committed AST, lock, or shape moved.
 
 ## 7. Environment
 

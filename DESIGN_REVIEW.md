@@ -13251,6 +13251,53 @@ build:
   red). The first real exercise is contract 0.24.
 - *Nothing was regenerated:* every committed AST already carries 0.23, the floor.
 
+**Suggestion 4 built: contract 0.24, a span outside a timeline (2026-11-22; the user's "item 80
+first then suggestion 4 (as described in points 2 and 3 above), and separate span and phase
+statements").** What was costed and put to the user before any edit:
+- *The planner already walked a span outside a timeline; the validator refused it and the
+  run's drivers skipped its marks.* So the work was the run: `vm.rs` now marks the begin and
+  the end to the driver (`Event::Span`), and the two drivers outside a timeline, the blocking
+  backends' sink and the event loop, time it in the state they share (`ActorState::span`).
+- *The timeline's rule for a span's body does not fit outside one.* There a span holds no
+  `compute` and no `parallel`, since D is a storage wait and both move the planned clock.
+  The regions suggestion 4 names hold exactly those: a checkpoint's write stands between two
+  barriers, a query holds `parallel` beams and ends in a `compute`. Decided (point 2): outside
+  a timeline D is the elapsed time of the body, which may hold ops and a joined `parallel`,
+  and nothing that is not the actor's own storage work: no `compute` (emulated time), no
+  `barrier`, channel, or `loader` (a wait on another actor), no `timeline` or `trace` (a scope
+  of its own). The author places the span around the I/O. A span is still never in a span,
+  and `staging` is a timeline's.
+- *Where it is reported* (point 3): where a timeline's spans are, under the same
+  `result.span.NAME.*` names; the five-minute windows by the run's clock in place of planned
+  time; nothing stops a run early on one, a watched constraint being a timeline's. The JSON
+  report keeps the key `timeline.spans` for both, so a reader of spans has one place; the
+  text report's line was renamed from `timeline spans` to `spans`.
+- *Separate from `phase`, with the cost now known.* The user had decided against merging on
+  2026-11-14; what was new on 2026-11-22 is that a span wrapped around statements moves the
+  site of every draw among them (a site is its node's JSON pointer), so adding one to a
+  committed abstract with draws in the region gives that abstract another sample, where a key
+  on an existing `phase` would not. Of the four abstracts with a region of the kind,
+  `safetensors_load`, `dcp_save`, and `dcp_load` hold no draw at all and `diskann_search`
+  holds five. Put to the user, who kept the separate statement.
+- *What D holds outside a timeline, said plainly.* Not only the ops' time: the hand-off to and
+  the join of a `parallel`'s threads or tasks, and under an event loop the time a completion
+  waits for the loop. It is the application's wait for that region on this host, as a
+  timeline's D includes the host's lag.
+- *An actor with a timeline.* It issues nothing outside its timeline yet, and a span there is
+  refused when the run plans, loudly, where the validator accepts it.
+- *The version range's first exercise.* 0.24 is a row in `SINCE`, "a `span` outside a
+  timeline", in both checkers. No committed AST holds one: none was regenerated, no lock
+  re-locked, no shape re-measured, and every test document written under 0.23 stayed as it
+  was. That is the first version of this project of which it is true.
+- *Tests.* Builder tests first (red, then green); the shared refusal cases, five (one was the
+  old refusal of a span outside a timeline, now a refusal of its version); `tests/spans.rs`,
+  written after the code and not seen red: the dry run's ops and fingerprint equal with and
+  without the span, a run under `sync`, `io_uring`, `libaio`, `posix-aio`, and `mmap`
+  reporting four D of a body with a joined parallel and six of a span in a parallel's
+  sub-actors, and the validator's rules.
+- *Not done.* No committed abstract or case uses a span outside a timeline: which regions to
+  measure, and whether `diskann_search` takes a new sample for it, is the user's to say.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

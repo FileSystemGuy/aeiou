@@ -46,7 +46,19 @@ pub struct Since {
     pub used: fn(&Ast) -> bool,
 }
 
-pub const SINCE: &[Since] = &[];
+pub const SINCE: &[Since] = &[Since { version: "0.24", what: "a `span` outside a timeline", used: span_outside_a_timeline }];
+
+fn span_outside_a_timeline(ast: &Ast) -> bool {
+    fn walk(nodes: &[Node]) -> bool {
+        nodes.iter().any(|n| match n {
+            Node::Span { .. } => true,
+            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } => walk(body),
+            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
+            _ => false,
+        })
+    }
+    ast.actors.values().any(|a| walk(&a.body))
+}
 
 /// The lowest contract version that holds what the document uses, and the thing in it that
 /// needs that version (`None` at the floor).
@@ -515,6 +527,27 @@ fn span_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
                 span_bans(then, &p(&np, &["cond", "then"]), out);
                 if let Some(b) = otherwise {
                     span_bans(b, &p(&np, &["cond", "else"]), out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// V36 (contract 0.24): the statements a `span` outside a timeline may not hold, with their
+/// paths: emulated compute, a wait on another actor, a scope of its own. Its own ops and a
+/// joined `parallel`'s are what it measures.
+fn span_bans_outside(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
+    for (i, n) in nodes.iter().enumerate() {
+        let np = p(pp, &[&i.to_string()]);
+        match n {
+            Node::Compute { .. } | Node::Barrier { .. } | Node::Channel { .. } | Node::Put { .. } | Node::Take { .. } | Node::Loader { .. }
+            | Node::Timeline { .. } | Node::Trace { .. } => out.push((np, n.kind())),
+            Node::Loop { body, .. } | Node::Phase { body, .. } | Node::Parallel { body, .. } => span_bans_outside(body, &p(&np, &[n.kind(), "body"]), out),
+            Node::Cond { then, otherwise, .. } => {
+                span_bans_outside(then, &p(&np, &["cond", "then"]), out);
+                if let Some(b) = otherwise {
+                    span_bans_outside(b, &p(&np, &["cond", "else"]), out);
                 }
             }
             _ => {}
@@ -1356,7 +1389,7 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["name"]), "not an identifier");
                 }
                 match (&st.timeline, staging) {
-                    (None, _) => self.err(pp, "span: outside a timeline, where no request is measured (V36)"),
+                    (None, Some(_)) => self.err(pp, format!("span `{name}`: `staging` names a timeline's workers, and no timeline encloses it (V36)")),
                     (Some((t, _)), Some(w)) if !st.workers.contains(w.as_str()) => {
                         self.err(pp, format!("span `{name}`: timeline `{t}` declares no workers `{w}` (V36)"));
                     }
@@ -1367,9 +1400,17 @@ impl<'a> Checker<'a> {
                 }
                 let bp = p(pp, &["body"]);
                 let mut bans = Vec::new();
-                span_bans(body, &bp, &mut bans);
-                for (bp2, what) in bans {
-                    self.err(&bp2, format!("a `{what}` in span `{name}`: a span measures storage waits, never planned time (V36)"));
+                if st.timeline.is_none() {
+                    // contract 0.24: outside a timeline, the elapsed time of its own ops
+                    span_bans_outside(body, &bp, &mut bans);
+                    for (bp2, what) in bans {
+                        self.err(&bp2, format!("a `{what}` in span `{name}`: outside a timeline a span measures its own ops and a joined `parallel`'s, never compute or a wait on another actor (V36)"));
+                    }
+                } else {
+                    span_bans(body, &bp, &mut bans);
+                    for (bp2, what) in bans {
+                        self.err(&bp2, format!("a `{what}` in span `{name}`: a span measures storage waits, never planned time (V36)"));
+                    }
                 }
                 let outer = st.span.replace(name.as_str());
                 self.body(body, &bp, scope, st);

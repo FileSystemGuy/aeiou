@@ -29,7 +29,23 @@ FLOOR = VERSIONS[0]
 # An addition to the contract is a row here and in the runner's validate.rs, with the version
 # in the schema's list; a change that is not an addition (a removal, another meaning) raises
 # the floor to its version and empties the table, and every abstract is regenerated.
-SINCE: list = []
+def _span_outside_a_timeline(ast: dict) -> bool:
+    def walk(nodes):
+        for node in nodes:
+            kind, a = next(iter(node.items()))
+            if kind == "span":
+                return True
+            if kind in ("loop", "parallel", "loader", "phase") and walk(a["body"]):
+                return True
+            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
+                return True
+        return False
+    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
+
+
+SINCE: list = [
+    ("0.24", "a `span` outside a timeline", _span_outside_a_timeline),
+]
 
 
 def version_key(v: str):
@@ -414,6 +430,26 @@ def span_bans(nodes, p, out):
         elif kind == "cond":
             span_bans(a["then"], np + ["cond", "then"], out)
             span_bans(a.get("else", []), np + ["cond", "else"], out)
+
+
+# V36 (contract 0.24): what a `span` outside a timeline may not hold: emulated compute, a wait
+# on another actor, a scope of its own. Its own ops and a joined `parallel`'s are what it measures.
+SPAN_BANS_OUTSIDE = {"compute", "barrier", "channel", "put", "take", "loader", "timeline", "trace"}
+
+
+def span_bans_outside(nodes, p, out):
+    """V36: the statements of a `span` outside a timeline it may not hold, with their paths. As
+    the runner's `span_bans_outside`."""
+    for i, node in enumerate(nodes):
+        kind, a = next(iter(node.items()))
+        np = p + [i]
+        if kind in SPAN_BANS_OUTSIDE:
+            out.append((np, kind))
+        elif kind in ("loop", "phase", "parallel"):
+            span_bans_outside(a["body"], np + [kind, "body"], out)
+        elif kind == "cond":
+            span_bans_outside(a["then"], np + ["cond", "then"], out)
+            span_bans_outside(a.get("else", []), np + ["cond", "else"], out)
 
 
 def param_refs(x, out: set):
@@ -1108,18 +1144,26 @@ class Check:
         self.span = outer
 
     def n_span(self, a, p, scope):
-        """V36: a `span` in a timeline, not in another, holding nothing planned; the staging its
-        reads draw on (contract 0.21) its timeline's workers."""
+        """V36: a `span`, not in another. In a timeline it holds nothing planned, and the staging
+        its reads draw on (contract 0.21) is its timeline's workers. Outside one (contract 0.24)
+        it takes no staging and holds no compute and no wait on another actor."""
         if self.timeline is None:
-            self.err(p, "span: outside a timeline, where no request is measured (V36)")
+            if "staging" in a:
+                self.err(p, f"span `{a['name']}`: `staging` names a timeline's workers, and no timeline encloses it (V36)")
         elif "staging" in a and a["staging"] not in self.workers:
             self.err(p, f"span `{a['name']}`: timeline `{self.timeline[0]}` declares no workers `{a['staging']}` (V36)")
         if self.span is not None:
             self.err(p, f"a span inside span `{self.span}`: a lane's wait is measured once (V36)")
         bans = []
-        span_bans(a["body"], p + ["body"], bans)
-        for bp, what in bans:
-            self.err(bp, f"a `{what}` in span `{a['name']}`: a span measures storage waits, never planned time (V36)")
+        if self.timeline is None:
+            span_bans_outside(a["body"], p + ["body"], bans)
+            for bp, what in bans:
+                self.err(bp, f"a `{what}` in span `{a['name']}`: outside a timeline a span measures its own ops and a joined "
+                             "`parallel`'s, never compute or a wait on another actor (V36)")
+        else:
+            span_bans(a["body"], p + ["body"], bans)
+            for bp, what in bans:
+                self.err(bp, f"a `{what}` in span `{a['name']}`: a span measures storage waits, never planned time (V36)")
         outer, self.span = self.span, a["name"]
         self.body(a["body"], p + ["body"], scope)
         self.span = outer

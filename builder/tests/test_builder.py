@@ -1997,8 +1997,8 @@ def test_workers_submit_and_span_refused_where_they_cannot_be():
         with pytest.raises(BuildError, match=r"submit: outside a timeline.*\(V36\)"):
             with a.submit("store"):
                 pass
-        with pytest.raises(BuildError, match=r"span: outside a timeline.*\(V36\)"):
-            with a.span("load"):
+        with pytest.raises(BuildError, match=r"span `load`: `staging` names a timeline's workers, and no timeline encloses it \(V36\)"):
+            with a.span("load", staging="store"):                  # outside a timeline a span is contract 0.24's, with no staging
                 pass
         with a.timeline("tl", workers={"store": (1, 1)}):
             with pytest.raises(BuildError, match=r"submit: timeline `tl` declares no workers `x` \(V36\)"):
@@ -2330,3 +2330,70 @@ def test_every_committed_abstract_is_read_unchanged_one_version_on(monkeypatch):
             assert d["ast"] == check.lowest(d)[0], f.name
             validate(d)
     assert any('"fsync"' in json.dumps(d) for d in docs)                  # the stand-in addition is used by some
+
+
+# ---- contract 0.24: a span outside a timeline (review suggestion 4; DESIGN_REVIEW.md §3.100) ----
+
+def _span_outside(body=None, **kw):
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.loop("i", 3):
+            with a.span("load", **kw):
+                (body or (lambda a: a.stat(ds.file(1))))(a)
+    return w
+
+
+def test_a_span_outside_a_timeline_serializes_validates_and_is_contract_0_24():
+    """Contract 0.24: a `span` may stand outside a timeline, where a run reports the elapsed
+    time of its body each time it is entered (the time to load a model, to write a checkpoint,
+    of one query). It holds ops and a joined `parallel`; it is the first addition under the
+    version range (brief item 80): this abstract carries 0.24, one without such a span 0.23."""
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.loop("i", 3):
+            with a.span("load"):
+                a.stat(ds.file(1))
+                with a.parallel("k", 2) as s:
+                    with s.phase("part"):
+                        s.stat(ds.file(s.index))
+    ast = w.build()
+    assert ast["ast"] == "0.24"
+    sp = ast["actors"]["gpu"]["body"][0]["loop"]["body"][0]
+    assert sp["span"]["name"] == "load" and [next(iter(n)) for n in sp["span"]["body"]] == ["stat", "parallel"]
+    validate(ast)
+    with pytest.raises(BuildError, match=r"ast: version `0.23`, but the document holds a `span` outside a timeline, which contract `0.24` added"):
+        validate({**ast, "ast": "0.23"})
+    # a span in a timeline is what it was, and so is its document's version
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.timeline("tl"):
+            with a.span("load"):
+                a.stat(ds.file(1))
+    inside = w.build()
+    assert inside["ast"] == "0.23"
+    with pytest.raises(BuildError, match="but the document holds nothing past contract `0.23`"):
+        validate({**inside, "ast": "0.24"})
+
+
+@pytest.mark.parametrize("body, what", [
+    (lambda a: a.compute(5), "compute"),
+    (lambda a: a.barrier("global"), "barrier"),
+    (lambda a: a.channel("c", 2), "channel"),
+    (lambda a: a.loader("ld", workers=1, prefetch=1, batches=1).__enter__(), "loader"),
+    (lambda a: a.trace("t.jsonl", "0" * 64), "trace"),
+])
+def test_a_span_outside_a_timeline_holds_no_compute_and_no_wait_on_another_actor(body, what):
+    with pytest.raises(BuildError, match=rf"a `{what}` in span `load`: outside a timeline a span measures its own ops and a joined "
+                                         r"`parallel`'s, never compute or a wait on another actor \(V36\)"):
+        _span_outside(body).build()
+
+
+def test_a_span_outside_a_timeline_takes_no_staging_and_no_span():
+    with pytest.raises(BuildError, match=r"span `load`: `staging` names a timeline's workers, and no timeline encloses it \(V36\)"):
+        _span_outside(staging="store").build()
+    def nested(a):
+        with a.parallel("k", 2) as s:
+            with s.span("inner"):
+                pass
+    with pytest.raises(BuildError, match="a span inside span `load`"):
+        _span_outside(nested).build()

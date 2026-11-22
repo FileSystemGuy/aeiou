@@ -60,7 +60,7 @@ impl Walk {
                     OpKind::Close => Step::Close,
                     _ => Step::Other,
                 },
-                Some(Event::Control(..)) => continue,
+                Some(Event::Control(..)) | Some(Event::Span(_)) => continue,
                 Some(Event::Fork(k)) => Step::Fork(k),
                 Some(Event::Trace(t, _)) => Step::Trace(t.lanes() as u64, t.peak_open, t.ops),
             };

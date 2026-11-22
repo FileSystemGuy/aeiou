@@ -193,7 +193,8 @@ lane's own clock, accepted wherever a timeline encloses it.
 
 | Context | Allows | Why |
 |---|---|---|
-| An actor's body outside a timeline | `op`, `time`, `fork` (joined), `sync`, `nest` | No shared order exists, so no timeline state |
+| An actor's body outside a timeline | `op`, `time`, `fork` (joined), `sync`, `nest`, `measure` | No shared order exists, so no timeline state; `measure` since contract 0.24 |
+| A `span`'s body outside a timeline | `op`, `fork` (joined) | Contract 0.24: its D is the elapsed time of its own ops and a joined `parallel`'s, so no emulated compute and no wait on another actor in it |
 | A timeline's lane | `op`, `time`, `wait`, `read`, `write`, `fork` (joined or not), `hand`, `measure` | Lanes wait on one another only in planned time, so no `sync`; one planned order, so no `nest` |
 | A `span`'s body | `op`, `read`, `write`, `hand` | Its D is a storage wait, so nothing in it may move or wait on the planned clock |
 | A `submit`'s body | `op` | A worker's ops stand at the submitting lane's instant: it plans no time, and neither reads nor changes the timeline's state |
@@ -405,6 +406,7 @@ needed them.
 | 0.20 | `workers`, `submit`, `span` | 4 and 3 | A map (staging) and two helpers; a new context |
 | 0.21 | A span's `staging` | 3 | A key on an existing helper |
 | 0.22 | A refusal | none | A provisional piece narrowed (7.4) |
+| 0.24 | A `span` outside a timeline | 3 | A helper allowed in a second context (section 5); the first version under 7.5's range, so no committed AST, lock, or workload id moved |
 | 0.23 | Key ranges on `probe`, `touch`, `store`; `store`'s `present: touch`, `hold`, `found`; `lookup` and `choose` removed | none | A provisional piece reshaped (7.4) and two composites lowered to the library (7.1); added 2026-11-22, after the two observations below were written |
 
 Two things the table shows. Contexts (a body with its own allowed effects) were added three
@@ -629,7 +631,7 @@ The finding: the DSL is RISC at its edges (ops, expressions) and CISC in the mid
 concurrency constructs and the cache verbs). The session generator, the most complex thing
 written, needed no generator-specific runner primitive.
 
-Six suggestions (decided 2026-11-14, after the list; ~~none built~~ 5 built 2026-11-15 as a library function, 1 built 2026-11-22 as contract 0.23):
+Six suggestions (decided 2026-11-14, after the list; ~~none built~~ 5 built 2026-11-15 as a library function, 1 built 2026-11-22 as contract 0.23, 4 the same day as contract 0.24):
 
 1. **Cache verbs take keys, not chunks of a sequence** (instruction set). `lookup`, `probe`,
    `touch`, `store` take `(seq, per, from, count)` today; brief item 75 said keys are opaque to
@@ -651,7 +653,7 @@ Six suggestions (decided 2026-11-14, after the list; ~~none built~~ 5 built 2026
    it. `loader` is exactly PyTorch; multi-stage pipelines (DALI, `tf.data`, Ray Data) need the raw
    pieces. The catch: `consume`'s position formula and the step times are defined through
    `loader`.
-4. **`span` everywhere, merged with `phase`** (instruction set). A measured region is
+4. **`span` everywhere, ~~merged with `phase`~~** (instruction set; *built 2026-11-22 as contract 0.24, a separate statement as decided: outside a timeline a span is the elapsed time of its body, ops and a joined `parallel`, no compute and no wait on another actor; no committed abstract uses one yet*). A measured region is
    timeline-only; time to load a model, time to save a checkpoint, and query latency are those
    workloads' headline numbers.
 5. **A quantile-table distribution** (instruction set). The tiered script builds inverse CDFs by

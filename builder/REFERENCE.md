@@ -168,6 +168,13 @@ part of a lane whose D a run measures (V36). The builder refuses a `submit` or `
 timeline, a `submit` naming workers its timeline does not declare, a span inside a span, a
 `compute`, `parallel`, `acquire`, or a store that touches (a `lookup`) in a span, and in a `submit` body anything but ops
 and the statements around them (what V35 bans in an eviction body, and `submit` and `span`).
+Since contract 0.24 (2026-11-22, the note "Suggestion 4 built"): `with c.span(name):` outside a
+timeline, the elapsed time of its body each time it is entered (a model's load, a checkpoint's
+write, one query), around ops and a joined `parallel`; the builder refuses a `staging` there and a
+`compute`, `barrier`, channel, `loader`, `timeline`, or `trace` in it. A script names no contract
+version: the builder stamps the lowest that holds what the abstract uses (brief item 80), so
+an abstract with such a span carries 0.24 and one without 0.23. Wrapping statements that
+hold a draw in a span moves the draw's site, and so the fingerprint, as any wrapping does.
 Since contract 0.23 (2026-11-22, `DESIGN_REVIEW.md` §3.100, the note "Suggestion 1 built") the
 cache statements take a key range, made by one of two library functions: `keys(index, count,
 key, frm=0)`, `key` a function of the index (`keys("j", 4, lambda j: j * 7)`), for keys of

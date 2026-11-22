@@ -136,6 +136,7 @@ class Describer:
 
     def __init__(self, ast: dict, values: dict, gpus: int, *, shape: dict | None = None):
         self.ast = ast
+        self._in_timeline = False               # a span reads as a request's wait in a timeline, as elapsed time outside one
         self.params = ast.get("params") or {}
         self.values = {**{k: default_value(p) for k, p in self.params.items()}, **values, "gpus": gpus}
         self.gpus = gpus
@@ -681,7 +682,11 @@ class Describer:
                         out.append("  " * (depth + 1) + f"- Each victim of tier `{t['name']}`, on "
                                    f"{self.value(t['on_evict']['lanes'], 'count')} eviction lanes at its eviction's planned time:")
                         out += self.body(t["on_evict"]["body"], depth + 2)
-            return out + self.body(a["body"], depth + 1)
+            self._in_timeline = True
+            try:
+                return out + self.body(a["body"], depth + 1)
+            finally:
+                self._in_timeline = False
         if k in ("probe", "touch", "store"):
             ks = a["keys"]
             rng = (f"the {self.value(ks['count'], 'count')} keys `{self.sym(ks['key'])}`, `{ks['index']}` from "
@@ -708,7 +713,8 @@ class Describer:
             return [pad + f"On a worker lane of `{a['workers']}`, at this lane's planned time:"] + self.body(a["body"], depth + 1)
         if k == "span":
             draws = f", its reads drawing on the staging of `{a['staging']}`" if "staging" in a else ""
-            return [pad + f"Measured as span `{a['name']}`, a request's own storage wait{draws}:"] + self.body(a["body"], depth + 1)
+            what = "a request's own storage wait" if self._in_timeline else "the elapsed time of what follows, each time it is entered"
+            return [pad + f"Measured as span `{a['name']}`, {what}{draws}:"] + self.body(a["body"], depth + 1)
         if k == "publish":
             vals = ", ".join(f"{n} = `{self.sym(v)}`" for n, v in a["values"].items())
             g = f", group `{self.sym(a['group'])}`" if "group" in a else ""

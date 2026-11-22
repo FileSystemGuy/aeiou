@@ -167,6 +167,11 @@ pub trait Sink<'m, 'a>: Sized {
     fn control(&mut self, _c: Control<'a>, _ctx: &OpCtx) -> Result<()> {
         Ok(())
     }
+    /// A `span` outside a timeline begins (its name) or ends (contract 0.24): the run times
+    /// what is between; the dry run has nothing to time.
+    fn span(&mut self, _begin: Option<&'a str>) -> Result<()> {
+        Ok(())
+    }
     /// A `parallel` or `loader`. Return `Ok(false)` to have the VM walk the sub-actors inline,
     /// in index order (the dry run). A sink that runs them itself takes a `Snapshot` from the
     /// closure, resumes one `Vm` per sub-actor from it, and calls `start_sub` per index and
@@ -451,6 +456,9 @@ pub enum Event<'e, 'a> {
     Fork(ForkKind<'a>),
     /// A `trace` node at this position.
     Trace(Arc<crate::trace::TraceFile>, OpCtx<'e>),
+    /// A `span` outside a timeline (contract 0.24): its begin, with its name, or its end. The
+    /// run times its body between the two; a timeline's spans go by `tl_step`.
+    Span(Option<&'a str>),
 }
 
 /// `Event` before the borrows are taken: what `step` found.
@@ -1022,7 +1030,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Some(Next::Trace(t)) => Some((Event::Trace(t, self.ctx()), None)),
                 Some(Next::Block) => return Err(anyhow!("a lane waited outside a timeline (V34)")),
                 Some(Next::Submit(..)) => unreachable!("a `submit` outside a timeline is refused when walked"),
-                Some(Next::SpanBegin(..) | Next::SpanEnd) => continue,
+                Some(Next::SpanBegin(name, _)) => Some((Event::Span(Some(name)), None)),
+                Some(Next::SpanEnd) => Some((Event::Span(None), None)),
             });
         }
     }
@@ -2948,12 +2957,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Ok(Some(Next::Submit(workers, body)))
             }
             Node::Span { name, staging, body } => {
-                // the plan walks its body where it stands; in a timeline's lane its begin and
-                // end are marked for the run, which measures D over it
-                if self.tl.is_none() {
-                    self.push_body(body);
-                    return Ok(None);
-                }
+                // the plan walks its body where it stands; its begin and end are marked for the
+                // run, which measures D over it: in a timeline's lane from its launch, outside
+                // one (contract 0.24) from this instant
                 self.stack.push(Cont::SpanEnd);
                 self.push_body(body);
                 Ok(Some(Next::SpanBegin(name, staging.as_deref())))
@@ -3337,6 +3343,7 @@ pub fn drive<'m, 'a: 'm, S: Sink<'m, 'a>>(vm: &mut Vm<'m, 'a>, sink: &mut S) -> 
             Some((Event::Op(op, ctx), None)) => sink.op(&op, &ctx)?,
             Some((Event::Control(c, ctx), _)) => sink.control(c, &ctx)?,
             Some((Event::Trace(t, ctx), _)) => sink.trace(&t, &ctx)?,
+            Some((Event::Span(begin), _)) => sink.span(begin)?,
             Some((Event::Fork(kind), _)) => {
                 let forked = {
                     let snap = || vm.snapshot();

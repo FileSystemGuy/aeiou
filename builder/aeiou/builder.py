@@ -708,6 +708,7 @@ class _Frame:
 # lane), and what a `span` may not (what moves or waits on the planned clock), as check.py
 SUBMIT_BANS = {"compute", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
                "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
+SPAN_BANS_OUTSIDE = {"compute", "barrier", "channel", "put", "take", "loader", "timeline", "trace"}   # outside a timeline (0.24)
 SPAN_BANS = {"compute", "parallel", "acquire"}       # and a store of present: touch, which may wait
 
 
@@ -745,7 +746,11 @@ class Cursor:
                     raise BuildError(f"a `{kind}` in a `submit` body, which only issues its ops on a worker lane (V36)")
                 break
             if f.kind == "span":
-                if kind in SPAN_BANS or (kind == "store" and node["store"].get("present") == "touch"):
+                if self._timeline_frame() is None:
+                    if kind in SPAN_BANS_OUTSIDE:
+                        raise BuildError(f"a `{kind}` in span `{f.label}`: outside a timeline a span measures its own ops and a joined "
+                                         "`parallel`'s, never compute or a wait on another actor (V36)")
+                elif kind in SPAN_BANS or (kind == "store" and node["store"].get("present") == "touch"):
                     raise BuildError(f"a `{kind}` in span `{f.label}`: a span measures storage waits, never planned time (V36)")
                 break
             if f.kind in ("timeline", "on_evict"):
@@ -972,15 +977,19 @@ class Cursor:
     def span(self, name: str, staging: str | None = None):
         """A measured part of this lane (contract 0.20, rule V36): a run reports its D by
         `name`, from its launch (planned time plus the lane's lag on entry) to its last op's
-        completion, a request's own storage wait. Nothing in the plan or the fingerprint. Never
+        completion, a request's own storage wait. Outside a timeline (contract 0.24): the elapsed
+        time of its body each time it is entered, its own ops and a joined `parallel`'s, with no
+        `staging`, no `compute`, and no wait on another actor (`barrier`, a channel, a `loader`)
+        in it. Nothing in the plan or the fingerprint. Never
         in another span or a `submit` body; never a `compute`, `parallel`, `acquire`, or
         `lookup` in it. With `staging`, the timeline's workers whose staging its reads draw on
         while in flight, loads into the pool the pending stores hold (contract 0.21)."""
         check_ident(name, "span")
         tl = self._timeline_frame()
         if tl is None:
-            raise BuildError("span: outside a timeline, where no request is measured (V36)")
-        if staging is not None and staging not in tl.label[1]:
+            if staging is not None:
+                raise BuildError(f"span `{name}`: `staging` names a timeline's workers, and no timeline encloses it (V36)")
+        elif staging is not None and staging not in tl.label[1]:
             raise BuildError(f"span `{name}`: timeline `{tl.label[0]}` declares no workers `{staging}` (V36)")
         body: list = []
         self._emit({"span": {"name": name, **({"staging": staging} if staging is not None else {}), "body": body}})

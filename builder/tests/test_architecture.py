@@ -31,8 +31,9 @@ OPS = KINDS - check.CONTROL
 EXPRS = {"published": {"published": "tl"}, "entry": {"entry": {"timeline": "tl", "index": 0, "key": "a"}}}
 
 # the contexts, by the words of the table's first column
-CONTEXTS = {"outside": "outside a timeline", "lane": "A timeline's lane", "span": "`span`'s body",
-            "submit": "`submit`'s body", "evict": "`on_evict` body"}
+# a row is the first context whose words it holds, so the longer names go first
+CONTEXTS = {"spanout": "`span`'s body outside a timeline", "outside": "An actor's body outside a timeline",
+            "lane": "A timeline's lane", "span": "`span`'s body", "submit": "`submit`'s body", "evict": "`on_evict` body"}
 
 # a refusal for where a statement stands, in either checker's words (the two word them alike)
 PLACEMENT = re.compile(r"inside a timeline|outside a timeline|in a `submit` body|in an `on_evict` body|in span `"
@@ -135,10 +136,13 @@ def document(ctx: str, node: dict) -> dict:
         ordered["on_evict"] = {"lanes": 1, "body": [node]}
     if not (ctx == "lane" and "release" in node):
         tl["body"].append({"release": {"hold": "h0"}})
-    return {"ast": check.FLOOR, "name": "t", "params": {"n": {"default": 3}},
-            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}},
-            "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 2}},
-            "actors": {"gpu": {"body": [node] if ctx == "outside" else [{"timeline": tl}]}}}
+    body = [node] if ctx == "outside" else [{"span": {"name": "outer", "body": [node]}}] if ctx == "spanout" else [{"timeline": tl}]
+    doc = {"ast": check.FLOOR, "name": "t", "params": {"n": {"default": 3}},
+           "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}},
+           "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 2}},
+           "actors": {"gpu": {"body": body}}}
+    doc["ast"] = check.lowest(doc)[0]           # the version it carries is the lowest that holds what it uses
+    return doc
 
 
 def placements():
@@ -217,7 +221,7 @@ def test_now_is_read_in_every_context_of_a_timeline(ctx):
     """`now` is the lane's own clock, no state of the timeline: accepted in every context a
     timeline encloses, an eviction body and a `submit` body included, and refused outside one."""
     errs = check.Check(document(ctx, {"stat": {"file": {"file": {"dataset": "d", "id": {"now": {}}}}}}), "t").run()
-    assert bool(errs) == (ctx == "outside"), errs
+    assert bool(errs) == (ctx in ("outside", "spanout")), errs
     assert all("now: outside a timeline" in e for e in errs)
 
 

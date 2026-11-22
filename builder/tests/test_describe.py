@@ -109,3 +109,14 @@ def test_workers_submit_and_span_are_described():
     lines = d.body([{"timeline": {"name": "tl", "workers": [{"name": "store", "lanes": 4, "staging": 2147483648}], "body": [
         {"span": {"name": "load", "staging": "store", "body": [st]}}]}}], 0)
     assert lines[1].strip() == "- Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:", lines
+
+
+def test_a_span_outside_a_timeline_is_described_as_elapsed_time():
+    """Contract 0.24: outside a timeline a span is the elapsed time of its body; in one, a request's wait."""
+    d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)
+    st = {"stat": {"file": {"file": {"dataset": "d", "id": 1}}}}
+    sp = {"span": {"name": "load", "body": [st]}}
+    assert d.body([sp], 0)[0] == "- Measured as span `load`, the elapsed time of what follows, each time it is entered:"
+    lines = d.body([{"timeline": {"name": "tl", "body": [sp]}}], 0)
+    assert any("Measured as span `load`, a request's own storage wait:" in l for l in lines), lines
+    assert d.body([sp], 0)[0].endswith("each time it is entered:")           # and outside one again after

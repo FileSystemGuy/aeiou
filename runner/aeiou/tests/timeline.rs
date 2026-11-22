@@ -457,7 +457,7 @@ fn a_run_reports_its_spans_and_lag() {
             .output().unwrap();
         let stdout = String::from_utf8_lossy(&r.stdout);
         assert!(r.status.success(), "{posix}: {}", String::from_utf8_lossy(&r.stderr));
-        assert!(stdout.contains("timeline spans (D:"), "{posix}: {stdout}");
+        assert!(stdout.contains("spans (D:"), "{posix}: {stdout}");
         assert!(stdout.lines().any(|l| l.trim_start().starts_with("load ") && l.contains("n=3")), "{posix}: {stdout}");
         assert!(stdout.contains("timeline lag (final L of 3 lanes)"), "{posix}: {stdout}");
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();

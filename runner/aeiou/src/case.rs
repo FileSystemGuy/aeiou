@@ -289,9 +289,9 @@ pub const NAMES: &[(&str, When, &str)] = &[
     ("result.min_gpu_busy_fraction", When::After, "the least, over the instances that take, of the busy fraction of that instance's takes but its first"),
 ];
 
-/// A timeline span's statistics, `result.span.<span>.<stat>` (brief item 72 (7) step 5): D's
-/// count, sum, nearest-rank p50 and p99, and maximum, and the worst 5-minute window's p99 by
-/// planned start, in seconds.
+/// A span's statistics, `result.span.<span>.<stat>` (brief item 72 (7) step 5; outside a
+/// timeline since contract 0.24): D's count, sum, nearest-rank p50 and p99, and maximum, and the
+/// worst 5-minute window's p99 by start (planned, or the run's clock outside a timeline), in seconds.
 pub const SPAN_STATS: &[(&str, &str)] = &[
     ("count", "the spans of that name that ended"),
     ("sum_s", "their D summed"),

@@ -31,6 +31,7 @@ mod trace_tool;
 mod usage;
 mod timeline;
 mod seqcache;
+mod spans;
 mod tiers;
 mod evict;
 mod exec;

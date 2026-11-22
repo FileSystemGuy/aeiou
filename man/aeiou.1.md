@@ -1040,9 +1040,10 @@ The names a lock's constraints read (contract 0.11), each defined here and in
 - **result.min_gpu_busy_fraction** (after): the least, over the instances that take, of
   that busy fraction.
 - **result.span.**_SPAN_**.count**, **.sum_s**, **.p50_s**, **.p99_s**, **.max_s**,
-  **.window_p99_s** (after): a timeline span's D, from its launch to its last op's
-  completion: how many, summed, nearest-rank median and 99th percentile, largest, and the
-  worst 5-minute window's p99 by planned start, in seconds. _SPAN_ must be a span of the
+  **.window_p99_s** (after): a span's D, in a timeline from its launch to its last op's
+  completion, outside one (contract 0.24) the elapsed time of its body: how many, summed,
+  nearest-rank median and 99th percentile, largest, and the worst 5-minute window's p99 by
+  start (planned in a timeline, the run's clock outside one), in seconds. _SPAN_ must be a span of the
   abstract.
 - **result.lag.p50_s**, **.p99_s**, **.max_s** (after): the final lag L of a timeline's body
   lanes that issued ops, in seconds.

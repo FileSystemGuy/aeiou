@@ -298,6 +298,7 @@ impl<'m, 'a: 'm> Plan<'m, 'a> {
                 }
                 Some(Event::Control(c, _)) => bail!("a `{}` is not planned: a planned run is one actor's timeline", control_name(&c)),
                 Some(Event::Trace(..)) => bail!("a `trace` node is not planned: it runs as the trace's own lanes"),
+                Some(Event::Span(_)) => bail!("a `span` outside the timeline of an actor that has one is not measured: a planned run is one actor's timeline"),
                 Some(Event::Fork(_)) => {
                     self.vm.inline_fork();
                     continue;

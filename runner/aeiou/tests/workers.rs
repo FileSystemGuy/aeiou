@@ -246,7 +246,8 @@ fn the_validator_holds_workers_submit_and_span_to_their_rules() {
     has(&refused(ev), "a `submit` in an `on_evict` body, which only issues the victim's ops at its tick (V35)");
 
     // span
-    has(&refused(json!([span("load", json!([]))])), "span: outside a timeline, where no request is measured (V36)");
+    // outside a timeline a span is contract 0.24's (tests/spans.rs); under 0.23 it is refused by its version
+    has(&refused(json!([span("load", json!([]))])), "ast: version `0.23`, but the document holds a `span` outside a timeline, which contract `0.24` added: it carries `0.24`");
     has(&refused(tl(json!([span("a b", json!([]))]))), "not an identifier");
     has(&refused(tl(json!([span("a", json!([span("b", json!([]))]))]))), "a span inside span `a`: a lane's wait is measured once (V36)");
     for (n, what) in [

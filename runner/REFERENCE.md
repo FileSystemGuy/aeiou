@@ -390,9 +390,24 @@ each is a recorded decision and the golden tests pin them.
   planned start, the worst of them the window p99; and the final L of the timeline's body lanes
   that issued ops (a worker's or eviction lane's L is never carried, so not among them). Spans
   and lags are kept whole (each span's two numbers) and concatenated over actors and hosts, so a
-  merged report's quantiles are exact. In the text report `timeline spans (D: …)` and `timeline
+  merged report's quantiles are exact. In the text report `spans (D: …)` (~~`timeline spans`~~ until 2026-11-22) and `timeline
   lag (final L of N lanes)`; in the JSON report `timeline` (§12); for a case's constraints
   `result.span.SPAN.*` and `result.lag.*` (§17).
+- **A span outside a timeline** (contract 0.24, V36; `vm.rs`'s `Event::Span`, `run.rs`'s
+  `ActorState::span`). The walk marks its begin and its end to the driver; the dry run times
+  nothing. A run notes the instant the actor (or the sub-actor of a `parallel` or a `loader`
+  it stands in) reaches the begin, and at the end, which the actor reaches when the body's
+  last op has completed and every `parallel` in it has been joined, records D, the elapsed
+  time, with the span's start on the run's clock (nanoseconds since the host's run state was
+  made) where a timeline's span has its planned start. So the statistics, the report's place
+  (`timeline.spans` in the JSON report, kept under that name), and the constraint names are
+  those of a timeline's spans; the five-minute windows are of the run's clock, each host's
+  its own. D holds whatever the body waits for: the time of its ops, the hand-off to and the
+  join of a `parallel`'s threads or tasks, and under an event loop the time its completions
+  wait for the loop. It holds no emulated compute and no wait on another actor, which V36
+  refuses in it. Nothing stops a run early on it: a watched constraint is a timeline's. An
+  actor whose body holds a timeline issues nothing outside it yet, and a span there is
+  refused when the run plans (`plan.rs`).
 - **Validity and stopping** (2026-11-14, step 5). Every timeline op's **lateness**, its issue
   less its `ready` (the host's, never the system under test's), is a histogram; a run whose
   lateness p99 passes 10 ms (`exec::LATENESS_P99_MAX_NS`, the user's choice) is invalid, exit 1:
@@ -2984,9 +2999,9 @@ defined once here; a change of a definition is a recorded decision:
 | `result.elapsed_s` | after | seconds from the start gate to the end of the run |
 | `result.busy_fraction` | after | compute × time-scale / (compute × time-scale + stall) over every take of every instance but each instance's first, which waits on the pipeline filling |
 | `result.min_gpu_busy_fraction` | after | the least, over the instances that take, of that busy fraction |
-| `result.span.SPAN.count` | after | the spans named SPAN that ended, in a timeline's lanes (contract 0.20; §2 "D and lag, reported"); SPAN must be a span of the abstract, checked when the lock is read |
+| `result.span.SPAN.count` | after | the spans named SPAN that ended, in a timeline's lanes (contract 0.20) or outside a timeline (contract 0.24; §2 "D and lag, reported"); SPAN must be a span of the abstract, checked when the lock is read |
 | `result.span.SPAN.sum_s`, `.p50_s`, `.p99_s`, `.max_s` | after | their D, from launch to last completion, summed, nearest-rank median and 99th percentile, and largest, in seconds |
-| `result.span.SPAN.window_p99_s` | after | the largest, over the 5-minute windows of planned start, of a window's nearest-rank p99 of D |
+| `result.span.SPAN.window_p99_s` | after | the largest, over the 5-minute windows of start (planned in a timeline, the run's clock outside one), of a window's nearest-rank p99 of D |
 | `result.lag.p50_s`, `.p99_s`, `.max_s` | after | the final L of a timeline's body lanes that issued ops, nearest-rank median and 99th percentile, and largest, in seconds |
 
 A constraint is checked at the latest time of the names it reads, with integer arithmetic and
