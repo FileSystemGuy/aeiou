@@ -287,8 +287,15 @@ each is a candidate, not a finding.
 |---|---|---|
 | `loader` | `parallel`, `channel`, `put` | `consume`'s position formula and a run's step times are defined through the enclosing `loader` |
 | `lookup` | `probe`, `touch`, `store` | `hold` and waiting on a `full: wait` tier exist only on `lookup` |
-| `choose` | A draw and `cond` | Nothing known; no committed abstract uses it |
-| `mixture`, `hotset` | A draw and a `cond` between distributions | Nothing known; no committed abstract uses either |
+| `choose` | A draw and `cond` | ~~Nothing known; no committed abstract uses it~~ Nothing: the builder emits the lowering since 2026-11-22 (`choose(name)`, a draw of the arm's index over an `empirical` and a `cond` an arm), and the node leaves the contract with the next version |
+| ~~`mixture`, `hotset`~~ `mixture` | A draw and a `cond` between distributions | ~~Nothing known; no committed abstract uses either~~ Lowers in a `draw` and in a `pick`'s `dist`; not in a dataset's `size`, which is one distribution resolved once and drawn per id from the dataset seed, with no site a `cond` could be evaluated at, and `empirical` holds literals alone, so two `lognormal` modes of file sizes have no other form. It stays |
+
+*Corrected 2026-11-22 (read from `eval.rs`, `vm.rs`, and `schema/README.md`; no lowering was
+run for `mixture` or `hotset`):* `hotset` was listed here as a composite and is not one. It
+draws a rank and maps it through the dataset's rank order (`rank_perm`, keyed by the dataset
+seed), which no expression exposes; lowered over `uniform` its hot ids would be `0` to
+`hot − 1`, neighbours in directories and container files, another workload to the storage. It
+is a primitive beside `zipf`.
 
 The rule this section proposes for the future: a composite is never added to the instruction
 set. A new intrinsic needs a reason from the definition above (an order, or state), stated where
@@ -419,7 +426,12 @@ decided").**
 4. Removing the unused composites (`choose`, `mixture`, `hotset`) waits for the decision on
    review suggestion 5, the quantile table, which would replace two of them. *Settled
    2026-11-15:* suggestion 5 is library, `quantile()`, and no distribution was added; whether
-   a library function can emit each of the three is checked before any is removed.
+   a library function can emit each of the three is checked before any is removed. *Checked
+   and decided 2026-11-22 (the user's "proceed as recommended"):* `choose` can, and the builder
+   emits the lowering now; its node leaves the contract with the next contract version, not
+   in a version of its own, since every version regenerates every AST until item 80 is built.
+   `mixture` cannot where a dataset's `size` stands, and `hotset` cannot at all; both stay
+   (section 6's table, corrected).
 
 ### 8. The definitions fingerprints depend on (exists; not yet written)
 

@@ -870,7 +870,7 @@ def test_choose_weights_and_divisor_defaults_the_runner_cannot_use_are_refused()
         w, P, ds = _wl()
         with w.actor("gpu", count=1) as c:
             with pytest.raises(BuildError, match=msg):
-                with c.choose() as ch:
+                with c.choose("arm") as ch:
                     for a in weights:
                         with ch.arm(a):
                             c.compute(1)
@@ -2150,6 +2150,51 @@ def test_quantile_is_library_two_draws_and_a_let_over_existing_nodes():
         a.compute(lo + (P.tab[0 + s + 1] - lo) * f // 16)
     b = w.build()["actors"]["gpu"]["body"]
     assert b[2] == b[3]
+    validate(w.build())
+
+
+def test_choose_is_library_a_draw_of_the_arm_and_a_cond_an_arm():
+    """`choose` is a library function (ARCHITECTURE.md 7.1; DESIGN_REVIEW.md §3.100, the note
+    "The three unused composites"): a draw of the arm's index, an `empirical` over the arms'
+    weights bound to the name given, and one `cond` an arm, the nodes written by hand; the
+    contract's `choose` node is not emitted."""
+    def build(lib):
+        w = Workload("ch")
+        P = w.params(n=4)
+        with w.actor("gpu") as a:
+            with a.loop("i", P.n):
+                if lib:
+                    with a.choose("op") as ch:
+                        with ch.arm(3):
+                            a.compute(1)
+                        with ch.arm(0):
+                            a.compute(2)
+                        with ch.arm(1.5):
+                            a.compute(3)
+                else:
+                    op = a.draw("op", empirical([0, 1, 2], [3, 0, 1.5]))
+                    with a.when(op == 0):
+                        a.compute(1)
+                    with a.when(op == 1):
+                        a.compute(2)
+                    with a.when(op == 2):
+                        a.compute(3)
+                a.compute(4)
+        return w.build()
+    lib, hand = build(True), build(False)
+    assert lib == hand
+    validate(lib)
+    body = lib["actors"]["gpu"]["body"][0]["loop"]["body"]
+    assert [next(iter(n)) for n in body] == ["let", "cond", "cond", "cond", "compute"]
+    assert "choose" not in json.dumps(lib)
+    # the arm drawn is a binding like any other, and its name is the author's
+    w = Workload("ch2")
+    with w.actor("gpu") as a:
+        with pytest.raises(BuildError, match="binding"):
+            a.choose("Not A Name").__enter__()
+        with a.choose("op") as ch, ch.arm(1):
+            a.compute(1)
+        a.compute(a.ref("op"))
     validate(w.build())
 
 

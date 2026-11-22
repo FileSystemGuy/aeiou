@@ -13098,6 +13098,40 @@ contract distribution waits for a fit that needs one. Next on suggestion 5's tai
 library function can emit `hotset`, `mixture`, and `choose`, before any is removed. `ARCHITECTURE.md`'s review table, 7.4, and suggestion 5 are
 corrected in place.
 
+**The three unused composites: one lowered, two stay (2026-11-22, the user's "proceed as
+recommended").** The check the note above left: can a library function emit `choose`,
+`mixture`, and `hotset`. Read from `eval.rs`, `vm.rs`, and `schema/README.md`; only the first
+was then built and run.
+- *`choose`: yes.* The node draws `u` in `[0, total)` at its own site and runs the first arm
+  whose cumulative weight passes `u`; a `draw` of an `empirical` over the arms' indices picks
+  by the same rule (`partition_point` on the cumulative weights), and a `cond` an arm runs it.
+  The draw's site is another JSON pointer, so an abstract using the node would get other
+  draws of the same distribution; none committed uses it. Built: `Cursor.choose(name)` emits
+  `let name = draw(empirical)` and one `cond` an arm, the name the author's, as `quantile`'s
+  are (tests first in `test_builder.py`: the nodes equal the hand-written ones, no `choose`
+  in the document; the two refusals keep their wording). The signature changed, `choose()` to
+  `choose(name)`, with no alias: nothing calls it. A dry run of arms weighted 3, 0, and 1
+  over 20,000 positions issued 15,005 and 4,995 ops of the first and third and none of the
+  second.
+- *`mixture`: only where a draw has a site.* In a `draw` or a `pick`'s `dist` it is a draw of
+  the arm and a `cond` between distributions, which a `distref` accepts. A dataset's `size`
+  is resolved once to a distribution (`DsMeta`'s `size: RDist`) and drawn per id from the
+  dataset seed with no site, so a `cond` there chooses once for the dataset, not per file;
+  `empirical` holds literal values, so file sizes of two `lognormal` modes have no other
+  form. It stays.
+- *`hotset`: no.* It draws a rank and maps it through the dataset's rank order (`rank_perm`,
+  keyed by the dataset seed), which no expression exposes. Lowered over `uniform`, the hot
+  ids would be `0` to `hot − 1`: neighbours under `{id div D}` and in container files, a
+  locality the real hot set does not have. It is a primitive beside `zipf`, and
+  `ARCHITECTURE.md`'s table had it among the composites wrongly.
+- *The node's removal waits for a version.* Taking `choose` out of the schema, the runner
+  (`Node::Choose`, its validator arms), and `describe.py` is a change of the contract, and
+  until item 80 is built every contract version regenerates every AST, lock, and workload id.
+  So it goes with the next version that changes for another reason. Until then a 0.22
+  document holding the node is accepted as before; the builder no longer writes one. The
+  digest's word `choose` (a selection with replacement, against `consume`) is its own
+  vocabulary and is untouched.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

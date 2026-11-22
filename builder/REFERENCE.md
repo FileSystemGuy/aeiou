@@ -114,7 +114,7 @@ ops (a `let` is the way to use one positional draw twice).
 the loop, for `x @ i` chains), `loop(index, to, start=, step=)` yielding the index,
 `parallel(index, width, join=)` and `loader(name, workers=, prefetch=, batches=, ordered=)` yielding a
 sub-cursor with `.index`, `channel`/`put`/`take`, `barrier(scope)`, `compute(ns)`, `when(test)`
-/ `otherwise()`, `every(n)`, `choose()` with `.arm(weight)`, `phase(name)`, `trace(file, sha256)`, and the
+/ `otherwise()`, `every(n)`, `choose(name)` with `.arm(weight)` (library since 2026-11-22: a draw of the arm's index bound to `name`, an `empirical` over the weights, and a `cond` an arm; the contract's `choose` node is no longer emitted), `phase(name)`, `trace(file, sha256)`, and the
 ~~eighteen~~ nineteen ops (contract 0.14): `open(f, "RDONLY|CLOEXEC", mode=, expect=)`, `close fstat stat fsync fdatasync
 unlink`, `read(f, len, offset=, repeat=, expect=)`, `write`, `lseek(f, off, "SET|CUR|END")`,
 `ioctl(f, "TCGETS")`, `fadvise(f, "WILLNEED", offset=, len=)`, `truncate(f, len)` (by path,

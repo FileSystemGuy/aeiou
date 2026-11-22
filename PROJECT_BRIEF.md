@@ -1870,7 +1870,12 @@ numbers; the order is this note's.
     declarations an addition makes; "provisional until a second mechanism uses it" as a rule
     that permits narrowing and reshaping; a range of accepted contract versions, since today
     every version changes every AST hash and so every workload id though no fingerprint; and
-    removing the unused composites (`choose`, `mixture`, `hotset`); (d) a
+    removing the unused composites (`choose`, `mixture`, `hotset`) (checked and decided
+    2026-11-22, `DESIGN_REVIEW.md` §3.100, the note "The three unused composites": the builder
+    emits `choose` as a draw and `cond`s; **not done yet, with the next contract version:**
+    the `choose` node taken out of the schema, the runner, `describe.py`, and the manual
+    page; `mixture` and `hotset` stay, the first for dataset sizes, the second a primitive);
+    (d) a
     conformance kit; (e) how stable the planned-op stream (the trace file) is as an interface;
     (f) the idiom catalogue, each library function carrying its lowering and its trace
     signature so the digest names what the builder emits, to be costed first; (g) the fit

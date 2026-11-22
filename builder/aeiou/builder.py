@@ -1202,15 +1202,22 @@ class Cursor:
             yield
 
     @contextlib.contextmanager
-    def choose(self):
-        """Run one arm, chosen positionally by weight: `with c.arm(0.8): ...`."""
-        arms: list = []
-        self._emit({"choose": {"arms": arms}})
-        yield Chooser(self, arms)
-        if not arms:
+    def choose(self, name: str):
+        """Run one arm, chosen positionally by weight: `with c.choose("op") as ch:` and
+        `with ch.arm(0.8): ...` an arm. Library, not contract (ARCHITECTURE.md 7.1): a draw of
+        the arm's index bound to `name`, an `empirical` over the arms' weights, and a `cond` an
+        arm; the contract's `choose` node is not emitted."""
+        arm = self.let(name, Draw(Dist("empirical", {"values": [0], "weights": [1]})))
+        node = self._top.body[-1]["let"]
+        weights: list = []
+        yield Chooser(self, arm, weights)
+        if not weights:
             raise BuildError("choose() needs at least one arm")
-        if sum(a["weight"] for a in arms) <= 0:
+        if sum(weights) <= 0:
             raise BuildError("choose: total weight is zero")
+        value = Draw(Dist("empirical", {"values": list(range(len(weights))), "weights": weights}))
+        node["value"] = ast_of(value)
+        self._top.bindings[name] = value
 
     @contextlib.contextmanager
     def phase(self, name):
@@ -1494,15 +1501,14 @@ class Sub:
 
 
 class Chooser:
-    def __init__(self, cursor: Cursor, arms: list):
-        self._cursor, self._arms = cursor, arms
+    def __init__(self, cursor: Cursor, arm: Ref, weights: list):
+        self._cursor, self._arm, self._weights = cursor, arm, weights
 
     @contextlib.contextmanager
     def arm(self, weight):
         if (not isinstance(weight, (int, float)) or isinstance(weight, bool)
                 or not math.isfinite(weight) or weight < 0):
             raise BuildError(f"arm weight must be a finite non-negative number, got {weight!r}")
-        body: list = []
-        self._arms.append({"weight": weight, "body": body})
-        with self._cursor._push(body, "arm"):
+        self._weights.append(weight)
+        with self._cursor.when(self._arm == len(self._weights) - 1):
             yield

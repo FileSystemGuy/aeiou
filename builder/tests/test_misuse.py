@@ -93,12 +93,12 @@ def test_a_declaration_misused_is_refused_by_name(what, misuse, why):
 
 
 def _choose_none(a):
-    with a.choose():
+    with a.choose("arm"):
         pass
 
 
 def _choose_zero(a):
-    with a.choose() as c, c.arm(0):
+    with a.choose("arm") as c, c.arm(0):
         a.compute(1)
 
 
