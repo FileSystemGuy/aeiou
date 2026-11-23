@@ -384,7 +384,7 @@ results of every other workload from those before it.
 - *Proposal (b):* a change that 7.3 does not hold for (a narrowing such as 0.22, a reshaping
   such as 0.8's one dataset shape) raises the floor, or is confined to provisional pieces whose
   abstracts are regenerated alone. Which of the two is a decision; the second keeps settled
-  abstracts' hashes through every change. *2026-11-22:* built with the first as its default, the floor raised; the second is not built and the decision is still the user's.
+  abstracts' hashes through every change. *2026-11-22:* built with the first as its default, the floor raised; ~~the second is not built and the decision is still the user's~~ decided by the user 2026-11-22 ("I'm ok with 'raise the floor' at this stage of the project"): the floor is raised; to be done better once the project has dozens of users or more, when regenerating every abstract is no longer cheap. The second is not built.
 - *Not proposed:* taking the version out of the hash. The hash would then no longer say which
   rules the document was checked under.
 - *The record, for scale:* of the eight versions 0.15 to 0.22, six only added (the history says
@@ -426,7 +426,7 @@ decided").**
 3. Proposal 7.5 (a) is accepted: the runner is to accept every contract version from a floor
    up to its own, an abstract carrying the lowest version that holds what it uses. ~~**Not built
    yet** (brief item 80); until it is, the runner accepts its own version alone and every
-   version regenerates every AST.~~ Built 2026-11-22 (7.5). The form of (b) is settled when it is built: built with the floor raised as the default, the decision still the user's.
+   version regenerates every AST.~~ Built 2026-11-22 (7.5). The form of (b) is settled when it is built: built with the floor raised, which the user decided the same day for this stage of the project.
 4. Removing the unused composites (`choose`, `mixture`, `hotset`) waits for the decision on
    review suggestion 5, the quantile table, which would replace two of them. *Settled
    2026-11-15:* suggestion 5 is library, `quantile()`, and no distribution was added; whether

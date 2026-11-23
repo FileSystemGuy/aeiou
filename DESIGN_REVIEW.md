@@ -13242,7 +13242,9 @@ build:
   default and written so in the comments. The second, such a change confined to provisional
   pieces whose abstracts alone are regenerated, would need the meaning of a document to
   depend on its version, and is not built. The decision between them was the user's to make
-  and is put to the user with this.
+  and is put to the user with this. *Answered the same day:* "I'm ok with 'raise the floor' at
+  this stage of the project, once we get dozens (or more) users then we will need to worry
+  about doing better than that." So the floor is raised, for now, by decision.
 - *What shows it works, and what does not yet.* No real version follows the floor, so the
   tests set a stand-in beside it (0.99, having "added" `fsync`): a document without one
   builds to the same bytes and is accepted, one with it carries 0.99, either under the

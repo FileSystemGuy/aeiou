@@ -1916,8 +1916,7 @@ numbers; the order is this note's.
     (0.23 removed two nodes, so nothing lower); the table `SINCE` in `schema/check.py` and
     `validate.rs`; both checkers refuse a version that is not the lowest the document could
     carry; the builder stamps it; tests with a stand-in later version that every committed
-    AST not using the addition is read unchanged. **Not settled:** the second question; the
-    floor is raised by default, and confining a change to provisional pieces is not built.
+    AST not using the addition is read unchanged. ~~**Not settled:** the second question;~~ Settled, decided by the user 2026-11-22 ("I'm ok with 'raise the floor' at this stage of the project"): the floor is raised; to be done better once the project has dozens of users or more, when regenerating every abstract is no longer cheap; confining a change to provisional pieces is not built.
     ~~**Not exercised yet** by a real addition: the first is contract 0.24, review suggestion 4.~~
     Exercised the same day by contract 0.24: no committed AST, lock, or shape moved.
 
