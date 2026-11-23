@@ -18,12 +18,21 @@ and a tenth more than 600, a prompt whose chunks G2 has dropped, G2 here holding
 against prompts of up to some thousands. That count follows from the lookup's rule as read from
 the source (every key past G2's hit, in every adapter) and is not itself held to a capture.
 
+Since 2026-11-23 (later the same day; another sample again) every chunk of the hit that G2 lacks is
+loaded, the ones the GPU already holds too, as the multi-process server does (read from its
+source, not traced; `DESIGN_REVIEW.md` §3.100, the note "What the multi-process server loads"):
+88,707 files written to each tier, 320,958 chunks read from G3 and 734,220 from G4, 69,133 files
+unlinked in G3, 2,190,010 stats in each tier, 32.2 TiB read in the hour. That is 5.9 chunks read
+for every file written where the lab's capture has 0.86, at other sizes and sessions; the count
+is the rule's consequence here and is not held to a capture.
+
 What LMCache does with two adapters is read from its source (0.5.5, `v1/distributed/
 storage_controllers/`) and, since 2026-11-22, seen in a capture of its multi-process server
 (`kit/captures/agentx-mp/`, the mechanism's README): every chunk G2 newly takes is stored in each
 adapter that lacks it; a lookup past
-G2's hit asks both, the hit is the leading run some adapter holds, and each chunk of it is loaded
-by the first adapter that holds it (G3 before G4), which alone is touched for it; each adapter
+G2's hit asks both, the hit is the leading run G2 or some adapter holds, and each chunk of it
+G2 lacks is loaded, whatever the GPU holds, by the first adapter that holds it (G3 before G4),
+which alone is touched for it; each adapter
 evicts by its own rule, so a chunk G3 dropped is still found in G4. Two things are not settled:
 
 - ~~The calls on a chunk file are the in-process connector's, as in `agentx-tiered`, while two L2

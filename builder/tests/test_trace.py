@@ -937,6 +937,27 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
                 yield from nodes(v, kind)
     found = list(nodes(ast, "stat"))
     assert found and all(st["expect"] == ["ENOENT"] for st in found), found      # a key the adapter lacks
+    # what is loaded (since 2026-11-23, the source read: the connector's lookup is the whole prompt
+    # and the server never learns the GPU's hit before it loads): every chunk of the run past G2's
+    # hit that some adapter holds, so the lookup's probe is the one that says which adapter serves
+    # each, and no second probe starts at the chunk the GPU held; a chunk of the run G2 holds past
+    # its own leading run counts toward the hit and is not loaded, so G2 is the probe's first tier
+    probes = [p for p in walk(ast, "probe") if "tiers" in p]
+    assert probes and all(p["tiers"] == ["g2", "g3", "g4"] and len(p["held"]) == 3
+                          and p["keys"]["from"]["min"][0]["ref"].endswith("_h2") for p in probes), probes
+    assert "_first" not in json.dumps(ast)
+
+
+def walk(x, kind):
+    """Every node of `kind` under `x`, a document's JSON."""
+    if isinstance(x, dict):
+        if isinstance(x.get(kind), dict):
+            yield x[kind]
+        for v in x.values():
+            yield from walk(v, kind)
+    elif isinstance(x, list):
+        for v in x:
+            yield from walk(v, kind)
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")

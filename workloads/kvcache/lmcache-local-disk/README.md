@@ -299,7 +299,12 @@ chunk file 3,145,728 bytes with no header; G3 a 2 GB directory, G4 6 GB):
   does not show G2's hits, so the count itself is not checked against that rule.
 - *A load:* `openat` with `O_RDONLY`, one `read` of the chunk, `close`. From G3 when G3 holds
   the chunk, from G4 only when G3 does not (all 6,038 of G4's loads); no load was followed by a
-  store of the chunk into G3, so nothing is promoted.
+  store of the chunk into G3, so nothing is promoted. Which chunks are loaded is read from the
+  source (2026-11-23, `prefetch_controller.py`; `DESIGN_REVIEW.md` §3.100, the note "What the
+  multi-process server loads"), not shown by the trace: every chunk of the hit that G2 lacks,
+  the ones the GPU already holds too, since the connector's lookup is the whole prompt and the
+  server loads before the connector says what vLLM had computed. The server's log agrees as far
+  as it goes: its prefetches retained 42,754 chunks where the engine retrieved 25,450.
 - *An eviction:* `unlink`, in batches of 20 % of the files at 0.8 of the capacity, each adapter
   by its own count.
 - *Threads:* an adapter's four workers issue all of its calls, stats, stores, loads, and

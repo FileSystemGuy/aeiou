@@ -1081,7 +1081,7 @@
             "run_length_write": "large",
             "request_size_read": "large",
             "request_size_write": "large",
-            "read_share": "mixed",
+            "read_share": "read-mostly",
             "metadata": "high",
             "reads_own_writes": "yes",
             "reread": "repeated",

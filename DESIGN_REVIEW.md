@@ -13411,15 +13411,67 @@ server", and `kit/captures/agentx-mp/replay-two-adapters-strace/`.
   5,740,435 stats in each tier, 48 for every file written against the capture's 7 or 8: most
   lookups stat one to three keys and a tenth more than 600 (a prompt G2 has dropped). The
   count is the rule's consequence at the case's sizes and is not held to a capture; the lab's
-  capture cannot check it, G2's hits not being in a trace. One thing seen and not examined:
+  capture cannot check it, G2's hits not being in a trace. ~~One thing seen and not examined:
   the abstract loads from the chunk holding the tokens the GPU held, the in-process
   connector's rule, while every key past G2's hit is looked up; whether the multi-process
-  server loads L2's hits the GPU already holds was not read.
+  server loads L2's hits the GPU already holds was not read.~~ Read 2026-11-23: it does (the
+  note "What the multi-process server loads" below).
 - *Tests.* `test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters` and the change to
   `test_kv_tiered_g4_reads_each_chunk_from_a_tier_that_holds_it` (a chunk is there at its
   rename, and none is written while its tier holds it) were written first and seen red.
 - *Disclosed to the user:* LMCache's usage report was on by default at the first server start
   and the two adapter benchmarks, before it was turned off for every later run.
+
+**What the multi-process server loads: every hit past G2's, the GPU's own included (2026-11-23; the
+user's "Proceed as you recommended" and "Proceed").** The question the note above left: the G4
+abstract loaded from the chunk holding the tokens the GPU held, the in-process connector's rule.
+
+- *The source* (LMCache 0.5.5 and vLLM 0.30.0 as installed; read, not traced; confidence: the
+  code's default path, one capture consistent with it and not deciding it).
+  `vllm_multi_process_adapter.py`, `maybe_submit_lookup_request`: the connector's lookup is the
+  whole prompt, `start=0`, and carries no count of what vLLM has computed.
+  `v1/multiprocess/modules/lookup.py`: a lookup is a prefetch job. `storage_manager.py`,
+  `_submit_prefix_fold`: G2's leading run is the L1 hit and every key past it goes to the
+  prefetch controller. `prefetch_controller.py`: `_lock_l1_keys` read-locks every one of those
+  keys G2 holds (past a gap in its leading run), every adapter is asked for all of them
+  (`_start_lookup_phase`), and only when every adapter has answered (`_transition_to_load_phase`)
+  the plan is made: the hit is the leading run of the union of G2's keys and the adapters', the
+  keys G2 holds are taken out of the load plan, and the rest are loaded, each by the
+  lowest-indexed adapter that has it, into G2 as temporary entries. Only then does the connector
+  free the locks on the chunks vLLM had computed (`update_state_after_alloc`,
+  `free_lookup_locks`), which drops those entries unread. So the server reads from storage
+  every chunk of the hit that G2 lacks, whatever the GPU holds.
+- *The capture* (`kit/captures/agentx-mp/`, the server's log; the raw trace was not kept, so
+  no request was followed read by read). 203 prefetches completed with 42,754 keys retained
+  where the engine retrieved 25,450 chunks (the log's "Retrieved N tokens", 256 a chunk): the
+  prefetch covers what the GPU held. The log's "L2" keys sum to 14,762 against 9,764 reads
+  traced in the two directories; the difference is what the second rule predicts, the count
+  being of the controller's result, which includes the keys G2 held past its leading run.
+  Consistent with the reading; not a proof of it.
+- *Built, in `lmcache_local_disk_tiered_g4` alone.* One `probe` over G2, G3, and G4 from G2's
+  hit, in place of two over G3 and G4: its run is the hit, G2's part of it is not loaded, and
+  G3's and G4's parts are loaded and touched as before. No contract change (0.25's probe over
+  several tiers takes a tier with no namespace). The single-tier abstract keeps the in-process
+  connector's rule. The sample moved (a statement fewer): the case at seed 1 and one GPU plans
+88,707 files written to each tier, 320,958 chunks read from G3 and 734,220 from G4, 69,133
+  files unlinked in G3, and 2,190,010 stats in each tier; 32.2 TiB read in the hour where the
+  rule before read about 15. That is 5.9 chunks read for every file written, against the lab
+  capture's 0.86 (9,764 reads, 11,393 files); the two are at different sizes and sessions, and
+  the count is the rule's consequence at the case's sizes, not held to a capture.
+- *Read and not built.* (1) The loads are submitted only when every adapter's lookup has
+  answered; the abstract submits both in one span at once (open item, no design yet).
+  (2) The load is all or nothing: G2 must take a buffer for every key of the plan, and when it
+  cannot (`_reserve_load_buffers`), nothing is loaded and the request is served G2's own hit;
+  the engine then computes and stores the rest again. The abstract loads whatever the tiers
+  hold, its bytes held in the store workers' staging. That fall-back is a function of G2's
+  planned contents, so it could be planned and would not be learned from a run; at the
+  case's sizes (G2 15,680 chunks against prompts of some thousands) it is not known how often
+  it would apply.
+- *Test.* The addition to `test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters`
+  (one probe over the three tiers from G2's hit, no binding for the chunk the GPU held), written
+  first and seen red. It is a test of the document, not of a planned trace: a trace does not
+  show which chunks the GPU held. The two G4 tests' planned trace at test sizes grew from 1.3 to
+  7.3 million lines, G2 there holding 300 chunks, and they take about a minute each.
 
 **Spans in the checkpoint abstracts; the search's left out (2026-11-22; the user's "proceed with
 the three spans as recommended").** The recommendation was one span outside a timeline

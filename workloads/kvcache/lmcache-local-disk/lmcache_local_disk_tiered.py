@@ -318,14 +318,18 @@ def shape(name, doc, g4):
     def chunk_ops_g4(c, tag, sq, gh, n, h2):
         """The same with two L2 adapters, G3 and G4 (LMCache 0.5.5's `distributed` controllers, read
         2026-11-22: `store_policy.py`, `prefetch_policy.py`, `prefetch_controller.py`): the chunks past
-        G2's hit are looked up in both, the leading run some adapter holds is the hit, and each of its
-        chunks is loaded by the first adapter that holds it, G3 before G4, which alone is touched for
-        it; every chunk G2 newly took is stored in each adapter that lacks it, each adapter's write on
+        G2's hit are looked up in both, the leading run G2 or some adapter holds is the hit, and each of
+        its chunks G2 lacks, whatever the GPU holds, is loaded by the first adapter that holds it, G3
+        before G4, which alone is touched for it; every chunk G2 newly took is stored in each adapter that lacks it, each adapter's write on
         its own workers. The calls on a chunk file are `fs_native`'s, traced 2026-11-22 (brief item 74)."""
-        h3 = c.probe("lm", ["g3", "g4"], chunk_keys(sq, P.per, h2), tag + "h3")
+        # every chunk of that run is loaded, the ones the GPU holds too: the connector's lookup is the
+        # whole prompt and carries no GPU hit, and the server's prefetch loads the run before the
+        # connector frees what vLLM had computed (source read 2026-11-23, not traced:
+        # `vllm_multi_process_adapter.py`, `storage_manager.py`, `prefetch_controller.py`)
+        # a chunk of the run that G2 holds past its own leading run counts toward the hit and is
+        # not loaded (the controller read-locks every such key and takes it out of the load plan)
+        h3, _, a3, a4 = c.probe("lm", ["g2", "g3", "g4"], chunk_keys(sq, P.per, h2), tag + "h3", held=(tag + "a2", tag + "a3", tag + "a4"))
         hit = c.let(tag + "hit", h2 + h3)
-        first = c.let(tag + "first", max_(h2, min_(gh * BL, seq_len(sq) * BL - 1) // (BL * P.per)))
-        _, a3, a4 = c.probe("lm", ["g3", "g4"], chunk_keys(sq, P.per, first, hit - first), tag + "hs", held=(tag + "a3", tag + "a4"))
         # the request waits for its lookup and its loads, which each adapter's workers carry (contract
         # 0.26; traced 2026-11-22: an adapter's four threads issue all its calls): worker q of an
         # adapter takes every `store_lanes`-th key from the q-th, behind what the lane already holds

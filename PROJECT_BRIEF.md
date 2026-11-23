@@ -1743,8 +1743,12 @@ numbers; the order is this note's.
     loads with its stores, the request's span waiting for them (contract 0.26, a `submit` with
     `join`, built 2026-11-23). **Not done yet:** its unlinks on those workers (they keep
     eviction lanes of their own, where a run times each batch; to wait for a run on storage,
-    the user, 2026-11-23); whether the server loads L2's
-    hits the GPU already holds; the single-tier
+    the user, 2026-11-23); ~~whether the server loads L2's
+    hits the GPU already holds;~~ (read 2026-11-23: it does, and the abstract now loads every
+    chunk of the hit that G2 lacks; `DESIGN_REVIEW.md` §3.100, the note "What the multi-process
+    server loads"); its loads submitted only once every adapter's lookup has answered, and its
+    all-or-nothing load when G2 cannot take the buffers (both read the same day, no design
+    yet); the single-tier
     abstract keeps the in-process connector's calls. The rest of this item is not started.
 
 75. **A cache construct, a stack of tiers (decided by the user 2026-11-10, `DESIGN_REVIEW.md`
