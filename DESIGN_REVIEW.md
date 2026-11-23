@@ -13344,6 +13344,22 @@ server", and `kit/captures/agentx-mp/replay-two-adapters-strace/`.
   G2's hits not being in a trace); (5) the workers, which changes what the
   span `load` measures. The eviction's period was not examined: the trace's batches were never
   closer than 4 s in G3 and 30 s in G4, which the tiers' refill rate may explain.
+- *(1) built, 2026-11-23 (the user: "Push what we have now, then proceed with design 1 and
+  design 2 after that").* No contract change: a `stat` with `expect: [ENOENT]` passes whether
+  the file is there or not, so a run learns nothing from it. A lookup is a loop over the keys
+  past G2's hit, once for each namespace, in the request's span `load` (the lookup is part of
+  its storage wait, so a request with no load now has a span too); a store's check is a loop
+  over the chunks G2 newly took, each stat submitted to the adapter's store workers ahead of
+  the writes. Two things it does not have: an adapter's lookup runs on its workers, both
+  adapters at once (design 2), and a chunk's stat and write are back to back on one worker,
+  where here they are separate submissions. The sample moved again. The case at seed 1 plans
+  5,740,435 stats in each tier, 48 for every file written against the capture's 7 or 8: most
+  lookups stat one to three keys and a tenth more than 600 (a prompt G2 has dropped). The
+  count is the rule's consequence at the case's sizes and is not held to a capture; the lab's
+  capture cannot check it, G2's hits not being in a trace. One thing seen and not examined:
+  the abstract loads from the chunk holding the tokens the GPU held, the in-process
+  connector's rule, while every key past G2's hit is looked up; whether the multi-process
+  server loads L2's hits the GPU already holds was not read.
 - *Tests.* `test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters` and the change to
   `test_kv_tiered_g4_reads_each_chunk_from_a_tier_that_holds_it` (a chunk is there at its
   rename, and none is written while its tier holds it) were written first and seen red.

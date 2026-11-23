@@ -27,9 +27,11 @@ or the `O_DIRECT` path; an eviction is one `unlink`. The second abstract, `_g4`,
 of LMCache's multi-process `fs_native` adapter instead, the mechanism's target (brief item 70),
 captured 2026-11-22 (item 74, `kit/captures/agentx-mp/`): a store is `NAME.tmp` opened
 `O_WRONLY|O_CREAT|O_TRUNC`, one write, close, and a `rename` to `NAME.data`, never of a chunk the
-adapter holds; a load is open, one read, close. Not in it yet: the adapter's `stat` of every key
-looked up and before every store, and its four workers carrying loads as well as stores and
-unlinks; this abstract, with one adapter, keeps the in-process calls.
+adapter holds; a load is open, one read, close; a lookup is a `stat` of every key past G2's hit
+in each adapter, in the request's span `load`, and a store stats each chunk first, on the
+adapter's store workers (since 2026-11-23). Not in it yet: the adapter's four workers carrying
+loads and lookups as well as stores and unlinks (contract 0.26, not built); this abstract, with
+one adapter, keeps the in-process calls.
 
 `aeiou run` runs it since brief item 72 (7) (2026-11-13/14); its case is `unsettled`. Not built yet:
 sessions arrive uniformly over `window_s`
@@ -323,6 +325,11 @@ def shape(name, doc, g4):
         first = c.let(tag + "first", max_(h2, min_(gh * BL, seq_len(sq) * BL - 1) // (BL * P.per)))
         _, a3, a4 = c.probe("lm", ["g3", "g4"], chunk_keys(sq, P.per, first, hit - first), tag + "hs", held=(tag + "a3", tag + "a4"))
         with c.span("load", staging="store"):
+            # the lookup: every key past G2's hit statted in each adapter, whatever the other holds
+            # (0.5.5's storage_manager.py; traced 2026-11-22), a key it lacks ENOENT
+            for tg, ns in (("q3", kv), ("q4", kv4)):
+                with c.loop(tag + tg, n, start=h2) as j:
+                    c.stat(final(ns, chunk_key(sq, j, P.per)), expect=["ENOENT"])
             for tg, ns, arr in (("r3", kv, a3), ("r4", kv4, a4)):
                 with c.loop(tag + tg, arr.len) as j:
                     native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[j], P.per))))
@@ -330,6 +337,9 @@ def shape(name, doc, g4):
         c.touch("lm", "g4", chunk_keys(sq, P.per, chunks=a4))
         t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")
         for tr, ns, wk in (("g3", kv, "store"), ("g4", kv4, "store4")):
+            with c.loop(tag + "c" + tr, t2.len) as j:                   # a store's check: each chunk statted first, on the adapter's workers
+                with c.submit(wk):
+                    c.stat(final(ns, chunk_key(sq, t2[j], P.per)), expect=["ENOENT"])
             tk = c.store("lm", tr, chunk_keys(sq, P.per, chunks=t2), taken=tag + "t" + tr)   # indices into t2; a chunk the adapter holds is left, never rewritten (traced)
             with c.loop(tag + "w" + tr, tk.len) as j:
                 with c.submit(wk):

@@ -15449,6 +15449,88 @@
                               "body": [
                                 {
                                   "loop": {
+                                    "index": "m_q3",
+                                    "from": {
+                                      "ref": "m_h2"
+                                    },
+                                    "to": {
+                                      "ref": "m_nch"
+                                    },
+                                    "body": [
+                                      {
+                                        "stat": {
+                                          "file": {
+                                            "object": {
+                                              "namespace": "kv",
+                                              "fields": {
+                                                "key": {
+                                                  "chunk_key": {
+                                                    "seq": {
+                                                      "ref": "m_seq"
+                                                    },
+                                                    "chunk": {
+                                                      "index": "m_q3"
+                                                    },
+                                                    "per": {
+                                                      "param": "per"
+                                                    }
+                                                  }
+                                                },
+                                                "ext": "data"
+                                              }
+                                            }
+                                          },
+                                          "expect": [
+                                            "ENOENT"
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "loop": {
+                                    "index": "m_q4",
+                                    "from": {
+                                      "ref": "m_h2"
+                                    },
+                                    "to": {
+                                      "ref": "m_nch"
+                                    },
+                                    "body": [
+                                      {
+                                        "stat": {
+                                          "file": {
+                                            "object": {
+                                              "namespace": "kv4",
+                                              "fields": {
+                                                "key": {
+                                                  "chunk_key": {
+                                                    "seq": {
+                                                      "ref": "m_seq"
+                                                    },
+                                                    "chunk": {
+                                                      "index": "m_q4"
+                                                    },
+                                                    "per": {
+                                                      "param": "per"
+                                                    }
+                                                  }
+                                                },
+                                                "ext": "data"
+                                              }
+                                            }
+                                          },
+                                          "expect": [
+                                            "ENOENT"
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "loop": {
                                     "index": "m_r3",
                                     "to": {
                                       "len": "m_a3"
@@ -15743,6 +15825,56 @@
                             }
                           },
                           {
+                            "loop": {
+                              "index": "m_cg3",
+                              "to": {
+                                "len": "m_t2"
+                              },
+                              "body": [
+                                {
+                                  "submit": {
+                                    "workers": "store",
+                                    "body": [
+                                      {
+                                        "stat": {
+                                          "file": {
+                                            "object": {
+                                              "namespace": "kv",
+                                              "fields": {
+                                                "key": {
+                                                  "chunk_key": {
+                                                    "seq": {
+                                                      "ref": "m_seq"
+                                                    },
+                                                    "chunk": {
+                                                      "elem": {
+                                                        "array": "m_t2",
+                                                        "index": {
+                                                          "index": "m_cg3"
+                                                        }
+                                                      }
+                                                    },
+                                                    "per": {
+                                                      "param": "per"
+                                                    }
+                                                  }
+                                                },
+                                                "ext": "data"
+                                              }
+                                            }
+                                          },
+                                          "expect": [
+                                            "ENOENT"
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
                             "store": {
                               "cache": "lm",
                               "tier": "g3",
@@ -15886,6 +16018,56 @@
                                               }
                                             }
                                           }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "m_cg4",
+                              "to": {
+                                "len": "m_t2"
+                              },
+                              "body": [
+                                {
+                                  "submit": {
+                                    "workers": "store4",
+                                    "body": [
+                                      {
+                                        "stat": {
+                                          "file": {
+                                            "object": {
+                                              "namespace": "kv4",
+                                              "fields": {
+                                                "key": {
+                                                  "chunk_key": {
+                                                    "seq": {
+                                                      "ref": "m_seq"
+                                                    },
+                                                    "chunk": {
+                                                      "elem": {
+                                                        "array": "m_t2",
+                                                        "index": {
+                                                          "index": "m_cg4"
+                                                        }
+                                                      }
+                                                    },
+                                                    "per": {
+                                                      "param": "per"
+                                                    }
+                                                  }
+                                                },
+                                                "ext": "data"
+                                              }
+                                            }
+                                          },
+                                          "expect": [
+                                            "ENOENT"
+                                          ]
                                         }
                                       }
                                     ]
@@ -23206,6 +23388,88 @@
                                                       "body": [
                                                         {
                                                           "loop": {
+                                                            "index": "s_q3",
+                                                            "from": {
+                                                              "ref": "s_h2"
+                                                            },
+                                                            "to": {
+                                                              "ref": "s_nch"
+                                                            },
+                                                            "body": [
+                                                              {
+                                                                "stat": {
+                                                                  "file": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "index": "s_q3"
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        },
+                                                                        "ext": "data"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "expect": [
+                                                                    "ENOENT"
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        },
+                                                        {
+                                                          "loop": {
+                                                            "index": "s_q4",
+                                                            "from": {
+                                                              "ref": "s_h2"
+                                                            },
+                                                            "to": {
+                                                              "ref": "s_nch"
+                                                            },
+                                                            "body": [
+                                                              {
+                                                                "stat": {
+                                                                  "file": {
+                                                                    "object": {
+                                                                      "namespace": "kv4",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "index": "s_q4"
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        },
+                                                                        "ext": "data"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "expect": [
+                                                                    "ENOENT"
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        },
+                                                        {
+                                                          "loop": {
                                                             "index": "s_r3",
                                                             "to": {
                                                               "len": "s_a3"
@@ -23500,6 +23764,56 @@
                                                     }
                                                   },
                                                   {
+                                                    "loop": {
+                                                      "index": "s_cg3",
+                                                      "to": {
+                                                        "len": "s_t2"
+                                                      },
+                                                      "body": [
+                                                        {
+                                                          "submit": {
+                                                            "workers": "store",
+                                                            "body": [
+                                                              {
+                                                                "stat": {
+                                                                  "file": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t2",
+                                                                                "index": {
+                                                                                  "index": "s_cg3"
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        },
+                                                                        "ext": "data"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "expect": [
+                                                                    "ENOENT"
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  {
                                                     "store": {
                                                       "cache": "lm",
                                                       "tier": "g3",
@@ -23643,6 +23957,56 @@
                                                                       }
                                                                     }
                                                                   }
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  {
+                                                    "loop": {
+                                                      "index": "s_cg4",
+                                                      "to": {
+                                                        "len": "s_t2"
+                                                      },
+                                                      "body": [
+                                                        {
+                                                          "submit": {
+                                                            "workers": "store4",
+                                                            "body": [
+                                                              {
+                                                                "stat": {
+                                                                  "file": {
+                                                                    "object": {
+                                                                      "namespace": "kv4",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t2",
+                                                                                "index": {
+                                                                                  "index": "s_cg4"
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        },
+                                                                        "ext": "data"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "expect": [
+                                                                    "ENOENT"
+                                                                  ]
                                                                 }
                                                               }
                                                             ]
@@ -30943,6 +31307,88 @@
                                                       "body": [
                                                         {
                                                           "loop": {
+                                                            "index": "s_q3",
+                                                            "from": {
+                                                              "ref": "s_h2"
+                                                            },
+                                                            "to": {
+                                                              "ref": "s_nch"
+                                                            },
+                                                            "body": [
+                                                              {
+                                                                "stat": {
+                                                                  "file": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "index": "s_q3"
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        },
+                                                                        "ext": "data"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "expect": [
+                                                                    "ENOENT"
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        },
+                                                        {
+                                                          "loop": {
+                                                            "index": "s_q4",
+                                                            "from": {
+                                                              "ref": "s_h2"
+                                                            },
+                                                            "to": {
+                                                              "ref": "s_nch"
+                                                            },
+                                                            "body": [
+                                                              {
+                                                                "stat": {
+                                                                  "file": {
+                                                                    "object": {
+                                                                      "namespace": "kv4",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "index": "s_q4"
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        },
+                                                                        "ext": "data"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "expect": [
+                                                                    "ENOENT"
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        },
+                                                        {
+                                                          "loop": {
                                                             "index": "s_r3",
                                                             "to": {
                                                               "len": "s_a3"
@@ -31237,6 +31683,56 @@
                                                     }
                                                   },
                                                   {
+                                                    "loop": {
+                                                      "index": "s_cg3",
+                                                      "to": {
+                                                        "len": "s_t2"
+                                                      },
+                                                      "body": [
+                                                        {
+                                                          "submit": {
+                                                            "workers": "store",
+                                                            "body": [
+                                                              {
+                                                                "stat": {
+                                                                  "file": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t2",
+                                                                                "index": {
+                                                                                  "index": "s_cg3"
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        },
+                                                                        "ext": "data"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "expect": [
+                                                                    "ENOENT"
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  {
                                                     "store": {
                                                       "cache": "lm",
                                                       "tier": "g3",
@@ -31380,6 +31876,56 @@
                                                                       }
                                                                     }
                                                                   }
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  {
+                                                    "loop": {
+                                                      "index": "s_cg4",
+                                                      "to": {
+                                                        "len": "s_t2"
+                                                      },
+                                                      "body": [
+                                                        {
+                                                          "submit": {
+                                                            "workers": "store4",
+                                                            "body": [
+                                                              {
+                                                                "stat": {
+                                                                  "file": {
+                                                                    "object": {
+                                                                      "namespace": "kv4",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t2",
+                                                                                "index": {
+                                                                                  "index": "s_cg4"
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
+                                                                        },
+                                                                        "ext": "data"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "expect": [
+                                                                    "ENOENT"
+                                                                  ]
                                                                 }
                                                               }
                                                             ]
@@ -31647,12 +32193,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk_tiered.py",
-      "sha256": "754ffbd3186b34c52272377375d19e102bbf420c1f5bac6c2a617765b1b5600a",
+      "sha256": "6280646d3f9a4e7cf2e71beccb531da8efc279f14675f859b8e0cd0ca7f81ba4",
       "builder_version": "0.4.0",
-      "git": "0ebb36cd2ad3-dirty"
+      "git": "28b8892cf29d-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "f96c30919e5afe731e2edfd8aa53566d7a077e6896150e608bfb503e363983f3"
+    "ast_sha256": "2c3d37e18de5fdac9070d469dd3276928c40655350e0277f22c81a7b440867d8"
   }
 }

@@ -312,7 +312,11 @@ kept: retrieval failed to allocate 129 times and the engine recomputed and store
 store calls against 49 retrieves); its calls on a file were the same.
 
 `lmcache_local_disk_tiered_g4` has the store, the load, the eviction, and the chunk left when
-held, since 2026-11-23. **Not in it yet:** the stats (a lookup's and a store's), and the adapter's
-workers carrying its loads; both wait on a design. The `fs` adapter (Python, no capacity, never
+held, since 2026-11-23, and since the same day the stats: a lookup's, every key past G2's hit in
+each adapter, in the request's span `load` on its own lane, one adapter after the other; and a
+store's, each chunk G2 newly took, on the adapter's store workers ahead of the writes (a
+chunk's stat and its write are separate submissions, so they may run on different workers, where
+the adapter does them back to back on one). **Not in it yet:** the adapter's workers carrying
+its loads and lookups (contract 0.26, not built). The `fs` adapter (Python, no capacity, never
 evicting under LRU) was traced alone with `lmcache bench l2`: the same store and load with
 Python's `fstat`, `ioctl`, `lseek` after each open and `O_CLOEXEC`, on one thread; not kept.

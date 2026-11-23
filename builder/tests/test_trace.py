@@ -870,8 +870,11 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     `O_WRONLY|O_CREAT|O_TRUNC` and mode 0644, writes the chunk in one call, closes, and renames it
     to `NAME.data`; a load is `open(O_RDONLY)`, one read, close; an eviction one unlink; none of
     Python's `fstat`, `ioctl`, `lseek` after an open, no `O_CLOEXEC`, and no `O_DIRECT` path, which
-    was not traced. Not here yet: the adapters' `stat` of every key looked up and before every
-    store, and their four workers carrying the loads (brief item 74, the designs to come)."""
+    was not traced. The adapters' stats (since 2026-11-23): a lookup stats every key past G2's hit
+    in each adapter, whatever the other holds, and a store stats each chunk G2 newly took in each
+    adapter first, so the two namespaces get the same stats, key for key, each of a `NAME.data`
+    that may be absent, and every file written was statted in its tier. Not here yet: the
+    adapters' four workers carrying the loads (brief item 74, contract 0.26 to come)."""
     case = case_dir("lmcache_local_disk_tiered_g4", "agentx-tiered-g4")
     out = tmp_path / "trace.jsonl"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk_tiered_g4")), "--gpus", "1", "--seed", "1",
@@ -881,7 +884,20 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     assert r.returncode == 0, r.stderr
     ops = [json.loads(line) for line in out.read_text().splitlines()[1:]]
     kinds = {o["op"] for o in ops}
-    assert kinds == {"open", "write", "read", "close", "rename", "unlink"}, kinds
+    assert kinds == {"stat", "open", "write", "read", "close", "rename", "unlink"}, kinds
+    stats = {"kv": {}, "kv4": {}}
+    for o in ops:
+        if o["op"] == "stat":
+            ns, name = o["path"].split("/")
+            assert name.endswith(".data"), o
+            stats[ns][name] = stats[ns].get(name, 0) + 1
+    assert stats["kv"] == stats["kv4"] and stats["kv"]
+    written = {}
+    for o in ops:
+        if o["op"] == "rename":
+            written[o["to"]] = written.get(o["to"], 0) + 1
+    assert all(stats[path.split("/")[0]][path.split("/")[1]] >= n for path, n in written.items())
+    assert sum(stats["kv"].values()) > 2 * sum(o["op"] == "rename" and o["to"].startswith("kv/") for o in ops)
     opens = [o for o in ops if o["op"] == "open"]
     stores = [o for o in opens if "WRONLY" in o["flags"]]
     loads = [o for o in opens if "WRONLY" not in o["flags"]]
@@ -893,7 +909,20 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     assert all(o["path"].endswith(".data") for o in ops if o["op"] == "unlink")
     assert all(o["len"] == 4096 for o in ops if o["op"] in ("read", "write"))
     assert sum(o["op"] == "write" for o in ops) == len(stores) and sum(o["op"] == "read" for o in ops) == len(loads)
-    assert "direct" not in json.loads(ast_path("lmcache_local_disk_tiered_g4").read_text())["params"]
+    ast = json.loads(ast_path("lmcache_local_disk_tiered_g4").read_text())
+    assert "direct" not in ast["params"]
+
+    def nodes(x, kind):
+        if isinstance(x, dict):
+            if kind in x and isinstance(x[kind], dict) and "file" in x[kind]:
+                yield x[kind]
+            for v in x.values():
+                yield from nodes(v, kind)
+        elif isinstance(x, list):
+            for v in x:
+                yield from nodes(v, kind)
+    found = list(nodes(ast, "stat"))
+    assert found and all(st["expect"] == ["ENOENT"] for st in found), found      # a key the adapter lacks
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")

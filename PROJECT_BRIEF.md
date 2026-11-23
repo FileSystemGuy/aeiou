@@ -1738,9 +1738,10 @@ numbers; the order is this note's.
     multi-process server captured"):* captured, with two `fs_native` adapters (the `fs` adapter
     has no capacity and never evicts; "64 unlinks at once" above is its cap on concurrent
     deletes), evidence in `kit/captures/agentx-mp/`. `lmcache_local_disk_tiered_g4` now has the
-    adapter's store (temporary file, `rename`), load, and a held chunk left. **Not done yet:**
-    the adapter's `stat` of every key looked up in each tier and before every store, and its four
-    workers carrying loads with stores and unlinks, each waiting on a design; the single-tier
+    adapter's store (temporary file, `rename`), load, a held chunk left, and its `stat` of every
+    key looked up in each tier and before every store. **Not done yet:** its four workers
+    carrying loads and lookups with stores and unlinks (contract 0.26, decided by the user
+    2026-11-23, not built); whether the server loads L2's hits the GPU already holds; the single-tier
     abstract keeps the in-process connector's calls. The rest of this item is not started.
 
 75. **A cache construct, a stack of tiers (decided by the user 2026-11-10, `DESIGN_REVIEW.md`
@@ -1856,9 +1857,9 @@ numbers; the order is this note's.
     `lmcache_local_disk_tiered_g4` (namespaces `kv` and `kv4`), with the case
     `agentx-tiered-g4`, `unsettled`. **Not done yet:** ~~the chunk-file calls are the in-process
     connector's, while two adapters exist only in the multi-process server, whose `fs` adapter
-    makes other calls and is not captured (item 74)~~ the adapters' lookup and store `stat`s and
-    their workers carrying loads (the server captured and the chunk-file calls its `fs_native`
-    adapter's since 2026-11-23, item 74); G4 as one tier shared by a domain's
+    makes other calls and is not captured (item 74)~~ the adapters' workers carrying loads and
+    lookups (the server captured and the chunk-file calls and stats its `fs_native` adapter's
+    since 2026-11-23, item 74); G4 as one tier shared by a domain's
     engines (item 72 (5)); the case's G3 and G4 sizes (960 GB and 7.68 TB) are this project's,
     chosen so both tiers are exercised, not the WG's; each adapter has store workers of its
     own, each pool's staging bounded by G2's size separately.

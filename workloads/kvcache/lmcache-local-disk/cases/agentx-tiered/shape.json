@@ -4,7 +4,7 @@
   "runs": [
     {
       "ast": "lmcache_local_disk_tiered",
-      "ast_sha256": "977e0b22fccc96f9da25981a40ca39551ff93a55e652d19d4664f4957279e440",
+      "ast_sha256": "255de0b777a9e114d937b8a3fa5a32a9fe8238cbf2b6e6910fce462f417a84da",
       "params": "case.lock.json",
       "params_sha256": "ae5a95e896761b5d742fbc451db9355b01235336bb8553b91b00b51cd5fc2a42",
       "gpus": 1,
