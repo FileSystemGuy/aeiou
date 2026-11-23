@@ -13340,7 +13340,10 @@ number a run is judged by, measured.
   were): the case's counts at seed 1 are design 1's. What it still does not have: the
   adapter's unlinks on those workers. They are on eviction lanes, which a run reports batch by
   batch (duration, overage past the next tick); putting them on the workers means either
-  losing that or a second addition to the contract, and was left for the user. And both the
+  losing that or a second addition to the contract, and was left for the user. *Decided
+  2026-11-23, the user:* "I agree with your recommendation to wait on the unlinks": they stay
+  on eviction lanes until a run on storage shows whether evictions contending with loads
+  matters. And both the
   lookup and the loads are submitted at the request's instant, each worker lane's stats ahead
   of its reads, where the server submits the loads once the lookup has answered.
 - *Not checked by a run of the abstract.* A timeline runs in real time (`--time-scale` is

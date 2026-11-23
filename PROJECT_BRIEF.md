@@ -1742,7 +1742,8 @@ numbers; the order is this note's.
     key looked up in each tier and before every store, and its four workers carry its lookups and
     loads with its stores, the request's span waiting for them (contract 0.26, a `submit` with
     `join`, built 2026-11-23). **Not done yet:** its unlinks on those workers (they keep
-    eviction lanes of their own, where a run times each batch); whether the server loads L2's
+    eviction lanes of their own, where a run times each batch; to wait for a run on storage,
+    the user, 2026-11-23); whether the server loads L2's
     hits the GPU already holds; the single-tier
     abstract keeps the in-process connector's calls. The rest of this item is not started.
 
