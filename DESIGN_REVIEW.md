@@ -13551,6 +13551,9 @@ real run test").** A correction and a partial result.
 - *What it does not show.* Anything about storage: 64 KiB chunks on a local disk through the
   page cache. Whether evictions contending with loads matters (the unlinks decision above) is
   not answered by five batches of 58 ms. The other 50 hours.
+- *Decided* (the user, 2026-11-23, "Let's do as you recommended: push and leave it at 90
+  minutes"): no 52-hour run at 1/512 of the bytes on this machine; the ninety minutes stand as
+  the local evidence that the plan executes, and a run at the case's sizes waits for a lab.
 
 **Two spans: the loads submitted only once every adapter's lookup has answered (2026-11-23; the
 user's "Yes, draft the design for item 2" and "proceed with the two spans").**
