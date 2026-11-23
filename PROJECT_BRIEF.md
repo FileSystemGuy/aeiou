@@ -1926,7 +1926,7 @@ numbers; the order is this note's.
     `sift1m-cache`'s capture outside tolerance, a row the committed abstract is already
     outside at two seeds of eight, and both the span and that fit wait for the work on the
     vector database cases (primitives for them as the cache statements are for the KV
-    cache), not yet an item of its own. ~~Next of the review: the first half of
+    cache), item 81. ~~Next of the review: the first half of
     suggestion 2, with item 78.~~ *Suggestion 2's first half set aside (2026-11-22):* item 78,
     read from LMCache's source, has no eviction cascade, so it is no user of an eviction body
     acting on a lower tier; that waits for item 76 (Dynamo). Item 78 was met by contract
@@ -1955,6 +1955,21 @@ numbers; the order is this note's.
     the commit, the script having been edited to emit the second abstract; a lock's
     `ast_sha256` does not cover them, a shape's does, so `agentx-tiered`'s shape records the
     new file hash, its numbers as they were).
+81. **Primitives for the vector database cases (queued by the user 2026-11-22, `DESIGN_REVIEW.md`
+    §3.100, the note "Spans in the checkpoint abstracts"; not started, not designed).** The
+    user: "We have more work to do on the VDB cases, akin to how we creates the cache
+    primitive in support of KVCache workloads." The vector search abstracts (`diskann_search`,
+    `diskann_build`, `faiss_ivf_ondisk`) are written from the general statements, draws and
+    picks, as the KV abstracts were before the cache statements (item 75). What the work is,
+    which structure of a search or a build the contract should hold as a statement, is not
+    decided and starts with a recommendation, primary sources first. What waits for it:
+    (a) a span of a query's rounds in `diskann_search` (contract 0.24), left out 2026-11-22;
+    (b) a finding of that day: the reuse distance of a read after a read in `sift1m-cache`'s
+    capture sits at the edge of its tolerance, the trace's distances shorter (p50 80 MiB, p90
+    192 MiB) than the abstract's uniform picks give (96 MiB, 224 MiB), outside at two seeds of
+    eight though the recorded verdict, judged at seed 1, is "accepted";
+    (c) DiskANN's node cache as a second user of the cache statements (item 79, review
+    suggestion 1).
 
 ## 7. Environment
 

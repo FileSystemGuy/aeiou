@@ -13334,6 +13334,8 @@ and `diskann_search` (a query). Two are built, one is left out.
   a span for now." So `diskann_search` is as it was, its capture's verdict as recorded, and
   the row's place at the edge of its tolerance is a finding for that work on the vector
   database cases, where the span of a query belongs too. The span's patch is not committed.
+  That work was queued the same day as brief item 81 (the user: "queue a brief item for the
+  VDB work"), not started and not designed.
 - *Tests.* The builder's test of the committed ASTs and the two assertions in the runner's
   `run::write_then_restore_through_the_namespace_manifest` (four `shard` spans of two ranks
   and two checkpoints, two `load` spans) were written first and seen red, then green. The
