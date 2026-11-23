@@ -471,8 +471,9 @@ enum Next<'a> {
     Trace(Arc<crate::trace::TraceFile>),
     /// A lane cannot go on until a release (contract 0.18): the statement runs again then.
     Block,
-    /// A `submit` (contract 0.20): its workers and body.
-    Submit(&'a str, &'a [Node]),
+    /// A `submit` (contract 0.20): its workers, whether its span waits for it (`join`, contract
+    /// 0.26), and its body.
+    Submit(&'a str, bool, &'a [Node]),
     /// A `span` of a timeline's lane was entered, by name and the workers whose staging its
     /// reads draw on (contract 0.21), or its body ended (contract 0.20).
     SpanBegin(&'a str, Option<&'a str>),
@@ -502,7 +503,12 @@ pub enum TlNote {
     Fork { parent: Exec, kids: Vec<Exec>, join: bool, plan: i64 },
     /// Lane `parent` submitted a body to worker lane `worker` of the timeline's workers `workers`
     /// (by declaration order), whose `staging` is in bytes.
-    Submit { parent: Exec, worker: Exec, workers: usize, name: Arc<str>, staging: i64, plan: i64 },
+    /// With `join` (contract 0.26) the span `parent` is in waits for the body.
+    Submit { parent: Exec, worker: Exec, workers: usize, name: Arc<str>, staging: i64, join: bool, plan: i64 },
+    /// A submitted body has ended: every op of it is before this on its worker lane `worker`,
+    /// whose bodies are walked one after another in the order submitted. `parent`: the lane
+    /// whose span waits for it (`join`).
+    BodyEnd { parent: Option<Exec>, worker: Exec, plan: i64 },
     /// An eviction batch started its victims on `lanes` at `plan`: by a store of lane `parent`,
     /// or at a tick (`None`).
     Evict { parent: Option<Exec>, lanes: Vec<Exec>, plan: i64 },
@@ -524,7 +530,7 @@ enum LaneEv<'a> {
     Trace,
     Block,
     End,
-    Submit(&'a str, &'a [Node]),
+    Submit(&'a str, bool, &'a [Node]),
     SpanBegin(&'a str, Option<&'a str>),
     SpanEnd,
 }
@@ -650,6 +656,9 @@ struct Lane<'m, 'a> {
     /// eviction lane by its tier's index and its victim's place mod `lanes`): lanes of one key
     /// issue their ops one after another, in planned order.
     exec: (u8, i64, i64),
+    /// A worker lane's body submitted with `join` (contract 0.26): the executor lane of the
+    /// span that waits for it.
+    joined: Option<(u8, i64, i64)>,
 }
 
 /// A timeline being walked: its lanes, a heap of (planned time, lane key, order put, lane)
@@ -699,7 +708,7 @@ impl<'m, 'a> TlRun<'m, 'a> {
             kid.lane = self.lanes.len();
             kid.victim = Some(k);
             kid.start(snap.body);
-            self.lanes.push(Lane { vm: Some(kid), key: vec![idx, batch, i % lanes, i / lanes], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 0, exec: (0, idx, i % lanes) });
+            self.lanes.push(Lane { vm: Some(kid), key: vec![idx, batch, i % lanes, i / lanes], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 0, exec: (0, idx, i % lanes), joined: None });
             let l = self.lanes.len() - 1;
             self.ready(l);
         }
@@ -1050,7 +1059,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             Some(Next::Fork(k)) => LaneEv::Fork(k),
             Some(Next::Trace(_)) => LaneEv::Trace,
             Some(Next::Block) => LaneEv::Block,
-            Some(Next::Submit(w, b)) => LaneEv::Submit(w, b),
+            Some(Next::Submit(w, j, b)) => LaneEv::Submit(w, j, b),
             Some(Next::SpanBegin(n, w)) => LaneEv::SpanBegin(n, w),
             Some(Next::SpanEnd) => LaneEv::SpanEnd,
             Some(Next::Timeline) => unreachable!("a timeline inside a timeline is refused when entered"),
@@ -1169,7 +1178,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         let mut kkey = key.clone();
                         kkey.push(k);
                         let exec = (1, run.lanes.len() as i64, 0);
-                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0, parked: false, class: 1, exec });
+                        run.lanes.push(Lane { vm: Some(kid), key: kkey, parent: join.then_some(cur), forks: 0, wait: 0, until: 0, parked: false, class: 1, exec, joined: None });
                         let l = run.lanes.len() - 1;
                         run.ready(l);
                     }
@@ -1180,7 +1189,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         run.cur = None;
                     }
                 }
-                S::Submit(name, body) => {
+                S::Submit(name, join, body) => {
                     let Some(wi) = run.workers.iter().position(|w| w.0 == name) else {
                         let g = run.shared.lock().unwrap();
                         let vm = run.lanes[cur].vm.as_ref().unwrap();
@@ -1203,9 +1212,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     kid.start(body);
                     let exec = (2, wi as i64, ord % run.workers[wi].1);
                     if let Some(n) = &run.notes {
-                        n.lock().unwrap().push(TlNote::Submit { parent: run.lanes[cur].exec, worker: exec, workers: wi, name: Arc::from(name), staging: run.workers[wi].2, plan: clock });
+                        n.lock().unwrap().push(TlNote::Submit { parent: run.lanes[cur].exec, worker: exec, workers: wi, name: Arc::from(name), staging: run.workers[wi].2, join, plan: clock });
                     }
-                    run.lanes.push(Lane { vm: Some(kid), key: vec![wi as i64, ord], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 2, exec });
+                    let joined = join.then_some(run.lanes[cur].exec);
+                    run.lanes.push(Lane { vm: Some(kid), key: vec![wi as i64, ord], parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 2, exec, joined });
                     let l = run.lanes.len() - 1;
                     run.ready(l);
                 }
@@ -1234,6 +1244,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         if let Some(n) = &run.notes {
                             n.lock().unwrap().push(TlNote::End { lane: lane.exec, plan: end });
                         }
+                    }
+                    if let (2, Some(n)) = (lane.class, &run.notes) {
+                        n.lock().unwrap().push(TlNote::BodyEnd { parent: lane.joined, worker: lane.exec, plan: end });
                     }
                     run.cur = None;
                     if let Some(p) = lane.parent {
@@ -2575,7 +2588,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 let mut main = Vm::resume(snap);
                 main.tl = Some(shared.clone());
                 main.push_body(body);
-                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 1, exec: (1, 0, 0) }], heap: BinaryHeap::new(), seq: 0, cur: None, notes: self.notes.clone(), evict, eval, workers: wk };
+                let mut run = TlRun { shared, lanes: vec![Lane { vm: Some(main), key: Vec::new(), parent: None, forks: 0, wait: 0, until: 0, parked: false, class: 1, exec: (1, 0, 0), joined: None }], heap: BinaryHeap::new(), seq: 0, cur: None, notes: self.notes.clone(), evict, eval, workers: wk };
                 run.ready(0);
                 self.tlrun = Some(Box::new(run));
                 Ok(Some(Next::Timeline))
@@ -2967,11 +2980,11 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 Ok(None)
             }
-            Node::Submit { workers, body } => {
+            Node::Submit { workers, join, body } => {
                 if self.tl.is_none() {
                     return other("submit: outside a timeline (V36)");
                 }
-                Ok(Some(Next::Submit(workers, body)))
+                Ok(Some(Next::Submit(workers, *join, body)))
             }
             Node::Span { name, staging, body } => {
                 // the plan walks its body where it stands; its begin and end are marked for the

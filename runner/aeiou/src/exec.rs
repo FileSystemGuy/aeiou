@@ -15,6 +15,11 @@
 //! one batch, issued back to back, would add their times to every later batch's). The bytes a submission writes
 //! are staged from when it is submitted until each write completes: past the workers'
 //! `staging`, a would-be drop (a gate failure: the plan never drops a submitted store).
+//! A body submitted with `join` (contract 0.26) is waited for by the span it was submitted in:
+//! the span's end is a join of those bodies, as a joined fork's is of its sub-lanes, so its D
+//! and its lane's L hold their wait, and the body's reads draw on the staging the span names.
+//! A worker lane's bodies arrive one after another, each ended by the planner's mark, and each
+//! queues behind its own submission's gate alone.
 //!
 //! `Exec` is the core, a state machine over a clock it is given (ns from the run's start, the
 //! timeline's planned 0): `push` the planner's events in planned order, `poll` for the records
@@ -39,7 +44,8 @@ enum Item {
     Spawn { gate: usize, plan: i64 },
     /// The lanes started at gate `gate` begin no earlier than it opens; a sub-lane of a fork
     /// (`fresh`) takes its parent's L; a submission's (`workers`) stages its writes.
-    Gate { gate: usize, plan: i64, fresh: bool, workers: Option<usize> },
+    /// A joined submission's reads draw on its span's staging, `loads`.
+    Gate { gate: usize, plan: i64, fresh: bool, workers: Option<usize>, loads: Option<usize> },
     /// A joined parent goes on once the `kids` sub-lanes of its fork have ended, at its plan the
     /// latest of their planned ends. A parent's forks are joined one at a time: the next fork
     /// is behind this join in its queue, so its sub-lanes end after it.
@@ -49,6 +55,9 @@ enum Item {
     /// workers `staging`, or leaves the one it entered last.
     SpanBegin { name: Arc<str>, staging: Option<usize>, plan: i64 },
     SpanEnd,
+    /// A worker lane: the body lane `parent` submitted with `join` ends here (contract 0.26); the
+    /// span that waits for it counts it done at the lane's previous completion.
+    Joined { parent: usize },
 }
 
 #[derive(Default)]
@@ -72,10 +81,8 @@ struct Lane {
     workers: Option<usize>,
     /// A worker or eviction lane: a queue, its L reported, not carried.
     queue: bool,
-    /// Gates in its queue not yet passed, and whether the latest passed one was a submission's
-    /// (a write pushed after it was passed is staged at once).
+    /// Gates in its queue not yet passed.
     gates_queued: usize,
-    staging_open: bool,
     timer: Option<i64>,
     ended: bool,
     /// The span it is in: name, planned start, launch, and the workers whose staging its reads
@@ -83,6 +90,22 @@ struct Lane {
     spans: Vec<(Arc<str>, i64, i64, Option<usize>)>,
     /// It has issued an op.
     issued: bool,
+    /// The stagings of the spans pushed to it and not ended, and the bodies the innermost has
+    /// submitted with `join` (contract 0.26): its end waits for them.
+    span_stagings: Vec<Option<usize>>,
+    span_joins: usize,
+    /// A worker lane: the staging the reads of the body at its head draw on, its span's.
+    load_staging: Option<usize>,
+    /// A worker lane: the gates of the submissions whose bodies have not begun to arrive, in
+    /// the order submitted, and whether the body arriving has its gate. A body's gate goes into
+    /// the queue just before its first op (or its end): the planner gives a lane's bodies one
+    /// after another, each whole, but notes every submission of an instant before any of them,
+    /// and a gate queued when submitted would hold an earlier body's ops behind a later
+    /// submission, which the submitting lane may reach only after waiting for those ops.
+    gates_pending: VecDeque<Item>,
+    body_open: bool,
+    /// The gate of the body arriving, and the workers whose staging its writes draw on.
+    body_gate: Option<(usize, usize)>,
     /// An eviction lane: its batches by planned start, not yet past; an op pushed belongs to the
     /// latest planned at or before it (the planner may push a batch before the previous one's ops).
     batches: VecDeque<(i64, usize)>,
@@ -306,6 +329,8 @@ pub struct Exec {
     flight: HashMap<u64, (usize, i64, Option<usize>, bool)>,
     /// Writes staged at their submission, not yet issued.
     staged: HashMap<u64, i64>,
+    /// The writes of the bodies whose gates have not opened, by gate, with their workers.
+    gate_writes: HashMap<usize, (usize, Vec<(u64, i64)>)>,
     waiters: HashMap<u64, Vec<usize>>,
     /// The time each gate opened, and the lanes it starts.
     gates: Vec<(Option<i64>, Vec<usize>)>,
@@ -341,7 +366,7 @@ pub struct Exec {
 
 impl Exec {
     pub fn new() -> Self {
-        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), ended: Vec::new(), ceiling_ns: None, watching: false, pushed_to: 0, open_win: HashMap::new(), win_d: BTreeMap::new(), live: 0, queue_lanes: Vec::new(), batches: HashMap::new(), batch_n: 0, batch_of: HashMap::new(), last_batch: HashMap::new(), gate_batch: HashMap::new(), series: None, stats: Stats::default() }
+        Exec { lanes: Vec::new(), outstanding: HashSet::new(), flight: HashMap::new(), staged: HashMap::new(), gate_writes: HashMap::new(), waiters: HashMap::new(), gates: Vec::new(), timers: BinaryHeap::new(), dirty: Vec::new(), ended: Vec::new(), ceiling_ns: None, watching: false, pushed_to: 0, open_win: HashMap::new(), win_d: BTreeMap::new(), live: 0, queue_lanes: Vec::new(), batches: HashMap::new(), batch_n: 0, batch_of: HashMap::new(), last_batch: HashMap::new(), gate_batch: HashMap::new(), series: None, stats: Stats::default() }
     }
 
     fn lane(&mut self, l: usize) -> &mut Lane {
@@ -435,21 +460,26 @@ impl Exec {
                 if let Some(acc) = &mut self.series {
                     *acc.open_planned.entry(sec(r.plan)).or_default() += 1;
                 }
+                self.open_body(l);
                 let lane = self.lane(l);
-                let stage_now = lane.staging_open && lane.gates_queued == 0 && r.kind == OpKind::Write;
+                // a submission's write is staged when its gate opens, wherever its lane is; one
+                // that arrives after that (a planner pulled behind the clock), as it arrives
+                let body = if r.kind == OpKind::Write { lane.body_gate } else { None };
                 while lane.batches.len() > 1 && lane.batches[1].0 <= r.plan {
                     lane.batches.pop_front();
                 }
                 let batch = lane.batches.front().filter(|x| x.0 <= r.plan).map(|x| x.1);
-                let (seq, len, w) = (r.seq, r.len, lane.workers);
+                let (seq, len) = (r.seq, r.len);
                 lane.q.push_back(Item::Op(r));
                 if let Some(bt) = batch.and_then(|b| self.batches.get_mut(&b)) {
                     bt.left += 1;
                     self.batch_of.insert(seq, batch.unwrap());
                 }
-                if stage_now {
-                    if let Some(w) = w {
+                if let Some((g, w)) = body {
+                    if self.gates[g].0.is_some() {
                         self.stage(w, &[(seq, len)], None);
+                    } else {
+                        self.gate_writes.entry(g).or_insert_with(|| (w, Vec::new())).1.push((seq, len));
                     }
                 }
                 self.dirty.push(l);
@@ -462,7 +492,7 @@ impl Exec {
                 self.lane(parent).q.push_back(Item::Spawn { gate: g, plan });
                 for &k in &kids {
                     let kid = self.lane(k);
-                    kid.q.push_back(Item::Gate { gate: g, plan, fresh: true, workers: None });
+                    kid.q.push_back(Item::Gate { gate: g, plan, fresh: true, workers: None, loads: None });
                     kid.gates_queued += 1;
                     if join {
                         kid.parent = Some(parent);
@@ -474,16 +504,30 @@ impl Exec {
                 }
                 self.dirty.push(parent);
             }
-            Planned::Submit { parent, worker, workers, name, staging, plan } => {
+            Planned::Submit { parent, worker, workers, name, staging, join, plan } => {
                 self.staging(workers, &name, staging);
                 let g = self.gate(vec![worker]);
-                self.lane(parent).q.push_back(Item::Spawn { gate: g, plan });
+                let p = self.lane(parent);
+                p.q.push_back(Item::Spawn { gate: g, plan });
+                // V36 holds that a joined submission is in a span
+                let loads = if join { p.span_stagings.last().copied().flatten() } else { None };
+                p.span_joins += join as usize;
                 self.queue(worker);
                 let w = self.lane(worker);
                 w.workers = Some(workers);
-                w.q.push_back(Item::Gate { gate: g, plan, fresh: false, workers: Some(workers) });
-                w.gates_queued += 1;
+                w.gates_pending.push_back(Item::Gate { gate: g, plan, fresh: false, workers: Some(workers), loads });
                 self.dirty.push(parent);
+            }
+            Planned::BodyEnd { parent, worker, .. } => {
+                // a body with no op has its gate too
+                self.open_body(worker);
+                let w = self.lane(worker);
+                w.body_open = false;
+                w.body_gate = None;
+                if let Some(parent) = parent {
+                    w.q.push_back(Item::Joined { parent });
+                }
+                self.dirty.push(worker);
             }
             Planned::Evict { parent: Some(parent), lanes, plan } => {
                 let g = self.gate(lanes.clone());
@@ -492,7 +536,7 @@ impl Exec {
                 self.lane(parent).q.push_back(Item::Spawn { gate: g, plan });
                 for &k in &lanes {
                     let e = self.lane(k);
-                    e.q.push_back(Item::Gate { gate: g, plan, fresh: false, workers: None });
+                    e.q.push_back(Item::Gate { gate: g, plan, fresh: false, workers: None, loads: None });
                     e.gates_queued += 1;
                 }
                 self.dirty.push(parent);
@@ -510,13 +554,40 @@ impl Exec {
                 if let Some((w, wname, bytes)) = &staging {
                     self.staging(*w, wname, *bytes);
                 }
-                self.lane(lane).q.push_back(Item::SpanBegin { name, staging: staging.map(|s| s.0), plan });
+                let staging = staging.map(|s| s.0);
+                let l = self.lane(lane);
+                l.span_stagings.push(staging);
+                l.q.push_back(Item::SpanBegin { name, staging, plan });
                 self.dirty.push(lane);
             }
-            Planned::SpanEnd { lane, .. } => {
-                self.lane(lane).q.push_back(Item::SpanEnd);
+            Planned::SpanEnd { lane, plan } => {
+                let l = self.lane(lane);
+                l.span_stagings.pop();
+                // the bodies it submitted with `join`: the span ends, and the lane goes on, once
+                // they have (a span holds no fork, so the lane's count of ended kids is theirs)
+                let kids = std::mem::take(&mut l.span_joins);
+                if kids > 0 {
+                    l.q.push_back(Item::Join { plan, kids });
+                }
+                l.q.push_back(Item::SpanEnd);
                 self.dirty.push(lane);
             }
+        }
+    }
+
+    /// A worker lane's body begins to arrive: its submission's gate goes into the queue.
+    fn open_body(&mut self, l: usize) {
+        let lane = self.lane(l);
+        if lane.body_open {
+            return;
+        }
+        if let Some(g) = lane.gates_pending.pop_front() {
+            lane.body_open = true;
+            if let Item::Gate { gate, workers: Some(w), .. } = &g {
+                lane.body_gate = Some((*gate, *w));
+            }
+            lane.q.push_back(g);
+            lane.gates_queued += 1;
         }
     }
 
@@ -631,7 +702,7 @@ impl Exec {
                     }
                     // a write's bytes were staged at its submission; a load's, a read in a span
                     // naming a staging, are from now until it completes
-                    let load = if r.kind == OpKind::Read { lane.spans.last().and_then(|s| s.3) } else { None };
+                    let load = if r.kind == OpKind::Read { lane.spans.last().and_then(|s| s.3).or(lane.load_staging) } else { None };
                     let held = match load {
                         Some(w) => {
                             let st = &mut self.stats.staging[w];
@@ -663,6 +734,9 @@ impl Exec {
                     self.gates[gate].0 = Some(fire);
                     let started = self.gates[gate].1.clone();
                     self.dirty.extend(started);
+                    if let Some((w, writes)) = self.gate_writes.remove(&gate) {
+                        self.stage(w, &writes, Some(fire));
+                    }
                     if let Some(b) = self.gate_batch.remove(&gate) {
                         let bt = self.batches.get_mut(&b).expect("a gate's batch is kept until reported");
                         bt.open = Some(fire);
@@ -672,29 +746,16 @@ impl Exec {
                         }
                     }
                 }
-                Item::Gate { gate, plan, fresh, workers } => {
+                Item::Gate { gate, plan, fresh, loads, .. } => {
                     let Some(t) = self.gates[*gate].0 else { return };
-                    let (plan, fresh, workers) = (*plan, *fresh, *workers);
+                    let (plan, fresh) = (*plan, *fresh);
+                    lane.load_staging = *loads;
                     lane.q.pop_front();
                     lane.gates_queued -= 1;
                     if fresh {
                         lane.l = lane.l.max(t - plan);
                     }
                     lane.last = lane.last.max(t);
-                    lane.staging_open = workers.is_some();
-                    if let Some(w) = workers {
-                        // the submission's writes: up to the lane's next gate
-                        let writes: Vec<(u64, i64)> = lane
-                            .q
-                            .iter()
-                            .take_while(|i| !matches!(i, Item::Gate { .. }))
-                            .filter_map(|i| match i {
-                                Item::Op(r) if r.kind == OpKind::Write => Some((r.seq, r.len)),
-                                _ => None,
-                            })
-                            .collect();
-                        self.stage(w, &writes, Some(t));
-                    }
                 }
                 Item::Join { plan, kids } => {
                     if lane.kids_done < *kids {
@@ -712,6 +773,14 @@ impl Exec {
                     lane.kids_done -= kids;
                     lane.kids_end = 0;
                     lane.kids_plan = 0;
+                }
+                Item::Joined { parent } => {
+                    let (parent, last) = (*parent, lane.last);
+                    lane.q.pop_front();
+                    let p = &mut self.lanes[parent];
+                    p.kids_done += 1;
+                    p.kids_end = p.kids_end.max(last);
+                    self.dirty.push(parent);
                 }
                 Item::SpanBegin { plan, .. } => {
                     // launched when the lane reaches it: its plan plus L, or its previous completion
@@ -997,6 +1066,7 @@ impl Exec {
             Item::Join { kids, .. } => format!("its {} sub-lanes, {} ended", kids, l.kids_done),
             Item::End { .. } => "its end".into(),
             Item::SpanBegin { .. } | Item::SpanEnd => "a span's mark".into(),
+            Item::Joined { parent } => format!("the end of a body lane {parent} joined"),
         };
         let mut out = format!("lane {i} waits on {what}");
         // an outstanding edge: the lane that holds it, and what that lane waits on
@@ -1026,7 +1096,7 @@ pub const RETIRE_FLOOR: usize = 1024;
 pub fn planned_at(p: &Planned) -> i64 {
     match p {
         Planned::Op(r) => r.plan,
-        Planned::Compute { plan, .. } | Planned::Fork { plan, .. } | Planned::Submit { plan, .. } | Planned::Evict { plan, .. } | Planned::End { plan, .. } => *plan,
+        Planned::Compute { plan, .. } | Planned::Fork { plan, .. } | Planned::Submit { plan, .. } | Planned::BodyEnd { plan, .. } | Planned::Evict { plan, .. } | Planned::End { plan, .. } => *plan,
         Planned::SpanBegin { plan, .. } | Planned::SpanEnd { plan, .. } => *plan,
     }
 }
@@ -1232,7 +1302,7 @@ mod tests {
     fn a_stuck_executor_says_what_waits_on_what() {
         let mut ex = Exec::new();
         ex.push(rec(0, 0, 0, OpKind::Stat, &[1]));
-        ex.push(Planned::Submit { parent: 0, worker: 1, workers: 0, name: "w".into(), staging: 1 << 20, plan: 0 });
+        ex.push(Planned::Submit { parent: 0, worker: 1, workers: 0, name: "w".into(), staging: 1 << 20, join: false, plan: 0 });
         ex.push(rec(1, 1, 0, OpKind::Write, &[]));
         assert!(ex.poll(0).is_empty());
         assert_eq!(ex.in_flight(), 0);
@@ -1248,7 +1318,7 @@ mod tests {
         ex.push(Planned::Fork { parent: 0, kids: vec![1], join: true, plan: 0 });
         ex.push(rec(0, 1, 0, OpKind::Stat, &[]));
         ex.push(Planned::End { lane: 1, plan: 0 });
-        ex.push(Planned::Submit { parent: 0, worker: 2, workers: 0, name: "w".into(), staging: 1 << 20, plan: 0 });
+        ex.push(Planned::Submit { parent: 0, worker: 2, workers: 0, name: "w".into(), staging: 1 << 20, join: false, plan: 0 });
         ex.push(rec(1, 2, 0, OpKind::Stat, &[]));
         ex.push(Planned::End { lane: 0, plan: 0 });
         let r = ex.poll(0);
@@ -1271,7 +1341,7 @@ mod tests {
     #[test]
     fn a_write_pushed_after_its_gate_opened_is_staged_at_once() {
         let mut ex = Exec::new();
-        ex.push(Planned::Submit { parent: 0, worker: 1, workers: 0, name: "w".into(), staging: 4096, plan: 0 });
+        ex.push(Planned::Submit { parent: 0, worker: 1, workers: 0, name: "w".into(), staging: 4096, join: false, plan: 0 });
         assert!(ex.poll(0).is_empty());
         ex.push(rec(0, 1, 0, OpKind::Write, &[]));
         ex.push(rec(1, 1, 0, OpKind::Write, &[]));

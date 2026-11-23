@@ -23,6 +23,21 @@ fn model(body: Value) -> &'static Model<'static> {
     Box::leak(Box::new(build_model(ast, cfg, params).unwrap()))
 }
 
+/// Everything the planner gives for actor 0 of `gpu` of a whole document.
+fn planned_doc(doc: Value) -> Vec<Planned> {
+    let cfg = Box::leak(Box::new(Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![], st_blksize: Default::default() }));
+    let loaded = aeiou::load_str(&doc.to_string()).unwrap_or_else(|e| panic!("{e:#}"));
+    let ast = Box::leak(Box::new(loaded.ast));
+    let params = Box::leak(Box::new(Params::new(ast, cfg).unwrap()));
+    let m = Box::leak(Box::new(build_model(ast, cfg, params).unwrap()));
+    let mut p = Plan::new(m, "gpu", 0, 1);
+    let mut out = Vec::new();
+    while let Some(x) = p.next().unwrap_or_else(|e| panic!("{e:#}")) {
+        out.push(x);
+    }
+    out
+}
+
 /// Everything the planner gives for actor 0 of `gpu`.
 fn planned(body: Value) -> Vec<Planned> {
     let m = model(body);
@@ -187,6 +202,26 @@ fn submitted_bodies_share_the_workers_lanes() {
     assert!(l[0] != l[1] && l[0] != l[2]);
 }
 
+/// A submitted body is followed, after its ops, by the mark of its end on its worker lane; with
+/// `join` (contract 0.26) the mark names the lane whose span waits for it.
+#[test]
+fn a_joined_bodys_end_is_marked_after_its_ops() {
+    let ast = json!({"ast": "0.26", "name": "t",
+        "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "workers": [{"name": "w", "lanes": 2, "staging": 4096}], "body": [
+            {"span": {"name": "s", "body": [{"submit": {"workers": "w", "join": true, "body": [stat(json!(1)), stat(json!(2))]}},
+                {"submit": {"workers": "w", "body": [stat(json!(3))]}}]}}]}}]}}});
+    let p = planned_doc(ast);
+    let words: Vec<String> = p.iter().filter_map(|x| match x {
+        Planned::Op(r) => Some(format!("op {} {}", r.lane, r.path)),
+        Planned::Submit { parent, worker, join, .. } => Some(format!("submit {parent} {worker} {join}")),
+        Planned::BodyEnd { parent, worker, .. } => Some(format!("body end {parent:?} {worker}")),
+        Planned::SpanEnd { lane, .. } => Some(format!("span end {lane}")),
+        _ => None,
+    }).collect();
+    assert_eq!(words, ["submit 0 1 true", "submit 0 2 false", "span end 0", "op 1 d/1", "op 1 d/2", "body end Some(0) 1", "op 2 d/3", "body end None 2"], "{words:#?}");
+}
+
 /// Victim i of an eviction batch runs on eviction lane i mod `lanes`, the same executor lane
 /// from batch to batch.
 #[test]
@@ -344,6 +379,7 @@ fn lane_events_come_before_the_ops_they_order() {
         Planned::End { lane, plan } => format!("end {lane} {plan}"),
         Planned::SpanBegin { lane, name, plan, .. } => format!("span {lane} {name} {plan}"),
         Planned::SpanEnd { lane, plan } => format!("span end {lane} {plan}"),
+        Planned::BodyEnd { parent, worker, plan } => format!("body end {parent:?} {worker} {plan}"),
     }).collect();
     // the root (lane 0) forks lanes 1 and 2 and waits; at 10 lane 2's stat; then the root goes on
     assert_eq!(&words[..3], ["fork 0 [1, 2] true 0", "compute 1 0+0", "op 1 d/0"], "{words:#?}");

@@ -32,7 +32,8 @@
       "enum": [
         "0.23",
         "0.24",
-        "0.25"
+        "0.25",
+        "0.26"
       ],
       "description": "The contract version this document conforms to: the lowest that holds everything it uses (brief item 80), one of those listed, the floor first. A checker reads every version from the floor to its own, so an addition to the contract changes the hash of no document that does not use it; what each version past the floor added is the table `SINCE` of schema/check.py and of the runner's validate.rs."
     },
@@ -2142,6 +2143,10 @@
           "properties": {
             "workers": {
               "$ref": "#/$defs/ident"
+            },
+            "join": {
+              "const": true,
+              "description": "In a `span` of a timeline (contract 0.26, rule V36): the span, and so its lane, waits for the body: its D ends no earlier than the body's last completion, and the body's reads draw on the staging the span names. Nothing in the plan or the fingerprint. Absent: the lane does not wait."
             },
             "body": {
               "$ref": "#/$defs/body"

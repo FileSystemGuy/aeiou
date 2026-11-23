@@ -873,8 +873,10 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     was not traced. The adapters' stats (since 2026-11-23): a lookup stats every key past G2's hit
     in each adapter, whatever the other holds, and a store stats each chunk G2 newly took in each
     adapter first, so the two namespaces get the same stats, key for key, each of a `NAME.data`
-    that may be absent, and every file written was statted in its tier. Not here yet: the
-    adapters' four workers carrying the loads (brief item 74, contract 0.26 to come)."""
+    that may be absent, and every file written was statted in its tier. An adapter's four
+    workers carry its stats, loads, and stores (contract 0.26: the lookup and the loads are
+    bodies the request's span `load` waits for), each adapter's its own; its unlinks are on
+    eviction lanes of their own."""
     case = case_dir("lmcache_local_disk_tiered_g4", "agentx-tiered-g4")
     out = tmp_path / "trace.jsonl"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk_tiered_g4")), "--gpus", "1", "--seed", "1",
@@ -909,8 +911,20 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     assert all(o["path"].endswith(".data") for o in ops if o["op"] == "unlink")
     assert all(o["len"] == 4096 for o in ops if o["op"] in ("read", "write"))
     assert sum(o["op"] == "write" for o in ops) == len(stores) and sum(o["op"] == "read" for o in ops) == len(loads)
+    lanes = {"kv": set(), "kv4": set()}
+    fds = {}
+    for o in ops:
+        if o["op"] in ("stat", "open", "rename"):
+            ns = o["path"].split("/")[0]
+            lanes[ns].add(o["lane"])
+            if o["op"] == "open":
+                fds[o["lane"], o["fd"]] = ns
+        elif o["op"] in ("read", "write", "close"):
+            assert o["lane"] in lanes[fds[o["lane"], o["fd"]]]
+    assert len(lanes["kv"]) == len(lanes["kv4"]) == 4 and not lanes["kv"] & lanes["kv4"], lanes
+    assert not {o["lane"] for o in ops if o["op"] == "unlink"} & (lanes["kv"] | lanes["kv4"])
     ast = json.loads(ast_path("lmcache_local_disk_tiered_g4").read_text())
-    assert "direct" not in ast["params"]
+    assert "direct" not in ast["params"] and ast["ast"] == "0.26"
 
     def nodes(x, kind):
         if isinstance(x, dict):

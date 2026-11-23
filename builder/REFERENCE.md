@@ -168,6 +168,10 @@ part of a lane whose D a run measures (V36). The builder refuses a `submit` or `
 timeline, a `submit` naming workers its timeline does not declare, a span inside a span, a
 `compute`, `parallel`, `acquire`, or a store that touches (a `lookup`) in a span, and in a `submit` body anything but ops
 and the statements around them (what V35 bans in an eviction body, and `submit` and `span`).
+`with c.submit("store", join=True):` (contract 0.26, 2026-11-23) is a body the span it stands
+in waits for, with that span's lane: a request's lookups and loads that workers carry while it
+waits; its reads draw on the staging the span names. The builder refuses it outside a span, and
+an abstract with one carries 0.26.
 Since contract 0.24 (2026-11-22, the note "Suggestion 4 built"): `with c.span(name):` outside a
 timeline, the elapsed time of its body each time it is entered (a model's load, a checkpoint's
 write, one query), around ops and a joined `parallel`; the builder refuses a `staging` there and a

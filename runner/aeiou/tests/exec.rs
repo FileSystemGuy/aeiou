@@ -240,6 +240,41 @@ fn agentx_tiered_through_the_executor() {
     assert!(ops.iter().all(|o| o.completed >= o.issued && o.issued >= o.record.plan));
 }
 
+/// The two-adapter abstract's case through the executor the same way (contract 0.26: a
+/// request's lookup and loads are bodies on its adapters' workers that its span `load` waits
+/// for): every op the plan holds is issued, none before its plan; every span ends, and those
+/// with a load are no shorter than one op's latency.
+#[test]
+fn agentx_tiered_g4_through_the_executor() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../workloads/kvcache/lmcache-local-disk");
+    let lock: Value = serde_json::from_str(&std::fs::read_to_string(root.join("cases/agentx-tiered-g4/case.lock.json")).unwrap()).unwrap();
+    let sessions = std::env::var("AEIOU_TEST_SESSIONS").unwrap_or_else(|_| "2".into());
+    let mut overrides: Vec<(String, String)> = lock["runs"][0]["params"].as_object().unwrap().iter()
+        .map(|(k, v)| (k.clone(), v.as_object().unwrap().values().next().unwrap().to_string())).collect();
+    overrides.push(("sessions".into(), sessions));
+    let cfg = Box::leak(Box::new(Config { seed: 0, gpus: 1, overrides, sets: vec![], st_blksize: Default::default() }));
+    let loaded = aeiou::load(&root.join("lmcache_local_disk_tiered_g4.ast.json")).unwrap();
+    let ast = Box::leak(Box::new(loaded.ast));
+    let params = Box::leak(Box::new(Params::new(ast, cfg).unwrap()));
+    let m = Box::leak(Box::new(build_model(ast, cfg, params).unwrap()));
+    let (mut planned, mut spans, mut joined) = (0, 0, 0);
+    let mut p = Plan::new(m, "gpu", 0, 1);
+    while let Some(x) = p.next().unwrap() {
+        planned += matches!(x, aeiou::plan::Planned::Op(_)) as usize;
+        spans += matches!(x, aeiou::plan::Planned::SpanEnd { .. }) as usize;
+        joined += matches!(x, aeiou::plan::Planned::BodyEnd { parent: Some(_), .. }) as usize;
+    }
+    let mut p = Plan::new(m, "gpu", 0, 1);
+    let (ops, st) = simulate(&mut p, 10_000_000_000, |_, _| 1_000_000).unwrap();
+    assert!(planned > 0 && joined > 0);
+    assert_eq!(ops.len(), planned);
+    assert!(ops.iter().all(|o| o.completed >= o.issued && o.issued >= o.record.plan));
+    let load = &st.spans["load"];
+    assert_eq!(load.len(), spans);
+    // a span that looked a key up waited for its stat at least; one with nothing past G2's hit is 0
+    assert!(load.iter().any(|x| x.1 >= 1_000_000) && load.iter().all(|x| x.1 == 0 || x.1 >= 1_000_000), "{:?}", &load[..load.len().min(20)]);
+}
+
 fn span(name: &str, body: Value) -> Value {
     json!({"span": {"name": name, "body": body}})
 }
@@ -330,6 +365,101 @@ fn stores_and_loads_share_the_staging() {
     let (_, st) = run(body, |r, _| if r.kind == aeiou::vm::OpKind::Write { 100 } else { 1 });
     assert_eq!(st.staging[0].peak, 10096);
     assert_eq!(st.staging[0].drops.len(), 1, "{:?}", st.staging[0]);
+}
+
+/// A timeline of contract 0.26 with workers `w` of `lanes` lanes, its staging 8192.
+fn run26(lanes: i64, body: Value, latency: impl FnMut(&Record, i64) -> i64) -> (Vec<Simulated>, Stats) {
+    run_at("0.26", lanes, body, latency)
+}
+
+fn run_at(version: &str, lanes: i64, body: Value, latency: impl FnMut(&Record, i64) -> i64) -> (Vec<Simulated>, Stats) {
+    let doc = json!({"ast": version, "name": "t",
+           "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
+           "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+           "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "workers": [{"name": "w", "lanes": lanes, "staging": 8192}], "body": body}}]}}}).to_string();
+    let cfg = Box::leak(Box::new(Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![], st_blksize: Default::default() }));
+    let loaded = aeiou::load_str(&doc).unwrap_or_else(|e| panic!("{e:#}"));
+    let ast = Box::leak(Box::new(loaded.ast));
+    let params = Box::leak(Box::new(Params::new(ast, cfg).unwrap()));
+    let m = Box::leak(Box::new(build_model(ast, cfg, params).unwrap()));
+    let mut p = Plan::new(m, "gpu", 0, 1);
+    simulate(&mut p, 1_000_000_000, latency).unwrap_or_else(|e| panic!("{e:#}"))
+}
+
+/// (path, issued) of each op, by time issued and then path.
+fn sorted(ops: &[Simulated]) -> Vec<(String, i64)> {
+    let mut v = when(ops);
+    v.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+    v
+}
+
+fn joined(body: Value) -> Value {
+    json!({"submit": {"workers": "w", "join": true, "body": body}})
+}
+
+/// A span waits for the bodies it submitted with `join` (contract 0.26; LMCache's loads, on its
+/// adapter's workers, the request waiting for them): its D ends at the last of their
+/// completions, and its lane goes on only then, behind by that wait from there on. A body
+/// submitted without `join` is not waited for, as before.
+#[test]
+fn a_span_waits_for_the_bodies_it_joined() {
+    let lat = |r: &Record, _| match &*r.path {
+        "d/1" => 20,
+        "d/2" => 50,
+        _ => 5,
+    };
+    // two worker lanes: both bodies at 0, the span's lane on at 50
+    let body = json!([span("load", json!([joined(json!([stat(1)])), joined(json!([stat(2)]))])), stat(3)]);
+    let (ops, st) = run26(2, body, lat);
+    assert_eq!(sorted(&ops), pairs(&[("d/1", 0), ("d/2", 0), ("d/3", 50)]));
+    assert_eq!(st.spans["load"], [(0, 50)]);
+    assert_eq!(st.body_lag, [50]);
+    // one worker lane: the second body queues behind the first, done at 70
+    let body = json!([span("load", json!([joined(json!([stat(1)])), joined(json!([stat(2)])), stat(4)])), stat(3)]);
+    let (ops, st) = run26(1, body, lat);
+    assert_eq!(sorted(&ops), pairs(&[("d/1", 0), ("d/4", 0), ("d/2", 20), ("d/3", 70)]));
+    assert_eq!(st.spans["load"], [(0, 70)]);
+    // not joined: the lane does not wait, and D is its own ops' alone
+    let free = json!({"submit": {"workers": "w", "body": [stat(1)]}});
+    let (ops, st) = run_at("0.23", 1, json!([span("load", json!([free, stat(4)])), stat(3)]), lat);
+    assert_eq!(sorted(&ops), pairs(&[("d/1", 0), ("d/4", 0), ("d/3", 5)]));
+    assert_eq!(st.spans["load"], [(0, 5)]);
+    // a submission after the span at the same instant, on the same worker lane: the joined body
+    // is not held behind it (its gate opens only once the span has ended, which waits for the
+    // body: found by the two-adapter abstract, whose stores' checks follow its span)
+    let after = json!({"submit": {"workers": "w", "body": [stat(2)]}});
+    let (ops, st) = run26(1, json!([span("load", json!([joined(json!([stat(1)]))])), after, stat(3)]), lat);
+    assert_eq!(sorted(&ops), pairs(&[("d/1", 0), ("d/2", 20), ("d/3", 20)]));
+    assert_eq!(st.spans["load"], [(0, 20)]);
+    // a joined body with no op, and a span with none of its own: nothing to wait for
+    let (ops, st) = run26(1, json!([span("load", json!([joined(json!([]))])), stat(3)]), lat);
+    assert_eq!(when(&ops), pairs(&[("d/3", 0)]));
+    assert_eq!(st.spans["load"], [(0, 0)]);
+}
+
+/// A joined body's reads draw on the staging its span names while they are in flight, as the
+/// span's own reads do (contract 0.21): two at once on two worker lanes are past 8192.
+#[test]
+fn a_joined_bodys_loads_draw_on_its_spans_staging() {
+    let load = |key: i64| joined(json!([obj("f", key), {"open": {"file": r("f"), "flags": ["RDONLY"]}}, {"read": {"file": r("f"), "len": 6000}}, {"close": {"file": r("f")}}]));
+    let body = |staging: bool| {
+        let mut s = json!({"span": {"name": "load", "body": [load(1), load(2)]}});
+        if staging {
+            s["span"]["staging"] = json!("w");
+        }
+        json!([s])
+    };
+    let (_, st) = run26(2, body(true), |_, _| 10);
+    assert_eq!((st.staging[0].peak, st.staging[0].held), (12000, 0));
+    assert_eq!(st.staging[0].drops, [(10, 12000)]);
+    assert_eq!(st.spans["load"], [(0, 30)]);
+    // one worker lane: one read in flight at a time
+    let (_, st) = run26(1, body(true), |_, _| 10);
+    assert_eq!(st.staging[0].peak, 6000);
+    assert_eq!(st.spans["load"], [(0, 60)]);
+    // a span naming no staging: nothing held
+    let (_, st) = run26(2, body(false), |_, _| 10);
+    assert!(st.staging.iter().all(|s| s.peak == 0 && s.drops.is_empty()), "{:?}", st.staging);
 }
 
 fn run_with(body: Value, opts: &aeiou::exec::TimelineOpts, latency: impl FnMut(&Record, i64) -> i64) -> (Vec<Simulated>, Stats) {

@@ -716,7 +716,8 @@ class Describer:
         if k == "release":
             return [pad + f"Releases `{a['hold']}`."]
         if k == "submit":
-            return [pad + f"On a worker lane of `{a['workers']}`, at this lane's planned time:"] + self.body(a["body"], depth + 1)
+            wait = ", the span waiting for it" if a.get("join") else ""
+            return [pad + f"On a worker lane of `{a['workers']}`, at this lane's planned time{wait}:"] + self.body(a["body"], depth + 1)
         if k == "span":
             draws = f", its reads drawing on the staging of `{a['staging']}`" if "staging" in a else ""
             what = "a request's own storage wait" if self._in_timeline else "the elapsed time of what follows, each time it is entered"

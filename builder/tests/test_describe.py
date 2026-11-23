@@ -105,6 +105,10 @@ def test_workers_submit_and_span_are_described():
     assert lines[1].strip() == "- Measured as span `load`, a request's own storage wait:", lines
     assert lines[3].strip() == "- On a worker lane of `store`, at this lane's planned time:", lines
     assert d.gist([{"submit": {"workers": "store", "body": [st]}}]).startswith("on a worker lane, "), d.gist([{"submit": {"workers": "store", "body": [st]}}])
+    # contract 0.26: a submit its span waits for
+    lines = d.body([{"timeline": {"name": "tl", "workers": [{"name": "store", "lanes": 4, "staging": 2147483648}], "body": [
+        {"span": {"name": "load", "body": [{"submit": {"workers": "store", "join": True, "body": [st]}}]}}]}}], 0)
+    assert lines[2].strip() == "- On a worker lane of `store`, at this lane's planned time, the span waiting for it:", lines
     # contract 0.21: a span naming the staging its loads draw on
     lines = d.body([{"timeline": {"name": "tl", "workers": [{"name": "store", "lanes": 4, "staging": 2147483648}], "body": [
         {"span": {"name": "load", "staging": "store", "body": [st]}}]}}], 0)

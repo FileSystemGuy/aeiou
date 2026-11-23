@@ -82,7 +82,11 @@ pub enum Planned {
     Fork { parent: usize, kids: Vec<usize>, join: bool, plan: i64 },
     /// `parent` submitted a body to worker lane `worker` (of the timeline's workers `workers`,
     /// `staging` bytes): its ops start no earlier than the parent reaches this point.
-    Submit { parent: usize, worker: usize, workers: usize, name: Arc<str>, staging: i64, plan: i64 },
+    /// With `join` (contract 0.26) the span `parent` is in waits for the body.
+    Submit { parent: usize, worker: usize, workers: usize, name: Arc<str>, staging: i64, join: bool, plan: i64 },
+    /// A submitted body's end on its worker lane, after its ops; `parent`: the lane whose span
+    /// waits for it.
+    BodyEnd { parent: Option<usize>, worker: usize, plan: i64 },
     /// An eviction batch on `lanes` at `plan`, started by a store of `parent` or at a tick.
     Evict { parent: Option<usize>, lanes: Vec<usize>, plan: i64 },
     /// A lane of the timeline's body ended at `plan`.
@@ -261,10 +265,11 @@ impl<'m, 'a: 'm> Plan<'m, 'a> {
                 let parent = p.lane(parent);
                 Planned::Fork { parent, kids: kids.into_iter().map(|k| p.lane(k)).collect(), join, plan }
             }
-            TlNote::Submit { parent, worker, workers, name, staging, plan } => {
+            TlNote::Submit { parent, worker, workers, name, staging, join, plan } => {
                 let parent = p.lane(parent);
-                Planned::Submit { parent, worker: p.lane(worker), workers, name, staging, plan }
+                Planned::Submit { parent, worker: p.lane(worker), workers, name, staging, join, plan }
             }
+            TlNote::BodyEnd { parent, worker, plan } => Planned::BodyEnd { parent: parent.map(|x| p.lane(x)), worker: p.lane(worker), plan },
             TlNote::Evict { parent, lanes, plan } => {
                 let parent = parent.map(|x| p.lane(x));
                 Planned::Evict { parent, lanes: lanes.into_iter().map(|k| p.lane(k)).collect(), plan }

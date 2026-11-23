@@ -1991,6 +1991,31 @@ def test_a_span_names_the_staging_its_loads_draw_on():
     validate(ast)
 
 
+def test_a_submit_its_span_waits_for_serializes_and_is_refused_outside_a_span():
+    """Contract 0.26: `submit(workers, join=True)` in a span, the span and its lane waiting for
+    the body (LMCache's loads on its adapter's workers); the document carries 0.26 for it, and
+    outside a span it is refused when built."""
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.timeline("tl", workers={"io": (4, P.n * MiB)}):
+            with a.span("load", staging="io"):
+                with a.loop("i", 3) as i:
+                    with a.submit("io", join=True):
+                        a.stat(ds.file(i))
+            with a.submit("io"):
+                a.stat(ds.file(9))
+            with pytest.raises(BuildError, match=r"submit: `join` outside a `span`, which is what waits for the body \(V36\)"):
+                with a.submit("io", join=True):
+                    pass
+    ast = w.build()
+    body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
+    sub = body[0]["span"]["body"][0]["loop"]["body"][0]["submit"]
+    assert sub["join"] is True and sub["workers"] == "io" and list(sub) == ["workers", "join", "body"]
+    assert "join" not in body[1]["submit"]
+    assert ast["ast"] == "0.26"
+    validate(ast)
+
+
 def test_workers_submit_and_span_refused_where_they_cannot_be():
     w, P, ds = _wl()
     with w.actor("gpu") as a:

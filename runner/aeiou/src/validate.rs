@@ -49,7 +49,21 @@ pub struct Since {
 pub const SINCE: &[Since] = &[
     Since { version: "0.24", what: "a `span` outside a timeline", used: span_outside_a_timeline },
     Since { version: "0.25", what: "a `probe` over several tiers", used: probe_over_tiers },
+    Since { version: "0.26", what: "a `submit` its span waits for (`join`)", used: joined_submit },
 ];
+
+fn joined_submit(ast: &Ast) -> bool {
+    fn walk(nodes: &[Node]) -> bool {
+        nodes.iter().any(|n| match n {
+            Node::Submit { join, .. } => *join,
+            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
+            | Node::Span { body, .. } => walk(body),
+            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
+            _ => false,
+        })
+    }
+    ast.actors.values().any(|a| walk(&a.body))
+}
 
 fn probe_over_tiers(ast: &Ast) -> bool {
     fn walk(nodes: &[Node]) -> bool {
@@ -1380,7 +1394,10 @@ impl<'a> Checker<'a> {
                 self.expr(name, &p(pp, &["name"]), scope, st, None);
                 self.body(body, &p(pp, &["body"]), scope, st);
             }
-            Node::Submit { workers, body } => {
+            Node::Submit { workers, join, body } => {
+                if *join && st.timeline.is_some() && st.span.is_none() {
+                    self.err(pp, "submit: `join` outside a `span`, which is what waits for the body (V36)");
+                }
                 match &st.timeline {
                     None => self.err(pp, "submit: outside a timeline, where nothing is planned (V36)"),
                     Some((t, _)) if !st.workers.contains(workers.as_str()) => {

@@ -29,9 +29,11 @@ captured 2026-11-22 (item 74, `kit/captures/agentx-mp/`): a store is `NAME.tmp` 
 `O_WRONLY|O_CREAT|O_TRUNC`, one write, close, and a `rename` to `NAME.data`, never of a chunk the
 adapter holds; a load is open, one read, close; a lookup is a `stat` of every key past G2's hit
 in each adapter, in the request's span `load`, and a store stats each chunk first, on the
-adapter's store workers (since 2026-11-23). Not in it yet: the adapter's four workers carrying
-loads and lookups as well as stores and unlinks (contract 0.26, not built); this abstract, with
-one adapter, keeps the in-process calls.
+adapter's store workers (since 2026-11-23). The lookup's stats and the loads are on the
+adapter's workers too, the span waiting for them (contract 0.26's joined `submit`), so an
+adapter's `store_lanes` lanes carry its lookups, loads, and stores; its unlinks stay on eviction
+lanes of their own, where a run times each batch. This abstract, with one adapter, keeps the
+in-process calls and its reads on the request's lane.
 
 `aeiou run` runs it since brief item 72 (7) (2026-11-13/14); its case is `unsettled`. Not built yet:
 sessions arrive uniformly over `window_s`
@@ -324,15 +326,22 @@ def shape(name, doc, g4):
         hit = c.let(tag + "hit", h2 + h3)
         first = c.let(tag + "first", max_(h2, min_(gh * BL, seq_len(sq) * BL - 1) // (BL * P.per)))
         _, a3, a4 = c.probe("lm", ["g3", "g4"], chunk_keys(sq, P.per, first, hit - first), tag + "hs", held=(tag + "a3", tag + "a4"))
+        # the request waits for its lookup and its loads, which each adapter's workers carry (contract
+        # 0.26; traced 2026-11-22: an adapter's four threads issue all its calls): worker q of an
+        # adapter takes every `store_lanes`-th key from the q-th, behind what the lane already holds
         with c.span("load", staging="store"):
             # the lookup: every key past G2's hit statted in each adapter, whatever the other holds
-            # (0.5.5's storage_manager.py; traced 2026-11-22), a key it lacks ENOENT
-            for tg, ns in (("q3", kv), ("q4", kv4)):
-                with c.loop(tag + tg, n, start=h2) as j:
-                    c.stat(final(ns, chunk_key(sq, j, P.per)), expect=["ENOENT"])
-            for tg, ns, arr in (("r3", kv, a3), ("r4", kv4, a4)):
-                with c.loop(tag + tg, arr.len) as j:
-                    native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[j], P.per))))
+            # (0.5.5's storage_manager.py), a key it lacks ENOENT
+            for tg, ns, wk in (("q3", kv, "store"), ("q4", kv4, "store4")):
+                with c.loop(tag + tg, min_(P.store_lanes, n - h2)) as q:
+                    with c.submit(wk, join=True):
+                        with c.loop(tag + tg + "i", ceil_div(n - h2 - q, P.store_lanes)) as i:
+                            c.stat(final(ns, chunk_key(sq, h2 + q + i * P.store_lanes, P.per)), expect=["ENOENT"])
+            for tg, ns, arr, wk in (("r3", kv, a3, "store"), ("r4", kv4, a4, "store4")):
+                with c.loop(tag + tg, min_(P.store_lanes, arr.len)) as q:
+                    with c.submit(wk, join=True):
+                        with c.loop(tag + tg + "i", ceil_div(arr.len - q, P.store_lanes)) as i:
+                            native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[q + i * P.store_lanes], P.per))))
         c.touch("lm", "g3", chunk_keys(sq, P.per, chunks=a3))
         c.touch("lm", "g4", chunk_keys(sq, P.per, chunks=a4))
         t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")

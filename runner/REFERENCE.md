@@ -288,6 +288,15 @@ each is a recorded decision and the golden tests pin them.
   body runs for it) and stores it as if absent, in the same event; with `taken`, it binds in its
   scope level an array of the indices of the chunks it stored, renewed ones included, in the
   order acted on. Bindings of a probe and a store are refused under `x @ i` (V33).
+- **A submit its span waits for** (contract 0.26, V36; `exec.rs`). The plan is as without
+  `join`: the body's ops at the submission's planned instant on its worker lane, the
+  submitting lane's planned clock not moved. In a run the span's end is a join of the bodies
+  submitted in it with `join`: its lane goes on at the latest of its plan plus L, its own
+  previous completion, and those bodies' last completions, and D runs to there; the lane's L
+  grows by the wait. A body's reads hold their bytes in the staging the span names while in
+  flight. The planner marks the end of every submitted body on its worker lane; the executor
+  queues a body behind the gate of its own submission alone, and stages a submission's writes
+  when its gate opens, wherever its worker lane then is.
 - **A probe over several tiers** (contract 0.25, V33; `vm.rs`'s `Node::Probe`). With `tiers`
   the walk takes the range's keys in order and, for each, the first tier of the list that
   holds it; the first key no tier holds ends the run, whose length is `bind`. With `held`,

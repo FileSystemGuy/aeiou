@@ -956,20 +956,23 @@ class Cursor:
         return next((f for f in reversed(self._frames) if f.kind == "timeline"), None)
 
     @contextlib.contextmanager
-    def submit(self, workers: str):
+    def submit(self, workers: str, *, join: bool = False):
         """A body run on a worker lane of the enclosing timeline's `workers`, at this lane's
         planned instant: worker lane (submission ordinal mod `lanes`) (contract 0.20, rule V36).
         Its ops are those it would issue here, with the same indices, so the fingerprint is the
         body's written inline; in a run they wait on the worker lane, never on this lane. It
         only issues ops: no `compute`, cache or timeline statement, `acquire`, `release`,
-        `parallel`, `submit`, or `span`."""
+        `parallel`, `submit`, or `span`. With `join` (contract 0.26), in a `span`: the span, and
+        so this lane, waits for the body, whose reads draw on the staging the span names."""
         tl = self._timeline_frame()
         if tl is None:
             raise BuildError("submit: outside a timeline, where nothing is planned (V36)")
         if workers not in tl.label[1]:
             raise BuildError(f"submit: timeline `{tl.label[0]}` declares no workers `{workers}` (V36)")
+        if join and not any(f.kind == "span" for f in self._frames):
+            raise BuildError("submit: `join` outside a `span`, which is what waits for the body (V36)")
         body: list = []
-        self._emit({"submit": {"workers": workers, "body": body}})
+        self._emit({"submit": {"workers": workers, **({"join": True} if join else {}), "body": body}})
         with self._push(body, "submit"):
             yield
 

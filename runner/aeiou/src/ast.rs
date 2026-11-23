@@ -16,7 +16,7 @@ use serde::Deserialize;
 /// (`validate::SINCE`), so an addition changes the hash of no abstract without it. A change
 /// that is not an addition raises the floor to its version.
 pub const AST_FLOOR: &str = "0.23";
-pub const AST_VERSION: &str = "0.25";
+pub const AST_VERSION: &str = "0.26";
 
 /// A version in order (`0.9` before `0.23`), `None` for what is not one in its one spelling.
 pub fn version_key(v: &str) -> Option<(u32, u32)> {
@@ -1049,7 +1049,14 @@ pub enum Node {
     },
     /// `body` run on a worker lane of `workers` at this lane's planned instant: lane (submission
     /// ordinal mod `lanes`), its ops this lane's ops as written (contract 0.20, rule V36).
-    Submit { workers: String, body: Body },
+    /// With `join` (contract 0.26), in a `span` of a timeline: the span, and its lane, wait
+    /// for the body to complete.
+    Submit {
+        workers: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        join: bool,
+        body: Body,
+    },
     /// A measured part of a lane: the run measures its D, a request's own storage wait, from its
     /// launch to its last op's completion (contract 0.20, rule V36). Nothing in the plan. Its
     /// reads draw on the staging of the timeline's workers `staging` while in flight, loads into

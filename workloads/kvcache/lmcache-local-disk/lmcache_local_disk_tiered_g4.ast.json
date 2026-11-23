@@ -1,5 +1,5 @@
 {
-  "ast": "0.25",
+  "ast": "0.26",
   "name": "lmcache_local_disk_tiered_g4",
   "doc": "One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2, and two L2 adapters, G3 and G4, each a directory under test.",
   "params": {
@@ -15450,38 +15450,109 @@
                                 {
                                   "loop": {
                                     "index": "m_q3",
-                                    "from": {
-                                      "ref": "m_h2"
-                                    },
                                     "to": {
-                                      "ref": "m_nch"
+                                      "min": [
+                                        {
+                                          "param": "store_lanes"
+                                        },
+                                        {
+                                          "sub": [
+                                            {
+                                              "ref": "m_nch"
+                                            },
+                                            {
+                                              "ref": "m_h2"
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     },
                                     "body": [
                                       {
-                                        "stat": {
-                                          "file": {
-                                            "object": {
-                                              "namespace": "kv",
-                                              "fields": {
-                                                "key": {
-                                                  "chunk_key": {
-                                                    "seq": {
-                                                      "ref": "m_seq"
+                                        "submit": {
+                                          "workers": "store",
+                                          "join": true,
+                                          "body": [
+                                            {
+                                              "loop": {
+                                                "index": "m_q3i",
+                                                "to": {
+                                                  "ceil_div": [
+                                                    {
+                                                      "sub": [
+                                                        {
+                                                          "sub": [
+                                                            {
+                                                              "ref": "m_nch"
+                                                            },
+                                                            {
+                                                              "ref": "m_h2"
+                                                            }
+                                                          ]
+                                                        },
+                                                        {
+                                                          "index": "m_q3"
+                                                        }
+                                                      ]
                                                     },
-                                                    "chunk": {
-                                                      "index": "m_q3"
-                                                    },
-                                                    "per": {
-                                                      "param": "per"
+                                                    {
+                                                      "param": "store_lanes"
+                                                    }
+                                                  ]
+                                                },
+                                                "body": [
+                                                  {
+                                                    "stat": {
+                                                      "file": {
+                                                        "object": {
+                                                          "namespace": "kv",
+                                                          "fields": {
+                                                            "key": {
+                                                              "chunk_key": {
+                                                                "seq": {
+                                                                  "ref": "m_seq"
+                                                                },
+                                                                "chunk": {
+                                                                  "add": [
+                                                                    {
+                                                                      "add": [
+                                                                        {
+                                                                          "ref": "m_h2"
+                                                                        },
+                                                                        {
+                                                                          "index": "m_q3"
+                                                                        }
+                                                                      ]
+                                                                    },
+                                                                    {
+                                                                      "mul": [
+                                                                        {
+                                                                          "index": "m_q3i"
+                                                                        },
+                                                                        {
+                                                                          "param": "store_lanes"
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                },
+                                                                "per": {
+                                                                  "param": "per"
+                                                                }
+                                                              }
+                                                            },
+                                                            "ext": "data"
+                                                          }
+                                                        }
+                                                      },
+                                                      "expect": [
+                                                        "ENOENT"
+                                                      ]
                                                     }
                                                   }
-                                                },
-                                                "ext": "data"
+                                                ]
                                               }
                                             }
-                                          },
-                                          "expect": [
-                                            "ENOENT"
                                           ]
                                         }
                                       }
@@ -15491,38 +15562,109 @@
                                 {
                                   "loop": {
                                     "index": "m_q4",
-                                    "from": {
-                                      "ref": "m_h2"
-                                    },
                                     "to": {
-                                      "ref": "m_nch"
+                                      "min": [
+                                        {
+                                          "param": "store_lanes"
+                                        },
+                                        {
+                                          "sub": [
+                                            {
+                                              "ref": "m_nch"
+                                            },
+                                            {
+                                              "ref": "m_h2"
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     },
                                     "body": [
                                       {
-                                        "stat": {
-                                          "file": {
-                                            "object": {
-                                              "namespace": "kv4",
-                                              "fields": {
-                                                "key": {
-                                                  "chunk_key": {
-                                                    "seq": {
-                                                      "ref": "m_seq"
+                                        "submit": {
+                                          "workers": "store4",
+                                          "join": true,
+                                          "body": [
+                                            {
+                                              "loop": {
+                                                "index": "m_q4i",
+                                                "to": {
+                                                  "ceil_div": [
+                                                    {
+                                                      "sub": [
+                                                        {
+                                                          "sub": [
+                                                            {
+                                                              "ref": "m_nch"
+                                                            },
+                                                            {
+                                                              "ref": "m_h2"
+                                                            }
+                                                          ]
+                                                        },
+                                                        {
+                                                          "index": "m_q4"
+                                                        }
+                                                      ]
                                                     },
-                                                    "chunk": {
-                                                      "index": "m_q4"
-                                                    },
-                                                    "per": {
-                                                      "param": "per"
+                                                    {
+                                                      "param": "store_lanes"
+                                                    }
+                                                  ]
+                                                },
+                                                "body": [
+                                                  {
+                                                    "stat": {
+                                                      "file": {
+                                                        "object": {
+                                                          "namespace": "kv4",
+                                                          "fields": {
+                                                            "key": {
+                                                              "chunk_key": {
+                                                                "seq": {
+                                                                  "ref": "m_seq"
+                                                                },
+                                                                "chunk": {
+                                                                  "add": [
+                                                                    {
+                                                                      "add": [
+                                                                        {
+                                                                          "ref": "m_h2"
+                                                                        },
+                                                                        {
+                                                                          "index": "m_q4"
+                                                                        }
+                                                                      ]
+                                                                    },
+                                                                    {
+                                                                      "mul": [
+                                                                        {
+                                                                          "index": "m_q4i"
+                                                                        },
+                                                                        {
+                                                                          "param": "store_lanes"
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                },
+                                                                "per": {
+                                                                  "param": "per"
+                                                                }
+                                                              }
+                                                            },
+                                                            "ext": "data"
+                                                          }
+                                                        }
+                                                      },
+                                                      "expect": [
+                                                        "ENOENT"
+                                                      ]
                                                     }
                                                   }
-                                                },
-                                                "ext": "data"
+                                                ]
                                               }
                                             }
-                                          },
-                                          "expect": [
-                                            "ENOENT"
                                           ]
                                         }
                                       }
@@ -15533,65 +15675,118 @@
                                   "loop": {
                                     "index": "m_r3",
                                     "to": {
-                                      "len": "m_a3"
+                                      "min": [
+                                        {
+                                          "param": "store_lanes"
+                                        },
+                                        {
+                                          "len": "m_a3"
+                                        }
+                                      ]
                                     },
                                     "body": [
                                       {
-                                        "let": {
-                                          "name": "m_r3f",
-                                          "value": {
-                                            "object": {
-                                              "namespace": "kv",
-                                              "fields": {
-                                                "key": {
-                                                  "chunk_key": {
-                                                    "seq": {
-                                                      "ref": "m_seq"
-                                                    },
-                                                    "chunk": {
-                                                      "elem": {
-                                                        "array": "m_a3",
-                                                        "index": {
+                                        "submit": {
+                                          "workers": "store",
+                                          "join": true,
+                                          "body": [
+                                            {
+                                              "loop": {
+                                                "index": "m_r3i",
+                                                "to": {
+                                                  "ceil_div": [
+                                                    {
+                                                      "sub": [
+                                                        {
+                                                          "len": "m_a3"
+                                                        },
+                                                        {
                                                           "index": "m_r3"
                                                         }
-                                                      }
+                                                      ]
                                                     },
-                                                    "per": {
-                                                      "param": "per"
+                                                    {
+                                                      "param": "store_lanes"
+                                                    }
+                                                  ]
+                                                },
+                                                "body": [
+                                                  {
+                                                    "let": {
+                                                      "name": "m_r3f",
+                                                      "value": {
+                                                        "object": {
+                                                          "namespace": "kv",
+                                                          "fields": {
+                                                            "key": {
+                                                              "chunk_key": {
+                                                                "seq": {
+                                                                  "ref": "m_seq"
+                                                                },
+                                                                "chunk": {
+                                                                  "elem": {
+                                                                    "array": "m_a3",
+                                                                    "index": {
+                                                                      "add": [
+                                                                        {
+                                                                          "index": "m_r3"
+                                                                        },
+                                                                        {
+                                                                          "mul": [
+                                                                            {
+                                                                              "index": "m_r3i"
+                                                                            },
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  }
+                                                                },
+                                                                "per": {
+                                                                  "param": "per"
+                                                                }
+                                                              }
+                                                            },
+                                                            "ext": "data"
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  },
+                                                  {
+                                                    "open": {
+                                                      "file": {
+                                                        "ref": "m_r3f"
+                                                      },
+                                                      "flags": [
+                                                        "RDONLY"
+                                                      ]
+                                                    }
+                                                  },
+                                                  {
+                                                    "read": {
+                                                      "file": {
+                                                        "ref": "m_r3f"
+                                                      },
+                                                      "len": {
+                                                        "param": "chunk_bytes"
+                                                      }
+                                                    }
+                                                  },
+                                                  {
+                                                    "close": {
+                                                      "file": {
+                                                        "ref": "m_r3f"
+                                                      }
                                                     }
                                                   }
-                                                },
-                                                "ext": "data"
+                                                ]
                                               }
                                             }
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "open": {
-                                          "file": {
-                                            "ref": "m_r3f"
-                                          },
-                                          "flags": [
-                                            "RDONLY"
                                           ]
-                                        }
-                                      },
-                                      {
-                                        "read": {
-                                          "file": {
-                                            "ref": "m_r3f"
-                                          },
-                                          "len": {
-                                            "param": "chunk_bytes"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "close": {
-                                          "file": {
-                                            "ref": "m_r3f"
-                                          }
                                         }
                                       }
                                     ]
@@ -15601,65 +15796,118 @@
                                   "loop": {
                                     "index": "m_r4",
                                     "to": {
-                                      "len": "m_a4"
+                                      "min": [
+                                        {
+                                          "param": "store_lanes"
+                                        },
+                                        {
+                                          "len": "m_a4"
+                                        }
+                                      ]
                                     },
                                     "body": [
                                       {
-                                        "let": {
-                                          "name": "m_r4f",
-                                          "value": {
-                                            "object": {
-                                              "namespace": "kv4",
-                                              "fields": {
-                                                "key": {
-                                                  "chunk_key": {
-                                                    "seq": {
-                                                      "ref": "m_seq"
-                                                    },
-                                                    "chunk": {
-                                                      "elem": {
-                                                        "array": "m_a4",
-                                                        "index": {
+                                        "submit": {
+                                          "workers": "store4",
+                                          "join": true,
+                                          "body": [
+                                            {
+                                              "loop": {
+                                                "index": "m_r4i",
+                                                "to": {
+                                                  "ceil_div": [
+                                                    {
+                                                      "sub": [
+                                                        {
+                                                          "len": "m_a4"
+                                                        },
+                                                        {
                                                           "index": "m_r4"
                                                         }
-                                                      }
+                                                      ]
                                                     },
-                                                    "per": {
-                                                      "param": "per"
+                                                    {
+                                                      "param": "store_lanes"
+                                                    }
+                                                  ]
+                                                },
+                                                "body": [
+                                                  {
+                                                    "let": {
+                                                      "name": "m_r4f",
+                                                      "value": {
+                                                        "object": {
+                                                          "namespace": "kv4",
+                                                          "fields": {
+                                                            "key": {
+                                                              "chunk_key": {
+                                                                "seq": {
+                                                                  "ref": "m_seq"
+                                                                },
+                                                                "chunk": {
+                                                                  "elem": {
+                                                                    "array": "m_a4",
+                                                                    "index": {
+                                                                      "add": [
+                                                                        {
+                                                                          "index": "m_r4"
+                                                                        },
+                                                                        {
+                                                                          "mul": [
+                                                                            {
+                                                                              "index": "m_r4i"
+                                                                            },
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  }
+                                                                },
+                                                                "per": {
+                                                                  "param": "per"
+                                                                }
+                                                              }
+                                                            },
+                                                            "ext": "data"
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  },
+                                                  {
+                                                    "open": {
+                                                      "file": {
+                                                        "ref": "m_r4f"
+                                                      },
+                                                      "flags": [
+                                                        "RDONLY"
+                                                      ]
+                                                    }
+                                                  },
+                                                  {
+                                                    "read": {
+                                                      "file": {
+                                                        "ref": "m_r4f"
+                                                      },
+                                                      "len": {
+                                                        "param": "chunk_bytes"
+                                                      }
+                                                    }
+                                                  },
+                                                  {
+                                                    "close": {
+                                                      "file": {
+                                                        "ref": "m_r4f"
+                                                      }
                                                     }
                                                   }
-                                                },
-                                                "ext": "data"
+                                                ]
                                               }
                                             }
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "open": {
-                                          "file": {
-                                            "ref": "m_r4f"
-                                          },
-                                          "flags": [
-                                            "RDONLY"
                                           ]
-                                        }
-                                      },
-                                      {
-                                        "read": {
-                                          "file": {
-                                            "ref": "m_r4f"
-                                          },
-                                          "len": {
-                                            "param": "chunk_bytes"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "close": {
-                                          "file": {
-                                            "ref": "m_r4f"
-                                          }
                                         }
                                       }
                                     ]
@@ -23389,38 +23637,109 @@
                                                         {
                                                           "loop": {
                                                             "index": "s_q3",
-                                                            "from": {
-                                                              "ref": "s_h2"
-                                                            },
                                                             "to": {
-                                                              "ref": "s_nch"
+                                                              "min": [
+                                                                {
+                                                                  "param": "store_lanes"
+                                                                },
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "ref": "s_nch"
+                                                                    },
+                                                                    {
+                                                                      "ref": "s_h2"
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
                                                             },
                                                             "body": [
                                                               {
-                                                                "stat": {
-                                                                  "file": {
-                                                                    "object": {
-                                                                      "namespace": "kv",
-                                                                      "fields": {
-                                                                        "key": {
-                                                                          "chunk_key": {
-                                                                            "seq": {
-                                                                              "ref": "s_seq"
+                                                                "submit": {
+                                                                  "workers": "store",
+                                                                  "join": true,
+                                                                  "body": [
+                                                                    {
+                                                                      "loop": {
+                                                                        "index": "s_q3i",
+                                                                        "to": {
+                                                                          "ceil_div": [
+                                                                            {
+                                                                              "sub": [
+                                                                                {
+                                                                                  "sub": [
+                                                                                    {
+                                                                                      "ref": "s_nch"
+                                                                                    },
+                                                                                    {
+                                                                                      "ref": "s_h2"
+                                                                                    }
+                                                                                  ]
+                                                                                },
+                                                                                {
+                                                                                  "index": "s_q3"
+                                                                                }
+                                                                              ]
                                                                             },
-                                                                            "chunk": {
-                                                                              "index": "s_q3"
-                                                                            },
-                                                                            "per": {
-                                                                              "param": "per"
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        },
+                                                                        "body": [
+                                                                          {
+                                                                            "stat": {
+                                                                              "file": {
+                                                                                "object": {
+                                                                                  "namespace": "kv",
+                                                                                  "fields": {
+                                                                                    "key": {
+                                                                                      "chunk_key": {
+                                                                                        "seq": {
+                                                                                          "ref": "s_seq"
+                                                                                        },
+                                                                                        "chunk": {
+                                                                                          "add": [
+                                                                                            {
+                                                                                              "add": [
+                                                                                                {
+                                                                                                  "ref": "s_h2"
+                                                                                                },
+                                                                                                {
+                                                                                                  "index": "s_q3"
+                                                                                                }
+                                                                                              ]
+                                                                                            },
+                                                                                            {
+                                                                                              "mul": [
+                                                                                                {
+                                                                                                  "index": "s_q3i"
+                                                                                                },
+                                                                                                {
+                                                                                                  "param": "store_lanes"
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          ]
+                                                                                        },
+                                                                                        "per": {
+                                                                                          "param": "per"
+                                                                                        }
+                                                                                      }
+                                                                                    },
+                                                                                    "ext": "data"
+                                                                                  }
+                                                                                }
+                                                                              },
+                                                                              "expect": [
+                                                                                "ENOENT"
+                                                                              ]
                                                                             }
                                                                           }
-                                                                        },
-                                                                        "ext": "data"
+                                                                        ]
                                                                       }
                                                                     }
-                                                                  },
-                                                                  "expect": [
-                                                                    "ENOENT"
                                                                   ]
                                                                 }
                                                               }
@@ -23430,38 +23749,109 @@
                                                         {
                                                           "loop": {
                                                             "index": "s_q4",
-                                                            "from": {
-                                                              "ref": "s_h2"
-                                                            },
                                                             "to": {
-                                                              "ref": "s_nch"
+                                                              "min": [
+                                                                {
+                                                                  "param": "store_lanes"
+                                                                },
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "ref": "s_nch"
+                                                                    },
+                                                                    {
+                                                                      "ref": "s_h2"
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
                                                             },
                                                             "body": [
                                                               {
-                                                                "stat": {
-                                                                  "file": {
-                                                                    "object": {
-                                                                      "namespace": "kv4",
-                                                                      "fields": {
-                                                                        "key": {
-                                                                          "chunk_key": {
-                                                                            "seq": {
-                                                                              "ref": "s_seq"
+                                                                "submit": {
+                                                                  "workers": "store4",
+                                                                  "join": true,
+                                                                  "body": [
+                                                                    {
+                                                                      "loop": {
+                                                                        "index": "s_q4i",
+                                                                        "to": {
+                                                                          "ceil_div": [
+                                                                            {
+                                                                              "sub": [
+                                                                                {
+                                                                                  "sub": [
+                                                                                    {
+                                                                                      "ref": "s_nch"
+                                                                                    },
+                                                                                    {
+                                                                                      "ref": "s_h2"
+                                                                                    }
+                                                                                  ]
+                                                                                },
+                                                                                {
+                                                                                  "index": "s_q4"
+                                                                                }
+                                                                              ]
                                                                             },
-                                                                            "chunk": {
-                                                                              "index": "s_q4"
-                                                                            },
-                                                                            "per": {
-                                                                              "param": "per"
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        },
+                                                                        "body": [
+                                                                          {
+                                                                            "stat": {
+                                                                              "file": {
+                                                                                "object": {
+                                                                                  "namespace": "kv4",
+                                                                                  "fields": {
+                                                                                    "key": {
+                                                                                      "chunk_key": {
+                                                                                        "seq": {
+                                                                                          "ref": "s_seq"
+                                                                                        },
+                                                                                        "chunk": {
+                                                                                          "add": [
+                                                                                            {
+                                                                                              "add": [
+                                                                                                {
+                                                                                                  "ref": "s_h2"
+                                                                                                },
+                                                                                                {
+                                                                                                  "index": "s_q4"
+                                                                                                }
+                                                                                              ]
+                                                                                            },
+                                                                                            {
+                                                                                              "mul": [
+                                                                                                {
+                                                                                                  "index": "s_q4i"
+                                                                                                },
+                                                                                                {
+                                                                                                  "param": "store_lanes"
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          ]
+                                                                                        },
+                                                                                        "per": {
+                                                                                          "param": "per"
+                                                                                        }
+                                                                                      }
+                                                                                    },
+                                                                                    "ext": "data"
+                                                                                  }
+                                                                                }
+                                                                              },
+                                                                              "expect": [
+                                                                                "ENOENT"
+                                                                              ]
                                                                             }
                                                                           }
-                                                                        },
-                                                                        "ext": "data"
+                                                                        ]
                                                                       }
                                                                     }
-                                                                  },
-                                                                  "expect": [
-                                                                    "ENOENT"
                                                                   ]
                                                                 }
                                                               }
@@ -23472,65 +23862,118 @@
                                                           "loop": {
                                                             "index": "s_r3",
                                                             "to": {
-                                                              "len": "s_a3"
+                                                              "min": [
+                                                                {
+                                                                  "param": "store_lanes"
+                                                                },
+                                                                {
+                                                                  "len": "s_a3"
+                                                                }
+                                                              ]
                                                             },
                                                             "body": [
                                                               {
-                                                                "let": {
-                                                                  "name": "s_r3f",
-                                                                  "value": {
-                                                                    "object": {
-                                                                      "namespace": "kv",
-                                                                      "fields": {
-                                                                        "key": {
-                                                                          "chunk_key": {
-                                                                            "seq": {
-                                                                              "ref": "s_seq"
-                                                                            },
-                                                                            "chunk": {
-                                                                              "elem": {
-                                                                                "array": "s_a3",
-                                                                                "index": {
+                                                                "submit": {
+                                                                  "workers": "store",
+                                                                  "join": true,
+                                                                  "body": [
+                                                                    {
+                                                                      "loop": {
+                                                                        "index": "s_r3i",
+                                                                        "to": {
+                                                                          "ceil_div": [
+                                                                            {
+                                                                              "sub": [
+                                                                                {
+                                                                                  "len": "s_a3"
+                                                                                },
+                                                                                {
                                                                                   "index": "s_r3"
                                                                                 }
-                                                                              }
+                                                                              ]
                                                                             },
-                                                                            "per": {
-                                                                              "param": "per"
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        },
+                                                                        "body": [
+                                                                          {
+                                                                            "let": {
+                                                                              "name": "s_r3f",
+                                                                              "value": {
+                                                                                "object": {
+                                                                                  "namespace": "kv",
+                                                                                  "fields": {
+                                                                                    "key": {
+                                                                                      "chunk_key": {
+                                                                                        "seq": {
+                                                                                          "ref": "s_seq"
+                                                                                        },
+                                                                                        "chunk": {
+                                                                                          "elem": {
+                                                                                            "array": "s_a3",
+                                                                                            "index": {
+                                                                                              "add": [
+                                                                                                {
+                                                                                                  "index": "s_r3"
+                                                                                                },
+                                                                                                {
+                                                                                                  "mul": [
+                                                                                                    {
+                                                                                                      "index": "s_r3i"
+                                                                                                    },
+                                                                                                    {
+                                                                                                      "param": "store_lanes"
+                                                                                                    }
+                                                                                                  ]
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          }
+                                                                                        },
+                                                                                        "per": {
+                                                                                          "param": "per"
+                                                                                        }
+                                                                                      }
+                                                                                    },
+                                                                                    "ext": "data"
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "open": {
+                                                                              "file": {
+                                                                                "ref": "s_r3f"
+                                                                              },
+                                                                              "flags": [
+                                                                                "RDONLY"
+                                                                              ]
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "read": {
+                                                                              "file": {
+                                                                                "ref": "s_r3f"
+                                                                              },
+                                                                              "len": {
+                                                                                "param": "chunk_bytes"
+                                                                              }
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "close": {
+                                                                              "file": {
+                                                                                "ref": "s_r3f"
+                                                                              }
                                                                             }
                                                                           }
-                                                                        },
-                                                                        "ext": "data"
+                                                                        ]
                                                                       }
                                                                     }
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_r3f"
-                                                                  },
-                                                                  "flags": [
-                                                                    "RDONLY"
                                                                   ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "read": {
-                                                                  "file": {
-                                                                    "ref": "s_r3f"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_r3f"
-                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -23540,65 +23983,118 @@
                                                           "loop": {
                                                             "index": "s_r4",
                                                             "to": {
-                                                              "len": "s_a4"
+                                                              "min": [
+                                                                {
+                                                                  "param": "store_lanes"
+                                                                },
+                                                                {
+                                                                  "len": "s_a4"
+                                                                }
+                                                              ]
                                                             },
                                                             "body": [
                                                               {
-                                                                "let": {
-                                                                  "name": "s_r4f",
-                                                                  "value": {
-                                                                    "object": {
-                                                                      "namespace": "kv4",
-                                                                      "fields": {
-                                                                        "key": {
-                                                                          "chunk_key": {
-                                                                            "seq": {
-                                                                              "ref": "s_seq"
-                                                                            },
-                                                                            "chunk": {
-                                                                              "elem": {
-                                                                                "array": "s_a4",
-                                                                                "index": {
+                                                                "submit": {
+                                                                  "workers": "store4",
+                                                                  "join": true,
+                                                                  "body": [
+                                                                    {
+                                                                      "loop": {
+                                                                        "index": "s_r4i",
+                                                                        "to": {
+                                                                          "ceil_div": [
+                                                                            {
+                                                                              "sub": [
+                                                                                {
+                                                                                  "len": "s_a4"
+                                                                                },
+                                                                                {
                                                                                   "index": "s_r4"
                                                                                 }
-                                                                              }
+                                                                              ]
                                                                             },
-                                                                            "per": {
-                                                                              "param": "per"
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        },
+                                                                        "body": [
+                                                                          {
+                                                                            "let": {
+                                                                              "name": "s_r4f",
+                                                                              "value": {
+                                                                                "object": {
+                                                                                  "namespace": "kv4",
+                                                                                  "fields": {
+                                                                                    "key": {
+                                                                                      "chunk_key": {
+                                                                                        "seq": {
+                                                                                          "ref": "s_seq"
+                                                                                        },
+                                                                                        "chunk": {
+                                                                                          "elem": {
+                                                                                            "array": "s_a4",
+                                                                                            "index": {
+                                                                                              "add": [
+                                                                                                {
+                                                                                                  "index": "s_r4"
+                                                                                                },
+                                                                                                {
+                                                                                                  "mul": [
+                                                                                                    {
+                                                                                                      "index": "s_r4i"
+                                                                                                    },
+                                                                                                    {
+                                                                                                      "param": "store_lanes"
+                                                                                                    }
+                                                                                                  ]
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          }
+                                                                                        },
+                                                                                        "per": {
+                                                                                          "param": "per"
+                                                                                        }
+                                                                                      }
+                                                                                    },
+                                                                                    "ext": "data"
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "open": {
+                                                                              "file": {
+                                                                                "ref": "s_r4f"
+                                                                              },
+                                                                              "flags": [
+                                                                                "RDONLY"
+                                                                              ]
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "read": {
+                                                                              "file": {
+                                                                                "ref": "s_r4f"
+                                                                              },
+                                                                              "len": {
+                                                                                "param": "chunk_bytes"
+                                                                              }
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "close": {
+                                                                              "file": {
+                                                                                "ref": "s_r4f"
+                                                                              }
                                                                             }
                                                                           }
-                                                                        },
-                                                                        "ext": "data"
+                                                                        ]
                                                                       }
                                                                     }
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_r4f"
-                                                                  },
-                                                                  "flags": [
-                                                                    "RDONLY"
                                                                   ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "read": {
-                                                                  "file": {
-                                                                    "ref": "s_r4f"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_r4f"
-                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -31308,38 +31804,109 @@
                                                         {
                                                           "loop": {
                                                             "index": "s_q3",
-                                                            "from": {
-                                                              "ref": "s_h2"
-                                                            },
                                                             "to": {
-                                                              "ref": "s_nch"
+                                                              "min": [
+                                                                {
+                                                                  "param": "store_lanes"
+                                                                },
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "ref": "s_nch"
+                                                                    },
+                                                                    {
+                                                                      "ref": "s_h2"
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
                                                             },
                                                             "body": [
                                                               {
-                                                                "stat": {
-                                                                  "file": {
-                                                                    "object": {
-                                                                      "namespace": "kv",
-                                                                      "fields": {
-                                                                        "key": {
-                                                                          "chunk_key": {
-                                                                            "seq": {
-                                                                              "ref": "s_seq"
+                                                                "submit": {
+                                                                  "workers": "store",
+                                                                  "join": true,
+                                                                  "body": [
+                                                                    {
+                                                                      "loop": {
+                                                                        "index": "s_q3i",
+                                                                        "to": {
+                                                                          "ceil_div": [
+                                                                            {
+                                                                              "sub": [
+                                                                                {
+                                                                                  "sub": [
+                                                                                    {
+                                                                                      "ref": "s_nch"
+                                                                                    },
+                                                                                    {
+                                                                                      "ref": "s_h2"
+                                                                                    }
+                                                                                  ]
+                                                                                },
+                                                                                {
+                                                                                  "index": "s_q3"
+                                                                                }
+                                                                              ]
                                                                             },
-                                                                            "chunk": {
-                                                                              "index": "s_q3"
-                                                                            },
-                                                                            "per": {
-                                                                              "param": "per"
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        },
+                                                                        "body": [
+                                                                          {
+                                                                            "stat": {
+                                                                              "file": {
+                                                                                "object": {
+                                                                                  "namespace": "kv",
+                                                                                  "fields": {
+                                                                                    "key": {
+                                                                                      "chunk_key": {
+                                                                                        "seq": {
+                                                                                          "ref": "s_seq"
+                                                                                        },
+                                                                                        "chunk": {
+                                                                                          "add": [
+                                                                                            {
+                                                                                              "add": [
+                                                                                                {
+                                                                                                  "ref": "s_h2"
+                                                                                                },
+                                                                                                {
+                                                                                                  "index": "s_q3"
+                                                                                                }
+                                                                                              ]
+                                                                                            },
+                                                                                            {
+                                                                                              "mul": [
+                                                                                                {
+                                                                                                  "index": "s_q3i"
+                                                                                                },
+                                                                                                {
+                                                                                                  "param": "store_lanes"
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          ]
+                                                                                        },
+                                                                                        "per": {
+                                                                                          "param": "per"
+                                                                                        }
+                                                                                      }
+                                                                                    },
+                                                                                    "ext": "data"
+                                                                                  }
+                                                                                }
+                                                                              },
+                                                                              "expect": [
+                                                                                "ENOENT"
+                                                                              ]
                                                                             }
                                                                           }
-                                                                        },
-                                                                        "ext": "data"
+                                                                        ]
                                                                       }
                                                                     }
-                                                                  },
-                                                                  "expect": [
-                                                                    "ENOENT"
                                                                   ]
                                                                 }
                                                               }
@@ -31349,38 +31916,109 @@
                                                         {
                                                           "loop": {
                                                             "index": "s_q4",
-                                                            "from": {
-                                                              "ref": "s_h2"
-                                                            },
                                                             "to": {
-                                                              "ref": "s_nch"
+                                                              "min": [
+                                                                {
+                                                                  "param": "store_lanes"
+                                                                },
+                                                                {
+                                                                  "sub": [
+                                                                    {
+                                                                      "ref": "s_nch"
+                                                                    },
+                                                                    {
+                                                                      "ref": "s_h2"
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
                                                             },
                                                             "body": [
                                                               {
-                                                                "stat": {
-                                                                  "file": {
-                                                                    "object": {
-                                                                      "namespace": "kv4",
-                                                                      "fields": {
-                                                                        "key": {
-                                                                          "chunk_key": {
-                                                                            "seq": {
-                                                                              "ref": "s_seq"
+                                                                "submit": {
+                                                                  "workers": "store4",
+                                                                  "join": true,
+                                                                  "body": [
+                                                                    {
+                                                                      "loop": {
+                                                                        "index": "s_q4i",
+                                                                        "to": {
+                                                                          "ceil_div": [
+                                                                            {
+                                                                              "sub": [
+                                                                                {
+                                                                                  "sub": [
+                                                                                    {
+                                                                                      "ref": "s_nch"
+                                                                                    },
+                                                                                    {
+                                                                                      "ref": "s_h2"
+                                                                                    }
+                                                                                  ]
+                                                                                },
+                                                                                {
+                                                                                  "index": "s_q4"
+                                                                                }
+                                                                              ]
                                                                             },
-                                                                            "chunk": {
-                                                                              "index": "s_q4"
-                                                                            },
-                                                                            "per": {
-                                                                              "param": "per"
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        },
+                                                                        "body": [
+                                                                          {
+                                                                            "stat": {
+                                                                              "file": {
+                                                                                "object": {
+                                                                                  "namespace": "kv4",
+                                                                                  "fields": {
+                                                                                    "key": {
+                                                                                      "chunk_key": {
+                                                                                        "seq": {
+                                                                                          "ref": "s_seq"
+                                                                                        },
+                                                                                        "chunk": {
+                                                                                          "add": [
+                                                                                            {
+                                                                                              "add": [
+                                                                                                {
+                                                                                                  "ref": "s_h2"
+                                                                                                },
+                                                                                                {
+                                                                                                  "index": "s_q4"
+                                                                                                }
+                                                                                              ]
+                                                                                            },
+                                                                                            {
+                                                                                              "mul": [
+                                                                                                {
+                                                                                                  "index": "s_q4i"
+                                                                                                },
+                                                                                                {
+                                                                                                  "param": "store_lanes"
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          ]
+                                                                                        },
+                                                                                        "per": {
+                                                                                          "param": "per"
+                                                                                        }
+                                                                                      }
+                                                                                    },
+                                                                                    "ext": "data"
+                                                                                  }
+                                                                                }
+                                                                              },
+                                                                              "expect": [
+                                                                                "ENOENT"
+                                                                              ]
                                                                             }
                                                                           }
-                                                                        },
-                                                                        "ext": "data"
+                                                                        ]
                                                                       }
                                                                     }
-                                                                  },
-                                                                  "expect": [
-                                                                    "ENOENT"
                                                                   ]
                                                                 }
                                                               }
@@ -31391,65 +32029,118 @@
                                                           "loop": {
                                                             "index": "s_r3",
                                                             "to": {
-                                                              "len": "s_a3"
+                                                              "min": [
+                                                                {
+                                                                  "param": "store_lanes"
+                                                                },
+                                                                {
+                                                                  "len": "s_a3"
+                                                                }
+                                                              ]
                                                             },
                                                             "body": [
                                                               {
-                                                                "let": {
-                                                                  "name": "s_r3f",
-                                                                  "value": {
-                                                                    "object": {
-                                                                      "namespace": "kv",
-                                                                      "fields": {
-                                                                        "key": {
-                                                                          "chunk_key": {
-                                                                            "seq": {
-                                                                              "ref": "s_seq"
-                                                                            },
-                                                                            "chunk": {
-                                                                              "elem": {
-                                                                                "array": "s_a3",
-                                                                                "index": {
+                                                                "submit": {
+                                                                  "workers": "store",
+                                                                  "join": true,
+                                                                  "body": [
+                                                                    {
+                                                                      "loop": {
+                                                                        "index": "s_r3i",
+                                                                        "to": {
+                                                                          "ceil_div": [
+                                                                            {
+                                                                              "sub": [
+                                                                                {
+                                                                                  "len": "s_a3"
+                                                                                },
+                                                                                {
                                                                                   "index": "s_r3"
                                                                                 }
-                                                                              }
+                                                                              ]
                                                                             },
-                                                                            "per": {
-                                                                              "param": "per"
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        },
+                                                                        "body": [
+                                                                          {
+                                                                            "let": {
+                                                                              "name": "s_r3f",
+                                                                              "value": {
+                                                                                "object": {
+                                                                                  "namespace": "kv",
+                                                                                  "fields": {
+                                                                                    "key": {
+                                                                                      "chunk_key": {
+                                                                                        "seq": {
+                                                                                          "ref": "s_seq"
+                                                                                        },
+                                                                                        "chunk": {
+                                                                                          "elem": {
+                                                                                            "array": "s_a3",
+                                                                                            "index": {
+                                                                                              "add": [
+                                                                                                {
+                                                                                                  "index": "s_r3"
+                                                                                                },
+                                                                                                {
+                                                                                                  "mul": [
+                                                                                                    {
+                                                                                                      "index": "s_r3i"
+                                                                                                    },
+                                                                                                    {
+                                                                                                      "param": "store_lanes"
+                                                                                                    }
+                                                                                                  ]
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          }
+                                                                                        },
+                                                                                        "per": {
+                                                                                          "param": "per"
+                                                                                        }
+                                                                                      }
+                                                                                    },
+                                                                                    "ext": "data"
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "open": {
+                                                                              "file": {
+                                                                                "ref": "s_r3f"
+                                                                              },
+                                                                              "flags": [
+                                                                                "RDONLY"
+                                                                              ]
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "read": {
+                                                                              "file": {
+                                                                                "ref": "s_r3f"
+                                                                              },
+                                                                              "len": {
+                                                                                "param": "chunk_bytes"
+                                                                              }
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "close": {
+                                                                              "file": {
+                                                                                "ref": "s_r3f"
+                                                                              }
                                                                             }
                                                                           }
-                                                                        },
-                                                                        "ext": "data"
+                                                                        ]
                                                                       }
                                                                     }
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_r3f"
-                                                                  },
-                                                                  "flags": [
-                                                                    "RDONLY"
                                                                   ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "read": {
-                                                                  "file": {
-                                                                    "ref": "s_r3f"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_r3f"
-                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -31459,65 +32150,118 @@
                                                           "loop": {
                                                             "index": "s_r4",
                                                             "to": {
-                                                              "len": "s_a4"
+                                                              "min": [
+                                                                {
+                                                                  "param": "store_lanes"
+                                                                },
+                                                                {
+                                                                  "len": "s_a4"
+                                                                }
+                                                              ]
                                                             },
                                                             "body": [
                                                               {
-                                                                "let": {
-                                                                  "name": "s_r4f",
-                                                                  "value": {
-                                                                    "object": {
-                                                                      "namespace": "kv4",
-                                                                      "fields": {
-                                                                        "key": {
-                                                                          "chunk_key": {
-                                                                            "seq": {
-                                                                              "ref": "s_seq"
-                                                                            },
-                                                                            "chunk": {
-                                                                              "elem": {
-                                                                                "array": "s_a4",
-                                                                                "index": {
+                                                                "submit": {
+                                                                  "workers": "store4",
+                                                                  "join": true,
+                                                                  "body": [
+                                                                    {
+                                                                      "loop": {
+                                                                        "index": "s_r4i",
+                                                                        "to": {
+                                                                          "ceil_div": [
+                                                                            {
+                                                                              "sub": [
+                                                                                {
+                                                                                  "len": "s_a4"
+                                                                                },
+                                                                                {
                                                                                   "index": "s_r4"
                                                                                 }
-                                                                              }
+                                                                              ]
                                                                             },
-                                                                            "per": {
-                                                                              "param": "per"
+                                                                            {
+                                                                              "param": "store_lanes"
+                                                                            }
+                                                                          ]
+                                                                        },
+                                                                        "body": [
+                                                                          {
+                                                                            "let": {
+                                                                              "name": "s_r4f",
+                                                                              "value": {
+                                                                                "object": {
+                                                                                  "namespace": "kv4",
+                                                                                  "fields": {
+                                                                                    "key": {
+                                                                                      "chunk_key": {
+                                                                                        "seq": {
+                                                                                          "ref": "s_seq"
+                                                                                        },
+                                                                                        "chunk": {
+                                                                                          "elem": {
+                                                                                            "array": "s_a4",
+                                                                                            "index": {
+                                                                                              "add": [
+                                                                                                {
+                                                                                                  "index": "s_r4"
+                                                                                                },
+                                                                                                {
+                                                                                                  "mul": [
+                                                                                                    {
+                                                                                                      "index": "s_r4i"
+                                                                                                    },
+                                                                                                    {
+                                                                                                      "param": "store_lanes"
+                                                                                                    }
+                                                                                                  ]
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          }
+                                                                                        },
+                                                                                        "per": {
+                                                                                          "param": "per"
+                                                                                        }
+                                                                                      }
+                                                                                    },
+                                                                                    "ext": "data"
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "open": {
+                                                                              "file": {
+                                                                                "ref": "s_r4f"
+                                                                              },
+                                                                              "flags": [
+                                                                                "RDONLY"
+                                                                              ]
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "read": {
+                                                                              "file": {
+                                                                                "ref": "s_r4f"
+                                                                              },
+                                                                              "len": {
+                                                                                "param": "chunk_bytes"
+                                                                              }
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "close": {
+                                                                              "file": {
+                                                                                "ref": "s_r4f"
+                                                                              }
                                                                             }
                                                                           }
-                                                                        },
-                                                                        "ext": "data"
+                                                                        ]
                                                                       }
                                                                     }
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "open": {
-                                                                  "file": {
-                                                                    "ref": "s_r4f"
-                                                                  },
-                                                                  "flags": [
-                                                                    "RDONLY"
                                                                   ]
-                                                                }
-                                                              },
-                                                              {
-                                                                "read": {
-                                                                  "file": {
-                                                                    "ref": "s_r4f"
-                                                                  },
-                                                                  "len": {
-                                                                    "param": "chunk_bytes"
-                                                                  }
-                                                                }
-                                                              },
-                                                              {
-                                                                "close": {
-                                                                  "file": {
-                                                                    "ref": "s_r4f"
-                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -32193,12 +32937,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk_tiered.py",
-      "sha256": "6280646d3f9a4e7cf2e71beccb531da8efc279f14675f859b8e0cd0ca7f81ba4",
+      "sha256": "7e785d662423fde1728df12328b68c3171c6ac2897179d7fc5855554300aaacb",
       "builder_version": "0.4.0",
-      "git": "28b8892cf29d-dirty"
+      "git": "67bf2795ccbd-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "2c3d37e18de5fdac9070d469dd3276928c40655350e0277f22c81a7b440867d8"
+    "ast_sha256": "5888d5d855abe81fd884cfb4a3d7fb22e38b7cd0b0999a0aaa570625a8f82f0a"
   }
 }

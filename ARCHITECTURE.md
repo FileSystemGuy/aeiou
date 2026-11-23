@@ -407,6 +407,7 @@ needed them.
 | 0.20 | `workers`, `submit`, `span` | 4 and 3 | A map (staging) and two helpers; a new context |
 | 0.21 | A span's `staging` | 3 | A key on an existing helper |
 | 0.22 | A refusal | none | A provisional piece narrowed (7.4) |
+| 0.26 | A `submit` its span waits for (`join`) | 3 | A key on an existing helper; no context changed (a `submit` was already allowed in a span, which did not wait for it); run side only, nothing in the plan; under 7.5's range |
 | 0.25 | A `probe` over several tiers (`tiers`, `held`) | 3 | Keys on an existing helper; no context changed (section 5: `probe` reads timeline state and changes nothing, as before); under 7.5's range, so no committed lock or workload id moved |
 | 0.24 | A `span` outside a timeline | 3 | A helper allowed in a second context (section 5); the first version under 7.5's range, so no committed AST, lock, or workload id moved |
 | 0.23 | Key ranges on `probe`, `touch`, `store`; `store`'s `present: touch`, `hold`, `found`; `lookup` and `choose` removed | none | A provisional piece reshaped (7.4) and two composites lowered to the library (7.1); added 2026-11-22, after the two observations below were written |

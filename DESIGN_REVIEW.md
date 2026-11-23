@@ -13302,6 +13302,58 @@ statements").** What was costed and put to the user before any edit:
   Two do since 2026-11-22, the third left out (the note "Spans in the checkpoint abstracts"
   below).
 
+**Contract 0.26: a submit its span waits for (2026-11-23; the user's "Push what we have now, then
+proceed with design 1 and design 2 after that").** Design 2 of the note below: LMCache's adapter
+runs a request's lookup and loads on its four workers while the request waits, up to eight in
+flight over two adapters and behind whatever those workers already hold; the abstract read a
+request's hits one after another on the request's own lane, which is what its span `load`, the
+number a run is judged by, measured.
+
+- *What the contract lacked.* A `submit` in a span was already allowed, and the span did not
+  wait for it: a submission was a store, never waited for. So the addition is a key, `join`,
+  on `submit`, valid in a span of a timeline: the span, and its lane, wait for the body. The
+  plan does not change at all, planned time having no I/O in it: the body's ops stand at the
+  submission's instant on its worker lane, as before, and the op set and fingerprint are the
+  body's written inline. Only the run moves: the executor ends the span with a join of those
+  bodies, the same join a fork's parent makes, so D runs to the last of their completions and
+  the lane's L grows by the wait; a body's reads hold their bytes in the staging the span
+  names. Considered and left: a key on the span (every submission in it joined), which would
+  have made a store submitted inside a span a wait.
+- *A deadlock found by the abstract, and what it showed.* The executor queued a submission's
+  gate on its worker lane when the submission was noted, and a body's ops when the planner
+  walked the body; the planner notes every submission of an instant before it walks any of
+  their bodies. So a worker lane's queue could read: gate A, gate B, A's ops, B's ops, and A's
+  ops waited for gate B. With stores alone that cost only time. With a join it stops: the lane
+  waits in its span for body A, whose ops wait for the gate of B, the stores' checks the same
+  lane submits after the span. The simulated run of the whole abstract
+  (`agentx_tiered_g4_through_the_executor`) stopped with "lane 3 waits on gate 9, never
+  opened"; the small tests had not, none submitting after a span at one instant. Fixed in the
+  executor's queueing, not around it: the planner marks the end of every submitted body, a
+  body's gate enters its lane's queue just before the body's first op, and a submission's
+  writes are staged when its gate opens, wherever the lane then is (they were staged when the
+  lane reached the gate, right only while the gate was at the queue's head). Three older tests
+  of staging held the second half of that. No plan, op set, or fingerprint moved.
+- *The abstract.* In `lmcache_local_disk_tiered_g4` the lookup's stats and the loads are
+  joined bodies on each adapter's workers, worker q taking every `store_lanes`-th key from
+  the q-th (a body a worker and adapter, not one a key: 5.7 million stats a tier would each
+  have been a lane of the walk). The sample did not move (the draws' sites are where they
+  were): the case's counts at seed 1 are design 1's. What it still does not have: the
+  adapter's unlinks on those workers. They are on eviction lanes, which a run reports batch by
+  batch (duration, overage past the next tick); putting them on the workers means either
+  losing that or a second addition to the contract, and was left for the user. And both the
+  lookup and the loads are submitted at the request's instant, each worker lane's stats ahead
+  of its reads, where the server submits the loads once the lookup has answered.
+- *Not checked by a run of the abstract.* A timeline runs in real time (`--time-scale` is
+  refused for one), so the abstract itself was not run on storage here; what ran on every
+  backend is the test's small timeline, and the abstract's two sessions on a simulated clock.
+- *Tests.* The executor's first two were written before the code and not seen red as tests
+  (until the key existed their documents were refused); the deadlock's case, the whole
+  abstract, and the rest after it. `exec.rs`: a span waits for its joined bodies, on one worker lane
+  and two, not for one not joined, and not behind a later submission (the deadlock's case); a
+  joined body's loads draw on the span's staging; the whole abstract. `plan.rs`: a body's end
+  is marked after its ops. `timeline.rs`: a run on `sync`, `io_uring`, `libaio`, `posix-aio`,
+  and `mmap`. Four shared refusal cases for both checkers; the builder's and the description's.
+
 **The multi-process server captured; the G4 abstract's calls on a chunk file (2026-11-22 and
 2026-11-23; brief item 74's check; the user's "Start with item 1 on your list", "proceed", and, on
 the recommendations below, "Yes, proceed with your recommendations").** Item 74 lists a capture
@@ -13351,7 +13403,7 @@ server", and `kit/captures/agentx-mp/replay-two-adapters-strace/`.
   its storage wait, so a request with no load now has a span too); a store's check is a loop
   over the chunks G2 newly took, each stat submitted to the adapter's store workers ahead of
   the writes. Two things it does not have: an adapter's lookup runs on its workers, both
-  adapters at once (design 2), and a chunk's stat and write are back to back on one worker,
+  adapters at once (design 2, built the same day: the note "Contract 0.26" above), and a chunk's stat and write are back to back on one worker,
   where here they are separate submissions. The sample moved again. The case at seed 1 plans
   5,740,435 stats in each tier, 48 for every file written against the capture's 7 or 8: most
   lookups stat one to three keys and a tenth more than 600 (a prompt G2 has dropped). The

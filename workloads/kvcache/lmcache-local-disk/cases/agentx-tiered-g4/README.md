@@ -32,12 +32,12 @@ evicts by its own rule, so a chunk G3 dropped is still found in G4. Two things a
   exists (brief item 74).~~ Since 2026-11-23 the calls on a chunk file are the multi-process
   server's `fs_native` adapter's, as captured: a temporary file and a `rename` for a store, open,
   read, close for a load, a chunk the adapter holds never rewritten; and the adapter's `stat`
-  of every key looked up, in both tiers, and before every store. Not yet: its four workers
-  carrying loads and lookups as well as stores and unlinks, where the abstract stats and reads
-  on the request's lane (contract 0.26, not built). The adapter's `O_DIRECT` option was not traced, and the
+  of every key looked up, in both tiers, and before every store; and its four workers carry
+  its lookups and loads as well as its stores, the request's span waiting for them (contract
+  0.26). Not so: its unlinks, on eviction lanes of their own. The adapter's `O_DIRECT` option was not traced, and the
   abstract has no `direct` parameter.
-- Each adapter's writes go to store workers of its own (`store` and `store4`, `store_lanes`
-  each), so a slow tier does not hold the other's writes; each pool's unfinished bytes are bounded
+- Each adapter has workers of its own (`store` and `store4`, `store_lanes` each) for its
+  lookups, loads, and stores, so a slow tier does not hold the other's writes; each pool's unfinished bytes are bounded
   by G2's size separately, where LMCache has one G2.
 
 Its sample is not `agentx-tiered`'s: an abstract's draws are keyed by where they stand in the

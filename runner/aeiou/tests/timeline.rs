@@ -471,6 +471,52 @@ fn a_run_reports_its_spans_and_lag() {
     }
 }
 
+/// A run waits in a span for the bodies it submitted with `join` (contract 0.26): three sessions
+/// each write two files and then load them in a span, each load a joined body on the workers'
+/// two lanes, and go on to a stat after it; under every backend the run's ops are the plan's,
+/// every span is reported with a D that holds its loads, and the files are read whole.
+#[test]
+fn a_run_waits_in_a_span_for_the_bodies_it_joined_on_every_backend() {
+    let rf = |n: &str| json!({"ref": n});
+    let key = |j: i64| json!({"add": [{"mul": [{"index": "k"}, 10]}, j]});
+    let file = |n: &str, j: i64| json!({"let": {"name": n, "value": {"object": {"namespace": "kv", "fields": {"key": key(j)}}}}});
+    let write = |n: &str| json!([{"open": {"file": rf(n), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf(n), "len": 4096}}, {"close": {"file": rf(n)}}]);
+    let load = |n: &str| json!({"submit": {"workers": "w", "join": true, "body": [{"open": {"file": rf(n), "flags": ["RDONLY"]}}, {"read": {"file": rf(n), "len": 4096}}, {"close": {"file": rf(n)}}]}});
+    let mut session = vec![file("f", 0), file("g", 1)];
+    session.extend(write("f").as_array().unwrap().iter().cloned());
+    session.extend(write("g").as_array().unwrap().iter().cloned());
+    session.push(json!({"compute": {"ns": 20_000_000}}));
+    session.push(json!({"span": {"name": "load", "staging": "w", "body": [load("f"), load("g")]}}));
+    session.push(json!({"stat": {"file": rf("f")}}));
+    let text = json!({"ast": "0.26", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "workers": [{"name": "w", "lanes": 2, "staging": 1 << 20}],
+            "body": [{"parallel": {"index": "k", "width": 3, "body": session}}]}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "joined");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    let aeiou = env!("CARGO_BIN_EXE_aeiou");
+    let fp = |o: &std::process::Output| String::from_utf8_lossy(&o.stdout).lines().find(|l| l.starts_with("fingerprint")).map(str::to_string).unwrap();
+    let dry = std::process::Command::new(aeiou).args(["dry-run", ast.to_str().unwrap(), "--gpus", "1"]).output().unwrap();
+    assert!(dry.status.success(), "{}", String::from_utf8_lossy(&dry.stderr));
+    for posix in ["sync", "io_uring", "libaio", "posix-aio", "mmap"] {
+        let root = dir.join(posix);
+        std::fs::create_dir_all(&root).unwrap();
+        let json_path = dir.join(format!("{posix}.json"));
+        let r = std::process::Command::new(aeiou)
+            .args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--posix", posix, "--report-json", json_path.to_str().unwrap()])
+            .output().unwrap();
+        assert!(r.status.success(), "{posix}: {}", String::from_utf8_lossy(&r.stderr));
+        assert_eq!(fp(&r), fp(&dry), "{posix}: the run's ops are the plan's");
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+        let s = &doc["result"]["timeline"]["spans"]["load"];
+        assert_eq!(s["count"], 3, "{posix}: {}", doc["result"]["timeline"]);
+        // a span with no op of its own: its D is its joined loads' alone, and is not nothing
+        assert!(s["p50_ns"].as_i64().unwrap() > 0, "{posix}: {s}");
+        assert_eq!(std::fs::read_dir(root.join("kv")).unwrap().filter(|e| !e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".aeiou")).count(), 6, "{posix}");
+    }
+}
+
 /// The spans an abstract declares, wherever its timelines' lanes hold them: in a loop, a branch of
 /// a `cond`, a `parallel`, or a `phase` (what a constraint's `result.span.SPAN.` is
 /// checked against when the lock is read).

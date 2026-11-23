@@ -57,9 +57,24 @@ def _probe_over_tiers(ast: dict) -> bool:
     return any(walk(a["body"]) for a in ast.get("actors", {}).values())
 
 
+def _joined_submit(ast: dict) -> bool:
+    def walk(nodes):
+        for node in nodes:
+            kind, a = next(iter(node.items()))
+            if kind == "submit" and a.get("join"):
+                return True
+            if kind in ("loop", "parallel", "loader", "phase", "timeline", "span") and walk(a["body"]):
+                return True
+            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
+                return True
+        return False
+    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
+
+
 SINCE: list = [
     ("0.24", "a `span` outside a timeline", _span_outside_a_timeline),
     ("0.25", "a `probe` over several tiers", _probe_over_tiers),
+    ("0.26", "a `submit` its span waits for (`join`)", _joined_submit),
 ]
 
 
@@ -1143,7 +1158,10 @@ class Check:
             self.err(p, f"{what}: in {self.op_body[0]}, which reads no state of its timeline ({self.op_body[1]})")
 
     def n_submit(self, a, p, scope):
-        """V36: a `submit` names workers of its timeline; its body only issues ops."""
+        """V36: a `submit` names workers of its timeline; its body only issues ops; with `join`
+        (contract 0.26) it is in a span, which waits for it."""
+        if a.get("join") and self.timeline is not None and self.span is None:
+            self.err(p, "submit: `join` outside a `span`, which is what waits for the body (V36)")
         if self.timeline is None:
             self.err(p, "submit: outside a timeline, where nothing is planned (V36)")
         elif a["workers"] not in self.workers:
