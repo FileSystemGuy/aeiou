@@ -58,10 +58,6 @@
       "unit": "count",
       "doc": "LMCache's store workers: a chunk's write queued to them, the forward step waiting only for its copy to host memory (0.5.5's local-disk path, read 2026-11-09, DESIGN_REVIEW.md §3.99 item 13 (4))"
     },
-    "direct": {
-      "default": false,
-      "doc": "[config] LMCache's `use_odirect`: every chunk opened with `O_DIRECT` by `os.open` and read or written in one call (traced 2026-10-07, §3.63); LMCache takes this path only when chunk_bytes is a multiple of the file system's block size"
-    },
     "tab": {
       "default": [
         0,
@@ -6240,9 +6236,10 @@
   },
   "namespaces": {
     "kv": {
-      "pattern": "kv/{key:016x}.pt",
+      "pattern": "kv/{key:016x}.{ext}",
       "fields": {
-        "key": "int"
+        "key": "int",
+        "ext": "str"
       },
       "size": {
         "param": "chunk_bytes"
@@ -6250,9 +6247,10 @@
       "seed": 1592646277
     },
     "kv4": {
-      "pattern": "kv4/{key:016x}.pt",
+      "pattern": "kv4/{key:016x}.{ext}",
       "fields": {
-        "key": "int"
+        "key": "int",
+        "ext": "str"
       },
       "size": {
         "param": "chunk_bytes"
@@ -6425,7 +6423,8 @@
                                 "fields": {
                                   "key": {
                                     "victim": {}
-                                  }
+                                  },
+                                  "ext": "data"
                                 }
                               }
                             }
@@ -6517,7 +6516,8 @@
                                 "fields": {
                                   "key": {
                                     "victim": {}
-                                  }
+                                  },
+                                  "ext": "data"
                                 }
                               }
                             }
@@ -15478,129 +15478,38 @@
                                                       "param": "per"
                                                     }
                                                   }
-                                                }
+                                                },
+                                                "ext": "data"
                                               }
                                             }
                                           }
                                         }
                                       },
                                       {
-                                        "cond": {
-                                          "if": {
-                                            "eq": [
-                                              {
-                                                "param": "direct"
-                                              },
-                                              false
-                                            ]
+                                        "open": {
+                                          "file": {
+                                            "ref": "m_r3f"
                                           },
-                                          "then": [
-                                            {
-                                              "open": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                },
-                                                "flags": [
-                                                  "RDONLY",
-                                                  "CLOEXEC"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "fstat": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "ioctl": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                },
-                                                "request": "TCGETS",
-                                                "expect": [
-                                                  "ENOTTY"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "lseek": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                },
-                                                "offset": 0,
-                                                "whence": "CUR"
-                                              }
-                                            },
-                                            {
-                                              "read": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                },
-                                                "len": {
-                                                  "param": "chunk_bytes"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "close": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                }
-                                              }
-                                            }
+                                          "flags": [
+                                            "RDONLY"
                                           ]
                                         }
                                       },
                                       {
-                                        "cond": {
-                                          "if": {
-                                            "eq": [
-                                              {
-                                                "param": "direct"
-                                              },
-                                              true
-                                            ]
+                                        "read": {
+                                          "file": {
+                                            "ref": "m_r3f"
                                           },
-                                          "then": [
-                                            {
-                                              "open": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                },
-                                                "flags": [
-                                                  "RDONLY",
-                                                  "DIRECT",
-                                                  "CLOEXEC"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "fstat": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "read": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                },
-                                                "len": {
-                                                  "param": "chunk_bytes"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "close": {
-                                                "file": {
-                                                  "ref": "m_r3f"
-                                                }
-                                              }
-                                            }
-                                          ]
+                                          "len": {
+                                            "param": "chunk_bytes"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "close": {
+                                          "file": {
+                                            "ref": "m_r3f"
+                                          }
                                         }
                                       }
                                     ]
@@ -15637,129 +15546,38 @@
                                                       "param": "per"
                                                     }
                                                   }
-                                                }
+                                                },
+                                                "ext": "data"
                                               }
                                             }
                                           }
                                         }
                                       },
                                       {
-                                        "cond": {
-                                          "if": {
-                                            "eq": [
-                                              {
-                                                "param": "direct"
-                                              },
-                                              false
-                                            ]
+                                        "open": {
+                                          "file": {
+                                            "ref": "m_r4f"
                                           },
-                                          "then": [
-                                            {
-                                              "open": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                },
-                                                "flags": [
-                                                  "RDONLY",
-                                                  "CLOEXEC"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "fstat": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "ioctl": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                },
-                                                "request": "TCGETS",
-                                                "expect": [
-                                                  "ENOTTY"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "lseek": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                },
-                                                "offset": 0,
-                                                "whence": "CUR"
-                                              }
-                                            },
-                                            {
-                                              "read": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                },
-                                                "len": {
-                                                  "param": "chunk_bytes"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "close": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                }
-                                              }
-                                            }
+                                          "flags": [
+                                            "RDONLY"
                                           ]
                                         }
                                       },
                                       {
-                                        "cond": {
-                                          "if": {
-                                            "eq": [
-                                              {
-                                                "param": "direct"
-                                              },
-                                              true
-                                            ]
+                                        "read": {
+                                          "file": {
+                                            "ref": "m_r4f"
                                           },
-                                          "then": [
-                                            {
-                                              "open": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                },
-                                                "flags": [
-                                                  "RDONLY",
-                                                  "DIRECT",
-                                                  "CLOEXEC"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "fstat": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "read": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                },
-                                                "len": {
-                                                  "param": "chunk_bytes"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "close": {
-                                                "file": {
-                                                  "ref": "m_r4f"
-                                                }
-                                              }
-                                            }
-                                          ]
+                                          "len": {
+                                            "param": "chunk_bytes"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "close": {
+                                          "file": {
+                                            "ref": "m_r4f"
+                                          }
                                         }
                                       }
                                     ]
@@ -15952,7 +15770,6 @@
                                   }
                                 }
                               },
-                              "present": "renew",
                               "taken": "m_tg3"
                             }
                           },
@@ -15996,125 +15813,79 @@
                                                       "param": "per"
                                                     }
                                                   }
-                                                }
+                                                },
+                                                "ext": "tmp"
                                               }
                                             }
                                           }
                                         }
                                       },
                                       {
-                                        "cond": {
-                                          "if": {
-                                            "eq": [
-                                              {
-                                                "param": "direct"
-                                              },
-                                              false
-                                            ]
+                                        "open": {
+                                          "file": {
+                                            "ref": "m_wfg3"
                                           },
-                                          "then": [
-                                            {
-                                              "open": {
-                                                "file": {
-                                                  "ref": "m_wfg3"
-                                                },
-                                                "flags": [
-                                                  "WRONLY",
-                                                  "CREAT",
-                                                  "TRUNC",
-                                                  "CLOEXEC"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "fstat": {
-                                                "file": {
-                                                  "ref": "m_wfg3"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "ioctl": {
-                                                "file": {
-                                                  "ref": "m_wfg3"
-                                                },
-                                                "request": "TCGETS",
-                                                "expect": [
-                                                  "ENOTTY"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "lseek": {
-                                                "file": {
-                                                  "ref": "m_wfg3"
-                                                },
-                                                "offset": 0,
-                                                "whence": "CUR"
-                                              }
-                                            },
-                                            {
-                                              "write": {
-                                                "file": {
-                                                  "ref": "m_wfg3"
-                                                },
-                                                "len": {
-                                                  "param": "chunk_bytes"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "close": {
-                                                "file": {
-                                                  "ref": "m_wfg3"
-                                                }
-                                              }
-                                            }
-                                          ]
+                                          "flags": [
+                                            "WRONLY",
+                                            "CREAT",
+                                            "TRUNC"
+                                          ],
+                                          "mode": 420
                                         }
                                       },
                                       {
-                                        "cond": {
-                                          "if": {
-                                            "eq": [
-                                              {
-                                                "param": "direct"
-                                              },
-                                              true
-                                            ]
+                                        "write": {
+                                          "file": {
+                                            "ref": "m_wfg3"
                                           },
-                                          "then": [
-                                            {
-                                              "open": {
-                                                "file": {
-                                                  "ref": "m_wfg3"
+                                          "len": {
+                                            "param": "chunk_bytes"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "close": {
+                                          "file": {
+                                            "ref": "m_wfg3"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "rename": {
+                                          "from": {
+                                            "ref": "m_wfg3"
+                                          },
+                                          "to": {
+                                            "object": {
+                                              "namespace": "kv",
+                                              "fields": {
+                                                "key": {
+                                                  "chunk_key": {
+                                                    "seq": {
+                                                      "ref": "m_seq"
+                                                    },
+                                                    "chunk": {
+                                                      "elem": {
+                                                        "array": "m_t2",
+                                                        "index": {
+                                                          "elem": {
+                                                            "array": "m_tg3",
+                                                            "index": {
+                                                              "index": "m_wg3"
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    },
+                                                    "per": {
+                                                      "param": "per"
+                                                    }
+                                                  }
                                                 },
-                                                "flags": [
-                                                  "WRONLY",
-                                                  "CREAT",
-                                                  "DIRECT",
-                                                  "CLOEXEC"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "write": {
-                                                "file": {
-                                                  "ref": "m_wfg3"
-                                                },
-                                                "len": {
-                                                  "param": "chunk_bytes"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "close": {
-                                                "file": {
-                                                  "ref": "m_wfg3"
-                                                }
+                                                "ext": "data"
                                               }
                                             }
-                                          ]
+                                          }
                                         }
                                       }
                                     ]
@@ -16151,7 +15922,6 @@
                                   }
                                 }
                               },
-                              "present": "renew",
                               "taken": "m_tg4"
                             }
                           },
@@ -16195,125 +15965,79 @@
                                                       "param": "per"
                                                     }
                                                   }
-                                                }
+                                                },
+                                                "ext": "tmp"
                                               }
                                             }
                                           }
                                         }
                                       },
                                       {
-                                        "cond": {
-                                          "if": {
-                                            "eq": [
-                                              {
-                                                "param": "direct"
-                                              },
-                                              false
-                                            ]
+                                        "open": {
+                                          "file": {
+                                            "ref": "m_wfg4"
                                           },
-                                          "then": [
-                                            {
-                                              "open": {
-                                                "file": {
-                                                  "ref": "m_wfg4"
-                                                },
-                                                "flags": [
-                                                  "WRONLY",
-                                                  "CREAT",
-                                                  "TRUNC",
-                                                  "CLOEXEC"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "fstat": {
-                                                "file": {
-                                                  "ref": "m_wfg4"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "ioctl": {
-                                                "file": {
-                                                  "ref": "m_wfg4"
-                                                },
-                                                "request": "TCGETS",
-                                                "expect": [
-                                                  "ENOTTY"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "lseek": {
-                                                "file": {
-                                                  "ref": "m_wfg4"
-                                                },
-                                                "offset": 0,
-                                                "whence": "CUR"
-                                              }
-                                            },
-                                            {
-                                              "write": {
-                                                "file": {
-                                                  "ref": "m_wfg4"
-                                                },
-                                                "len": {
-                                                  "param": "chunk_bytes"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "close": {
-                                                "file": {
-                                                  "ref": "m_wfg4"
-                                                }
-                                              }
-                                            }
-                                          ]
+                                          "flags": [
+                                            "WRONLY",
+                                            "CREAT",
+                                            "TRUNC"
+                                          ],
+                                          "mode": 420
                                         }
                                       },
                                       {
-                                        "cond": {
-                                          "if": {
-                                            "eq": [
-                                              {
-                                                "param": "direct"
-                                              },
-                                              true
-                                            ]
+                                        "write": {
+                                          "file": {
+                                            "ref": "m_wfg4"
                                           },
-                                          "then": [
-                                            {
-                                              "open": {
-                                                "file": {
-                                                  "ref": "m_wfg4"
+                                          "len": {
+                                            "param": "chunk_bytes"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "close": {
+                                          "file": {
+                                            "ref": "m_wfg4"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "rename": {
+                                          "from": {
+                                            "ref": "m_wfg4"
+                                          },
+                                          "to": {
+                                            "object": {
+                                              "namespace": "kv4",
+                                              "fields": {
+                                                "key": {
+                                                  "chunk_key": {
+                                                    "seq": {
+                                                      "ref": "m_seq"
+                                                    },
+                                                    "chunk": {
+                                                      "elem": {
+                                                        "array": "m_t2",
+                                                        "index": {
+                                                          "elem": {
+                                                            "array": "m_tg4",
+                                                            "index": {
+                                                              "index": "m_wg4"
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    },
+                                                    "per": {
+                                                      "param": "per"
+                                                    }
+                                                  }
                                                 },
-                                                "flags": [
-                                                  "WRONLY",
-                                                  "CREAT",
-                                                  "DIRECT",
-                                                  "CLOEXEC"
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "write": {
-                                                "file": {
-                                                  "ref": "m_wfg4"
-                                                },
-                                                "len": {
-                                                  "param": "chunk_bytes"
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "close": {
-                                                "file": {
-                                                  "ref": "m_wfg4"
-                                                }
+                                                "ext": "data"
                                               }
                                             }
-                                          ]
+                                          }
                                         }
                                       }
                                     ]
@@ -23511,129 +23235,38 @@
                                                                               "param": "per"
                                                                             }
                                                                           }
-                                                                        }
+                                                                        },
+                                                                        "ext": "data"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      false
-                                                                    ]
+                                                                "open": {
+                                                                  "file": {
+                                                                    "ref": "s_r3f"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "flags": [
-                                                                          "RDONLY",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "ioctl": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "request": "TCGETS",
-                                                                        "expect": [
-                                                                          "ENOTTY"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "lseek": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "offset": 0,
-                                                                        "whence": "CUR"
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "read": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        }
-                                                                      }
-                                                                    }
+                                                                  "flags": [
+                                                                    "RDONLY"
                                                                   ]
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      true
-                                                                    ]
+                                                                "read": {
+                                                                  "file": {
+                                                                    "ref": "s_r3f"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "flags": [
-                                                                          "RDONLY",
-                                                                          "DIRECT",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "read": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        }
-                                                                      }
-                                                                    }
-                                                                  ]
+                                                                  "len": {
+                                                                    "param": "chunk_bytes"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "close": {
+                                                                  "file": {
+                                                                    "ref": "s_r3f"
+                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -23670,129 +23303,38 @@
                                                                               "param": "per"
                                                                             }
                                                                           }
-                                                                        }
+                                                                        },
+                                                                        "ext": "data"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      false
-                                                                    ]
+                                                                "open": {
+                                                                  "file": {
+                                                                    "ref": "s_r4f"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "flags": [
-                                                                          "RDONLY",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "ioctl": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "request": "TCGETS",
-                                                                        "expect": [
-                                                                          "ENOTTY"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "lseek": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "offset": 0,
-                                                                        "whence": "CUR"
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "read": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        }
-                                                                      }
-                                                                    }
+                                                                  "flags": [
+                                                                    "RDONLY"
                                                                   ]
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      true
-                                                                    ]
+                                                                "read": {
+                                                                  "file": {
+                                                                    "ref": "s_r4f"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "flags": [
-                                                                          "RDONLY",
-                                                                          "DIRECT",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "read": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        }
-                                                                      }
-                                                                    }
-                                                                  ]
+                                                                  "len": {
+                                                                    "param": "chunk_bytes"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "close": {
+                                                                  "file": {
+                                                                    "ref": "s_r4f"
+                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -23985,7 +23527,6 @@
                                                           }
                                                         }
                                                       },
-                                                      "present": "renew",
                                                       "taken": "s_tg3"
                                                     }
                                                   },
@@ -24029,125 +23570,79 @@
                                                                               "param": "per"
                                                                             }
                                                                           }
-                                                                        }
+                                                                        },
+                                                                        "ext": "tmp"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      false
-                                                                    ]
+                                                                "open": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg3"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "flags": [
-                                                                          "WRONLY",
-                                                                          "CREAT",
-                                                                          "TRUNC",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "ioctl": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "request": "TCGETS",
-                                                                        "expect": [
-                                                                          "ENOTTY"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "lseek": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "offset": 0,
-                                                                        "whence": "CUR"
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "write": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        }
-                                                                      }
-                                                                    }
-                                                                  ]
+                                                                  "flags": [
+                                                                    "WRONLY",
+                                                                    "CREAT",
+                                                                    "TRUNC"
+                                                                  ],
+                                                                  "mode": 420
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      true
-                                                                    ]
+                                                                "write": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg3"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
+                                                                  "len": {
+                                                                    "param": "chunk_bytes"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "close": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg3"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "rename": {
+                                                                  "from": {
+                                                                    "ref": "s_wfg3"
+                                                                  },
+                                                                  "to": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t2",
+                                                                                "index": {
+                                                                                  "elem": {
+                                                                                    "array": "s_tg3",
+                                                                                    "index": {
+                                                                                      "index": "s_wg3"
+                                                                                    }
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
                                                                         },
-                                                                        "flags": [
-                                                                          "WRONLY",
-                                                                          "CREAT",
-                                                                          "DIRECT",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "write": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        }
+                                                                        "ext": "data"
                                                                       }
                                                                     }
-                                                                  ]
+                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -24184,7 +23679,6 @@
                                                           }
                                                         }
                                                       },
-                                                      "present": "renew",
                                                       "taken": "s_tg4"
                                                     }
                                                   },
@@ -24228,125 +23722,79 @@
                                                                               "param": "per"
                                                                             }
                                                                           }
-                                                                        }
+                                                                        },
+                                                                        "ext": "tmp"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      false
-                                                                    ]
+                                                                "open": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg4"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "flags": [
-                                                                          "WRONLY",
-                                                                          "CREAT",
-                                                                          "TRUNC",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "ioctl": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "request": "TCGETS",
-                                                                        "expect": [
-                                                                          "ENOTTY"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "lseek": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "offset": 0,
-                                                                        "whence": "CUR"
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "write": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        }
-                                                                      }
-                                                                    }
-                                                                  ]
+                                                                  "flags": [
+                                                                    "WRONLY",
+                                                                    "CREAT",
+                                                                    "TRUNC"
+                                                                  ],
+                                                                  "mode": 420
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      true
-                                                                    ]
+                                                                "write": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg4"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
+                                                                  "len": {
+                                                                    "param": "chunk_bytes"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "close": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg4"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "rename": {
+                                                                  "from": {
+                                                                    "ref": "s_wfg4"
+                                                                  },
+                                                                  "to": {
+                                                                    "object": {
+                                                                      "namespace": "kv4",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t2",
+                                                                                "index": {
+                                                                                  "elem": {
+                                                                                    "array": "s_tg4",
+                                                                                    "index": {
+                                                                                      "index": "s_wg4"
+                                                                                    }
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
                                                                         },
-                                                                        "flags": [
-                                                                          "WRONLY",
-                                                                          "CREAT",
-                                                                          "DIRECT",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "write": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        }
+                                                                        "ext": "data"
                                                                       }
                                                                     }
-                                                                  ]
+                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -31524,129 +30972,38 @@
                                                                               "param": "per"
                                                                             }
                                                                           }
-                                                                        }
+                                                                        },
+                                                                        "ext": "data"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      false
-                                                                    ]
+                                                                "open": {
+                                                                  "file": {
+                                                                    "ref": "s_r3f"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "flags": [
-                                                                          "RDONLY",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "ioctl": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "request": "TCGETS",
-                                                                        "expect": [
-                                                                          "ENOTTY"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "lseek": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "offset": 0,
-                                                                        "whence": "CUR"
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "read": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        }
-                                                                      }
-                                                                    }
+                                                                  "flags": [
+                                                                    "RDONLY"
                                                                   ]
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      true
-                                                                    ]
+                                                                "read": {
+                                                                  "file": {
+                                                                    "ref": "s_r3f"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "flags": [
-                                                                          "RDONLY",
-                                                                          "DIRECT",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "read": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_r3f"
-                                                                        }
-                                                                      }
-                                                                    }
-                                                                  ]
+                                                                  "len": {
+                                                                    "param": "chunk_bytes"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "close": {
+                                                                  "file": {
+                                                                    "ref": "s_r3f"
+                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -31683,129 +31040,38 @@
                                                                               "param": "per"
                                                                             }
                                                                           }
-                                                                        }
+                                                                        },
+                                                                        "ext": "data"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      false
-                                                                    ]
+                                                                "open": {
+                                                                  "file": {
+                                                                    "ref": "s_r4f"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "flags": [
-                                                                          "RDONLY",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "ioctl": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "request": "TCGETS",
-                                                                        "expect": [
-                                                                          "ENOTTY"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "lseek": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "offset": 0,
-                                                                        "whence": "CUR"
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "read": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        }
-                                                                      }
-                                                                    }
+                                                                  "flags": [
+                                                                    "RDONLY"
                                                                   ]
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      true
-                                                                    ]
+                                                                "read": {
+                                                                  "file": {
+                                                                    "ref": "s_r4f"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "flags": [
-                                                                          "RDONLY",
-                                                                          "DIRECT",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "read": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_r4f"
-                                                                        }
-                                                                      }
-                                                                    }
-                                                                  ]
+                                                                  "len": {
+                                                                    "param": "chunk_bytes"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "close": {
+                                                                  "file": {
+                                                                    "ref": "s_r4f"
+                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -31998,7 +31264,6 @@
                                                           }
                                                         }
                                                       },
-                                                      "present": "renew",
                                                       "taken": "s_tg3"
                                                     }
                                                   },
@@ -32042,125 +31307,79 @@
                                                                               "param": "per"
                                                                             }
                                                                           }
-                                                                        }
+                                                                        },
+                                                                        "ext": "tmp"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      false
-                                                                    ]
+                                                                "open": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg3"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "flags": [
-                                                                          "WRONLY",
-                                                                          "CREAT",
-                                                                          "TRUNC",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "ioctl": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "request": "TCGETS",
-                                                                        "expect": [
-                                                                          "ENOTTY"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "lseek": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "offset": 0,
-                                                                        "whence": "CUR"
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "write": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        }
-                                                                      }
-                                                                    }
-                                                                  ]
+                                                                  "flags": [
+                                                                    "WRONLY",
+                                                                    "CREAT",
+                                                                    "TRUNC"
+                                                                  ],
+                                                                  "mode": 420
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      true
-                                                                    ]
+                                                                "write": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg3"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
+                                                                  "len": {
+                                                                    "param": "chunk_bytes"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "close": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg3"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "rename": {
+                                                                  "from": {
+                                                                    "ref": "s_wfg3"
+                                                                  },
+                                                                  "to": {
+                                                                    "object": {
+                                                                      "namespace": "kv",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t2",
+                                                                                "index": {
+                                                                                  "elem": {
+                                                                                    "array": "s_tg3",
+                                                                                    "index": {
+                                                                                      "index": "s_wg3"
+                                                                                    }
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
                                                                         },
-                                                                        "flags": [
-                                                                          "WRONLY",
-                                                                          "CREAT",
-                                                                          "DIRECT",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "write": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg3"
-                                                                        }
+                                                                        "ext": "data"
                                                                       }
                                                                     }
-                                                                  ]
+                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -32197,7 +31416,6 @@
                                                           }
                                                         }
                                                       },
-                                                      "present": "renew",
                                                       "taken": "s_tg4"
                                                     }
                                                   },
@@ -32241,125 +31459,79 @@
                                                                               "param": "per"
                                                                             }
                                                                           }
-                                                                        }
+                                                                        },
+                                                                        "ext": "tmp"
                                                                       }
                                                                     }
                                                                   }
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      false
-                                                                    ]
+                                                                "open": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg4"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "flags": [
-                                                                          "WRONLY",
-                                                                          "CREAT",
-                                                                          "TRUNC",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "fstat": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "ioctl": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "request": "TCGETS",
-                                                                        "expect": [
-                                                                          "ENOTTY"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "lseek": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "offset": 0,
-                                                                        "whence": "CUR"
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "write": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        }
-                                                                      }
-                                                                    }
-                                                                  ]
+                                                                  "flags": [
+                                                                    "WRONLY",
+                                                                    "CREAT",
+                                                                    "TRUNC"
+                                                                  ],
+                                                                  "mode": 420
                                                                 }
                                                               },
                                                               {
-                                                                "cond": {
-                                                                  "if": {
-                                                                    "eq": [
-                                                                      {
-                                                                        "param": "direct"
-                                                                      },
-                                                                      true
-                                                                    ]
+                                                                "write": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg4"
                                                                   },
-                                                                  "then": [
-                                                                    {
-                                                                      "open": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
+                                                                  "len": {
+                                                                    "param": "chunk_bytes"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "close": {
+                                                                  "file": {
+                                                                    "ref": "s_wfg4"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "rename": {
+                                                                  "from": {
+                                                                    "ref": "s_wfg4"
+                                                                  },
+                                                                  "to": {
+                                                                    "object": {
+                                                                      "namespace": "kv4",
+                                                                      "fields": {
+                                                                        "key": {
+                                                                          "chunk_key": {
+                                                                            "seq": {
+                                                                              "ref": "s_seq"
+                                                                            },
+                                                                            "chunk": {
+                                                                              "elem": {
+                                                                                "array": "s_t2",
+                                                                                "index": {
+                                                                                  "elem": {
+                                                                                    "array": "s_tg4",
+                                                                                    "index": {
+                                                                                      "index": "s_wg4"
+                                                                                    }
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            },
+                                                                            "per": {
+                                                                              "param": "per"
+                                                                            }
+                                                                          }
                                                                         },
-                                                                        "flags": [
-                                                                          "WRONLY",
-                                                                          "CREAT",
-                                                                          "DIRECT",
-                                                                          "CLOEXEC"
-                                                                        ]
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "write": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        },
-                                                                        "len": {
-                                                                          "param": "chunk_bytes"
-                                                                        }
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "close": {
-                                                                        "file": {
-                                                                          "ref": "s_wfg4"
-                                                                        }
+                                                                        "ext": "data"
                                                                       }
                                                                     }
-                                                                  ]
+                                                                  }
                                                                 }
                                                               }
                                                             ]
@@ -32475,12 +31647,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk_tiered.py",
-      "sha256": "820e1cfb00eaffbddb20d5571d75f78ccb3d88c9810b6f0555067a525bf8a171",
+      "sha256": "754ffbd3186b34c52272377375d19e102bbf420c1f5bac6c2a617765b1b5600a",
       "builder_version": "0.4.0",
-      "git": "3cb5da18f2d6-dirty"
+      "git": "0ebb36cd2ad3-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "d5ef8b6642e83c23a2b61af922ac3e1bd3a09c98d113262bffaa52ac0ff116e2"
+    "ast_sha256": "f96c30919e5afe731e2edfd8aa53566d7a077e6896150e608bfb503e363983f3"
   }
 }

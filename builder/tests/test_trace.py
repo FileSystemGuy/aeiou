@@ -842,13 +842,16 @@ def test_kv_tiered_g4_reads_each_chunk_from_a_tier_that_holds_it(tmp_path):
     events = []
     for n, line in enumerate(out.read_text().splitlines()[1:]):
         o = json.loads(line)
-        if o["op"] in ("open", "unlink"):
-            events.append((o["t"], n, o["op"], o["path"], "WRONLY" in o.get("flags", [])))
+        if o["op"] == "rename":                     # a chunk is there once its temporary file is renamed into place
+            events.append((o["t"], n, "write", o["to"]))
+        elif o["op"] == "unlink" or o["op"] == "open" and "WRONLY" not in o["flags"]:
+            events.append((o["t"], n, "unlink" if o["op"] == "unlink" else "read", o["path"]))
     count, there = {}, set()
-    for _, _, op, path, wr in sorted(events):
-        ns, kind = path.split("/")[0], "unlink" if op == "unlink" else "write" if wr else "read"
+    for _, _, kind, path in sorted(events):
+        ns = path.split("/")[0]
         count[ns, kind] = count.get((ns, kind), 0) + 1
         if kind == "write":
+            assert path not in there, f"{path} written again while its tier holds it"
             there.add(path)
         else:
             assert path in there, f"{kind} of {path}, not there at its planned time"
@@ -857,6 +860,40 @@ def test_kv_tiered_g4_reads_each_chunk_from_a_tier_that_holds_it(tmp_path):
     assert {ns for ns, _ in count} == {"kv", "kv4"}, count
     assert count["kv", "write"] == count["kv4", "write"] > 0
     assert count["kv", "read"] > 0 and count["kv4", "read"] > 0 and count["kv", "unlink"] > 0 and ("kv4", "unlink") not in count, count
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
+    """`lmcache_local_disk_tiered_g4`'s calls on a chunk file are those of LMCache 0.5.5's
+    multi-process server with two `fs_native` adapters, traced 2026-11-22 under the AgentX replay
+    (brief item 74; `kit/captures/agentx-mp/`): a store opens `NAME.tmp` with
+    `O_WRONLY|O_CREAT|O_TRUNC` and mode 0644, writes the chunk in one call, closes, and renames it
+    to `NAME.data`; a load is `open(O_RDONLY)`, one read, close; an eviction one unlink; none of
+    Python's `fstat`, `ioctl`, `lseek` after an open, no `O_CLOEXEC`, and no `O_DIRECT` path, which
+    was not traced. Not here yet: the adapters' `stat` of every key looked up and before every
+    store, and their four workers carrying the loads (brief item 74, the designs to come)."""
+    case = case_dir("lmcache_local_disk_tiered_g4", "agentx-tiered-g4")
+    out = tmp_path / "trace.jsonl"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk_tiered_g4")), "--gpus", "1", "--seed", "1",
+                        "--params-file", str(case / "params.json"), "--param", "sessions=6", "--param", "slots=6",
+                        "--param", "chunk_bytes=4096", "--param", "g1_bytes=16384000", "--param", "g2_bytes=1228800",
+                        "--param", "g3_bytes=12288000", "--param", "g4_bytes=1228800000", "--emit-trace", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    ops = [json.loads(line) for line in out.read_text().splitlines()[1:]]
+    kinds = {o["op"] for o in ops}
+    assert kinds == {"open", "write", "read", "close", "rename", "unlink"}, kinds
+    opens = [o for o in ops if o["op"] == "open"]
+    stores = [o for o in opens if "WRONLY" in o["flags"]]
+    loads = [o for o in opens if "WRONLY" not in o["flags"]]
+    assert stores and loads
+    assert all(o["flags"] == ["WRONLY", "CREAT", "TRUNC"] and o["mode"] == 0o644 and o["path"].endswith(".tmp") for o in stores)
+    assert all(o["flags"] == ["RDONLY"] and o["path"].endswith(".data") for o in loads)
+    renames = [o for o in ops if o["op"] == "rename"]
+    assert sorted((o["path"], o["to"]) for o in renames) == sorted((o["path"], o["path"][:-4] + ".data") for o in stores)
+    assert all(o["path"].endswith(".data") for o in ops if o["op"] == "unlink")
+    assert all(o["len"] == 4096 for o in ops if o["op"] in ("read", "write"))
+    assert sum(o["op"] == "write" for o in ops) == len(stores) and sum(o["op"] == "read" for o in ops) == len(loads)
+    assert "direct" not in json.loads(ast_path("lmcache_local_disk_tiered_g4").read_text())["params"]
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")

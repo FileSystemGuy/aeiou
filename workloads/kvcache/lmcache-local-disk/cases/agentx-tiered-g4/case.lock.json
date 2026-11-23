@@ -5,12 +5,11 @@
     {
       "name": "lmcache_local_disk_tiered_g4",
       "abstract": "kvcache/lmcache-local-disk/lmcache_local_disk_tiered_g4.ast.json",
-      "ast_sha256": "d5ef8b6642e83c23a2b61af922ac3e1bd3a09c98d113262bffaa52ac0ff116e2",
+      "ast_sha256": "f96c30919e5afe731e2edfd8aa53566d7a077e6896150e608bfb503e363983f3",
       "params": {
         "cap": {"default": 989824},
         "chunk_bytes": {"default": 33554432},
         "cls": {"default": {"empirical": {"values": [0, 1, 2, 3, 4, 5, 6, 7], "weights": [92, 57, 80, 52, 49, 28, 16, 19]}}},
-        "direct": {"default": false},
         "evict_lanes": {"default": 4},
         "g1_bytes": {"default": 177213005824},
         "g2_bytes": {"default": 526133493760},
@@ -57,7 +56,6 @@
         "cap": "abstract",
         "chunk_bytes": "kvcache/lmcache-local-disk/cases/agentx-tiered-g4/params.json",
         "cls": "abstract",
-        "direct": "abstract",
         "evict_lanes": "abstract",
         "g1_bytes": "kvcache/lmcache-local-disk/cases/agentx-tiered-g4/params.json",
         "g2_bytes": "kvcache/lmcache-local-disk/cases/agentx-tiered-g4/params.json",

@@ -23,8 +23,13 @@ addendum "Built", seven configurations).
 
 The calls on a chunk file are those traced under LMCache's in-process connector (2026-10-02, the
 slot-model abstract `lmcache_local_disk`, retired 2026-11-14, its captures in `kit/captures/`): Python's `open` around one `read` or one `write`,
-or the `O_DIRECT` path; an eviction is one `unlink`. LMCache's multi-process `fs_native` adapter,
-the mechanism's target (brief item 70), is not yet captured (item 74); its calls replace these then.
+or the `O_DIRECT` path; an eviction is one `unlink`. The second abstract, `_g4`, has the calls
+of LMCache's multi-process `fs_native` adapter instead, the mechanism's target (brief item 70),
+captured 2026-11-22 (item 74, `kit/captures/agentx-mp/`): a store is `NAME.tmp` opened
+`O_WRONLY|O_CREAT|O_TRUNC`, one write, close, and a `rename` to `NAME.data`, never of a chunk the
+adapter holds; a load is open, one read, close. Not in it yet: the adapter's `stat` of every key
+looked up and before every store, and its four workers carrying loads as well as stores and
+unlinks; this abstract, with one adapter, keeps the in-process calls.
 
 `aeiou run` runs it since brief item 72 (7) (2026-11-13/14); its case is `unsettled`. Not built yet:
 sessions arrive uniformly over `window_s`
@@ -86,9 +91,10 @@ def shape(name, doc, g4):
     w.param("evict_lanes", 4, unit="count", doc="LMCache's delete workers (the connector's num_workers, 4 in 0.5.5)")
     w.param("store_lanes", 4, unit="count", doc="LMCache's store workers: a chunk's write queued to them, the forward step waiting only "
             "for its copy to host memory (0.5.5's local-disk path, read 2026-11-09, DESIGN_REVIEW.md §3.99 item 13 (4))")
-    w.param("direct", False, doc="[config] LMCache's `use_odirect`: every chunk opened with `O_DIRECT` by `os.open` and read or "
-            "written in one call (traced 2026-10-07, §3.63); LMCache takes this path only when chunk_bytes is a multiple of the "
-            "file system's block size")
+    if not g4:                                      # fs_native's own `odirect` path is not traced, so the G4 abstract has none
+        w.param("direct", False, doc="[config] LMCache's `use_odirect`: every chunk opened with `O_DIRECT` by `os.open` and read or "
+                "written in one call (traced 2026-10-07, §3.63); LMCache takes this path only when chunk_bytes is a multiple of the "
+                "file system's block size")
     w.param("tab", tab, doc="[load, fitted] the fit's quantile tables, fixed point × 1e6, one row a table on the fit's grid")
     w.param("prof", [round(x * S) for x in G['prof']], doc="[load, fitted] the main agent's growth by tenth of its session")
     w.param("p_sub", [round(c['p_sub'] * S) for c in CL], doc="[load, fitted] a session has sub-agents, by class")
@@ -111,10 +117,14 @@ def shape(name, doc, g4):
     G2_CHUNKS = P.g2_bytes // P.chunk_bytes
     G3_CHUNKS = P.g3_bytes // P.chunk_bytes
 
-    kv = w.namespace("kv", pattern="kv/{key:016x}.pt", fields={"key": int}, size=P.chunk_bytes, seed=0x5eed_da85)   # one flat directory (traced)
-    if g4:                                          # G4's directory, a namespace of its own, so `--endpoint kv4=DIR` places it on the shared system
+    if not g4:
+        kv = w.namespace("kv", pattern="kv/{key:016x}.pt", fields={"key": int}, size=P.chunk_bytes, seed=0x5eed_da85)   # one flat directory (traced)
+        final = lambda ns, key: ns.object(key=key)                     # noqa: E731
+    else:                                           # fs_native: `NAME.tmp` renamed to `NAME.data`; G4's directory a namespace of its own, so `--endpoint kv4=DIR` places it on the shared system
         G4_CHUNKS = P.g4_bytes // P.chunk_bytes
-        kv4 = w.namespace("kv4", pattern="kv4/{key:016x}.pt", fields={"key": int}, size=P.chunk_bytes, seed=0x5eed_da86)
+        kv = w.namespace("kv", pattern="kv/{key:016x}.{ext}", fields={"key": int, "ext": str}, size=P.chunk_bytes, seed=0x5eed_da85)
+        kv4 = w.namespace("kv4", pattern="kv4/{key:016x}.{ext}", fields={"key": int, "ext": str}, size=P.chunk_bytes, seed=0x5eed_da86)
+        final = lambda ns, key: ns.object(key=key, ext="data")         # noqa: E731
 
 
     def opened(a, b, flags):
@@ -306,7 +316,8 @@ def shape(name, doc, g4):
         2026-11-22: `store_policy.py`, `prefetch_policy.py`, `prefetch_controller.py`): the chunks past
         G2's hit are looked up in both, the leading run some adapter holds is the hit, and each of its
         chunks is loaded by the first adapter that holds it, G3 before G4, which alone is touched for
-        it; every chunk G2 newly took is stored in both, each adapter's write on its own workers."""
+        it; every chunk G2 newly took is stored in each adapter that lacks it, each adapter's write on
+        its own workers. The calls on a chunk file are `fs_native`'s, traced 2026-11-22 (brief item 74)."""
         h3 = c.probe("lm", ["g3", "g4"], chunk_keys(sq, P.per, h2), tag + "h3")
         hit = c.let(tag + "hit", h2 + h3)
         first = c.let(tag + "first", max_(h2, min_(gh * BL, seq_len(sq) * BL - 1) // (BL * P.per)))
@@ -314,15 +325,31 @@ def shape(name, doc, g4):
         with c.span("load", staging="store"):
             for tg, ns, arr in (("r3", kv, a3), ("r4", kv4, a4)):
                 with c.loop(tag + tg, arr.len) as j:
-                    chunk_read(c, c.let(tag + tg + "f", ns.object(key=chunk_key(sq, arr[j], P.per))))
+                    native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[j], P.per))))
         c.touch("lm", "g3", chunk_keys(sq, P.per, chunks=a3))
         c.touch("lm", "g4", chunk_keys(sq, P.per, chunks=a4))
         t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")
         for tr, ns, wk in (("g3", kv, "store"), ("g4", kv4, "store4")):
-            tk = c.store("lm", tr, chunk_keys(sq, P.per, chunks=t2), present="renew", taken=tag + "t" + tr)   # indices into t2
+            tk = c.store("lm", tr, chunk_keys(sq, P.per, chunks=t2), taken=tag + "t" + tr)   # indices into t2; a chunk the adapter holds is left, never rewritten (traced)
             with c.loop(tag + "w" + tr, tk.len) as j:
                 with c.submit(wk):
-                    chunk_write(c, c.let(tag + "wf" + tr, ns.object(key=chunk_key(sq, t2[tk[j]], P.per))))
+                    native_write(c, tag + "wf" + tr, ns, chunk_key(sq, t2[tk[j]], P.per))
+
+
+    def native_read(a, b):
+        """One chunk loaded by LMCache's `fs_native` adapter (the multi-process server, traced 2026-11-22)."""
+        a.open(b, "RDONLY")
+        a.read(b, P.chunk_bytes)
+        a.close(b)
+
+
+    def native_write(a, tag, ns, key):
+        """One chunk stored by `fs_native`: written whole to `NAME.tmp`, renamed into place (traced 2026-11-22)."""
+        t = a.let(tag, ns.object(key=key, ext="tmp"))
+        a.open(t, "WRONLY|CREAT|TRUNC", mode=0o644)
+        a.write(t, P.chunk_bytes)
+        a.close(t)
+        a.rename(t, final(ns, key))
 
 
     def sub_agents(bt, tl, s, cls, spl, psub, join):
@@ -353,11 +380,11 @@ def shape(name, doc, g4):
             return timed(1_000_000_000, tier_attr("used") * 10 >= cap * 8, max_(1, tier_attr("entries") * 2 // 10))
         g2 = tier("g2", lmc_order, capacity=G2_CHUNKS, evict=lmc_rule(G2_CHUNKS))
         g3 = tier("g3", lmc_order, capacity=G3_CHUNKS, evict=lmc_rule(G3_CHUNKS),
-                  on_evict=(P.evict_lanes, lambda b: b.unlink(kv.object(key=victim()))))
+                  on_evict=(P.evict_lanes, lambda b: b.unlink(final(kv, victim()))))
         lm, workers = [g2, g3], {"store": (P.store_lanes, P.g2_bytes)}
         if g4:                                                         # each adapter evicts by its own rule and has its own workers
             lm.append(tier("g4", lmc_order, capacity=G4_CHUNKS, evict=lmc_rule(G4_CHUNKS),
-                           on_evict=(P.evict_lanes, lambda b: b.unlink(kv4.object(key=victim())))))
+                           on_evict=(P.evict_lanes, lambda b: b.unlink(final(kv4, victim())))))
             workers["store4"] = (P.store_lanes, P.g2_bytes)
         with gpu.timeline("tl", caches={"lm": lm, "gpu": [tier("g1", vllm, capacity=G1_BLOCKS, full="wait")]},
                           resources={"slots": P.slots},

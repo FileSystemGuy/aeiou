@@ -8,19 +8,28 @@ G4's on the shared system, `--root` or `--endpoint kv=DIR` G3's on the node's dr
 G3 is a 960 GB drive (28,610 chunks) and G4 7.68 TB (228,881 chunks). These two sizes are this
 project's, chosen so that both tiers are exercised within the run, not the WG's: at them G3
 reaches its watermark and unlinks most of what it took, G4 never reaches its own, and so G4 serves
-the chunks G3 dropped. At seed 1 and one GPU: 88,707 files written to each tier, 83,517 chunks read
-from G3 and 35,080 from G4, 69,133 files unlinked in G3 and none in G4.
+the chunks G3 dropped. At seed 1 and one GPU: 116,456 files written to each tier, 205,774 chunks read
+from G3 and 152,601 from G4, 96,453 files unlinked in G3 and none in G4 (since 2026-11-23; before the
+chunk-file calls changed, another sample: 88,707, 83,517, 35,080, and 69,133).
 
 What LMCache does with two adapters is read from its source (0.5.5, `v1/distributed/
-storage_controllers/`), not traced: every chunk G2 newly takes is stored in both; a lookup past
+storage_controllers/`) and, since 2026-11-22, seen in a capture of its multi-process server
+(`kit/captures/agentx-mp/`, the mechanism's README): every chunk G2 newly takes is stored in each
+adapter that lacks it; a lookup past
 G2's hit asks both, the hit is the leading run some adapter holds, and each chunk of it is loaded
 by the first adapter that holds it (G3 before G4), which alone is touched for it; each adapter
 evicts by its own rule, so a chunk G3 dropped is still found in G4. Two things are not settled:
 
-- The calls on a chunk file are the in-process connector's, as in `agentx-tiered`, while two L2
+- ~~The calls on a chunk file are the in-process connector's, as in `agentx-tiered`, while two L2
   adapters exist only in LMCache's multi-process server, whose `fs` adapter makes other calls (a
   `stat` before every store and every lookup, a temporary file and a `rename`); no capture of it
-  exists (brief item 74).
+  exists (brief item 74).~~ Since 2026-11-23 the calls on a chunk file are the multi-process
+  server's `fs_native` adapter's, as captured: a temporary file and a `rename` for a store, open,
+  read, close for a load, a chunk the adapter holds never rewritten. Not yet: the adapter's `stat`
+  of every key looked up, in both tiers, and before every store (in the capture seven for every
+  file written), and its four workers carrying loads as well as stores and unlinks, where the
+  abstract reads on the request's lane. The adapter's `O_DIRECT` option was not traced, and the
+  abstract has no `direct` parameter.
 - Each adapter's writes go to store workers of its own (`store` and `store4`, `store_lanes`
   each), so a slow tier does not hold the other's writes; each pool's unfinished bytes are bounded
   by G2's size separately, where LMCache has one G2.
@@ -28,6 +37,6 @@ evicts by its own rule, so a chunk G3 dropped is still found in G4. Two things a
 Its sample is not `agentx-tiered`'s: an abstract's draws are keyed by where they stand in the
 document, and this one has statements the other lacks, so the same seed gives other sessions.
 
-No capture. The planned trace at seed 1 was checked for consistency (no read of a file not yet
+No capture of its own. The planned trace at seed 1 was checked for consistency (no read of a file not yet
 written or already unlinked, in planned order); the probe over both tiers is held by the runner's
 tests (`evict.rs`).

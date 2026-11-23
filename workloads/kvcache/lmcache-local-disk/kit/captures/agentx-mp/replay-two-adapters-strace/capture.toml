@@ -1,0 +1,16 @@
+# Evidence of the kit, outside the catalog: no pair is judged. LMCache 0.5.5's multi-process server
+# (`lmcache server`) with two `fs_native` L2 adapters, the traced process, under the AgentX replay
+# (kit/replay_agentx.py, 8 sessions, 300 requests asked, 234 sent, 131,072 context) of vLLM 0.30.0
+# on `LMCacheMPConnector`; strace (aeiou-trace capture --source strace), 2026-11-22 23:23 to
+# 2026-11-23 00:22; kit/serve_mp.sh, README.md "LMCache's multi-process server". Brief item 74;
+# DESIGN_REVIEW.md §3.100, the note "The multi-process server captured".
+#   G2 (LMCache's L1) 4 GB, G3 2 GB, G4 6 GB, two directories of one local ext4 file system; the
+#   sizes are the lab's, small enough that both adapters evict, not the WG's.
+#   The KV passed through shared memory (engine-driven transfer), CUDA's interprocess sharing
+#   failing under WSL2: the capture does not show the default mode's calls to be the same.
+#   trace.metrics.json is both directories, trace.g3.metrics.json and trace.g4.metrics.json each
+#   alone (--metrics-block 3145728, a chunk file's size); lmcache.log is the server's output, colors
+#   stripped. The paths in the records are the lab's scratch directories.
+# What it is evidence of: the calls on a chunk file and what the two adapters do with a chunk
+# (lmcache_local_disk_tiered_g4). No abstract was fitted to its counts.
+raw_trace = "not retained"   # the metrics and the trace's capture record (trace.capture.json, with the trace's SHA-256) are kept, never the trace

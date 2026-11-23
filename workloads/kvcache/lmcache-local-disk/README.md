@@ -232,9 +232,10 @@ Since 2026-11-22 the script emits a second abstract, `lmcache_local_disk_tiered_
 `kv` and G4 in `kv4`, each placed by `--endpoint` (G3 on the node's drive, G4 on the shared
 system). Every chunk G2 newly takes is written to both; a lookup past G2's hit is one `probe` over
 both tiers, each chunk of the hit read from the first that holds it; each tier evicts and unlinks
-on its own. Read from LMCache 0.5.5's source, not traced; its case, `agentx-tiered-g4`, says what
-is not settled. The first abstract's contents are as they were (its file records the script's new
-hash).
+on its own. ~~Read from LMCache 0.5.5's source, not traced~~ Read from LMCache 0.5.5's source and,
+since 2026-11-22, held to a capture of its multi-process server (the next section); its case,
+`agentx-tiered-g4`, says what is not settled. The first abstract's contents are as they were (its
+file records the script's new hash).
 
 ```
 aeiou dry-run --case agentx-tiered-g4 --workloads ../.. --gpus 1
@@ -244,3 +245,74 @@ aeiou run --case agentx-tiered-g4 --workloads ../.. --gpus 1 --root /mnt/nvme --
 The fit equals the scratch's `gen5.8.json`, and the abstract's chunk reads, writes, and unlinks
 equal, key for key, those of the scratch port held to LMCache's own `LRUEvictionPolicy`
 (`gen10_lmc`, less the marker files it writes for that comparison), at three configurations.
+
+## LMCache's multi-process server, two adapters (2026-11-22)
+
+Brief item 74's check, `DESIGN_REVIEW.md` §3.100, the note "The multi-process server captured".
+Two L2 adapters exist only in LMCache's multi-process server (`lmcache server`), which vLLM reaches
+through `LMCacheMPConnector`; the traced process is that server, not vLLM. Its `fs_native` adapter
+(C++, four workers an adapter) is the one with a capacity, so the one that evicts.
+
+```
+# from this directory; the corpus as in the AgentX section; D3 and D4 two empty directories under test
+export PYTHONHASHSEED=0 KV_BYTES=2147483648 MAX_MODEL_LEN=131072 L1_GB=4 G3_GB=2 G4_GB=6
+export VLLM_ARGS='--hf-overrides {"max_position_embeddings":131072,"rope_parameters":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
+C=kit/captures/agentx-mp/replay-two-adapters-strace
+aeiou-trace capture --source strace --root $D3 --root $D4 -o /local/cap -- sh kit/serve_mp.sh server $D3 $D4 > server.log 2>&1 &
+sh kit/serve_mp.sh engine > vllm.log 2>&1 &                        # once port 5555 listens
+python kit/replay_agentx.py traces.jsonl --sessions 8 --requests 300 --max-context 131072 > $C/replay.log   # once /health answers
+kill -TERM %2; wait %2; kill -TERM %1; wait
+aeiou-trace metrics /local/cap/trace.txt --root $D3 --root $D4 --metrics-block 3145728 -o $C/trace.metrics.json
+aeiou-trace metrics /local/cap/trace.txt --root $D3 --metrics-block 3145728 -o $C/trace.g3.metrics.json   # and $D4, trace.g4.metrics.json
+cp /local/cap/capture.json $C/trace.capture.json; sed -E 's/\x1b\[[0-9;]*m//g' server.log > $C/lmcache.log
+```
+
+The capture ran these commands from scratch scripts; `kit/serve_mp.sh` is their tidied form and
+has not itself been run under a capture. On the lab's machine (WSL2) CUDA's interprocess sharing
+fails, so the KV was passed through shared memory, `SERVER_ARGS="--supported-transfer-mode
+engine_driven --shm-name aeiou_kv"` and `LMCACHE_MP_TRANSFER_MODE=engine_driven`; the server's
+filesystem calls come after that hand-off, but the capture cannot show the default mode's to be
+the same. Both programs' usage reports were off (`serve_mp.sh` sets the three variables).
+
+What the trace shows (234 requests, 63,422 chunks of prompt, 4,134 distinct chunks stored, a
+chunk file 3,145,728 bytes with no header; G3 a 2 GB directory, G4 6 GB):
+
+| | G3 | G4 |
+|---|---|---|
+| `stat` | 41,497 | 41,497 |
+| files written (`rename`) | 6,066 | 5,327 |
+| files loaded | 3,726 | 6,038 |
+| `unlink` | 5,529 | 3,947 |
+| eviction batches | 50, of 109 to 115 files | 12, of 327 to 331 |
+
+- *A store:* `stat NAME.data` (absent), `openat NAME.tmp` with `O_WRONLY|O_CREAT|O_TRUNC`, mode
+  0644 and no `O_CLOEXEC`, one `write` of the chunk, `close`, `rename` to `NAME.data`. No
+  `fsync`, none of Python's `fstat`, `ioctl`, `lseek`. A chunk the adapter holds is left: no
+  rename of the 11,393 landed on a file that was there. Both adapters store a new chunk at once
+  (their first stores of a chunk within 10 ms of each other).
+- *A lookup:* one `stat` a key in each adapter, both asked whatever the other answers (the same
+  count in each), a miss `ENOENT`, and no stop at the first miss. About 35,500 of an adapter's
+  stats are lookups (103 bursts of more than 8) and about 6,000 the stores' checks (8 a store
+  call). The keys a lookup stats are those past G2's hit, every one, in every adapter (0.5.5's
+  `storage_manager.py`, "Keys from chunk l1_hit_chunks onwards are candidates for L2", read
+  2026-11-23), which is why the lookups are fewer than the prompts' 63,422 chunks; the trace
+  does not show G2's hits, so the count itself is not checked against that rule.
+- *A load:* `openat` with `O_RDONLY`, one `read` of the chunk, `close`. From G3 when G3 holds
+  the chunk, from G4 only when G3 does not (all 6,038 of G4's loads); no load was followed by a
+  store of the chunk into G3, so nothing is promoted.
+- *An eviction:* `unlink`, in batches of 20 % of the files at 0.8 of the capacity, each adapter
+  by its own count.
+- *Threads:* an adapter's four workers issue all of its calls, stats, stores, loads, and
+  unlinks; the two adapters' workers are separate.
+- One flat directory an adapter, the file `MODEL@0x%08x@GROUP@HASH.data`, no listing, no scan
+  at start.
+
+A first run the same evening with G2 at 1 GB (341 chunks, under one 131k prompt's 512) is not
+kept: retrieval failed to allocate 129 times and the engine recomputed and stored again (3,935
+store calls against 49 retrieves); its calls on a file were the same.
+
+`lmcache_local_disk_tiered_g4` has the store, the load, the eviction, and the chunk left when
+held, since 2026-11-23. **Not in it yet:** the stats (a lookup's and a store's), and the adapter's
+workers carrying its loads; both wait on a design. The `fs` adapter (Python, no capacity, never
+evicting under LRU) was traced alone with `lmcache bench l2`: the same store and load with
+Python's `fstat`, `ioctl`, `lseek` after each open and `O_CLOEXEC`, on one thread; not kept.

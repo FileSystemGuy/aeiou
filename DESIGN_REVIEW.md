@@ -13302,6 +13302,54 @@ statements").** What was costed and put to the user before any edit:
   Two do since 2026-11-22, the third left out (the note "Spans in the checkpoint abstracts"
   below).
 
+**The multi-process server captured; the G4 abstract's calls on a chunk file (2026-11-22 and
+2026-11-23; brief item 74's check; the user's "Start with item 1 on your list", "proceed", and, on
+the recommendations below, "Yes, proceed with your recommendations").** Item 74 lists a capture
+under LMCache's multi-process connector against what the abstract emits; `lmcache_local_disk_tiered_g4`
+(contract 0.25) was read from the source alone. LMCache 0.5.5's `lmcache server` was traced with
+two `fs_native` adapters, G3 2 GB and G4 6 GB, under the kit's AgentX replay (234 requests);
+the record, the commands, and the counts are in the mechanism's README, "LMCache's multi-process
+server", and `kit/captures/agentx-mp/replay-two-adapters-strace/`.
+
+- *Two runs, one kept.* The first had G2 (the server's L1) at 1 GB, 341 chunks, under one
+  131k prompt's 512: retrieval failed to allocate, the engine recomputed, and the mix was 3,935
+  store calls to 49 retrieves. Its calls on a file were sound and its counts were not; the user
+  agreed to a second run at 4 GB (25,450 chunks retrieved, 6,786 stored, one allocation
+  failure), which is the evidence. Both ran with the KV passed through shared memory, CUDA's
+  interprocess sharing failing under WSL2; the server's filesystem calls come after that
+  hand-off, and the capture cannot show the default mode's to be the same.
+- *What the source reading had right:* a new chunk stored in both adapters at once; a chunk
+  loaded from G3 when G3 holds it and from G4 only when it does not; nothing promoted from G4
+  to G3; each adapter evicting 20 % of its files at 0.8 of its capacity.
+- *What differed, five things.* (1) A lookup is a `stat` a key in each adapter, both asked
+  whatever the other answers, and a store stats first: 41,497 an adapter, seven or eight for
+  every file written, the largest count on the shared tier; the abstract's `probe` issues
+  nothing. (2) A store writes `NAME.tmp` and renames it. (3) A chunk the adapter holds is left,
+  never rewritten (the abstract had `present="renew"`, the in-process connector's). (4) No
+  `fstat`, `ioctl`, `lseek` after an open and no `O_CLOEXEC`: the adapter is C++, not Python.
+  (5) An adapter's four workers issue all its calls, loads with stores and unlinks, where the
+  abstract reads on the request's lane and has separate store and eviction lanes.
+- *Built, 2026-11-23:* (2), (3), and (4) in `lmcache_local_disk_tiered_g4` alone: `native_read`
+  and `native_write`, the namespaces' names `{key}.{ext}` (`tmp`, `data`), the stores of
+  `present="keep"`. Its `direct` parameter is gone, the adapter's own `O_DIRECT` option not
+  being traced. The single-tier abstract is unchanged (its file records the script's new hash):
+  it has one adapter and the in-process connector's calls, each from its own capture, and
+  whether it moves to `fs_native` is the user's under item 70. The G4 abstract's statements
+  changed, so its draws' sites and its sample did: the case at seed 1 writes 116,456 files to
+  each tier where it wrote 88,707.
+- *Not built, each waiting on a design the user has asked for:* (1) the stats, which need a
+  way to issue a call per probed key, a miss expected (the keys are those past G2's hit, every
+  one, in every adapter: 0.5.5's `storage_manager.py`, read 2026-11-23; the trace's about
+  35,500 lookup stats an adapter against 63,422 chunks of prompt fit that and cannot check it,
+  G2's hits not being in a trace); (5) the workers, which changes what the
+  span `load` measures. The eviction's period was not examined: the trace's batches were never
+  closer than 4 s in G3 and 30 s in G4, which the tiers' refill rate may explain.
+- *Tests.* `test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters` and the change to
+  `test_kv_tiered_g4_reads_each_chunk_from_a_tier_that_holds_it` (a chunk is there at its
+  rename, and none is written while its tier holds it) were written first and seen red.
+- *Disclosed to the user:* LMCache's usage report was on by default at the first server start
+  and the two adapter benchmarks, before it was turned off for every later run.
+
 **Spans in the checkpoint abstracts; the search's left out (2026-11-22; the user's "proceed with
 the three spans as recommended").** The recommendation was one span outside a timeline
 (contract 0.24) in each of `dcp_save` (a checkpoint's write), `dcp_load` (a checkpoint's load),
