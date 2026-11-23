@@ -336,7 +336,7 @@ fn node(n: &Node, p: &mut Path) {
         }
         Node::Submit { body: b, .. } | Node::Span { body: b, .. } => p.with(&[k, "body"], |p| body(b, p)),
         Node::Acquire { n, .. } => p.with(&[k, "n"], |p| expr(n, p)),
-        Node::Release { .. } => {}
+        Node::Release { .. } | Node::Used { .. } => {}
         Node::Probe { keys, .. } | Node::Touch { keys, .. } => keys_of(keys, k, p),
         Node::Store { keys, size, .. } => {
             keys_of(keys, k, p);

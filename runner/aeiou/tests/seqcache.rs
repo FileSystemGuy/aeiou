@@ -290,7 +290,7 @@ fn the_validator_holds_seqs_caches_and_lookups_to_their_rules() {
         lookup(fresh(4), "h"),
         let_("y", json!({"cond": {"if": {"gt": [{"index": "i"}, 0]}, "then": {"at": {"ref": "h", "index": {"sub": [{"index": "i"}, 1]}}}, "else": 0}}))]}}]))]), "(V33)");
     has(json!([tl(unbounded(), json!([{"loop": {"index": "i", "to": 2, "body": [
-        lookup(fresh(4), "h"), let_("y", json!({"prev": {"ref": "h", "init": 0}}))]}}]))]), "prev: `h` is bound by a `probe` or a `store`, not a `let` (V31)");
+        lookup(fresh(4), "h"), let_("y", json!({"prev": {"ref": "h", "init": 0}}))]}}]))]), "prev: `h` is bound by a `probe`, a `used`, or a `store`, not a `let` (V31)");
     // a seq where a number goes, a number where a seq goes
     has(json!([stat(json!({"add": [fresh(1), 1]}))]), "seq");
     has(json!([stat(json!({"seq_len": 3}))]), "seq_len: expected a seq, got int");

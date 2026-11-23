@@ -50,6 +50,7 @@ pub const SINCE: &[Since] = &[
     Since { version: "0.24", what: "a `span` outside a timeline", used: span_outside_a_timeline },
     Since { version: "0.25", what: "a `probe` over several tiers", used: probe_over_tiers },
     Since { version: "0.26", what: "a `submit` its span waits for (`join`)", used: joined_submit },
+    Since { version: "0.27", what: "a `used`, a tier's fill read by a lane", used: tier_used },
 ];
 
 fn joined_submit(ast: &Ast) -> bool {
@@ -58,6 +59,19 @@ fn joined_submit(ast: &Ast) -> bool {
             Node::Submit { join, .. } => *join,
             Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
             | Node::Span { body, .. } => walk(body),
+            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
+            _ => false,
+        })
+    }
+    ast.actors.values().any(|a| walk(&a.body))
+}
+
+fn tier_used(ast: &Ast) -> bool {
+    fn walk(nodes: &[Node]) -> bool {
+        nodes.iter().any(|n| match n {
+            Node::Used { .. } => true,
+            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
+            | Node::Submit { body, .. } | Node::Span { body, .. } => walk(body),
             Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
             _ => false,
         })
@@ -529,7 +543,7 @@ fn evict_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
     for (i, n) in nodes.iter().enumerate() {
         let np = p(pp, &[&i.to_string()]);
         match n {
-            Node::Compute { .. } | Node::Probe { .. } | Node::Touch { .. } | Node::Store { .. } | Node::Acquire { .. }
+            Node::Compute { .. } | Node::Probe { .. } | Node::Used { .. } | Node::Touch { .. } | Node::Store { .. } | Node::Acquire { .. }
             | Node::Release { .. } | Node::Publish { .. } | Node::Parallel { .. } | Node::Loader { .. } | Node::Channel { .. } | Node::Put { .. }
             | Node::Take { .. } | Node::Barrier { .. } | Node::Timeline { .. } | Node::Trace { .. } | Node::Submit { .. } | Node::Span { .. } => out.push((np, n.kind())),
             Node::Loop { body, .. } | Node::Phase { body, .. } => evict_bans(body, &p(&np, &[n.kind(), "body"]), out),
@@ -1614,6 +1628,19 @@ impl<'a> Checker<'a> {
                 st.holds.clear();
                 st.workers.clear();
             }
+            Node::Used { cache, tier, bind } => {
+                // a tier's fill read by a lane (contract 0.27); as check.py's `n_used`
+                match st.caches.get(cache.as_str()) {
+                    None => self.err(pp, format!("used: no timeline declares cache `{cache}` around it (V33)")),
+                    Some(tiers) if !tiers.iter().any(|(n, _, _)| n == tier) => self.err(pp, format!("used: cache `{cache}` has no tier `{tier}` (V33)")),
+                    _ => {}
+                }
+                if !is_ident(bind) {
+                    self.err(&p(pp, &["bind"]), "not an identifier");
+                }
+                scope.bind(bind, &LOOKUP_DEF, true, Some("int"), (None, None));
+                scope.unpositional.insert(bind.as_str(), "V33");
+            }
             Node::Probe { cache, tier, tiers, keys, bind, held } => {
                 // over several tiers (contract 0.25): `tiers`, two or more and none twice, in
                 // place of `tier`, and `held`, an array a tier, only with it; as check.py's
@@ -2557,7 +2584,7 @@ impl<'a> Checker<'a> {
                     Some(_) => {}
                 }
                 if scope.unpositional.get(name.as_str()) == Some(&"V33") {
-                    self.err(path, format!("prev: `{name}` is bound by a `probe` or a `store`, not a `let` (V31)"));
+                    self.err(path, format!("prev: `{name}` is bound by a `probe`, a `used`, or a `store`, not a `let` (V31)"));
                 }
                 self.expr(init, &p(path, &["init"]), scope, st, None);
             }
@@ -2679,7 +2706,7 @@ impl<'a> Checker<'a> {
             self.err(path, format!("`{name} @` names a binding of this loop body, so its index must be {{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1"));
         }
         if scope.unpositional.get(name) == Some(&"V33") {
-            self.err(path, format!("`{name} @`: it is bound by a `probe` or a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)"));
+            self.err(path, format!("`{name} @`: it is bound by a `probe`, a `used`, or a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)"));
         } else if let Some(rule) = scope.unpositional.get(name) {
             self.err(path, format!("`{name} @`: its definition reads `published`, `entry`, `now`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})"));
         }

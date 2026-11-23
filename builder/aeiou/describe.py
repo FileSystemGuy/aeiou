@@ -32,7 +32,7 @@ from .pattern import Pattern
 OPS = ("open", "close", "read", "write", "lseek", "ioctl", "fadvise", "fstat", "stat", "fsync", "fdatasync",
        "unlink", "truncate", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
 STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond",
-              "phase", "trace", "timeline", "publish", "array", "acquire", "release", "probe", "touch",
+              "phase", "trace", "timeline", "publish", "array", "acquire", "release", "probe", "used", "touch",
               "store", "submit", "span") + OPS
 DISTS = ("const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture")
 EXPRS = ("param", "index", "ref", "at", "actor", "draw", "elem", "len", "sum", "size", "offset", "unit_index", "units",
@@ -687,6 +687,8 @@ class Describer:
                 return out + self.body(a["body"], depth + 1)
             finally:
                 self._in_timeline = False
+        if k == "used":
+            return [pad + f"`{a['bind']}` is what tier `{a['tier']}` of cache `{a['cache']}` holds now, in the tier's unit; nothing changed."]
         if k in ("probe", "touch", "store"):
             ks = a["keys"]
             rng = (f"the {self.value(ks['count'], 'count')} keys `{self.sym(ks['key'])}`, `{ks['index']}` from "

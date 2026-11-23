@@ -16,7 +16,7 @@ use serde::Deserialize;
 /// (`validate::SINCE`), so an addition changes the hash of no abstract without it. A change
 /// that is not an addition raises the floor to its version.
 pub const AST_FLOOR: &str = "0.23";
-pub const AST_VERSION: &str = "0.26";
+pub const AST_VERSION: &str = "0.27";
 
 /// A version in order (`0.9` before `0.23`), `None` for what is not one in its one spelling.
 pub fn version_key(v: &str) -> Option<(u32, u32)> {
@@ -1093,6 +1093,9 @@ pub enum Node {
         #[serde(default)]
         held: Option<Vec<String>>,
     },
+    /// What a tier of a cache of the enclosing timeline holds, in the tier's unit, at this lane's
+    /// planned instant, bound to `bind`; nothing changed (contract 0.27, rule V33).
+    Used { cache: String, tier: String, bind: String },
     /// Those of `keys` a tier holds, touched, as one event (contract 0.19; keys 0.23; rule V33).
     Touch { cache: String, tier: String, keys: Keys },
     /// Those of `keys` a tier lacks, stored, as one event; those it holds left (`present:
@@ -1164,6 +1167,7 @@ impl Node {
             Node::Acquire { .. } => "acquire",
             Node::Release { .. } => "release",
             Node::Probe { .. } => "probe",
+            Node::Used { .. } => "used",
             Node::Touch { .. } => "touch",
             Node::Store { .. } => "store",
             Node::Open { .. } => "open",
@@ -1195,7 +1199,7 @@ impl Node {
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
                 | Node::Cond { .. } | Node::Phase { .. } | Node::Trace { .. }
                 | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. }
-                | Node::Acquire { .. } | Node::Release { .. } | Node::Probe { .. } | Node::Touch { .. } | Node::Store { .. }
+                | Node::Acquire { .. } | Node::Release { .. } | Node::Probe { .. } | Node::Used { .. } | Node::Touch { .. } | Node::Store { .. }
                 | Node::Submit { .. } | Node::Span { .. }
         )
     }

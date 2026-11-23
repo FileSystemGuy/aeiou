@@ -131,7 +131,7 @@ worker lanes after every other lane at theirs. The state is:
 |---|---|---|---|
 | Each lane's planned clock | `compute`; a wait for a resource, a `full: wait` tier, or a join | `now` | The live lanes |
 | The published log, by group | `publish` | `published`, `entry` | The entries published (a known gap: nothing bounds it but the abstract) |
-| A tier's entries and their attributes (`stored`, `touched`, `freed`, `hits`, `pos`, `size`), and which a lane holds | `store`, `touch`, `release`, an eviction | `probe`, the tier's `order` (through `cached`), its `evict` (through `tier`) | The tier's capacity, a parameter |
+| A tier's entries and their attributes (`stored`, `touched`, `freed`, `hits`, `pos`, `size`), and which a lane holds | `store`, `touch`, `release`, an eviction | `probe`, `used` (its fill, contract 0.27), the tier's `order` (through `cached`), its `evict` (through `tier`) | The tier's capacity, a parameter |
 | A resource's free units and its queue of waiting lanes | `acquire`, `release` | `acquire` | The live lanes |
 | An `array`, and a `store`'s `taken` | Where it stands, once | `elem`, `len` | Its count |
 
@@ -159,7 +159,7 @@ the start).
 
 ### 4. Helpers (new; not yet written)
 
-`probe`, `touch`, `store`, `acquire`, `release`, `publish`, `submit`, `span`, each with
+`probe`, `used`, `touch`, `store`, `acquire`, `release`, `publish`, `submit`, `span`, each with
 a declared effect signature in section 5's terms.
 
 ### 5. The verifier (new; one proposal)
@@ -176,7 +176,7 @@ in it.
 | `op` | Issues an op to the system under test | The POSIX ops (`open` to `readdir`) |
 | `time` | Moves the lane's clock (planned, in a timeline; a real delay outside one) | `compute` |
 | `wait` | May wait in planned time for another lane | `acquire`; a store of `present: touch` (on a `full: wait` tier; ~~`lookup`~~, a builder function over it since contract 0.23) |
-| `read` | Reads timeline state | `probe`; the expressions `published` and `entry` |
+| `read` | Reads timeline state | `probe`, `used`; the expressions `published` and `entry` |
 | `write` | Changes timeline state | `publish`, `touch`, `store`, `release` |
 | `fork` | Starts lanes that plan their own time | `parallel` (joined, or with `join: false`) |
 | `hand` | Hands ops to a worker lane | `submit` |
@@ -275,7 +275,7 @@ Three places a capability can live, and the test for which.
   six calls of Python's `open()`.
 - **Intrinsic.** A capability the runner carries because it needs an order across lanes or
   state kept efficiently, neither of which expressions can give. Today: the timeline and its
-  planned order; the tier (a sorted victim index) with `probe`, `touch`, `store`; the resource
+  planned order; the tier (a sorted victim index) with `probe`, `used`, `touch`, `store`; the resource
   with `acquire` and `release`; the published log; `workers` and `submit`; `span`; the Feistel
   shuffle behind `consume`; `channel`, `put`, `take`, and `barrier`.
 - **Instruction.** The core that neither of the above can be reduced to: binding, loops,
@@ -408,6 +408,7 @@ needed them.
 | 0.21 | A span's `staging` | 3 | A key on an existing helper |
 | 0.22 | A refusal | none | A provisional piece narrowed (7.4) |
 | 0.26 | A `submit` its span waits for (`join`) | 3 | A key on an existing helper; no context changed (a `submit` was already allowed in a span, which did not wait for it); run side only, nothing in the plan; under 7.5's range |
+| 0.27 | `used`, a tier's fill read by a lane | 3 | A helper beside `probe`, with its context (it reads timeline state and changes nothing, on a lane only); plan side only, nothing in the run; under 7.5's range |
 | 0.25 | A `probe` over several tiers (`tiers`, `held`) | 3 | Keys on an existing helper; no context changed (section 5: `probe` reads timeline state and changes nothing, as before); under 7.5's range, so no committed lock or workload id moved |
 | 0.24 | A `span` outside a timeline | 3 | A helper allowed in a second context (section 5); the first version under 7.5's range, so no committed AST, lock, or workload id moved |
 | 0.23 | Key ranges on `probe`, `touch`, `store`; `store`'s `present: touch`, `hold`, `found`; `lookup` and `choose` removed | none | A provisional piece reshaped (7.4) and two composites lowered to the library (7.1); added 2026-11-22, after the two observations below were written |

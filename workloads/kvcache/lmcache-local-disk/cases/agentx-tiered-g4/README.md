@@ -26,13 +26,21 @@ unlinked in G3, 2,190,010 stats in each tier, 32.2 TiB read in the hour. That is
 for every file written where the lab's capture has 0.86, at other sizes and sessions; the count
 is the rule's consequence here and is not held to a capture.
 
+And the load is all or nothing (contract 0.27, the same day, the same source): the server takes a
+G2 buffer for every chunk it would load, and when G2 has not the room nothing is loaded, the hit
+is G2's own, and the engine computes and stores the rest again. Another sample: 88,866 files
+written to each tier, 348,900 chunks read from G3 and 655,228 from G4, 69,278 files unlinked in
+G3, 2,096,859 stats in each tier, 30.6 TiB read in the hour. At these sizes the rule seldom
+applies (the largest load of one request is 2,068 chunks, G2 holding 15,680); G2's room is the
+plan's at the request's instant, the bytes of loads in flight during a run not in it.
+
 What LMCache does with two adapters is read from its source (0.5.5, `v1/distributed/
 storage_controllers/`) and, since 2026-11-22, seen in a capture of its multi-process server
 (`kit/captures/agentx-mp/`, the mechanism's README): every chunk G2 newly takes is stored in each
 adapter that lacks it; a lookup past
 G2's hit asks both, the hit is the leading run G2 or some adapter holds, and each chunk of it
 G2 lacks is loaded, whatever the GPU holds, by the first adapter that holds it (G3 before G4),
-which alone is touched for it; each adapter
+which alone is touched for it, all of them when G2 has room and none when it has not; each adapter
 evicts by its own rule, so a chunk G3 dropped is still found in G4. Two things are not settled:
 
 - ~~The calls on a chunk file are the in-process connector's, as in `agentx-tiered`, while two L2

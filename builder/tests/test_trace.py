@@ -828,8 +828,8 @@ def test_kv_tiered_issues_storage_ops_on_g3_alone(tmp_path):
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_tiered_g4_reads_each_chunk_from_a_tier_that_holds_it(tmp_path):
     """`lmcache_local_disk_tiered_g4` (2026-11-22, brief item 78, contract 0.25): LMCache's two L2
-    adapters, G3 on `kv` and G4 on `kv4`. Every chunk G2 newly takes is written to both, so the two
-    namespaces get the same writes; G3, small here, evicts and unlinks, G4 never does, so G4 serves
+    adapters, G3 on `kv` and G4 on `kv4`. Every chunk G2 newly takes is written to each adapter
+    that lacks it; G3, small here, evicts and unlinks, G4 never does, so G4 serves
     what G3 dropped; and in planned order no chunk is read from a tier before its file there was
     written or after it was unlinked, which is what the probe over both tiers decides."""
     case = case_dir("lmcache_local_disk_tiered_g4", "agentx-tiered-g4")
@@ -858,8 +858,18 @@ def test_kv_tiered_g4_reads_each_chunk_from_a_tier_that_holds_it(tmp_path):
             if kind == "unlink":
                 there.remove(path)
     assert {ns for ns, _ in count} == {"kv", "kv4"}, count
-    assert count["kv", "write"] == count["kv4", "write"] > 0
+    # G4 holds every chunk G3 does here, so what G4 is sent G3 is sent; G3 alone is sent again a
+    # chunk it dropped that a load too large for G2 left the engine to compute and store
+    assert count["kv", "write"] >= count["kv4", "write"] > 0
     assert count["kv", "read"] > 0 and count["kv4", "read"] > 0 and count["kv", "unlink"] > 0 and ("kv4", "unlink") not in count, count
+    # a load is all or nothing (contract 0.27, the source read 2026-11-23): the server takes a G2
+    # buffer for every chunk it would load or loads none, so no request loads more chunks than
+    # G2 holds, here 300; a request's loads are planned at one instant
+    at = {}
+    for t, _, kind, _ in events:
+        if kind == "read":
+            at[t] = at.get(t, 0) + 1
+    assert max(at.values()) <= 1228800 // 4096, max(at.values())
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
@@ -924,7 +934,7 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     assert len(lanes["kv"]) == len(lanes["kv4"]) == 4 and not lanes["kv"] & lanes["kv4"], lanes
     assert not {o["lane"] for o in ops if o["op"] == "unlink"} & (lanes["kv"] | lanes["kv4"])
     ast = json.loads(ast_path("lmcache_local_disk_tiered_g4").read_text())
-    assert "direct" not in ast["params"] and ast["ast"] == "0.26"
+    assert "direct" not in ast["params"] and ast["ast"] == "0.27"
 
     def nodes(x, kind):
         if isinstance(x, dict):
@@ -946,6 +956,8 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     assert probes and all(p["tiers"] == ["g2", "g3", "g4"] and len(p["held"]) == 3
                           and p["keys"]["from"]["min"][0]["ref"].endswith("_h2") for p in probes), probes
     assert "_first" not in json.dumps(ast)
+    # and the load is decided by G2's fill, read before the span (contract 0.27)
+    assert [u for u in walk(ast, "used")] and all(u["cache"] == "lm" and u["tier"] == "g2" for u in walk(ast, "used"))
 
 
 def walk(x, kind):

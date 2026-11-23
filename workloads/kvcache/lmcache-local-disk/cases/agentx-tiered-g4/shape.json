@@ -4,9 +4,9 @@
   "runs": [
     {
       "ast": "lmcache_local_disk_tiered_g4",
-      "ast_sha256": "c625221ed2d8e8bb25231e366338c263e263f594c67a68530e7df6f2ad15d4a2",
+      "ast_sha256": "4f432a5360011dce91bd1aa46c8ff212aedabfdbee1caca306d481da68e02152",
       "params": "case.lock.json",
-      "params_sha256": "c6f0634a30b7acd3d844b12dcd6f308406af3d01bdd9870b21417968247bf06e",
+      "params_sha256": "b52416065ab16b44948e2afd7b953c39322116331788b0667eaddcc0c6bd0d44",
       "gpus": 1,
       "seeds": [
         1,
@@ -20,18 +20,18 @@
         "metadata",
         "skew"
       ],
-      "ops": 8324343,
+      "ops": 7986308,
       "counts": {
-        "close": 1232592,
-        "open": 1232592,
-        "read": 1055178,
-        "rename": 177414,
-        "stat": 4380020,
-        "unlink": 69133,
-        "write": 177414
+        "close": 1181860,
+        "open": 1181860,
+        "read": 1004128,
+        "rename": 177732,
+        "stat": 4193718,
+        "unlink": 69278,
+        "write": 177732
       },
-      "bytes_read": 35405898448896,
-      "bytes_written": 5953025998848,
+      "bytes_read": 33692944695296,
+      "bytes_written": 5963696308224,
       "datasets": [],
       "attributes": {
         "run_length_read": {
@@ -55,13 +55,13 @@
           "class": "large"
         },
         "read_share": {
-          "value": 0.888171,
-          "spread": 0.0323213,
+          "value": 0.884597,
+          "spread": 0.0526763,
           "class": "read-mostly"
         },
         "metadata": {
-          "value": 5.75353,
-          "spread": 1.50637,
+          "value": 5.83843,
+          "spread": 0.917585,
           "class": "high"
         },
         "reads_own_writes": {
@@ -70,13 +70,13 @@
           "class": "yes"
         },
         "reread": {
-          "value": 0.987507,
-          "spread": 0.00403475,
+          "value": 0.985718,
+          "spread": 0.00510077,
           "class": "repeated"
         },
         "skew": {
-          "value": 0.328335,
-          "spread": 0.119995,
+          "value": 0.321688,
+          "spread": 0.0772151,
           "class": "skewed"
         }
       }

@@ -115,6 +115,14 @@ def test_workers_submit_and_span_are_described():
     assert lines[1].strip() == "- Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:", lines
 
 
+def test_used_is_described():
+    """Contract 0.27: a tier's fill read by a lane."""
+    d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)
+    lines = d.body([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": [{"name": "g2", "capacity": 4}]}], "body": [
+        {"used": {"cache": "lm", "tier": "g2", "bind": "f"}}]}}], 0)
+    assert lines[-1].strip() == "- `f` is what tier `g2` of cache `lm` holds now, in the tier's unit; nothing changed.", lines
+
+
 def test_a_span_outside_a_timeline_is_described_as_elapsed_time():
     """Contract 0.24: outside a timeline a span is the elapsed time of its body; in one, a request's wait."""
     d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)

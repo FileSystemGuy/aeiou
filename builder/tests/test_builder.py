@@ -2424,6 +2424,42 @@ def test_a_span_outside_a_timeline_takes_no_staging_and_no_span():
         _span_outside(nested).build()
 
 
+# ---- contract 0.27: a tier's fill read by a lane (brief item 74; DESIGN_REVIEW.md §3.100) ----
+
+def test_used_serializes_validates_and_is_contract_0_27():
+    """Contract 0.27: `used(cache, tier, bind)` binds what a tier holds, in its unit, at the
+    lane's planned instant, nothing changed: what a lane decides by as LMCache's server does
+    whether a lookup's hits fit in G2, all loaded or none. An addition under the version range:
+    a document with one carries 0.27."""
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.timeline("tl", caches={"lm": [tier("g2", lru(), capacity=P.n)]}):
+            f = a.used("lm", "g2", "f")
+            assert isinstance(f, Ref)
+            with a.when(P.n - f >= 2):
+                a.stat(ds.file(f))
+            a.compute(10)
+    ast = w.build()
+    assert ast["ast"] == "0.27"
+    body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
+    assert body[0] == {"used": {"cache": "lm", "tier": "g2", "bind": "f"}}
+    validate(ast)
+    with pytest.raises(BuildError, match=r"ast: version `0.26`, but the document holds a `used`, a tier's fill read by a lane, which contract `0.27` added"):
+        validate({**ast, "ast": "0.26"})
+
+
+@pytest.mark.parametrize("build, needle", [
+    (lambda a: a.used("lm", "g", "1f"), "binding '1f' must match"),
+    (lambda a: a.used("lm", "no tier", "f"), "tier 'no tier' must match"),
+])
+def test_what_used_refuses_is_refused_at_construction(build, needle):
+    w, P, ds = _wl()
+    with pytest.raises(BuildError, match=needle):
+        with w.actor("gpu") as a:
+            with a.timeline("tl", caches={"lm": [tier("g", lru(), capacity=4)]}):
+                build(a)
+
+
 # ---- contract 0.25: a probe over several tiers (brief item 78; DESIGN_REVIEW.md §3.100) ----
 
 def test_a_probe_over_several_tiers_serializes_validates_and_is_contract_0_25():

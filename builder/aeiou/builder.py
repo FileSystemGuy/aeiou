@@ -706,7 +706,7 @@ class _Frame:
 
 # V36 (contract 0.20): what a `submit` body may not hold (it only issues its ops on a worker
 # lane), and what a `span` may not (what moves or waits on the planned clock), as check.py
-SUBMIT_BANS = {"compute", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
+SUBMIT_BANS = {"compute", "probe", "used", "touch", "store", "acquire", "release", "publish", "parallel",
                "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
 SPAN_BANS_OUTSIDE = {"compute", "barrier", "channel", "put", "take", "loader", "timeline", "trace"}   # outside a timeline (0.24)
 SPAN_BANS = {"compute", "parallel", "acquire"}       # and a store of present: touch, which may wait
@@ -1058,6 +1058,16 @@ class Cursor:
         self._emit({"probe": node})
         self._top.bindings[bind] = None
         return (Ref(bind), *(ArrayRef(h) for h in held)) if held is not None else Ref(bind)
+
+    def used(self, cache: str, tier: str, bind: str):
+        """What `tier` of `cache` holds, in the tier's unit, at this lane's planned instant, bound
+        to `bind`; nothing changed (contract 0.27, rule V33). Returns the binding, which `@` and
+        `prev` may not read. What a lane decides by as an application's allocator does: LMCache's
+        server loads a lookup's hits into G2 all or none, by the room G2 has."""
+        check_ident(bind, "binding")
+        self._emit({"used": {"cache": check_ident(cache, "cache"), "tier": check_ident(tier, "tier"), "bind": bind}})
+        self._top.bindings[bind] = None
+        return Ref(bind)
 
     def touch(self, cache: str, tier: str, keys):
         """Those of `keys` that `tier` of `cache` holds, touched as one event (contract 0.19,

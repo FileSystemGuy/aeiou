@@ -654,3 +654,80 @@ fn the_validator_holds_a_probe_over_several_tiers_to_its_rules() {
     assert_eq!(aeiou::validate::check(&aeiou::ast::parse(&text).expect("parses")), Vec::<String>::new());
     assert_eq!(walk_doc(&text, true).unwrap(), ["d/0"]);
 }
+
+// ---------------------------------------------------------------- a tier's fill read by a lane (contract 0.27)
+
+fn used(tier: &str, bind: &str) -> Value {
+    json!({"used": {"cache": "c", "tier": tier, "bind": bind}})
+}
+
+fn walk_27(body: Value) -> Vec<String> {
+    walk_doc(&doc(body).replacen("\"0.23\"", "\"0.27\"", 1), true).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Contract 0.27 (brief item 74): `used` binds what a tier holds, in the tier's unit, at the
+/// lane's planned instant, and changes nothing: what a lane needs to decide as LMCache's server
+/// does whether a load fits in G2, all of it or none.
+#[test]
+fn used_binds_what_a_tier_holds_and_changes_nothing() {
+    // empty, then three of A's chunks in t and one in u; each tier's own count
+    let body = json!([tl(tiers_tu(100), json!([
+        used("t", "u0"), stat(r("u0")),
+        let_("a", shared(1, 6)), store_in("t", r("a"), json!({"from": 0, "count": 3})), store_in("u", r("a"), json!({"from": 0, "count": 1})),
+        used("t", "ut"), used("u", "uu"), stat(r("ut")), stat(r("uu")),
+        // read again after a store: the value is the one at the statement, not a later one
+        store_in("t", r("a"), json!({"from": 3, "count": 2})), stat(r("ut")), used("t", "ut2"), stat(r("ut2"))]))]);
+    assert_eq!(walk_27(body), ["d/0", "d/3", "d/1", "d/3", "d/5"]);
+    // a tier that counts bytes: `used` is in bytes
+    let bytes = json!([{"name": "t", "order": [cached("touched")], "capacity": 1000, "unit": "bytes"}]);
+    let body = json!([tl(bytes, json!([
+        {"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(shared(1, 2), json!(1), json!(0), Some(json!(2))), "size": 300}},
+        used("t", "b"), stat(r("b"))]))]);
+    assert_eq!(walk_27(body), ["d/600"]);
+    // the decision it is for: a load of `n` fits in what a tier of 4 has left, or nothing is done
+    let lru = json!([{"name": "t", "order": [cached("touched"), {"neg": cached("pos")}], "capacity": 4}]);
+    let fits = |n: i64| json!({"le": [n, {"sub": [4, r("f")]}]});
+    let body = json!([tl(lru, json!([
+        store(shared(1, 3), 0, 3), used("t", "f"),
+        {"cond": {"if": fits(1), "then": [stat(json!(1))], "else": [stat(json!(10))]}},
+        {"cond": {"if": fits(2), "then": [stat(json!(2))], "else": [stat(json!(20))]}}]))]);
+    assert_eq!(walk_27(body), ["d/1", "d/20"]);
+    // nothing is changed: A's chunks keep their order, so B's one evicts A's first-stored tail
+    let lru = json!([{"name": "t", "order": [cached("touched"), cached("pos")], "capacity": 3}]);
+    let body = json!([tl(lru, json!([
+        let_("a", shared(1, 3)), store(r("a"), 0, 3), used("t", "f"), store(shared(2, 1), 0, 1),
+        probe(r("a"), 0, "h0"), probe(r("a"), 1, "h1"), used("t", "g"), stat(r("h0")), stat(r("h1")), stat(r("g"))]))]);
+    assert_eq!(walk_27(body), ["d/0", "d/2", "d/3"]);
+}
+
+#[test]
+fn the_validator_holds_used_to_its_rules() {
+    let check = |body: Value, version: &str| {
+        let text = doc(body).replacen("\"0.23\"", &format!("\"{version}\""), 1);
+        aeiou::validate::check(&aeiou::ast::parse(&text).expect("parses"))
+    };
+    let has = |body: Value, needle: &str| {
+        let e = check(body.clone(), "0.27");
+        assert!(e.iter().any(|m| m.contains(needle)), "wanted `{needle}` for {body}:\n{e:#?}");
+    };
+    has(json!([used("t", "f")]), "used: no timeline declares cache `c` around it (V33)");
+    has(json!([tl(tiers_tu(9), json!([used("v", "f")]))]), "used: cache `c` has no tier `v` (V33)");
+    has(json!([tl(tiers_tu(9), json!([used("t", "1f")]))]), "not an identifier");
+    // its value is the one the step being walked sees: never under `@`, never a `prev`
+    has(json!([tl(tiers_tu(9), json!([{"loop": {"index": "i", "to": 2, "body": [used("t", "f"), stat(json!({"at": {"ref": "f", "index": 0}}))]}}]))]),
+        "`f @`: it is bound by a `probe`, a `used`, or a `store`");
+    has(json!([tl(tiers_tu(9), json!([{"loop": {"index": "i", "to": 2, "body": [used("t", "f"), stat(json!({"prev": {"ref": "f", "init": 0}}))]}}]))]),
+        "prev: `f` is bound by a `probe`, a `used`, or a `store`, not a `let` (V31)");
+    // a body that only issues ops reads no state of its timeline
+    let workers = |body: Value| json!([{"timeline": {"name": "tl", "caches": [{"name": "c", "tiers": tiers_tu(9)}],
+        "workers": [{"name": "w", "lanes": 1, "staging": 4096}], "body": body}}]);
+    has(workers(json!([{"submit": {"workers": "w", "body": [used("t", "f")]}}])), "used");
+    let evicting = json!([{"name": "t", "order": [cached("touched")], "capacity": 4, "on_evict": {"lanes": 1, "body": [used("t", "f")]}}]);
+    has(json!([tl(evicting, json!([]))]), "used");
+    // the version: a document with it carries 0.27, and one without it does not
+    let e = check(json!([tl(tiers_tu(9), json!([used("t", "f")]))]), "0.23");
+    assert_eq!(e, ["t: ast: version `0.23`, but the document holds a `used`, a tier's fill read by a lane, which contract `0.27` added: it carries `0.27`"]);
+    let e = check(json!([tl(tiers_tu(9), json!([probe_in("t", shared(1, 2), 0, "h")]))]), "0.27");
+    assert!(e[0].contains("holds nothing past contract `0.23`"), "{e:?}");
+    assert_eq!(check(json!([tl(tiers_tu(9), json!([used("t", "f"), stat(r("f"))]))]), "0.27"), Vec::<String>::new());
+}

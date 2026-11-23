@@ -297,6 +297,11 @@ each is a recorded decision and the golden tests pin them.
   flight. The planner marks the end of every submitted body on its worker lane; the executor
   queues a body behind the gate of its own submission alone, and stages a submission's writes
   when its gate opens, wherever its worker lane then is.
+- **A tier's fill read by a lane** (contract 0.27, V33; `vm.rs`'s `Node::Used`). `used` binds
+  the tier's `used` as it stands when the lane's walk reaches the statement, in the tier's
+  unit, the number its timed eviction's `tier used` reads; nothing is touched or stored. The
+  binding is a probe's: refused under `x @ i` and to `prev`. It is of the plan alone: a run
+  issues nothing for it, and what a run's loads hold in flight is not in it.
 - **A probe over several tiers** (contract 0.25, V33; `vm.rs`'s `Node::Probe`). With `tiers`
   the walk takes the range's keys in order and, for each, the first tier of the list that
   holds it; the first key no tier holds ends the run, whose length is `bind`. With `held`,

@@ -13460,18 +13460,69 @@ abstract loaded from the chunk holding the tokens the GPU held, the in-process c
   the count is the rule's consequence at the case's sizes, not held to a capture.
 - *Read and not built.* (1) The loads are submitted only when every adapter's lookup has
   answered; the abstract submits both in one span at once (open item, no design yet).
-  (2) The load is all or nothing: G2 must take a buffer for every key of the plan, and when it
+  (2) ~~The load is all or nothing: G2 must take a buffer for every key of the plan, and when it
   cannot (`_reserve_load_buffers`), nothing is loaded and the request is served G2's own hit;
   the engine then computes and stores the rest again. The abstract loads whatever the tiers
   hold, its bytes held in the store workers' staging. That fall-back is a function of G2's
   planned contents, so it could be planned and would not be learned from a run; at the
   case's sizes (G2 15,680 chunks against prompts of some thousands) it is not known how often
-  it would apply.
+  it would apply.~~ Built the same day: the note "Contract 0.27" below.
 - *Test.* The addition to `test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters`
   (one probe over the three tiers from G2's hit, no binding for the chunk the GPU held), written
   first and seen red. It is a test of the document, not of a planned trace: a trace does not
-  show which chunks the GPU held. The two G4 tests' planned trace at test sizes grew from 1.3 to
-  7.3 million lines, G2 there holding 300 chunks, and they take about a minute each.
+  show which chunks the GPU held. ~~The two G4 tests' planned trace at test sizes grew from 1.3 to
+  7.3 million lines, G2 there holding 300 chunks, and they take about a minute each.~~ With
+  the all-or-nothing load (below) most loads at test sizes do not fit, and the tests are back
+  to about 20 s each.
+
+**Contract 0.27: a tier's fill read by a lane, and the load that is all or nothing (2026-11-23;
+the user's "Proceed with the all-or-nothing load work" and "yes, proceed").**
+
+- *What the server does* (LMCache 0.5.5, read, not traced). After every adapter's lookup has
+  answered, `_reserve_load_buffers` asks G2 for a buffer for every key of the load plan
+  (`l1_manager.reserve_write`, the memory manager's `allocate`, all or nothing by its own
+  words). Nothing is evicted to make room: G2 is emptied only by its timed rule. On a failure
+  nothing is loaded and the hit is G2's own leading run; the lookup's stats have been made;
+  the engine computes the rest and stores it, which the adapters that hold a chunk leave. On
+  success the buffers are temporary, gone when the engine has retrieved them.
+- *What the language lacked.* A lane could not read how full a tier is: `tier used|entries`
+  is an expression of a tier's own `evict` alone.
+- *Decided: a statement, `used {cache, tier, bind}`.* What the tier holds, in its unit, at the
+  lane's planned instant, bound as a probe's run is; nothing changed. Proposed to the user as
+  an expression read in a `let`; built as a statement, the user not asked again: it is then a
+  `probe` in every rule (on a lane only, never in a `submit` or `on_evict` body, its binding
+  never under `@` or `prev`), a document that uses it is found by the walk every other row of
+  the version table makes, and no expression's context changes. One attribute, `used`, the
+  number `capacity` is compared with; `entries` waits for a user.
+- *Never learns from the run.* The decision reads G2's planned contents at the request's
+  planned instant. What a run's loads hold while in flight is not in it (planned time has no
+  I/O), and stays what the span's `staging` bounds, an invalid run past it. The server's own
+  decision is made on what G2 holds at that real moment, loads and stores in flight included;
+  a run where that differs from the plan is not detected by this.
+- *Set aside:* the load as an all-or-nothing `store` into G2 whose held entries are dropped
+  at release. It would count concurrent loads against G2, but in planned time the buffers
+  would be held to the request's end, far longer than the server holds them, and it needs two
+  additions.
+- *Built in `lmcache_local_disk_tiered_g4`.* `fits`: the chunks to load from G3 and G4 number
+  no more than G2's capacity less its fill. When it does not hold: no loads, no touch in G3
+  or G4, the hit G2's, and the store over everything past it; the lookup's stats as before.
+  A consequence the tests showed: the two tiers are no longer sent the same writes, since a
+  chunk recomputed after a load that did not fit is written to the adapter that lacks it and
+  left in the one that holds it.
+- *How often it applies.* Expected to matter (the long prompts G2 has dropped are the large
+  loads); at the case's sizes it does not much: at seed 1 and one GPU 88,866 files written to
+  each tier, 348,900 chunks read from G3 and 655,228 from G4 (1,004,128 where the rule
+  before read 1,055,178; 30.6 TiB in the hour), 69,278 files unlinked in G3, 2,096,859 stats
+  in each tier; the largest load of one request is 2,068 chunks, G2 holding 15,680. The
+  sample moved with the statements, so the two are not the same sessions. At the tests'
+  sizes, G2 300 chunks, most loads do not fit.
+- *Not modelled.* The allocator counts bytes and may fragment; the plan counts chunks.
+- *Tests.* Written first and seen red: `evict.rs` (`used` at each point of a walk, in bytes,
+  deciding a `cond`, changing nothing; the validator's rules and the version; red on the
+  version the runner did not read, the statement's code already written by then, so not red
+  as tests of it), six shared refusal cases, the builder's and the description's, and in
+  `test_trace.py` that no planned instant loads more chunks than G2 holds (red: 2,422 against
+  300) and that the abstract reads G2's fill.
 
 **Spans in the checkpoint abstracts; the search's left out (2026-11-22; the user's "proceed with
 the three spans as recommended").** The recommendation was one span outside a timeline

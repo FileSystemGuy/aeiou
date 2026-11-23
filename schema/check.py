@@ -57,6 +57,20 @@ def _probe_over_tiers(ast: dict) -> bool:
     return any(walk(a["body"]) for a in ast.get("actors", {}).values())
 
 
+def _tier_used(ast: dict) -> bool:
+    def walk(nodes):
+        for node in nodes:
+            kind, a = next(iter(node.items()))
+            if kind == "used":
+                return True
+            if kind in ("loop", "parallel", "loader", "phase", "timeline", "submit", "span") and walk(a["body"]):
+                return True
+            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
+                return True
+        return False
+    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
+
+
 def _joined_submit(ast: dict) -> bool:
     def walk(nodes):
         for node in nodes:
@@ -75,6 +89,7 @@ SINCE: list = [
     ("0.24", "a `span` outside a timeline", _span_outside_a_timeline),
     ("0.25", "a `probe` over several tiers", _probe_over_tiers),
     ("0.26", "a `submit` its span waits for (`join`)", _joined_submit),
+    ("0.27", "a `used`, a tier's fill read by a lane", _tier_used),
 ]
 
 
@@ -106,7 +121,7 @@ def version_error(ast: dict):
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "phase", "trace", "timeline", "publish", "array",
-           "acquire", "release", "probe", "touch", "store", "submit", "span"}
+           "acquire", "release", "probe", "used", "touch", "store", "submit", "span"}
 # V30: what a timeline's lanes may not hold: they are planned, never waiting on one another
 NOT_IN_TIMELINE = {"loader", "channel", "put", "take", "barrier", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
@@ -422,7 +437,7 @@ def plan_reads(e, also):
 
 # V35: what an `on_evict` body may not hold: anything that plans time, holds, or changes a cache
 # or a timeline (a body issues its victim's ops at its tick)
-EVICT_BANS = {"compute", "probe", "touch", "store", "acquire", "release", "publish", "parallel",
+EVICT_BANS = {"compute", "probe", "used", "touch", "store", "acquire", "release", "publish", "parallel",
               "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
 
 
@@ -1388,6 +1403,16 @@ class Check:
         scope.bind(a["bind"], 0, True, "int")
         scope.unpositional[a["bind"]] = "V33"
 
+    def n_used(self, a, p, scope):
+        """V33 (contract 0.27): a tier's fill read by a lane. As the runner's `Node::Used`."""
+        cache, tier = a["cache"], a["tier"]
+        if cache not in self.caches:
+            self.err(p, f"used: no timeline declares cache `{cache}` around it (V33)")
+        elif tier not in self.caches[cache]:
+            self.err(p, f"used: cache `{cache}` has no tier `{tier}` (V33)")
+        scope.bind(a["bind"], 0, True, "int")
+        scope.unpositional[a["bind"]] = "V33"
+
     def n_touch(self, a, p, scope):
         self.keys_stmt("touch", a, p, scope)
 
@@ -1697,7 +1722,7 @@ class Check:
             elif not s.loop_body:
                 self.err(p, f"prev: `{name}` is not bound directly in a loop's body, so it has no previous iteration (V31)")
             if scope.lookup_unpositional(name) == "V33":
-                self.err(p, f"prev: `{name}` is bound by a `probe` or a `store`, not a `let` (V31)")
+                self.err(p, f"prev: `{name}` is bound by a `probe`, a `used`, or a `store`, not a `let` (V31)")
             self.expr(a["init"], p + ["init"], scope)
         elif k == "fresh":
             self.expr(a, p + ["fresh"], scope)
@@ -1814,7 +1839,7 @@ class Check:
                             f"{{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1")
         rule = scope.lookup_unpositional(name)
         if rule == "V33":
-            self.err(p, f"`{name} @`: it is bound by a `probe` or a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)")
+            self.err(p, f"`{name} @`: it is bound by a `probe`, a `used`, or a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)")
         elif rule:
             self.err(p, f"`{name} @`: its definition reads `published`, `entry`, `now`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})")
         # of two `let`s of one name in this body, which one an `at` reads is not defined

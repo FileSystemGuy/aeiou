@@ -2633,6 +2633,16 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 Ok(None)
             }
+            Node::Used { cache, tier, bind } => {
+                let tl = self.cache_of(cache, "used")?;
+                let used = match tl.lock().unwrap().tiers.get(&(cache.as_str(), tier.as_str())) {
+                    Some(t) => t.used,
+                    None => return other(format!("used: cache `{cache}` has no tier `{tier}` (V33)")),
+                };
+                let level = self.scopes.last_mut().unwrap();
+                level.bindings.insert(bind.as_str(), Binding { value: Value::Int(used), body: level.body, def: &LOOKUP_DEF, walked: true });
+                Ok(None)
+            }
             Node::Touch { cache, tier, keys } => {
                 let ks = self.keys(keys, "touch")?;
                 let tl = self.cache_of(cache, "touch")?;

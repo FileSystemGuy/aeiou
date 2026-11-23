@@ -320,7 +320,8 @@ def shape(name, doc, g4):
         2026-11-22: `store_policy.py`, `prefetch_policy.py`, `prefetch_controller.py`): the chunks past
         G2's hit are looked up in both, the leading run G2 or some adapter holds is the hit, and each of
         its chunks G2 lacks, whatever the GPU holds, is loaded by the first adapter that holds it, G3
-        before G4, which alone is touched for it; every chunk G2 newly took is stored in each adapter that lacks it, each adapter's write on
+        before G4, which alone is touched for it, all of them when G2 has room for them and none
+        when it has not; every chunk G2 newly took is stored in each adapter that lacks it, each adapter's write on
         its own workers. The calls on a chunk file are `fs_native`'s, traced 2026-11-22 (brief item 74)."""
         # every chunk of that run is loaded, the ones the GPU holds too: the connector's lookup is the
         # whole prompt and carries no GPU hit, and the server's prefetch loads the run before the
@@ -329,7 +330,12 @@ def shape(name, doc, g4):
         # a chunk of the run that G2 holds past its own leading run counts toward the hit and is
         # not loaded (the controller read-locks every such key and takes it out of the load plan)
         h3, _, a3, a4 = c.probe("lm", ["g2", "g3", "g4"], chunk_keys(sq, P.per, h2), tag + "h3", held=(tag + "a2", tag + "a3", tag + "a4"))
-        hit = c.let(tag + "hit", h2 + h3)
+        # the load is all or nothing (contract 0.27; `prefetch_controller.py`, `_reserve_load_buffers`,
+        # read 2026-11-23): the server takes a G2 buffer for every chunk it would load, and when G2
+        # has not the room nothing is loaded, the hit is G2's own, and the engine computes and
+        # stores the rest again; G2's room is its planned one at the request's instant
+        fits = c.let(tag + "fits", a3.len + a4.len <= G2_CHUNKS - c.used("lm", "g2", tag + "u2"))
+        hit = c.let(tag + "hit", h2 + when(fits, h3, 0))
         # the request waits for its lookup and its loads, which each adapter's workers carry (contract
         # 0.26; traced 2026-11-22: an adapter's four threads issue all its calls): worker q of an
         # adapter takes every `store_lanes`-th key from the q-th, behind what the lane already holds
@@ -341,13 +347,15 @@ def shape(name, doc, g4):
                     with c.submit(wk, join=True):
                         with c.loop(tag + tg + "i", ceil_div(n - h2 - q, P.store_lanes)) as i:
                             c.stat(final(ns, chunk_key(sq, h2 + q + i * P.store_lanes, P.per)), expect=["ENOENT"])
-            for tg, ns, arr, wk in (("r3", kv, a3, "store"), ("r4", kv4, a4, "store4")):
-                with c.loop(tag + tg, min_(P.store_lanes, arr.len)) as q:
-                    with c.submit(wk, join=True):
-                        with c.loop(tag + tg + "i", ceil_div(arr.len - q, P.store_lanes)) as i:
-                            native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[q + i * P.store_lanes], P.per))))
-        c.touch("lm", "g3", chunk_keys(sq, P.per, chunks=a3))
-        c.touch("lm", "g4", chunk_keys(sq, P.per, chunks=a4))
+            with c.when(fits):
+                for tg, ns, arr, wk in (("r3", kv, a3, "store"), ("r4", kv4, a4, "store4")):
+                    with c.loop(tag + tg, min_(P.store_lanes, arr.len)) as q:
+                        with c.submit(wk, join=True):
+                            with c.loop(tag + tg + "i", ceil_div(arr.len - q, P.store_lanes)) as i:
+                                native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[q + i * P.store_lanes], P.per))))
+        with c.when(fits):
+            c.touch("lm", "g3", chunk_keys(sq, P.per, chunks=a3))
+            c.touch("lm", "g4", chunk_keys(sq, P.per, chunks=a4))
         t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")
         for tr, ns, wk in (("g3", kv, "store"), ("g4", kv4, "store4")):
             with c.loop(tag + "c" + tr, t2.len) as j:                   # a store's check: each chunk statted first, on the adapter's workers
