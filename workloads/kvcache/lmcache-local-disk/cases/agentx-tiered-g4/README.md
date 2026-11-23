@@ -22,7 +22,7 @@ Since 2026-11-23 (later the same day; another sample again) every chunk of the h
 loaded, the ones the GPU already holds too, as the multi-process server does (read from its
 source, not traced; `DESIGN_REVIEW.md` §3.100, the note "What the multi-process server loads"):
 88,707 files written to each tier, 320,958 chunks read from G3 and 734,220 from G4, 69,133 files
-unlinked in G3, 2,190,010 stats in each tier, 32.2 TiB read in the hour. That is 5.9 chunks read
+unlinked in G3, 2,190,010 stats in each tier, 32.2 TiB read ~~in the hour~~ over the whole plan (see the correction below). That is 5.9 chunks read
 for every file written where the lab's capture has 0.86, at other sizes and sessions; the count
 is the rule's consequence here and is not held to a capture.
 
@@ -30,7 +30,7 @@ And the load is all or nothing (contract 0.27, the same day, the same source): t
 G2 buffer for every chunk it would load, and when G2 has not the room nothing is loaded, the hit
 is G2's own, and the engine computes and stores the rest again. Another sample: 88,866 files
 written to each tier, 348,900 chunks read from G3 and 655,228 from G4, 69,278 files unlinked in
-G3, 2,096,859 stats in each tier, 30.6 TiB read in the hour. At these sizes the rule seldom
+G3, 2,096,859 stats in each tier, 30.6 TiB read ~~in the hour~~ over the whole plan, which is not an hour: the sessions arrive over the hour `window_s` and run to their ends, the last at 51.9 hours of planned time at seed 1 (corrected 2026-11-23, found by running it; the first planned hour holds 46,217 of the 1,004,128 reads and 72,052 of the 177,732 writes, about 1.4 TiB read and 2.2 TiB written). At these sizes the rule seldom
 applies (the largest load of one request is 2,068 chunks, G2 holding 15,680); G2's room is the
 plan's at the request's instant, the bytes of loads in flight during a run not in it.
 

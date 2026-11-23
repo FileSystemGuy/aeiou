@@ -13454,7 +13454,7 @@ abstract loaded from the chunk holding the tokens the GPU held, the in-process c
   several tiers takes a tier with no namespace). The single-tier abstract keeps the in-process
   connector's rule. The sample moved (a statement fewer): the case at seed 1 and one GPU plans
 88,707 files written to each tier, 320,958 chunks read from G3 and 734,220 from G4, 69,133
-  files unlinked in G3, and 2,190,010 stats in each tier; 32.2 TiB read in the hour where the
+  files unlinked in G3, and 2,190,010 stats in each tier; 32.2 TiB read ~~in the hour~~ over the plan's 51.9 hours (corrected 2026-11-23, the note "The plan is 51.9 hours") where the
   rule before read about 15. That is 5.9 chunks read for every file written, against the lab
   capture's 0.86 (9,764 reads, 11,393 files); the two are at different sizes and sessions, and
   the count is the rule's consequence at the case's sizes, not held to a capture.
@@ -13512,7 +13512,7 @@ the user's "Proceed with the all-or-nothing load work" and "yes, proceed").**
 - *How often it applies.* Expected to matter (the long prompts G2 has dropped are the large
   loads); at the case's sizes it does not much: at seed 1 and one GPU 88,866 files written to
   each tier, 348,900 chunks read from G3 and 655,228 from G4 (1,004,128 where the rule
-  before read 1,055,178; 30.6 TiB in the hour), 69,278 files unlinked in G3, 2,096,859 stats
+  before read 1,055,178; 30.6 TiB ~~in the hour~~ over the plan's 51.9 hours, corrected 2026-11-23), 69,278 files unlinked in G3, 2,096,859 stats
   in each tier; the largest load of one request is 2,068 chunks, G2 holding 15,680. The
   sample moved with the statements, so the two are not the same sessions. At the tests'
   sizes, G2 300 chunks, most loads do not fit.
@@ -13523,6 +13523,33 @@ the user's "Proceed with the all-or-nothing load work" and "yes, proceed").**
   as tests of it), six shared refusal cases, the builder's and the description's, and in
   `test_trace.py` that no planned instant loads more chunks than G2 holds (red: 2,422 against
   300) and that the abstract reads G2's fill.
+
+**The plan is 51.9 hours, and its first ninety minutes run (2026-11-23; the user's "push, then the
+real run test").** A correction and a partial result.
+
+- *The correction.* The notes above and the case's README said the case's counts fall "in the
+  hour". They do not: `window_s` is the hour the sessions arrive over, each then runs to its end,
+  and at seed 1 the last op of `agentx-tiered-g4` is planned at 51.9 hours (read from the planned
+  trace, `dry-run --emit-trace`). The first planned hour holds 46,217 of the 1,004,128 reads and
+  72,052 of the 177,732 writes (about 1.4 TiB read and 2.2 TiB written at the case's chunk size);
+  hours 8 to 11 and 23 to 51 are nearly empty. That 40 sessions plan far past the hour was
+  measured for the single-tier case on 2026-11-14 and not carried into this text; the mistake
+  was this log's, not the abstract's. A recommendation made on it, "a real run of an hour", was
+  wrong with it.
+- *What ran.* The case's plan with every byte size divided by 512 (`chunk_bytes` 65,536, G1, G2,
+  G3, and G4 likewise, so every chunk count is the case's, and the plan's op counts are: checked
+  by dry run), seed 1, one GPU, `sync`, both directories on this machine's ext4 disk (WSL2), real
+  time, the page cache not dropped. The case's own sizes need 960 GB and some terabytes, which
+  this machine has not. Stopped by its 90-minute limit at 5,389 s, so no report and no
+  fingerprint; its per-second series is the evidence, and it is not kept.
+- *What it shows.* For 5,389 s the run issued exactly the plan's ops of those seconds (164,880
+  reads, 89,146 writes and renames, 735,774 stats, 23,188 unlinks, the run's clock and the
+  planned clock agreeing). No stall, no certain failure. Lateness stayed under 5 ms but for one
+  quarter hour (0.8 s at most, then 51 ms in the next). Five eviction batches in G3, each about
+  58 ms; eight edge waits in all. Staging peaked at 117 MB of G2's 1,028 MB, 1,792 writes behind.
+- *What it does not show.* Anything about storage: 64 KiB chunks on a local disk through the
+  page cache. Whether evictions contending with loads matters (the unlinks decision above) is
+  not answered by five batches of 58 ms. The other 50 hours.
 
 **Spans in the checkpoint abstracts; the search's left out (2026-11-22; the user's "proceed with
 the three spans as recommended").** The recommendation was one span outside a timeline
