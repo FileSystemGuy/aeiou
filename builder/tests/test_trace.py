@@ -885,7 +885,8 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     adapter first, so the two namespaces get the same stats, key for key, each of a `NAME.data`
     that may be absent, and every file written was statted in its tier. An adapter's four
     workers carry its stats, loads, and stores (contract 0.26: the lookup and the loads are
-    bodies the request's span `load` waits for), each adapter's its own; its unlinks are on
+    bodies the request's spans `lookup` and `load` wait for, the loads submitted only when the
+    lookup has answered), each adapter's its own; its unlinks are on
     eviction lanes of their own."""
     case = case_dir("lmcache_local_disk_tiered_g4", "agentx-tiered-g4")
     out = tmp_path / "trace.jsonl"
@@ -958,6 +959,16 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     assert "_first" not in json.dumps(ast)
     # and the load is decided by G2's fill, read before the span (contract 0.27)
     assert [u for u in walk(ast, "used")] and all(u["cache"] == "lm" and u["tier"] == "g2" for u in walk(ast, "used"))
+    # the loads are submitted only once every adapter's lookup has answered (the server's load
+    # phase, its source read 2026-11-23): two spans in turn, `lookup` holding every stat a span
+    # waits for and `load` every read, the second reached only when the first has ended
+    spans = list(walk(ast, "span"))
+    assert spans and [s["name"] for s in spans] == ["lookup", "load"] * (len(spans) // 2), [s["name"] for s in spans]
+    for s in spans:
+        held = {k for k in ("stat", "read") if list(walk(s["body"], k))}
+        assert held == ({"stat"} if s["name"] == "lookup" else {"read"}), (s["name"], held)
+        assert s.get("staging") == (None if s["name"] == "lookup" else "store")
+        assert all(sub.get("join") for sub in walk(s["body"], "submit"))
 
 
 def walk(x, kind):

@@ -15347,8 +15347,7 @@
                           },
                           {
                             "span": {
-                              "name": "load",
-                              "staging": "store",
+                              "name": "lookup",
                               "body": [
                                 {
                                   "loop": {
@@ -15573,13 +15572,21 @@
                                       }
                                     ]
                                   }
-                                },
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "cond": {
+                              "if": {
+                                "ref": "m_fits"
+                              },
+                              "then": [
                                 {
-                                  "cond": {
-                                    "if": {
-                                      "ref": "m_fits"
-                                    },
-                                    "then": [
+                                  "span": {
+                                    "name": "load",
+                                    "staging": "store",
+                                    "body": [
                                       {
                                         "loop": {
                                           "index": "m_r3",
@@ -15824,16 +15831,7 @@
                                       }
                                     ]
                                   }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "cond": {
-                              "if": {
-                                "ref": "m_fits"
-                              },
-                              "then": [
+                                },
                                 {
                                   "touch": {
                                     "cache": "lm",
@@ -23455,8 +23453,7 @@
                                                   },
                                                   {
                                                     "span": {
-                                                      "name": "load",
-                                                      "staging": "store",
+                                                      "name": "lookup",
                                                       "body": [
                                                         {
                                                           "loop": {
@@ -23681,13 +23678,21 @@
                                                               }
                                                             ]
                                                           }
-                                                        },
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  {
+                                                    "cond": {
+                                                      "if": {
+                                                        "ref": "s_fits"
+                                                      },
+                                                      "then": [
                                                         {
-                                                          "cond": {
-                                                            "if": {
-                                                              "ref": "s_fits"
-                                                            },
-                                                            "then": [
+                                                          "span": {
+                                                            "name": "load",
+                                                            "staging": "store",
+                                                            "body": [
                                                               {
                                                                 "loop": {
                                                                   "index": "s_r3",
@@ -23932,16 +23937,7 @@
                                                               }
                                                             ]
                                                           }
-                                                        }
-                                                      ]
-                                                    }
-                                                  },
-                                                  {
-                                                    "cond": {
-                                                      "if": {
-                                                        "ref": "s_fits"
-                                                      },
-                                                      "then": [
+                                                        },
                                                         {
                                                           "touch": {
                                                             "cache": "lm",
@@ -31543,8 +31539,7 @@
                                                   },
                                                   {
                                                     "span": {
-                                                      "name": "load",
-                                                      "staging": "store",
+                                                      "name": "lookup",
                                                       "body": [
                                                         {
                                                           "loop": {
@@ -31769,13 +31764,21 @@
                                                               }
                                                             ]
                                                           }
-                                                        },
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  {
+                                                    "cond": {
+                                                      "if": {
+                                                        "ref": "s_fits"
+                                                      },
+                                                      "then": [
                                                         {
-                                                          "cond": {
-                                                            "if": {
-                                                              "ref": "s_fits"
-                                                            },
-                                                            "then": [
+                                                          "span": {
+                                                            "name": "load",
+                                                            "staging": "store",
+                                                            "body": [
                                                               {
                                                                 "loop": {
                                                                   "index": "s_r3",
@@ -32020,16 +32023,7 @@
                                                               }
                                                             ]
                                                           }
-                                                        }
-                                                      ]
-                                                    }
-                                                  },
-                                                  {
-                                                    "cond": {
-                                                      "if": {
-                                                        "ref": "s_fits"
-                                                      },
-                                                      "then": [
+                                                        },
                                                         {
                                                           "touch": {
                                                             "cache": "lm",
@@ -32700,12 +32694,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk_tiered.py",
-      "sha256": "c9d67106f298b64f8f91a1abd01395715bb1f26ab0149968205fddd6d5e0fb73",
+      "sha256": "3b6139403c575488ab1c958ff43641915bf7e373df84771f9b690a635997af47",
       "builder_version": "0.4.0",
-      "git": "0ce3c6aa53ac-dirty"
+      "git": "ee733650f3ea-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "3b7113074f85f523fe5139e9239506e33dd6c10ad82f1746d2ae3334298c024c"
+    "ast_sha256": "fd2646ffe22ad9591ebec14c523e2ab731eee201bd2b020a7ec00dde8a7c1b51"
   }
 }

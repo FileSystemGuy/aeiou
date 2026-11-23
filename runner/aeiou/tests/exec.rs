@@ -241,8 +241,8 @@ fn agentx_tiered_through_the_executor() {
 }
 
 /// The two-adapter abstract's case through the executor the same way (contract 0.26: a
-/// request's lookup and loads are bodies on its adapters' workers that its span `load` waits
-/// for): every op the plan holds is issued, none before its plan; every span ends, and those
+/// request's lookup and loads are bodies on its adapters' workers that its spans `lookup` and
+/// `load` wait for): every op the plan holds is issued, none before its plan; every span ends, and those
 /// with a load are no shorter than one op's latency.
 #[test]
 fn agentx_tiered_g4_through_the_executor() {
@@ -252,6 +252,8 @@ fn agentx_tiered_g4_through_the_executor() {
     let mut overrides: Vec<(String, String)> = lock["runs"][0]["params"].as_object().unwrap().iter()
         .map(|(k, v)| (k.clone(), v.as_object().unwrap().values().next().unwrap().to_string())).collect();
     overrides.push(("sessions".into(), sessions));
+    // G2 small enough to drop chunks its two sessions come back for, so that some are loaded
+    overrides.iter_mut().find(|o| o.0 == "g2_bytes").unwrap().1 = "6710886400".into();
     let cfg = Box::leak(Box::new(Config { seed: 0, gpus: 1, overrides, sets: vec![], st_blksize: Default::default() }));
     let loaded = aeiou::load(&root.join("lmcache_local_disk_tiered_g4.ast.json")).unwrap();
     let ast = Box::leak(Box::new(loaded.ast));
@@ -269,10 +271,15 @@ fn agentx_tiered_g4_through_the_executor() {
     assert!(planned > 0 && joined > 0);
     assert_eq!(ops.len(), planned);
     assert!(ops.iter().all(|o| o.completed >= o.issued && o.issued >= o.record.plan));
-    let load = &st.spans["load"];
-    assert_eq!(load.len(), spans);
-    // a span that looked a key up waited for its stat at least; one with nothing past G2's hit is 0
-    assert!(load.iter().any(|x| x.1 >= 1_000_000) && load.iter().all(|x| x.1 == 0 || x.1 >= 1_000_000), "{:?}", &load[..load.len().min(20)]);
+    // a request's lookup and its loads are spans in turn (the loads submitted only once every
+    // adapter's lookup has answered), a `load` only where the load fits G2
+    assert_eq!(st.spans["lookup"].len() + st.spans["load"].len(), spans);
+    assert!(st.spans["load"].len() <= st.spans["lookup"].len());
+    for name in ["lookup", "load"] {
+        let d = &st.spans[name];
+        // a span that looked a key up or loaded one waited for an op at least; one with nothing to do is 0
+        assert!(d.iter().any(|x| x.1 >= 1_000_000) && d.iter().all(|x| x.1 == 0 || x.1 >= 1_000_000), "{name}: max {:?} {:?}", d.iter().map(|x| x.1).max(), d.iter().filter(|x| x.1 > 0 && x.1 < 1_000_000).take(5).collect::<Vec<_>>());
+    }
 }
 
 fn span(name: &str, body: Value) -> Value {
@@ -435,6 +442,29 @@ fn a_span_waits_for_the_bodies_it_joined() {
     let (ops, st) = run26(1, json!([span("load", json!([joined(json!([]))])), stat(3)]), lat);
     assert_eq!(when(&ops), pairs(&[("d/3", 0)]));
     assert_eq!(st.spans["load"], [(0, 0)]);
+}
+
+/// A span after a span that joined bodies issues nothing until those bodies are done (the
+/// two-adapter abstract's lookup, then its loads: LMCache's server starts its load phase only
+/// once every adapter's lookup has answered): the second span's bodies wait for the first's on
+/// every worker lane, not only their own, and each span has its own D.
+#[test]
+fn a_span_after_a_span_waits_for_the_firsts_bodies() {
+    let lat = |r: &Record, _| match &*r.path {
+        "d/1" => 20,
+        "d/2" => 50,
+        _ => 5,
+    };
+    let lookup = span("lookup", json!([joined(json!([stat(1)])), joined(json!([stat(2)]))]));
+    let body = json!([lookup, span("load", json!([joined(json!([stat(4)])), joined(json!([stat(5)]))])), stat(3)]);
+    let (ops, st) = run26(2, body, lat);
+    assert_eq!(sorted(&ops), pairs(&[("d/1", 0), ("d/2", 0), ("d/4", 50), ("d/5", 50), ("d/3", 55)]));
+    assert_eq!(st.spans["lookup"], [(0, 50)]);
+    assert_eq!(st.spans["load"], [(0, 5)]);
+    // in one span the first lane's load would follow its own stat at 20, the other's not yet done
+    let one = json!([span("load", json!([joined(json!([stat(1)])), joined(json!([stat(2)])), joined(json!([stat(4)])), joined(json!([stat(5)]))])), stat(3)]);
+    let (ops, _) = run26(2, one, lat);
+    assert_eq!(sorted(&ops), pairs(&[("d/1", 0), ("d/2", 0), ("d/4", 20), ("d/5", 50), ("d/3", 55)]));
 }
 
 /// A joined body's reads draw on the staging its span names while they are in flight, as the

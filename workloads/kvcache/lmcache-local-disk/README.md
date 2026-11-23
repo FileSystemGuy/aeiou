@@ -323,10 +323,14 @@ each adapter; and a store's, each chunk G2 newly took, on the adapter's workers 
 writes (a chunk's stat and its write are separate submissions, so they may run on different
 workers, where the adapter does them back to back on one). The lookup and the loads are on the
 adapter's workers too (contract 0.26, the same day): worker q of an adapter takes every fourth
-key from the q-th, and the request's span `load` waits for them, so its D is the wait behind
+key from the q-th, and the request's spans wait for them, so each one's D is the wait behind
 whatever those four lanes already hold, stores included, and the two adapters work at once.
+The stats are a span `lookup` and the loads a span `load` after it (2026-11-23, later the same
+day; the server's load phase, read from its source, not traced): the loads are submitted only
+once every adapter's lookup has answered, so a slow adapter's lookup holds the other's loads,
+and a run reports the two waits by name; nothing planned moved.
 **Not in it:** the unlinks on those same workers (they are on eviction lanes of their own, where
-a run times each batch); the loads submitted only once the lookup has answered (both are
-submitted at the request's instant, each lane's stats ahead of its reads). The `fs` adapter (Python, no capacity, never
+a run times each batch); ~~the loads submitted only once the lookup has answered (both are
+submitted at the request's instant, each lane's stats ahead of its reads)~~ (built, above). The `fs` adapter (Python, no capacity, never
 evicting under LRU) was traced alone with `lmcache bench l2`: the same store and load with
 Python's `fstat`, `ioctl`, `lseek` after each open and `O_CLOEXEC`, on one thread; not kept.

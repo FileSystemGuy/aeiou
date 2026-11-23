@@ -28,9 +28,11 @@ of LMCache's multi-process `fs_native` adapter instead, the mechanism's target (
 captured 2026-11-22 (item 74, `kit/captures/agentx-mp/`): a store is `NAME.tmp` opened
 `O_WRONLY|O_CREAT|O_TRUNC`, one write, close, and a `rename` to `NAME.data`, never of a chunk the
 adapter holds; a load is open, one read, close; a lookup is a `stat` of every key past G2's hit
-in each adapter, in the request's span `load`, and a store stats each chunk first, on the
+in each adapter, in the request's span `lookup`, and a store stats each chunk first, on the
 adapter's store workers (since 2026-11-23). The lookup's stats and the loads are on the
-adapter's workers too, the span waiting for them (contract 0.26's joined `submit`), so an
+adapter's workers too, the request's spans waiting for them (contract 0.26's joined `submit`),
+the loads in a span `load` of their own, submitted only once every adapter's lookup has
+answered (the server's load phase, its source read 2026-11-23), so an
 adapter's `store_lanes` lanes carry its lookups, loads, and stores; its unlinks stay on eviction
 lanes of their own, where a run times each batch. This abstract, with one adapter, keeps the
 in-process calls and its reads on the request's lane.
@@ -339,7 +341,10 @@ def shape(name, doc, g4):
         # the request waits for its lookup and its loads, which each adapter's workers carry (contract
         # 0.26; traced 2026-11-22: an adapter's four threads issue all its calls): worker q of an
         # adapter takes every `store_lanes`-th key from the q-th, behind what the lane already holds
-        with c.span("load", staging="store"):
+        # two spans in turn: the loads are submitted only once every adapter's lookup has answered
+        # (`prefetch_controller.py`, `_transition_to_load_phase`, read 2026-11-23, not traced), so a
+        # slow adapter's lookup holds the other's loads; a run reports each span's wait by its name
+        with c.span("lookup"):
             # the lookup: every key past G2's hit statted in each adapter, whatever the other holds
             # (0.5.5's storage_manager.py), a key it lacks ENOENT
             for tg, ns, wk in (("q3", kv, "store"), ("q4", kv4, "store4")):
@@ -347,13 +352,13 @@ def shape(name, doc, g4):
                     with c.submit(wk, join=True):
                         with c.loop(tag + tg + "i", ceil_div(n - h2 - q, P.store_lanes)) as i:
                             c.stat(final(ns, chunk_key(sq, h2 + q + i * P.store_lanes, P.per)), expect=["ENOENT"])
-            with c.when(fits):
+        with c.when(fits):
+            with c.span("load", staging="store"):
                 for tg, ns, arr, wk in (("r3", kv, a3, "store"), ("r4", kv4, a4, "store4")):
                     with c.loop(tag + tg, min_(P.store_lanes, arr.len)) as q:
                         with c.submit(wk, join=True):
                             with c.loop(tag + tg + "i", ceil_div(arr.len - q, P.store_lanes)) as i:
                                 native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[q + i * P.store_lanes], P.per))))
-        with c.when(fits):
             c.touch("lm", "g3", chunk_keys(sq, P.per, chunks=a3))
             c.touch("lm", "g4", chunk_keys(sq, P.per, chunks=a4))
         t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")

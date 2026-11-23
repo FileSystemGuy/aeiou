@@ -31066,9 +31066,9 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk_tiered.py",
-      "sha256": "c9d67106f298b64f8f91a1abd01395715bb1f26ab0149968205fddd6d5e0fb73",
+      "sha256": "3b6139403c575488ab1c958ff43641915bf7e373df84771f9b690a635997af47",
       "builder_version": "0.4.0",
-      "git": "0ce3c6aa53ac-dirty"
+      "git": "ee733650f3ea-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,

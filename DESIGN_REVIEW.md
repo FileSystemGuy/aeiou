@@ -13458,8 +13458,9 @@ abstract loaded from the chunk holding the tokens the GPU held, the in-process c
   rule before read about 15. That is 5.9 chunks read for every file written, against the lab
   capture's 0.86 (9,764 reads, 11,393 files); the two are at different sizes and sessions, and
   the count is the rule's consequence at the case's sizes, not held to a capture.
-- *Read and not built.* (1) The loads are submitted only when every adapter's lookup has
-  answered; the abstract submits both in one span at once (open item, no design yet).
+- *Read and not built.* (1) ~~The loads are submitted only when every adapter's lookup has
+  answered; the abstract submits both in one span at once (open item, no design yet).~~ Built
+  2026-11-23, the note "Two spans" below.
   (2) ~~The load is all or nothing: G2 must take a buffer for every key of the plan, and when it
   cannot (`_reserve_load_buffers`), nothing is loaded and the request is served G2's own hit;
   the engine then computes and stores the rest again. The abstract loads whatever the tiers
@@ -13550,6 +13551,39 @@ real run test").** A correction and a partial result.
 - *What it does not show.* Anything about storage: 64 KiB chunks on a local disk through the
   page cache. Whether evictions contending with loads matters (the unlinks decision above) is
   not answered by five batches of 58 ms. The other 50 hours.
+
+**Two spans: the loads submitted only once every adapter's lookup has answered (2026-11-23; the
+user's "Yes, draft the design for item 2" and "proceed with the two spans").**
+
+- *What the server does* (LMCache 0.5.5, `prefetch_controller.py`, read, not traced). Every
+  adapter is asked for its keys (`_start_lookup_phase`); the load phase starts only when all of
+  those lookups are done (`_transition_to_load_phase`).
+- *What the abstract did.* One span `load` held the lookup's stats and the loads, all submitted
+  at the request's instant. On one worker lane the stats ran ahead of the loads, a lane taking
+  its bodies in order; an adapter's loads did not wait for the other adapter's lookup, nor one
+  lane's for another's stats. Where G4 is slow shared storage that is the difference that
+  matters: the server holds G3's loads behind G4's lookup.
+- *Decided: two spans in turn, no contract change.* A span `lookup` with the joined stats, then
+  a span `load` (staging `store`) with the joined reads, under the guard `fits` with the touches.
+  Under contract 0.26 a span and its lane wait for the bodies it joined, so the lane reaches the
+  second span's submissions only when the first has ended. When an op issues follows the run,
+  which the rule of §3.99 allows; which ops, and their plan, do not.
+- *Passed over:* a wait point inside one span (a contract 0.28 statement), which keeps one D for
+  a request's whole storage wait at the cost of a version, both checkers, the schema, the
+  builder, and the executor. No case has a constraint on that one number. If one comes, this is
+  the alternative.
+- *Consequences.* A run reports `result.span.lookup.*` and `result.span.load.*`, and no single
+  D of a request; the lane's L carries both. A `load` span is counted only for a request whose
+  load fits, where it was counted for every request.
+- *The plan did not move.* At seed 1 the case's fingerprint is `ec4aaf3f3e50f0d2` before and
+  after, every count as in the note above. A first form, with the guard written twice, added a
+  statement to the request's body, moved the sites of the draws after it, and so drew another
+  sample (1,089,038 reads); one guard over the span and the touches keeps the statement count,
+  and the unchanged fingerprint is then the check that the split changes no op.
+- *Tests.* `exec.rs`, `a_span_after_a_span_waits_for_the_firsts_bodies`: written first, and
+  green at once, the executor of 0.26 already doing it; it pins what the abstract now relies on,
+  against the one-span order. `test_trace.py`, the document's spans in turn, `lookup` holding
+  stats and no staging, `load` reads and the staging: written first, seen red.
 
 **Spans in the checkpoint abstracts; the search's left out (2026-11-22; the user's "proceed with
 the three spans as recommended").** The recommendation was one span outside a timeline
