@@ -567,3 +567,90 @@ fn the_validator_holds_taken_chunks_and_present_to_their_rules() {
     assert_eq!(refused(ok.clone()), Vec::<String>::new());
     assert_eq!(walk(ok), ["d/0", "d/0", "d/0", "d/0"]);
 }
+
+// ---------------------------------------------------------------- a probe over several tiers (contract 0.25)
+
+fn probe_tiers(tiers: Value, s: Value, from: i64, bind: &str, held: Option<Value>) -> Value {
+    let mut n = json!({"cache": "c", "tiers": tiers, "keys": crate::common::chunk_keys(s, json!(1), json!(from), None), "bind": bind});
+    if let Some(h) = held {
+        n["held"] = h;
+    }
+    json!({"probe": n})
+}
+
+fn walk_25(body: Value) -> Vec<String> {
+    walk_doc(&doc(body).replacen("\"0.23\"", "\"0.25\"", 1), true).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Contract 0.25 (brief item 78): a `probe` over `tiers` binds the leading run of the keys some
+/// tier of the list holds, and `held` binds, a tier, the indices of that run it serves, a key
+/// going to the first tier listed that holds it: LMCache's lookup over two L2 adapters, where
+/// the union of what they hold is cut at its first gap and the lowest adapter loads each key.
+#[test]
+fn a_probe_over_several_tiers_reads_the_unions_leading_run() {
+    // t holds A's chunks 0 and 2; u holds 1, 2, and 4; no tier holds 3
+    let setup = || vec![let_("a", shared(1, 6)), store_in("t", r("a"), json!({"from": 0, "count": 1})), store_in("t", r("a"), json!({"from": 2, "count": 1})),
+        store_in("u", r("a"), json!({"from": 1, "count": 2})), store_in("u", r("a"), json!({"from": 4, "count": 1}))];
+    let with = |more: Vec<Value>| json!([tl(tiers_tu(100), Value::Array(setup().into_iter().chain(more).collect()))]);
+    // neither tier alone has a run past one chunk; together, three; t serves 0 and 2, u the 1 between
+    let body = with(vec![probe_in("t", r("a"), 0, "ht"), probe_in("u", r("a"), 0, "hu"),
+        probe_tiers(json!(["t", "u"]), r("a"), 0, "h", Some(json!(["at", "au"]))),
+        stat(r("ht")), stat(r("hu")), stat(r("h")), stat(json!({"len": "at"})), stat(json!({"len": "au"})),
+        stat(elem("at", 0)), stat(elem("at", 1)), stat(elem("au", 0))]);
+    assert_eq!(walk_25(body), ["d/1", "d/0", "d/3", "d/2", "d/1", "d/0", "d/2", "d/1"]);
+    // the order of the list decides who serves a key both hold: u first, chunk 2 is u's
+    let body = with(vec![probe_tiers(json!(["u", "t"]), r("a"), 0, "h", Some(json!(["au", "at"]))),
+        stat(r("h")), stat(json!({"len": "at"})), stat(json!({"len": "au"})), stat(elem("at", 0)), stat(elem("au", 0)), stat(elem("au", 1))]);
+    assert_eq!(walk_25(body), ["d/3", "d/1", "d/2", "d/0", "d/1", "d/2"]);
+    // from chunk 1: the run is 1 and 2, the arrays hold the range's indices, not counts from its start
+    let body = with(vec![probe_tiers(json!(["t", "u"]), r("a"), 1, "h", Some(json!(["at", "au"]))),
+        stat(r("h")), stat(elem("at", 0)), stat(elem("au", 0))]);
+    assert_eq!(walk_25(body), ["d/2", "d/2", "d/1"]);
+    // from a chunk no tier holds: no run, and empty arrays; without `held`, the run alone
+    let body = with(vec![probe_tiers(json!(["t", "u"]), r("a"), 3, "h", Some(json!(["at", "au"]))), probe_tiers(json!(["t", "u"]), r("a"), 4, "g", None),
+        stat(r("h")), stat(json!({"len": "at"})), stat(json!({"len": "au"})), stat(r("g"))]);
+    assert_eq!(walk_25(body), ["d/0", "d/0", "d/0", "d/1"]);
+    // nothing is changed: with room for four in u, A's chunks stay in the order they were stored
+    // in, so B's two evict A's 1 and 2, the probe between having touched none
+    let lru = |name: &str, cap: i64| json!({"name": name, "order": [cached("touched"), cached("pos")], "capacity": cap});
+    let body = json!([tl(json!([lru("t", 100), lru("u", 4)]), json!([
+        let_("a", shared(1, 6)), store_in("u", r("a"), json!({"from": 1, "count": 2})), store_in("u", r("a"), json!({"from": 4, "count": 2})),
+        probe_tiers(json!(["t", "u"]), r("a"), 1, "h", Some(json!(["at", "au"]))),
+        store_in("u", shared(2, 2), json!({"from": 0, "count": 2})),
+        probe_in("u", r("a"), 1, "h1"), probe_in("u", r("a"), 4, "h4"), stat(r("h")), stat(r("h1")), stat(r("h4"))]))]);
+    assert_eq!(walk_25(body), ["d/2", "d/0", "d/2"]);
+}
+
+#[test]
+fn the_validator_holds_a_probe_over_several_tiers_to_its_rules() {
+    let has = |node: Value, needle: &str| {
+        let text = doc(json!([tl(tiers_tu(9), json!([{"probe": node.clone()}]))])).replacen("\"0.23\"", "\"0.25\"", 1);
+        let e = aeiou::validate::check(&aeiou::ast::parse(&text).expect("parses"));
+        assert!(e.iter().any(|m| m.contains(needle)), "wanted `{needle}` for {node}:\n{e:#?}");
+    };
+    let ks = || json!({"index": "j", "count": 1, "key": {"index": "j"}});
+    has(json!({"cache": "c", "tier": "t", "tiers": ["t", "u"], "keys": ks(), "bind": "h"}), "probe: `tier` and `tiers` both; it names one tier or a list of them (V33)");
+    has(json!({"cache": "c", "keys": ks(), "bind": "h"}), "probe: neither `tier` nor `tiers` (V33)");
+    has(json!({"cache": "c", "tiers": ["t"], "keys": ks(), "bind": "h"}), "probe: `tiers` names 1 tier; a probe of one tier names it by `tier` (V33)");
+    has(json!({"cache": "c", "tiers": ["t", "u", "t"], "keys": ks(), "bind": "h"}), "probe: tier `t` named twice in `tiers` (V33)");
+    has(json!({"cache": "c", "tiers": ["t", "v"], "keys": ks(), "bind": "h"}), "probe: cache `c` has no tier `v` (V33)");
+    has(json!({"cache": "c", "tier": "t", "keys": ks(), "bind": "h", "held": ["x"]}), "probe: `held` without `tiers`; a probe of one tier binds its run alone (V33)");
+    has(json!({"cache": "c", "tiers": ["t", "u"], "keys": ks(), "bind": "h", "held": ["x"]}), "probe: `held` names 1 arrays for 2 tiers (V33)");
+    has(json!({"cache": "c", "tiers": ["t", "u"], "keys": ks(), "bind": "h", "held": ["x", "x"]}), "probe: `held` `x` named twice (V33)");
+    has(json!({"cache": "c", "tiers": ["t", "u"], "keys": ks(), "bind": "h", "held": ["x", "cap"]}), "probe: `held` `cap` has the name of a parameter, which `elem` and `len` also read (V32)");
+    has(json!({"cache": "c", "tiers": ["t", "u"], "keys": ks(), "bind": "h", "held": ["x", "1y"]}), "not an identifier");
+    // the version: a document with such a probe carries 0.25, and one without it does not
+    let with = doc(json!([tl(tiers_tu(9), json!([probe_tiers(json!(["t", "u"]), shared(1, 2), 0, "h", None)]))]));
+    let e = aeiou::validate::check(&aeiou::ast::parse(&with).expect("parses"));
+    assert_eq!(e, ["t: ast: version `0.23`, but the document holds a `probe` over several tiers, which contract `0.25` added: it carries `0.25`"]);
+    let without = doc(json!([tl(tiers_tu(9), json!([probe_in("t", shared(1, 2), 0, "h")]))])).replacen("\"0.23\"", "\"0.25\"", 1);
+    let e = aeiou::validate::check(&aeiou::ast::parse(&without).expect("parses"));
+    assert!(e[0].contains("holds nothing past contract `0.23`"), "{e:?}");
+    // what `held` binds varies with what the tiers hold, as a store's `taken` does: read after the probe
+    let ok = json!([tl(tiers_tu(9), json!([let_("a", shared(1, 4)), probe_tiers(json!(["t", "u"]), r("a"), 0, "h", Some(json!(["at", "au"]))),
+        {"touch": {"cache": "c", "tier": "u", "keys": crate::common::chunk_keys_of(r("a"), json!(1), "au")}},
+        {"loop": {"index": "k", "to": {"len": "at"}, "body": [stat(elem("at", 0))]}}, stat(r("h"))]))]);
+    let text = doc(ok).replacen("\"0.23\"", "\"0.25\"", 1);
+    assert_eq!(aeiou::validate::check(&aeiou::ast::parse(&text).expect("parses")), Vec::<String>::new());
+    assert_eq!(walk_doc(&text, true).unwrap(), ["d/0"]);
+}

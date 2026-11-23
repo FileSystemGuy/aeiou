@@ -261,7 +261,8 @@ not positional, and the refusals made only when walked (a lane ending holding, a
   effects once and every context's rule follows. Whether the two checkers' code is rewritten to
   match is a separate decision; their messages and the shared refusal cases would not change.
 - *What the table exposes.* Review suggestion 2 (an eviction body acting on another tier) is the
-  `on_evict` context gaining `write`, and nothing else; suggestion 4 (`span` outside a timeline)
+  `on_evict` context gaining `write`, and nothing else (not built: set aside 2026-11-22, item
+  78 having no cascade); suggestion 4 (`span` outside a timeline)
   is the first context gaining `measure`.
 
 ### 6. Instruction, intrinsic, library (new)
@@ -406,6 +407,7 @@ needed them.
 | 0.20 | `workers`, `submit`, `span` | 4 and 3 | A map (staging) and two helpers; a new context |
 | 0.21 | A span's `staging` | 3 | A key on an existing helper |
 | 0.22 | A refusal | none | A provisional piece narrowed (7.4) |
+| 0.25 | A `probe` over several tiers (`tiers`, `held`) | 3 | Keys on an existing helper; no context changed (section 5: `probe` reads timeline state and changes nothing, as before); under 7.5's range, so no committed lock or workload id moved |
 | 0.24 | A `span` outside a timeline | 3 | A helper allowed in a second context (section 5); the first version under 7.5's range, so no committed AST, lock, or workload id moved |
 | 0.23 | Key ranges on `probe`, `touch`, `store`; `store`'s `present: touch`, `hold`, `found`; `lookup` and `choose` removed | none | A provisional piece reshaped (7.4) and two composites lowered to the library (7.1); added 2026-11-22, after the two observations below were written |
 
@@ -631,7 +633,7 @@ The finding: the DSL is RISC at its edges (ops, expressions) and CISC in the mid
 concurrency constructs and the cache verbs). The session generator, the most complex thing
 written, needed no generator-specific runner primitive.
 
-Six suggestions (decided 2026-11-14, after the list; ~~none built~~ 5 built 2026-11-15 as a library function, 1 built 2026-11-22 as contract 0.23, 4 the same day as contract 0.24):
+Six suggestions (decided 2026-11-14, after the list; ~~none built~~ 5 built 2026-11-15 as a library function, 1 built 2026-11-22 as contract 0.23, 4 the same day as contract 0.24; the first half of 2 set aside the same day, brief item 78 having no eviction cascade, and item 78 met by contract 0.25, a `probe` over several tiers):
 
 1. **Cache verbs take keys, not chunks of a sequence** (instruction set). `lookup`, `probe`,
    `touch`, `store` take `(seq, per, from, count)` today; brief item 75 said keys are opaque to
@@ -647,6 +649,11 @@ Six suggestions (decided 2026-11-14, after the list; ~~none built~~ 5 built 2026
    G3" cannot be said: Dynamo's cascade (item 76), G3 with G4 (item 78), S3-FIFO. Entries carrying
    values make the tier a keyed table (routing, allocation). A trigger on tier state running a
    body might express a vector database's compaction; unchecked against any source.
+   *Corrected 2026-11-22:* item 78 is not a user of it. LMCache 0.5.5 with two L2 adapters,
+   read from its source that day, stores every new chunk in both and evicts each on its own;
+   nothing evicted from G3 is written to G4. What item 78 lacked was a lookup over both, built
+   as contract 0.25 (a `probe` over several tiers). The eviction body acting on a lower tier
+   waits for Dynamo's cascade (item 76), its one remaining user; S3-FIFO is unchecked.
 3. **One run-side synchronisation primitive** (microarchitecture first). Four today (`channel`
    with `put`/`take`, `barrier`, `workers` with staging, validity edges), `loader` a composite of
    the first, and item 72 (6)'s events a fifth. Build events as the base and lower the others onto
@@ -683,7 +690,7 @@ waits for a dataset size that needs a fitted table), `normal` and `lognormal` ke
 piece reshaped (7.4), `lookup` becoming a builder function, ~~accepted when the tiered
 abstract's fingerprint is unchanged~~ built 2026-11-22 and accepted by the user on other evidence, the planned trace of the tiered case equal line for line between the old node on the old runner and the new store on the new one, the fingerprint itself having moved for a `let` the new form needs (a statement added moves every later draw site of its body); 4 in part, `span` outside a timeline, `phase` left as it
 is and not merged; 2 in part, an eviction body acting on a strictly lower tier (so a cascade
-ends), built with brief item 78 after 1, and entries carrying values and a trigger on tier
+ends), ~~built with brief item 78 after 1~~ not built (the user's "proceed", 2026-11-22, on the finding that item 78 has no cascade; it waits for item 76), and entries carrying values and a trigger on tier
 state not built for want of a committed user. Deferred: 3, recorded as a constraint on brief
 item 72 (6) (events designed as the base, nothing existing lowered onto them until then, since
 `consume`'s position formula is defined through `loader`), and 6, costed when item 58 starts.
@@ -692,8 +699,8 @@ Considered and not recommended now: functions in the AST (the tiered abstract's 
 Python expand to a 1.6 MB AST, but Python functions already give the builder the reuse).
 
 Coverage for the next year or two, as judged in the review: covered today, training pipelines,
-checkpoints, model loading, one-engine KV with G1 to G3; needing 1 and 2, vector search with
-caches, G3 with G4, Dynamo's cascade; needing 3 and item 72 (5), several engines sharing a tier;
+checkpoints, model loading, one-engine KV with G1 to G3, and since contract 0.25 G3 with G4 (~~needing 2~~); needing 1 and 2, vector search with
+caches, ~~G3 with G4,~~ Dynamo's cascade; needing 3 and item 72 (5), several engines sharing a tier;
 needing a new op family (6), object-native requests and block or NVMe-KV devices; excluded by
 design, anything adaptive to the run.
 

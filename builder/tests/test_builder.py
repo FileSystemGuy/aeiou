@@ -2397,3 +2397,57 @@ def test_a_span_outside_a_timeline_takes_no_staging_and_no_span():
                 pass
     with pytest.raises(BuildError, match="a span inside span `load`"):
         _span_outside(nested).build()
+
+
+# ---- contract 0.25: a probe over several tiers (brief item 78; DESIGN_REVIEW.md §3.100) ----
+
+def test_a_probe_over_several_tiers_serializes_validates_and_is_contract_0_25():
+    """Contract 0.25: a `probe` naming `tiers` reads the leading run of the keys that some tier
+    of the list holds, and with `held` binds, a tier, the array of the run's indices that tier
+    serves, a key going to the first tier listed that holds it: LMCache's lookup over two L2
+    adapters (G3 and G4). An addition under the version range: a document with one carries
+    0.25, a probe of one tier leaves its document where it was."""
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.timeline("tl", caches={"lm": [tier("g3", lru(), capacity=P.n), tier("g4", lru(), capacity=P.n)]}):
+            s = a.let("s", fresh(8))
+            u = a.probe("lm", ["g3", "g4"], chunk_keys(s, 2), "u")
+            assert isinstance(u, Ref)
+            h, a3, a4 = a.probe("lm", ["g3", "g4"], chunk_keys(s, 2, 1, u), "h", held=("a3", "a4"))
+            a.touch("lm", "g3", chunk_keys(s, 2, chunks=a3))
+            with a.loop("r", a4.len) as j:
+                a.stat(ds.file(a4[j] + h))
+            a.compute(10)
+    ast = w.build()
+    assert ast["ast"] == "0.25"
+    body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
+    n_ = {"div": [{"seq_len": {"ref": "s"}}, 2]}
+    key = {"chunk_key": {"seq": {"ref": "s"}, "chunk": {"index": "j"}, "per": 2}}
+    assert body[1] == {"probe": {"cache": "lm", "tiers": ["g3", "g4"], "keys": {"index": "j", "count": n_, "key": key}, "bind": "u"}}
+    assert body[2]["probe"]["tiers"] == ["g3", "g4"] and body[2]["probe"]["held"] == ["a3", "a4"] and "tier" not in body[2]["probe"]
+    validate(ast)
+    with pytest.raises(BuildError, match=r"ast: version `0.23`, but the document holds a `probe` over several tiers, which contract `0.25` added"):
+        validate({**ast, "ast": "0.23"})
+    # a probe of one tier is what it was, and so is its document's version
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.timeline("tl", caches={"lm": [tier("g3", lru(), capacity=P.n)]}):
+            a.probe("lm", "g3", keys("j", 1, 0), "h")
+            a.compute(10)
+    assert w.build()["ast"] == "0.23"
+
+
+@pytest.mark.parametrize("build, needle", [
+    (lambda a: a.probe("lm", ["g"], keys("j", 1, 0), "h"), "a probe of one tier names it by `tier`"),
+    (lambda a: a.probe("lm", ["g", "g"], keys("j", 1, 0), "h"), "tier `g` named twice"),
+    (lambda a: a.probe("lm", "g", keys("j", 1, 0), "h", held=("x",)), "`held` without `tiers`"),
+    (lambda a: a.probe("lm", ["g", "k"], keys("j", 1, 0), "h", held=("x",)), "`held` names 1 arrays for 2 tiers"),
+    (lambda a: a.probe("lm", ["g", "k"], keys("j", 1, 0), "h", held=("x", "x")), "`held` `x` named twice"),
+    (lambda a: a.probe("lm", ["g", "k"], keys("j", 1, 0), "h", held=("x", "n")), "has the name of a parameter"),
+])
+def test_what_a_probe_over_several_tiers_refuses_is_refused_at_construction(build, needle):
+    w, P, ds = _wl()
+    with pytest.raises(BuildError, match=needle):
+        with w.actor("gpu") as a:
+            with a.timeline("tl", caches={"lm": [tier("g", lru(), capacity=4), tier("k", lru(), capacity=4)]}):
+                build(a)

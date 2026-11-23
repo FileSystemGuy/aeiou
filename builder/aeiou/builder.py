@@ -1017,18 +1017,44 @@ class Cursor:
             raise BuildError(f"{what}: no timeline declares cache {cache!r} around it (V33)")
         if not isinstance(keys, Keys):
             raise BuildError(f"{what}: its keys are a key range, keys(...) or chunk_keys(...), not {type(keys).__name__} (V33)")
+        if isinstance(tier, (list, tuple)):
+            return {"cache": check_ident(cache, "cache"), "tiers": [check_ident(t, "tier") for t in tier], "keys": keys.node}
         return {"cache": check_ident(cache, "cache"), "tier": check_ident(tier, "tier"), "keys": keys.node}
 
-    def probe(self, cache: str, tier: str, keys, bind: str) -> Ref:
+    def probe(self, cache: str, tier, keys, bind: str, *, held=None):
         """The longest leading run of `keys` (a key range, `keys(...)` or `chunk_keys(...)`) held
         in `tier` of `cache`, bound to `bind`; nothing changed (contract 0.19, keys 0.23, rule
-        V33). Returns the binding, which `@` and `prev` may not read."""
+        V33). Returns the binding, which `@` and `prev` may not read. Over several tiers
+        (contract 0.25): `tier` a list of two or more, the run of the keys some tier of it
+        holds; with `held`, a name a tier, each is bound to the array of the run's indices that
+        tier serves, a key going to the first tier listed that holds it, and the binding and
+        those ArrayRefs are returned, a tuple in the list's order."""
         check_ident(bind, "binding")
+        several = isinstance(tier, (list, tuple))
+        if several:
+            if len(tier) < 2:
+                raise BuildError(f"probe: `tiers` names {len(tier)} tier; a probe of one tier names it by `tier` (V33)")
+            for t in tier:
+                if list(tier).count(t) > 1:
+                    raise BuildError(f"probe: tier `{t}` named twice in `tiers` (V33)")
         node = self._keys("probe", cache, tier, keys)
         node["bind"] = bind
+        if held is not None:
+            held = list(held)
+            if not several:
+                raise BuildError("probe: `held` without `tiers`; a probe of one tier binds its run alone (V33)")
+            if len(held) != len(tier):
+                raise BuildError(f"probe: `held` names {len(held)} arrays for {len(tier)} tiers (V33)")
+            for h in held:
+                check_ident(h, "held")
+                if held.count(h) > 1:
+                    raise BuildError(f"probe: `held` `{h}` named twice (V33)")
+                if h in self.wl._param_specs:
+                    raise BuildError(f"probe: `held` {h!r} has the name of a parameter (V32)")
+            node["held"] = held
         self._emit({"probe": node})
         self._top.bindings[bind] = None
-        return Ref(bind)
+        return (Ref(bind), *(ArrayRef(h) for h in held)) if held is not None else Ref(bind)
 
     def touch(self, cache: str, tier: str, keys):
         """Those of `keys` that `tier` of `cache` holds, touched as one event (contract 0.19,

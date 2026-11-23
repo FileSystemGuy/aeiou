@@ -2590,17 +2590,34 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 tl.lock().unwrap().entries.entry(group).or_default().push((self.clock, got));
                 Ok(None)
             }
-            Node::Probe { cache, tier, keys, bind } => {
+            Node::Probe { cache, tier, tiers, keys, bind, held } => {
                 let ks = self.keys(keys, "probe")?;
                 let tl = self.cache_of(cache, "probe")?;
                 let g = tl.lock().unwrap();
-                let Some(t) = g.tiers.get(&(cache.as_str(), tier.as_str())) else {
-                    return other(format!("probe: cache `{cache}` has no tier `{tier}` (V33)"));
-                };
-                let hit = ks.iter().take_while(|(k, _)| t.entries.contains_key(k)).count();
+                // one tier, or several (contract 0.25): the run of the keys some tier holds,
+                // each key the first listed tier's that holds it
+                let mut over = Vec::new();
+                for tier in tiers.iter().flatten().chain(tier) {
+                    let Some(t) = g.tiers.get(&(cache.as_str(), tier.as_str())) else {
+                        return other(format!("probe: cache `{cache}` has no tier `{tier}` (V33)"));
+                    };
+                    over.push(t);
+                }
+                let mut serves: Vec<Vec<Value>> = vec![Vec::new(); if held.is_some() { over.len() } else { 0 }];
+                let mut hit = 0;
+                for (k, pos) in &ks {
+                    let Some(i) = over.iter().position(|t| t.entries.contains_key(k)) else { break };
+                    if let Some(s) = serves.get_mut(i) {
+                        s.push(Value::Int(*pos));
+                    }
+                    hit += 1;
+                }
                 drop(g);
                 let level = self.scopes.last_mut().unwrap();
                 level.bindings.insert(bind.as_str(), Binding { value: Value::Int(hit as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
+                for (a, s) in held.iter().flatten().zip(serves) {
+                    level.arrays.insert(a.as_str(), Arc::from(s));
+                }
                 Ok(None)
             }
             Node::Touch { cache, tier, keys } => {

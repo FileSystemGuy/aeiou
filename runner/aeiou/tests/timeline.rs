@@ -695,3 +695,60 @@ fn a_run_reports_its_worker_and_eviction_lanes() {
         assert!(t["series"]["peak_evict_queued"]["ops"].as_i64().unwrap() >= 1, "{posix}: {t}");
     }
 }
+
+/// Contract 0.25 (brief item 78) through a run: two tiers of one cache, each with a namespace of
+/// its own, the second placed by `--endpoint`; a `probe` over both gives the chunks to read and
+/// which tier's file each is read from, and the run issues exactly the plan's ops, each on the
+/// storage its tier is on.
+#[test]
+fn run_reads_each_tiers_hits_from_its_own_namespace() {
+    let rf = |n: &str| json!({"ref": n});
+    let obj = |ns: &str, key: Value| json!({"object": {"namespace": ns, "fields": {"key": key}}});
+    let keys = |from: i64, count: i64| json!({"index": "j", "from": from, "count": count, "key": {"index": "j"}});
+    let write = |ns: &str, key: Value| json!([{"let": {"name": "f", "value": obj(ns, key)}},
+        {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"write": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]);
+    let read = |ns: &str, arr: &str| json!({"loop": {"index": "i", "to": {"len": arr}, "body": [
+        {"let": {"name": "f", "value": obj(ns, json!({"elem": {"array": arr, "index": {"index": "i"}}}))}},
+        {"open": {"file": rf("f"), "flags": ["RDONLY"]}}, {"read": {"file": rf("f"), "len": 4096}}, {"close": {"file": rf("f")}}]}});
+    let tier = |n: &str| json!({"name": n, "order": [{"cached": "touched"}], "capacity": 8});
+    // G4 takes chunks 0, 1, 2 and G3 chunk 1; no tier holds 3: the hit is three chunks, 1 from G3
+    let body = json!([
+        {"store": {"cache": "c", "tier": "g4", "keys": keys(0, 3)}},
+        {"loop": {"index": "k", "to": 3, "body": write("kv4", json!({"index": "k"}))}},
+        {"store": {"cache": "c", "tier": "g3", "keys": keys(1, 1)}},
+        {"loop": {"index": "k", "to": 1, "body": write("kv", json!(1))}},
+        {"compute": {"ns": 20_000_000}},
+        {"probe": {"cache": "c", "tiers": ["g3", "g4"], "keys": keys(0, 4), "bind": "h", "held": ["a3", "a4"]}},
+        read("kv", "a3"), read("kv4", "a4")]);
+    let text = json!({"ast": "0.25", "name": "t",
+        "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1},
+                       "kv4": {"pattern": "kv4/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 2}},
+        "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "caches": [{"name": "c", "tiers": [tier("g3"), tier("g4")]}], "body": body}}]}}}).to_string();
+    let dir = crate::common::tmpdir("timeline", "tiers");
+    let ast = dir.join("t.ast.json");
+    std::fs::write(&ast, text).unwrap();
+    let aeiou = env!("CARGO_BIN_EXE_aeiou");
+    let out = |args: &[&str]| std::process::Command::new(aeiou).args(args).output().unwrap();
+    let a = ast.to_str().unwrap();
+    let fp = |o: &std::process::Output| String::from_utf8_lossy(&o.stdout).lines().find(|l| l.starts_with("fingerprint ")).map(str::to_string);
+    let dry = out(&["dry-run", a, "--gpus", "1"]);
+    assert!(dry.status.success(), "{}", String::from_utf8_lossy(&dry.stderr));
+    assert!(fp(&dry).is_some());
+    for posix in ["sync", "io_uring"] {
+        let (root, shared) = (dir.join(posix), dir.join(format!("{posix}-shared")));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        let r = out(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap(), "--endpoint", &format!("kv4={}", shared.display()), "--posix", posix]);
+        assert!(r.status.success(), "{posix}: {}", String::from_utf8_lossy(&r.stderr));
+        assert_eq!(fp(&r), fp(&dry), "{posix}: the run's ops are the plan's");
+        assert!(String::from_utf8_lossy(&r.stdout).contains("by kind: open=7 close=7 read=3 write=4"), "{posix}: {}", String::from_utf8_lossy(&r.stdout));
+        let names = |d: &std::path::Path| {
+            let mut v: Vec<String> = std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).filter(|n| !n.starts_with('.')).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(names(&root.join("kv")), ["1"], "{posix}: G3's file under the root");
+        assert_eq!(names(&shared), ["0", "1", "2"], "{posix}: G4's files where its endpoint is");
+        assert!(!root.join("kv4").exists(), "{posix}");
+    }
+}

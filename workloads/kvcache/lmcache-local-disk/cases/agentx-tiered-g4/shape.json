@@ -1,0 +1,86 @@
+{
+  "shape_version": 3,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "lmcache_local_disk_tiered_g4",
+      "ast_sha256": "bd5f494481fa35e74aeec293b81e6fbc548a018d609a482d0d90c138666cd68e",
+      "params": "case.lock.json",
+      "params_sha256": "0a7b8835e4de7eb78c61e9c3a12b80282c2411a568702a7485afcdedf1f6af3c",
+      "gpus": 1,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": null,
+      "stable": false,
+      "moving": [
+        "read_share",
+        "reread",
+        "skew"
+      ],
+      "ops": 1845199,
+      "counts": {
+        "close": 296011,
+        "fstat": 296011,
+        "ioctl": 296011,
+        "lseek": 296011,
+        "open": 296011,
+        "read": 118597,
+        "unlink": 69133,
+        "write": 177414
+      },
+      "bytes_read": 3979454971904,
+      "bytes_written": 5953025998848,
+      "datasets": [],
+      "attributes": {
+        "run_length_read": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "run_length_write": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "request_size_read": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "request_size_write": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "read_share": {
+          "value": 0.588726,
+          "spread": 0.220267,
+          "class": "mixed"
+        },
+        "metadata": {
+          "value": 3.17998,
+          "spread": 0.0738151,
+          "class": "high"
+        },
+        "reads_own_writes": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "yes"
+        },
+        "reread": {
+          "value": 0.884231,
+          "spread": 0.0971128,
+          "class": "repeated"
+        },
+        "skew": {
+          "value": 0.149414,
+          "spread": 0.0905554,
+          "class": "skewed"
+        }
+      }
+    }
+  ]
+}

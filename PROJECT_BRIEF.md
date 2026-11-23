@@ -1817,7 +1817,7 @@ numbers; the order is this note's.
     the runner's payload definition for namespaces (`runner/REFERENCE.md` §5), a recorded
     decision; `aeiou-verify` takes the nonce from the manifest or the marker.
 
-78. **G3 and G4 active together in one abstract (queued by the user 2026-11-13; not started).**
+78. **G3 and G4 active together in one abstract (queued by the user 2026-11-13; ~~not started~~ the abstract and a what-if case built 2026-11-22, contract 0.25, `DESIGN_REVIEW.md` §3.100, the note "Item 78 read, and contract 0.25"; not done: the multi-process adapter's calls, G4 shared by several engines, a case at the WG's sizes).**
     Some products serve a node-local G3 and a shared G4 at once (the user's example: Hammerspace),
     so a KV abstract must be able to have both, each tier a namespace of its own on its own
     storage (G3 the node's drive, G4 the shared file system or object store), each issuing its
@@ -1833,6 +1833,25 @@ numbers; the order is this note's.
     and `--endpoint` today name one root and S3 endpoints); and G4 as one tier shared by a
     domain's engines (item 72 (5)). A case with both at the WG's sizes; a WG what-if, not a
     default.
+    *Read and built (2026-11-22):* LMCache 0.5.5's source (`v1/distributed/storage_controllers/
+    store_policy.py`, `prefetch_policy.py`, `prefetch_controller.py`, `eviction_controller.py`;
+    read, not traced). Every chunk G2 newly takes is stored in every adapter and never deleted
+    from G2 by that; a lookup past G2's hit asks every adapter, the hit is the leading run of
+    the union, and each key is loaded by the lowest-numbered adapter that has it, into G2 as a
+    temporary entry; each adapter evicts on its own, so a chunk evicted from G3 is still found
+    in G4; an adapter is touched only by a load it serves, so neither tier's contents are a
+    subset of the other's. So no eviction cascade, and review suggestion 2's first half (an
+    eviction body acting on a lower tier) is not what this item needs: set aside until item
+    76. The contract said all of it but the lookup over both tiers: contract 0.25, a `probe`
+    over `tiers` with `held`. Placement needed nothing: each tier's namespace is placed by
+    `--endpoint NAME=DIR`. `lmcache_local_disk_tiered.py` emits a second abstract,
+    `lmcache_local_disk_tiered_g4` (namespaces `kv` and `kv4`), with the case
+    `agentx-tiered-g4`, `unsettled`. **Not done yet:** the chunk-file calls are the in-process
+    connector's, while two adapters exist only in the multi-process server, whose `fs` adapter
+    makes other calls and is not captured (item 74); G4 as one tier shared by a domain's
+    engines (item 72 (5)); the case's G3 and G4 sizes (960 GB and 7.68 TB) are this project's,
+    chosen so both tiers are exercised, not the WG's; each adapter has store workers of its
+    own, each pool's staging bounded by G2's size separately.
 
 79. **`ARCHITECTURE.md`: the sections to write, and its proposals (raised by the user 2026-11-14,
     `DESIGN_REVIEW.md` §3.100; the outline and Part 0, sections 1, 5, 6, 15, and 20 drafted the
@@ -1899,8 +1918,12 @@ numbers; the order is this note's.
     reported as a timeline's spans are; a separate statement from `phase`, as the user
     decided again that day. **Not done yet:** no committed abstract or case uses one (a
     model's load, a checkpoint's write, a query: the user's to choose; `diskann_search` would
-    take a new sample, its region holding draws). Next of the review: the first half of
-    suggestion 2, with item 78.
+    take a new sample, its region holding draws). ~~Next of the review: the first half of
+    suggestion 2, with item 78.~~ *Suggestion 2's first half set aside (2026-11-22):* item 78,
+    read from LMCache's source, has no eviction cascade, so it is no user of an eviction body
+    acting on a lower tier; that waits for item 76 (Dynamo). Item 78 was met by contract
+    0.25, a `probe` over several tiers (item 78's own text). Left of the review: 3 and 6,
+    deferred as decided; a second user of the cache statements, not written.
 
 80. **A range of accepted contract versions (decided by the user 2026-11-14, `ARCHITECTURE.md`
     §7.5, `DESIGN_REVIEW.md` §3.100; ~~not built~~ built 2026-11-22, the note "The version range built").** Today the runner accepts exactly its own
@@ -1918,7 +1941,12 @@ numbers; the order is this note's.
     carry; the builder stamps it; tests with a stand-in later version that every committed
     AST not using the addition is read unchanged. ~~**Not settled:** the second question;~~ Settled, decided by the user 2026-11-22 ("I'm ok with 'raise the floor' at this stage of the project"): the floor is raised; to be done better once the project has dozens of users or more, when regenerating every abstract is no longer cheap; confining a change to provisional pieces is not built.
     ~~**Not exercised yet** by a real addition: the first is contract 0.24, review suggestion 4.~~
-    Exercised the same day by contract 0.24: no committed AST, lock, or shape moved.
+    Exercised the same day by contract 0.24: no committed AST, lock, or shape moved. And by
+    contract 0.25 (item 78): one new AST carries it; no committed lock or workload id
+    moved (the tiered AST's file changed in the two lines that record its script's hash and
+    the commit, the script having been edited to emit the second abstract; a lock's
+    `ast_sha256` does not cover them, a shape's does, so `agentx-tiered`'s shape records the
+    new file hash, its numbers as they were).
 
 ## 7. Environment
 

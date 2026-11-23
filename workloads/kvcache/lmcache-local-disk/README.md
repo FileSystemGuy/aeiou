@@ -227,6 +227,20 @@ aeiou-build lmcache_local_disk_tiered.py
 aeiou dry-run --case agentx-tiered --workloads ../.. --gpus 1
 ```
 
+Since 2026-11-22 the script emits a second abstract, `lmcache_local_disk_tiered_g4` (brief item
+78; contract 0.25): the same engine with LMCache's two L2 adapters active together, G3 in namespace
+`kv` and G4 in `kv4`, each placed by `--endpoint` (G3 on the node's drive, G4 on the shared
+system). Every chunk G2 newly takes is written to both; a lookup past G2's hit is one `probe` over
+both tiers, each chunk of the hit read from the first that holds it; each tier evicts and unlinks
+on its own. Read from LMCache 0.5.5's source, not traced; its case, `agentx-tiered-g4`, says what
+is not settled. The first abstract's contents are as they were (its file records the script's new
+hash).
+
+```
+aeiou dry-run --case agentx-tiered-g4 --workloads ../.. --gpus 1
+aeiou run --case agentx-tiered-g4 --workloads ../.. --gpus 1 --root /mnt/nvme --endpoint kv4=/mnt/shared/kv4
+```
+
 The fit equals the scratch's `gen5.8.json`, and the abstract's chunk reads, writes, and unlinks
 equal, key for key, those of the scratch port held to LMCache's own `LRUEvictionPolicy`
 (`gen10_lmc`, less the marker files it writes for that comparison), at three configurations.

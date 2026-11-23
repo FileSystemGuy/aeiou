@@ -1046,6 +1046,51 @@
       ]
     },
     {
+      "name": "lmcache-local-disk/agentx-tiered-g4",
+      "dir": "kvcache/lmcache-local-disk/cases/agentx-tiered-g4",
+      "lock": "kvcache/lmcache-local-disk/cases/agentx-tiered-g4/case.lock.json",
+      "description": "kvcache/lmcache-local-disk/cases/agentx-tiered-g4/DESCRIPTION.md",
+      "gpus": [
+        1
+      ],
+      "attributes": {
+        "category": "kvcache",
+        "application": "vllm-lmcache",
+        "format": "lmcache-chunks",
+        "phase": [
+          "inference"
+        ],
+        "domain": [
+          "ai"
+        ],
+        "kind": "unsettled",
+        "modality": "agentic",
+        "model-family": "llm"
+      },
+      "runs": [
+        {
+          "ast": "lmcache_local_disk_tiered_g4",
+          "does": "One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2, and two L2 adapters, G3 and G4, each a directory under test.",
+          "is": "A what-if of agentx-tiered with two L2 adapters (brief item 78): the same sessions, engine, G1, and G2; G3 a 960 GB node-local drive, small enough that it evicts within the run, and G4 7.68 TB of shared storage, which then serves what G3 dropped. The G3 and G4 sizes are this project's, chosen so that both tiers are exercised, not the WG's.",
+          "attributes": {
+            "api": "sync",
+            "writes": "yes",
+            "inputs": "no",
+            "status": "untraced",
+            "run_length_read": "large",
+            "run_length_write": "large",
+            "request_size_read": "large",
+            "request_size_write": "large",
+            "read_share": "mixed",
+            "metadata": "high",
+            "reads_own_writes": "yes",
+            "reread": "repeated",
+            "skew": "skewed"
+          }
+        }
+      ]
+    },
+    {
       "name": "lmcache-shared-fs/chat-64-slots",
       "dir": "kvcache/lmcache-shared-fs/cases/chat-64-slots",
       "lock": "kvcache/lmcache-shared-fs/cases/chat-64-slots/case.lock.json",

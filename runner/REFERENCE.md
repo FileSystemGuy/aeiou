@@ -288,6 +288,14 @@ each is a recorded decision and the golden tests pin them.
   body runs for it) and stores it as if absent, in the same event; with `taken`, it binds in its
   scope level an array of the indices of the chunks it stored, renewed ones included, in the
   order acted on. Bindings of a probe and a store are refused under `x @ i` (V33).
+- **A probe over several tiers** (contract 0.25, V33; `vm.rs`'s `Node::Probe`). With `tiers`
+  the walk takes the range's keys in order and, for each, the first tier of the list that
+  holds it; the first key no tier holds ends the run, whose length is `bind`. With `held`,
+  each tier's array gets the indices (the range's, `from` and up, never counts from its start)
+  of the keys it was the first to hold, in the range's order; a key that comes twice in the
+  range is counted and listed at each index it comes at, as a one-tier probe counts it.
+  Nothing in any tier changes, no entry is touched. The arrays are read with `len` and `elem`
+  by the statements after the probe in its body, as a store's `taken`.
 - **Key ranges, and the store that touches** (contract 0.23, V33 and V34; `vm.rs`'s `keys`).
   What the two entries above say of a `lookup` and of ranges is superseded here. A `probe`,
   `touch`, or `store` evaluates its range's `from` (0 when absent) and `count` (refused when

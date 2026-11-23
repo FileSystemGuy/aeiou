@@ -46,7 +46,23 @@ pub struct Since {
     pub used: fn(&Ast) -> bool,
 }
 
-pub const SINCE: &[Since] = &[Since { version: "0.24", what: "a `span` outside a timeline", used: span_outside_a_timeline }];
+pub const SINCE: &[Since] = &[
+    Since { version: "0.24", what: "a `span` outside a timeline", used: span_outside_a_timeline },
+    Since { version: "0.25", what: "a `probe` over several tiers", used: probe_over_tiers },
+];
+
+fn probe_over_tiers(ast: &Ast) -> bool {
+    fn walk(nodes: &[Node]) -> bool {
+        nodes.iter().any(|n| match n {
+            Node::Probe { tiers, .. } => tiers.is_some(),
+            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
+            | Node::Submit { body, .. } | Node::Span { body, .. } => walk(body),
+            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
+            _ => false,
+        })
+    }
+    ast.actors.values().any(|a| walk(&a.body))
+}
 
 fn span_outside_a_timeline(ast: &Ast) -> bool {
     fn walk(nodes: &[Node]) -> bool {
@@ -1581,8 +1597,54 @@ impl<'a> Checker<'a> {
                 st.holds.clear();
                 st.workers.clear();
             }
-            Node::Probe { cache, tier, keys, bind } => {
-                self.keys_stmt("probe", cache, tier, keys, pp, scope, st);
+            Node::Probe { cache, tier, tiers, keys, bind, held } => {
+                // over several tiers (contract 0.25): `tiers`, two or more and none twice, in
+                // place of `tier`, and `held`, an array a tier, only with it; as check.py's
+                match (tier, tiers) {
+                    (Some(_), Some(_)) => self.err(pp, "probe: `tier` and `tiers` both; it names one tier or a list of them (V33)"),
+                    (None, None) => self.err(pp, "probe: neither `tier` nor `tiers` (V33)"),
+                    _ => {}
+                }
+                let mut named: Vec<&str> = Vec::new();
+                match tiers {
+                    Some(ts) => {
+                        if ts.len() < 2 {
+                            self.err(pp, format!("probe: `tiers` names {} tier; a probe of one tier names it by `tier` (V33)", ts.len()));
+                        }
+                        let mut twice: Vec<&str> = Vec::new();
+                        for t in ts {
+                            if !named.contains(&t.as_str()) {
+                                named.push(t);
+                            } else if !twice.contains(&t.as_str()) {
+                                twice.push(t);
+                                self.err(pp, format!("probe: tier `{t}` named twice in `tiers` (V33)"));
+                            }
+                        }
+                    }
+                    None => named.extend(tier.as_deref()),
+                }
+                self.keys_stmt("probe", cache, &named, keys, pp, scope, st);
+                if let Some(hs) = held {
+                    match tiers {
+                        None => self.err(pp, "probe: `held` without `tiers`; a probe of one tier binds its run alone (V33)"),
+                        Some(ts) if ts.len() != hs.len() => self.err(pp, format!("probe: `held` names {} arrays for {} tiers (V33)", hs.len(), ts.len())),
+                        _ => {}
+                    }
+                    for (i, h) in hs.iter().enumerate() {
+                        let hp = p(pp, &["held", &i.to_string()]);
+                        if !is_ident(h) {
+                            self.err(&hp, "not an identifier");
+                        }
+                        if hs[..i].contains(h) {
+                            self.err(&hp, format!("probe: `held` `{h}` named twice (V33)"));
+                        }
+                        if self.ast.params.contains_key(h) {
+                            self.err(&hp, format!("probe: `held` `{h}` has the name of a parameter, which `elem` and `len` also read (V32)"));
+                        }
+                        scope.arrays.insert(h.as_str());
+                        scope.taken.insert(h.as_str());
+                    }
+                }
                 if !is_ident(bind) {
                     self.err(&p(pp, &["bind"]), "not an identifier");
                 }
@@ -1590,7 +1652,7 @@ impl<'a> Checker<'a> {
                 scope.unpositional.insert(bind.as_str(), "V33");
             }
             Node::Touch { cache, tier, keys } => {
-                self.keys_stmt("touch", cache, tier, keys, pp, scope, st);
+                self.keys_stmt("touch", cache, &[tier.as_str()], keys, pp, scope, st);
             }
             Node::Store { cache, tier, keys, size, present, hold, found, bind, taken } => {
                 if let Some(a) = taken {
@@ -1601,7 +1663,7 @@ impl<'a> Checker<'a> {
                         self.err(&p(pp, &["taken"]), format!("store: `taken` `{a}` has the name of a parameter, which `elem` and `len` also read (V32)"));
                     }
                 }
-                if let Some((unit, full)) = self.keys_stmt("store", cache, tier, keys, pp, scope, st) {
+                if let Some((unit, full)) = self.keys_stmt("store", cache, &[tier.as_str()], keys, pp, scope, st) {
                     match (unit, size) {
                         (TierUnit::Bytes, None) => self.err(pp, format!("store: tier `{tier}` counts bytes, so the store needs a `size` (V33)")),
                         (TierUnit::Entries, Some(_)) => self.err(pp, format!("store: tier `{tier}` counts entries, so the store takes no `size` (V33)")),
@@ -2247,20 +2309,24 @@ impl<'a> Checker<'a> {
     /// tier of it, and acts on a key range: `from` and `count` integers, `key` an integer
     /// read with the range's `index` in scope, as an `array`'s value is. The tier's unit and
     /// what it does when full, when the names are found.
-    fn keys_stmt(&mut self, what: &str, cache: &str, tier: &str, keys: &'a Keys, pp: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) -> Option<(TierUnit, Full)> {
-        let found = match st.caches.get(cache) {
-            None => {
-                self.err(pp, format!("{what}: no timeline declares cache `{cache}` around it (V33)"));
-                None
-            }
-            Some(tiers) => match tiers.iter().find(|(n, _, _)| *n == tier) {
-                None => {
-                    self.err(pp, format!("{what}: cache `{cache}` has no tier `{tier}` (V33)"));
-                    None
+    fn keys_stmt(&mut self, what: &str, cache: &str, named: &[&str], keys: &'a Keys, pp: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) -> Option<(TierUnit, Full)> {
+        // the tiers named, one but for a `probe` over several (contract 0.25), each once
+        let mut found = None;
+        let mut missing = Vec::new();
+        match st.caches.get(cache) {
+            None => self.err(pp, format!("{what}: no timeline declares cache `{cache}` around it (V33)")),
+            Some(tiers) => {
+                for tier in named {
+                    match tiers.iter().find(|(n, _, _)| n == tier) {
+                        None => missing.push(*tier),
+                        Some((_, u, f)) => found = Some((*u, *f)),
+                    }
                 }
-                Some((_, u, f)) => Some((*u, *f)),
-            },
-        };
+            }
+        }
+        for tier in missing {
+            self.err(pp, format!("{what}: cache `{cache}` has no tier `{tier}` (V33)"));
+        }
         let kp = p(pp, &["keys"]);
         if !is_ident(&keys.index) {
             self.err(&p(&kp, &["index"]), "not an identifier");

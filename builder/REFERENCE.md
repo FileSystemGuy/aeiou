@@ -181,7 +181,11 @@ key, frm=0)`, `key` a function of the index (`keys("j", 4, lambda j: j * 7)`), f
 any origin; and `chunk_keys(seq, per, frm=0, count=None, *, chunks=None, index="j",
 clip=True)`, the keys of a bound sequence's whole chunks, cut at its end as the runner cut them
 until 0.22 (the `min` and `max` are written into the range; `clip=False` leaves them out), or
-of the chunks whose indices an array holds. `c.probe(cache, tier, keys, bind)`,
+of the chunks whose indices an array holds. `c.probe(cache, tier, keys, bind, *, held=None)`
+(with `tier` a list of two or more tiers, contract 0.25, the leading run some tier of them holds,
+and with `held`, a name a tier, the binding and one ArrayRef a tier returned as a tuple, each
+array the run's indices that tier serves, a key going to the first tier listed that holds it;
+an abstract with such a probe carries 0.25),
 `c.touch(cache, tier, keys)`, and `c.store(cache, tier, keys, size=None, *, present=None,
 hold=None, found=None, bind=None, taken=None)`, which returns the Refs of `found` and `bind`
 and the ArrayRef of `taken`, those given, in that order. `c.lookup(...)` is one such store

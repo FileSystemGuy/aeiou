@@ -13300,6 +13300,83 @@ statements").** What was costed and put to the user before any edit:
 - *Not done.* No committed abstract or case uses a span outside a timeline: which regions to
   measure, and whether `diskann_search` takes a new sample for it, is the user's to say.
 
+**Item 78 read, and contract 0.25: a probe over several tiers; suggestion 2's first half set
+aside (2026-11-22; the user's "proceed" on the recommendation of that day).** The review's
+decision of 2026-11-14 was to build an eviction body acting on a strictly lower tier "with brief
+item 78 as its user". Item 78 says to read first what LMCache does with two L2 adapters, and
+the reading removes the user.
+
+- *The source* (LMCache 0.5.5 as installed, `lmcache/v1/distributed/storage_controllers/`;
+  read, not traced; confidence: the code's defaults, no run behind it).
+  `store_policy.py`, `DefaultStorePolicy`: every key written to L1 (G2) goes to every adapter,
+  and none is deleted from L1 after (`skip_l1`, the other registered policy, deletes them all;
+  not the default). `prefetch_controller.py`: the keys past the L1 prefix are submitted to
+  every adapter's `lookup_and_lock`, the results are OR-ed, and the plan is trimmed to the
+  contiguous prefix of the union ("a missing key at index 2 breaks the prefix").
+  `prefetch_policy.py`, `DefaultPrefetchPolicy`: each key is loaded by the lowest-indexed
+  adapter that has it, into L1 as a temporary entry (`select_l1_retentions`, all `False`).
+  `eviction_controller.py`: each adapter's usage and deletes are its own; nothing moves a
+  victim to another adapter. Recency in an adapter comes from a completed load (the reading of
+  2026-11-13 above), so the adapter that did not serve a key is not touched for it: the two
+  tiers' contents diverge, and neither is a subset of the other.
+- *What follows for suggestion 2.* No cascade: a chunk evicted from G3 is not written to G4,
+  it is already there or it is not. An eviction body acting on a lower tier has no user in
+  item 78. Dynamo's block manager (item 76, not near-term) is the user left; S3-FIFO was never
+  checked against a workload here. ~~Built with item 78~~ Not built, by the rule the review
+  itself set for the second half of the suggestion: no committed user.
+- *What item 78 lacked.* 0.24 already said the rest: a second tier with its own namespace,
+  timed eviction, and eviction body; the store over what G2 newly took (`taken`, then a store
+  of `present: renew` over it); and `--endpoint NAME=DIR` places each namespace. Missing was
+  the lookup. A `probe` binds one tier's leading run, and the leading run of the union is not
+  a function of the tiers' own runs (G3 holding chunks 0 and 2 and G4 chunk 1 have runs 1 and
+  0, and a union run of 3); alternating probes would need a loop whose length the data
+  decides. Options weighed: a per-key probe in a loop (no way to stop at the first gap
+  without mutable state); a probe binding every held index, the union left to expressions
+  (the expression language has no merge of arrays, and should not grow one for this); a probe
+  over an ordered list of tiers (taken).
+- *Contract 0.25.* `probe {cache, tiers, keys, bind, held}`: `tiers`, two or more of the
+  cache's, none twice, in place of `tier`; `bind` the leading run of the keys some tier holds;
+  `held`, optional, a name a tier, each bound to the array of the run's indices (the range's
+  indices, as a `taken`'s) that tier serves, a key going to the first tier listed that holds
+  it. Nothing changed in any tier. A list of one is refused: it would be a second spelling of
+  `tier`, and one abstract has one hash. `held` is optional because the tiered script needs
+  the union's run from G2's hit and, separately, who serves the chunks from the first one the
+  GPU does not hold, two probes of which the first reads no arrays. A row in `SINCE` in both
+  checkers; the rule is V33's, stated by both in one wording, the schema leaving which of
+  `tier` and `tiers` to them so that the shared refusal cases compare messages.
+- *The abstract.* `lmcache_local_disk_tiered.py` became a function of `g4` and emits two
+  abstracts. `lmcache_local_disk_tiered_g4`: namespaces `kv` (G3) and `kv4` (G4); G4 a tier
+  with LMCache's order and rule and its own eviction body; the lookup as above, the reads of
+  G3's hits then of G4's in the request's span, each tier touched for what it served; what G2
+  newly took stored in both and written to both, each tier's writes on store workers of its
+  own (`store`, `store4`). The case `agentx-tiered-g4`, `unsettled`: G3 960 GB, G4 7.68 TB,
+  sizes of this project's choosing so that G3 evicts within the run and G4 serves what it
+  dropped. Seed 1, one GPU: 1,845,199 ops; 88,707 files written to each tier; 83,517 chunks
+  read from G3 and 35,080 from G4; 69,133 unlinks in G3, none in G4; in planned order no read
+  or unlink of a file not there.
+- *What I had said and what happened.* I said the committed abstract's bytes would stay as
+  they are. Its contents did: ops, fingerprint, lock, and workload id unchanged, and its
+  shape's numbers. Its file did not: an AST records its script's hash and the commit, the
+  script changed, so two lines of `lmcache_local_disk_tiered.ast.json` changed, and the file
+  hash in `agentx-tiered`'s `shape.json` with them. The lock's `ast_sha256` does not cover
+  those lines, so the lock is byte for byte what it was.
+- *Not settled, and said in the case's README.* The chunk-file calls are the in-process
+  connector's (the traced ones), while two adapters exist only in the multi-process server,
+  whose `fs` adapter stats before every store and lookup and writes through a temporary file
+  and a `rename`; not captured (item 74). Store workers a tier: a slow tier must not hold the
+  other's writes (they are two systems under test), at the cost that each pool's staging is
+  bounded by G2's size separately where LMCache has one G2. The new abstract's sample is not
+  the old one's at the same seed, its body having statements the other lacks. G4 shared by a
+  domain's engines is item 72 (5).
+- *Tests.* Builder tests first, red then green: the node as built and its version, six
+  refusals at construction, three shared refusal cases (accepted; ten rules refused in one
+  document; the version). The runner's tests in `evict.rs` were written before the code but
+  first compiled after it, so not seen red: the union's run, the order of the list, a range
+  from past 0, an empty run, nothing touched, and the validator's rules. Written after the
+  code: `timeline.rs`, a run under `sync` and `io_uring` with G4's namespace placed by
+  `--endpoint`, each tier's hits read from its own directory, the run's fingerprint the
+  plan's; `test_trace.py`, the new abstract's planned trace at test sizes.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

@@ -826,6 +826,40 @@ def test_kv_tiered_issues_storage_ops_on_g3_alone(tmp_path):
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_kv_tiered_g4_reads_each_chunk_from_a_tier_that_holds_it(tmp_path):
+    """`lmcache_local_disk_tiered_g4` (2026-11-22, brief item 78, contract 0.25): LMCache's two L2
+    adapters, G3 on `kv` and G4 on `kv4`. Every chunk G2 newly takes is written to both, so the two
+    namespaces get the same writes; G3, small here, evicts and unlinks, G4 never does, so G4 serves
+    what G3 dropped; and in planned order no chunk is read from a tier before its file there was
+    written or after it was unlinked, which is what the probe over both tiers decides."""
+    case = case_dir("lmcache_local_disk_tiered_g4", "agentx-tiered-g4")
+    out = tmp_path / "trace.jsonl"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk_tiered_g4")), "--gpus", "1", "--seed", "1",
+                        "--params-file", str(case / "params.json"), "--param", "sessions=6", "--param", "slots=6",
+                        "--param", "chunk_bytes=4096", "--param", "g1_bytes=16384000", "--param", "g2_bytes=1228800",
+                        "--param", "g3_bytes=12288000", "--param", "g4_bytes=1228800000", "--emit-trace", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    events = []
+    for n, line in enumerate(out.read_text().splitlines()[1:]):
+        o = json.loads(line)
+        if o["op"] in ("open", "unlink"):
+            events.append((o["t"], n, o["op"], o["path"], "WRONLY" in o.get("flags", [])))
+    count, there = {}, set()
+    for _, _, op, path, wr in sorted(events):
+        ns, kind = path.split("/")[0], "unlink" if op == "unlink" else "write" if wr else "read"
+        count[ns, kind] = count.get((ns, kind), 0) + 1
+        if kind == "write":
+            there.add(path)
+        else:
+            assert path in there, f"{kind} of {path}, not there at its planned time"
+            if kind == "unlink":
+                there.remove(path)
+    assert {ns for ns, _ in count} == {"kv", "kv4"}, count
+    assert count["kv", "write"] == count["kv4", "write"] > 0
+    assert count["kv", "read"] > 0 and count["kv4", "read"] > 0 and count["kv", "unlink"] > 0 and ("kv4", "unlink") not in count, count
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     """`workloads/kvcache/lmcache-shared-fs`: vLLM with LMCache's `fs://` backend, the 300 requests of
     the row above sent to an engine on an empty store and then to a restarted engine on the

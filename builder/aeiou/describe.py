@@ -691,6 +691,12 @@ class Describer:
             ks = a["keys"]
             rng = (f"the {self.value(ks['count'], 'count')} keys `{self.sym(ks['key'])}`, `{ks['index']}` from "
                    f"`{self.sym(ks.get('from', 0))}`,")
+            if k == "probe" and "tiers" in a:
+                names = ", ".join(f"`{t}`" for t in a["tiers"])
+                held = ("; " + ", ".join(f"`{h}` is the indices of those `{t}` serves" for h, t in zip(a["held"], a["tiers"]))
+                        + ", a key going to the first of the tiers that holds it") if "held" in a else ""
+                return [pad + f"Probes {rng} in tiers {names} of cache `{a['cache']}` together: `{a['bind']}` is the leading ones "
+                              f"some tier of them holds, nothing changed{held}."]
             where = f"in tier `{a['tier']}` of cache `{a['cache']}`"
             if k == "probe":
                 return [pad + f"Probes {rng} {where}: `{a['bind']}` is the leading ones held, nothing changed."]

@@ -16,7 +16,7 @@ use serde::Deserialize;
 /// (`validate::SINCE`), so an addition changes the hash of no abstract without it. A change
 /// that is not an addition raises the floor to its version.
 pub const AST_FLOOR: &str = "0.23";
-pub const AST_VERSION: &str = "0.24";
+pub const AST_VERSION: &str = "0.25";
 
 /// A version in order (`0.9` before `0.23`), `None` for what is not one in its one spelling.
 pub fn version_key(v: &str) -> Option<(u32, u32)> {
@@ -1071,8 +1071,21 @@ pub enum Node {
     /// What this lane holds under `hold`, given back (contract 0.18, rule V34).
     Release { hold: String },
     /// The longest leading run of `keys` held in a tier of a cache of the enclosing timeline,
-    /// bound to `bind`; nothing changed (contract 0.19; keys contract 0.23; rule V33).
-    Probe { cache: String, tier: String, keys: Keys, bind: String },
+    /// bound to `bind`; nothing changed (contract 0.19; keys contract 0.23; rule V33). Over
+    /// several tiers (contract 0.25): `tiers` in place of `tier`, the run of the keys some tier
+    /// of the list holds, and `held`, an array a tier, the run's indices that tier serves, a
+    /// key going to the first tier listed that holds it.
+    Probe {
+        cache: String,
+        #[serde(default)]
+        tier: Option<String>,
+        #[serde(default)]
+        tiers: Option<Vec<String>>,
+        keys: Keys,
+        bind: String,
+        #[serde(default)]
+        held: Option<Vec<String>>,
+    },
     /// Those of `keys` a tier holds, touched, as one event (contract 0.19; keys 0.23; rule V33).
     Touch { cache: String, tier: String, keys: Keys },
     /// Those of `keys` a tier lacks, stored, as one event; those it holds left (`present:

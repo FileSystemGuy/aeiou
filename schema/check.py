@@ -43,8 +43,23 @@ def _span_outside_a_timeline(ast: dict) -> bool:
     return any(walk(a["body"]) for a in ast.get("actors", {}).values())
 
 
+def _probe_over_tiers(ast: dict) -> bool:
+    def walk(nodes):
+        for node in nodes:
+            kind, a = next(iter(node.items()))
+            if kind == "probe" and "tiers" in a:
+                return True
+            if kind in ("loop", "parallel", "loader", "phase", "timeline", "submit", "span") and walk(a["body"]):
+                return True
+            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
+                return True
+        return False
+    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
+
+
 SINCE: list = [
     ("0.24", "a `span` outside a timeline", _span_outside_a_timeline),
+    ("0.25", "a `probe` over several tiers", _probe_over_tiers),
 ]
 
 
@@ -1299,19 +1314,22 @@ class Check:
         elif a["hold"] not in self.holds:
             self.err(p, f"release: no `acquire` or `store` of timeline `{self.timeline[0]}` holds `{a['hold']}` (V34)")
 
-    def keys_stmt(self, what, a, p, scope):
+    def keys_stmt(self, what, a, p, scope, tiers=None):
         """V33 (contract 0.23): a `probe`, `touch`, or `store` names a cache of its timeline and a
-        tier of it, and acts on a key range: `from` and `count` integers, `key` an integer read
-        with the range's `index` in scope, as an `array`'s value is. The tier's unit and `full`,
-        when it is declared. As the runner's `keys_stmt`."""
-        cache, tier = a["cache"], a["tier"]
+        tier of it (a `probe` over several, contract 0.25, each of `tiers`), and acts on a key
+        range: `from` and `count` integers, `key` an integer read with the range's `index` in
+        scope, as an `array`'s value is. The tier's unit and `full`, when it is declared. As the
+        runner's `keys_stmt`."""
+        cache = a["cache"]
         found = None
         if cache not in self.caches:
             self.err(p, f"{what}: no timeline declares cache `{cache}` around it (V33)")
-        elif tier not in self.caches[cache]:
-            self.err(p, f"{what}: cache `{cache}` has no tier `{tier}` (V33)")
         else:
-            found = self.caches[cache][tier]
+            for tier in dict.fromkeys([a["tier"]] if tiers is None else tiers):
+                if tier not in self.caches[cache]:
+                    self.err(p, f"{what}: cache `{cache}` has no tier `{tier}` (V33)")
+                else:
+                    found = self.caches[cache][tier]
         keys, kp = a["keys"], p + ["keys"]
         for k in ("from", "count"):
             if k in keys:
@@ -1323,7 +1341,32 @@ class Check:
         return found
 
     def n_probe(self, a, p, scope):
-        self.keys_stmt("probe", a, p, scope)
+        """V33; over several tiers (contract 0.25): `tiers`, two or more and none twice, in place
+        of `tier`, and `held`, an array a tier, only with it. As the runner's `Node::Probe`."""
+        tiers = a.get("tiers")
+        if "tier" in a and tiers is not None:
+            self.err(p, "probe: `tier` and `tiers` both; it names one tier or a list of them (V33)")
+        elif "tier" not in a and tiers is None:
+            self.err(p, "probe: neither `tier` nor `tiers` (V33)")
+        if tiers is not None:
+            if len(tiers) < 2:
+                self.err(p, f"probe: `tiers` names {len(tiers)} tier; a probe of one tier names it by `tier` (V33)")
+            for t in dict.fromkeys(t for i, t in enumerate(tiers) if t in tiers[:i]):
+                self.err(p, f"probe: tier `{t}` named twice in `tiers` (V33)")
+        self.keys_stmt("probe", a, p, scope, tiers if tiers is not None or "tier" in a else [])
+        held = a.get("held")
+        if held is not None:
+            if tiers is None:
+                self.err(p, "probe: `held` without `tiers`; a probe of one tier binds its run alone (V33)")
+            elif len(held) != len(tiers):
+                self.err(p, f"probe: `held` names {len(held)} arrays for {len(tiers)} tiers (V33)")
+            for i, h in enumerate(held):
+                if h in held[:i]:
+                    self.err(p + ["held", i], f"probe: `held` `{h}` named twice (V33)")
+                if h in self.params:
+                    self.err(p + ["held", i], f"probe: `held` `{h}` has the name of a parameter, which `elem` and `len` also read (V32)")
+                scope.arrays.add(h)
+                scope.taken.add(h)
         scope.bind(a["bind"], 0, True, "int")
         scope.unpositional[a["bind"]] = "V33"
 
