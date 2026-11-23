@@ -61,10 +61,12 @@ fn hashes_match_check_py() {
     let want = [
         // 2026-10-23: the job's and the model's values required (its unsettled case four-items), `buf` and `meta_buf`
         // the st_blksize of its input namespaces (contract 0.12), DESIGN_REVIEW §3.78
-        ("dcp_load", "3b8d64ee712fc48580b3c7a1a449b89f71f9e2066caf343568fa1f579179f03a"),
+        // 2026-11-22: a rank's restore in a span outside a timeline, `load` (contract 0.24), no fingerprint changed
+        ("dcp_load", "fc18a2b8a48438b4271c7f02e749e3c084e7860c1da34403991a8085f7245129"),
         // 2026-10-23: the job's and the GPU's values required (its unsettled case four-items), `buf` and `xfer`
         // the st_blksize of its namespace (contract 0.12), DESIGN_REVIEW §3.78
-        ("dcp_save", "6a0bfb688d96332e80a67b815a87c03b87f684107376b6f5fab2df869bfa70ac"),
+        // 2026-11-22: a rank's shard file in a span outside a timeline, `shard` (contract 0.24), no fingerprint changed
+        ("dcp_save", "c7ff4f39dbb9628b09c06500c25306d63113e89f3456a03ee24134ee5d8fbebe"),
         // lmcache_local_disk, here from 2026-09-30, retired 2026-11-14 with its four cases (DESIGN_REVIEW §3.99, the
         // addendum "The slot model retired"): its last hash 9b6a8fd06dc4d739044a3588c84b0f534e4afa4dd4f62fdf402ac53bc95add00
         // 2026-10-23: the model's shards and tensor table and the deployment's tp required (its unsettled case

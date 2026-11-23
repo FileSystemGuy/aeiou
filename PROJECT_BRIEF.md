@@ -1916,9 +1916,17 @@ numbers; the order is this note's.
     *Review suggestion 4 built (2026-11-22, contract 0.24; the note "Suggestion 4 built"):* a
     `span` outside a timeline, the elapsed time of its body, ops and a joined `parallel`,
     reported as a timeline's spans are; a separate statement from `phase`, as the user
-    decided again that day. **Not done yet:** no committed abstract or case uses one (a
+    decided again that day. ~~**Not done yet:** no committed abstract or case uses one (a
     model's load, a checkpoint's write, a query: the user's to choose; `diskann_search` would
-    take a new sample, its region holding draws). ~~Next of the review: the first half of
+    take a new sample, its region holding draws).~~ *In use since 2026-11-22 (the note "Spans
+    in the checkpoint abstracts"):* `dcp_save`'s span `shard` (a rank's shard file, `mkdir` to
+    `close`) and `dcp_load`'s `load` (a rank's restore to its shard's close), each stopping
+    short of its barriers. **Not done yet:** `diskann_search`'s span of a query's rounds, left
+    out by the user's decision of the same day: its new sample puts the reuse-distance row of
+    `sift1m-cache`'s capture outside tolerance, a row the committed abstract is already
+    outside at two seeds of eight, and both the span and that fit wait for the work on the
+    vector database cases (primitives for them as the cache statements are for the KV
+    cache), not yet an item of its own. ~~Next of the review: the first half of
     suggestion 2, with item 78.~~ *Suggestion 2's first half set aside (2026-11-22):* item 78,
     read from LMCache's source, has no eviction cascade, so it is no user of an eviction body
     acting on a lower tier; that waits for item 76 (Dynamo). Item 78 was met by contract

@@ -358,6 +358,9 @@ fn write_then_restore_through_the_namespace_manifest() {
     let t0 = run::unix_now();
     let wr = go(wmodel, wo.clone());
     assert_eq!(wr.stats.counts.get(&aeiou::vm::OpKind::Read), None, "readback is off by default");
+    // a rank's shard file, from its mkdir to its close, is a span (contract 0.24): two ranks, two checkpoints
+    assert_eq!(wr.stats.spans.keys().collect::<Vec<_>>(), ["shard"]);
+    assert_eq!(wr.stats.spans["shard"].len(), 2 * 2);
     let t1 = run::unix_now();
     let written = run::write_namespace_manifests(wl, wcfg, &root, &wo, &wr, t0, t1).unwrap();
     assert_eq!(written.len(), 1);
@@ -397,6 +400,9 @@ fn write_then_restore_through_the_namespace_manifest() {
     assert_eq!(r.stats.ops, ops);
     assert_eq!(r.stats.bytes_read, bytes);
     assert_eq!(r.stats.input_opens, 4, "two ranks open .metadata and a shard");
+    // a rank's restore, from its open of .metadata to its shard's close, is a span: one a rank
+    assert_eq!(r.stats.spans.keys().collect::<Vec<_>>(), ["load"]);
+    assert_eq!(r.stats.spans["load"].len(), 2);
     assert_eq!(r.stats.warm_opens, 4, "all written on this host");
     // --require-cold refuses on one host; a different layout parameter is refused by the definition check
     ro.require_cold = true;

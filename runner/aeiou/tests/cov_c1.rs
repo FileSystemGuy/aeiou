@@ -79,7 +79,9 @@ fn an_ast_of_a_contract_version_outside_the_range_is_refused() {
     fn uses_fsync(ast: &aeiou::ast::Ast) -> bool {
         ast.actors.values().any(|a| a.body.iter().any(|n| n.kind() == "fsync"))
     }
-    let later = [Since { version: "0.99", what: "an `fsync`", used: uses_fsync }];
+    // (the versions there are, then 0.99: a committed abstract may carry one of them, as dcp_save does 0.24)
+    let later: Vec<Since> = SINCE.iter().map(|s| Since { version: s.version, what: s.what, used: s.used })
+        .chain([Since { version: "0.99", what: "an `fsync`", used: uses_fsync }]).collect();
     let doc = |v: &str, sync: bool| {
         let body = if sync { json!([{"fsync": {"file": {"object": {"namespace": "o", "fields": {"k": 0}}}}}]) } else { json!([]) };
         let text = json!({"ast": AST_FLOOR, "name": "t", "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 2}},

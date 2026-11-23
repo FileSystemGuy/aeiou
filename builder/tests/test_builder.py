@@ -2451,3 +2451,28 @@ def test_what_a_probe_over_several_tiers_refuses_is_refused_at_construction(buil
         with w.actor("gpu") as a:
             with a.timeline("tl", caches={"lm": [tier("g", lru(), capacity=4), tier("k", lru(), capacity=4)]}):
                 build(a)
+
+
+def test_two_committed_abstracts_time_a_region_with_a_span_outside_a_timeline():
+    """Contract 0.24 in use (the user's "proceed with the three spans as recommended", 2026-11-22):
+    a rank's shard write in dcp_save and a rank's restore in dcp_load are each one span, outside
+    a timeline, so each carries 0.24; a span holds no `compute` and no `barrier`, so each stops
+    short of the barrier its region ends with. The third, a query's rounds in diskann_search, is
+    left out by the user's decision of the same day: its new sample puts a capture's row outside
+    its tolerance, and it waits for the work on the vector database cases (brief item 79)."""
+    def spans(nodes, out):
+        for n in nodes:
+            (kind, v), = n.items()
+            if kind == "span":
+                out.append((v["name"], json.dumps(v["body"])))
+            if isinstance(v, dict):
+                for key in ("body", "then", "else"):
+                    if isinstance(v.get(key), list):
+                        spans(v[key], out)
+        return out
+    for name, span in [("dcp_save", "shard"), ("dcp_load", "load")]:
+        doc = json.loads(ast_path(name).read_text())
+        found = spans(doc["actors"]["gpu"]["body"], [])
+        assert [n for n, _ in found] == [span], name
+        assert doc["ast"] == "0.24", name
+        assert '"compute"' not in found[0][1] and '"barrier"' not in found[0][1] and '"timeline"' not in json.dumps(doc), name

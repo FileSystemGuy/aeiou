@@ -58,77 +58,78 @@ ckpt_meta = w.namespace("ckpt_meta", pattern="ckpt/step_{step:06}/{name}", field
 
 with w.actor("gpu") as gpu:
     with gpu.phase("restore"):
-        m = gpu.let("m", ckpt_meta.object(step=P.restore_step, name=".metadata"))
-        gpu.open(m, "RDONLY|CLOEXEC")
-        gpu.fstat(m)
-        gpu.ioctl(m, "TCGETS", expect=["ENOTTY"])
-        gpu.lseek(m, 0, "CUR")
-        gpu.read(m, P.meta_buf, repeat=ceil_div(P.meta_bytes, P.meta_buf))                    # pickle.load: fills, the last short; no EOF read
-        gpu.close(m)
-        c = gpu.let("c", ckpt.object(step=P.restore_step, rank=gpu_id // P.replicas))   # fan-in
-        gpu.open(c, "RDONLY|CLOEXEC")
-        gpu.fstat(c)
-        gpu.ioctl(c, "TCGETS", expect=["ENOTTY"])
-        gpu.lseek(c, 0, "CUR")
-        with gpu.loop("k", P.items) as k:                                           # one torch.load per item, in name order
-            t = gpu.let("t", P.read_order[k])
-            o = gpu.let("o", P.item_off[t])
-            n = gpu.let("n", P.hdr + P.item_bytes[t] + P.trailer - P.item_bytes[t] % 64)   # the item: a zip archive of one storage
-            pb = gpu.let("pb", when(k == 0, -1, gpu.ref("bst").at(k - 1)))          # where the buffer starts; -1: it is empty
-            head_in = gpu.let("head_in", (pb >= 0) & (pb <= o) & (o < min_(pb + P.buf, FSIZE)))
-            be = gpu.let("be", min_(when(head_in, pb, o) + P.buf, FSIZE))           # the buffer's end once the head is in it
-            end_in = gpu.let("end_in", o + n < be)                                  # the whole item is in the buffer
-            far = gpu.let("far", n > P.buf)                                         # no fill at the item holds its end record
-            last = gpu.let("last", o + n == FSIZE)
-            gpu.let("bst", when(~end_in & far & (P.hdr + P.item_bytes[t] > P.buf), -1, when(head_in & end_in, pb, o)))
-            with gpu.when(~head_in):
-                gpu.lseek(c, o, "SET")
+        with gpu.span("load"):                                                      # a rank's restore, to its shard's close: its elapsed time (0.24)
+            m = gpu.let("m", ckpt_meta.object(step=P.restore_step, name=".metadata"))
+            gpu.open(m, "RDONLY|CLOEXEC")
+            gpu.fstat(m)
+            gpu.ioctl(m, "TCGETS", expect=["ENOTTY"])
+            gpu.lseek(m, 0, "CUR")
+            gpu.read(m, P.meta_buf, repeat=ceil_div(P.meta_bytes, P.meta_buf))                    # pickle.load: fills, the last short; no EOF read
+            gpu.close(m)
+            c = gpu.let("c", ckpt.object(step=P.restore_step, rank=gpu_id // P.replicas))   # fan-in
+            gpu.open(c, "RDONLY|CLOEXEC")
+            gpu.fstat(c)
+            gpu.ioctl(c, "TCGETS", expect=["ENOTTY"])
             gpu.lseek(c, 0, "CUR")
-            with gpu.when(~head_in):
-                gpu.lseek(c, o, "SET")
-            with gpu.loop("i", 2):
-                gpu.lseek(c, 0, "CUR")
-            with gpu.when(~head_in):
-                gpu.read(c, P.buf)                                                  # the magic: a fill at the item
-            with gpu.loop("i", 2):
-                gpu.lseek(c, 0, "CUR")
-            with gpu.when(~end_in):                                                 # the view's length: a seek to its end
-                with gpu.when(o + n > be):
-                    gpu.lseek(c, o + n, "SET")                                      # (free when the end is the buffer's own, at EOF)
-                gpu.lseek(c, 0, "CUR")
-                gpu.lseek(c, o, "SET")                                              # the buffer is gone
-                gpu.lseek(c, o, "SET")
-                gpu.lseek(c, 0, "CUR")
-                gpu.read(c, P.buf)                                                  # the magic again
-                with gpu.when(far):
-                    gpu.lseek(c, o + n - P.eocd_scan, "SET")
-                gpu.lseek(c, 0, "CUR")
-                with gpu.when(far):
-                    gpu.read(c, P.buf)                                              # end record and central directory, and what follows the item
-                with gpu.when(last), gpu.loop("b", P.tail_back.len) as b:           # at EOF each step back is a fill
-                    gpu.lseek(c, o + n - P.tail_back[b], "SET")
-                    gpu.read(c, P.buf)
-                with gpu.loop("i", 8):
-                    gpu.lseek(c, 0, "CUR")
-                with gpu.when(far | last):
-                    gpu.lseek(c, o + P.rec2, "SET")
-                gpu.lseek(c, 0, "CUR")
-                with gpu.when(far | last):
-                    gpu.read(c, P.buf)                                              # the records before the storage
-                with gpu.loop("i", 5):
-                    gpu.lseek(c, 0, "CUR")
-                with gpu.when(far | last):
+            with gpu.loop("k", P.items) as k:                                           # one torch.load per item, in name order
+                t = gpu.let("t", P.read_order[k])
+                o = gpu.let("o", P.item_off[t])
+                n = gpu.let("n", P.hdr + P.item_bytes[t] + P.trailer - P.item_bytes[t] % 64)   # the item: a zip archive of one storage
+                pb = gpu.let("pb", when(k == 0, -1, gpu.ref("bst").at(k - 1)))          # where the buffer starts; -1: it is empty
+                head_in = gpu.let("head_in", (pb >= 0) & (pb <= o) & (o < min_(pb + P.buf, FSIZE)))
+                be = gpu.let("be", min_(when(head_in, pb, o) + P.buf, FSIZE))           # the buffer's end once the head is in it
+                end_in = gpu.let("end_in", o + n < be)                                  # the whole item is in the buffer
+                far = gpu.let("far", n > P.buf)                                         # no fill at the item holds its end record
+                last = gpu.let("last", o + n == FSIZE)
+                gpu.let("bst", when(~end_in & far & (P.hdr + P.item_bytes[t] > P.buf), -1, when(head_in & end_in, pb, o)))
+                with gpu.when(~head_in):
                     gpu.lseek(c, o, "SET")
                 gpu.lseek(c, 0, "CUR")
-                with gpu.when(far | last):
-                    gpu.read(c, P.buf)                                              # data.pkl, and the storage's first part
-                with gpu.loop("i", 3):
+                with gpu.when(~head_in):
+                    gpu.lseek(c, o, "SET")
+                with gpu.loop("i", 2):
                     gpu.lseek(c, 0, "CUR")
-                with gpu.when(far & (P.hdr + P.item_bytes[t] > P.buf)):
-                    gpu.read(c, P.hdr + P.item_bytes[t] - P.buf)                    # the rest of the storage: one read past the buffer
-            with gpu.otherwise(), gpu.loop("i", 21):                                # every seek lands in the buffer: only the tells
-                gpu.lseek(c, 0, "CUR")
-        gpu.close(c)
+                with gpu.when(~head_in):
+                    gpu.read(c, P.buf)                                                  # the magic: a fill at the item
+                with gpu.loop("i", 2):
+                    gpu.lseek(c, 0, "CUR")
+                with gpu.when(~end_in):                                                 # the view's length: a seek to its end
+                    with gpu.when(o + n > be):
+                        gpu.lseek(c, o + n, "SET")                                      # (free when the end is the buffer's own, at EOF)
+                    gpu.lseek(c, 0, "CUR")
+                    gpu.lseek(c, o, "SET")                                              # the buffer is gone
+                    gpu.lseek(c, o, "SET")
+                    gpu.lseek(c, 0, "CUR")
+                    gpu.read(c, P.buf)                                                  # the magic again
+                    with gpu.when(far):
+                        gpu.lseek(c, o + n - P.eocd_scan, "SET")
+                    gpu.lseek(c, 0, "CUR")
+                    with gpu.when(far):
+                        gpu.read(c, P.buf)                                              # end record and central directory, and what follows the item
+                    with gpu.when(last), gpu.loop("b", P.tail_back.len) as b:           # at EOF each step back is a fill
+                        gpu.lseek(c, o + n - P.tail_back[b], "SET")
+                        gpu.read(c, P.buf)
+                    with gpu.loop("i", 8):
+                        gpu.lseek(c, 0, "CUR")
+                    with gpu.when(far | last):
+                        gpu.lseek(c, o + P.rec2, "SET")
+                    gpu.lseek(c, 0, "CUR")
+                    with gpu.when(far | last):
+                        gpu.read(c, P.buf)                                              # the records before the storage
+                    with gpu.loop("i", 5):
+                        gpu.lseek(c, 0, "CUR")
+                    with gpu.when(far | last):
+                        gpu.lseek(c, o, "SET")
+                    gpu.lseek(c, 0, "CUR")
+                    with gpu.when(far | last):
+                        gpu.read(c, P.buf)                                              # data.pkl, and the storage's first part
+                    with gpu.loop("i", 3):
+                        gpu.lseek(c, 0, "CUR")
+                    with gpu.when(far & (P.hdr + P.item_bytes[t] > P.buf)):
+                        gpu.read(c, P.hdr + P.item_bytes[t] - P.buf)                    # the rest of the storage: one read past the buffer
+                with gpu.otherwise(), gpu.loop("i", 21):                                # every seek lands in the buffer: only the tells
+                    gpu.lseek(c, 0, "CUR")
+            gpu.close(c)
         gpu.barrier("global")
 
 if __name__ == "__main__":

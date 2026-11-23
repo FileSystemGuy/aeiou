@@ -660,7 +660,7 @@ Six suggestions (decided 2026-11-14, after the list; ~~none built~~ 5 built 2026
    it. `loader` is exactly PyTorch; multi-stage pipelines (DALI, `tf.data`, Ray Data) need the raw
    pieces. The catch: `consume`'s position formula and the step times are defined through
    `loader`.
-4. **`span` everywhere, ~~merged with `phase`~~** (instruction set; *built 2026-11-22 as contract 0.24, a separate statement as decided: outside a timeline a span is the elapsed time of its body, ops and a joined `parallel`, no compute and no wait on another actor; no committed abstract uses one yet*). A measured region is
+4. **`span` everywhere, ~~merged with `phase`~~** (instruction set; *built 2026-11-22 as contract 0.24, a separate statement as decided: outside a timeline a span is the elapsed time of its body, ops and a joined `parallel`, no compute and no wait on another actor; ~~no committed abstract uses one yet~~ `dcp_save` and `dcp_load` use one since 2026-11-22, `diskann_search`'s left out by decision until the work on the vector database cases, `DESIGN_REVIEW.md` §3.100, the note "Spans in the checkpoint abstracts"*). A measured region is
    timeline-only; time to load a model, time to save a checkpoint, and query latency are those
    workloads' headline numbers.
 5. **A quantile-table distribution** (instruction set). The tiered script builds inverse CDFs by

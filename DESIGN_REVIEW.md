@@ -13297,8 +13297,47 @@ statements").** What was costed and put to the user before any edit:
   without the span, a run under `sync`, `io_uring`, `libaio`, `posix-aio`, and `mmap`
   reporting four D of a body with a joined parallel and six of a span in a parallel's
   sub-actors, and the validator's rules.
-- *Not done.* No committed abstract or case uses a span outside a timeline: which regions to
-  measure, and whether `diskann_search` takes a new sample for it, is the user's to say.
+- ~~*Not done.* No committed abstract or case uses a span outside a timeline: which regions to
+  measure, and whether `diskann_search` takes a new sample for it, is the user's to say.~~
+  Two do since 2026-11-22, the third left out (the note "Spans in the checkpoint abstracts"
+  below).
+
+**Spans in the checkpoint abstracts; the search's left out (2026-11-22; the user's "proceed with
+the three spans as recommended").** The recommendation was one span outside a timeline
+(contract 0.24) in each of `dcp_save` (a checkpoint's write), `dcp_load` (a checkpoint's load),
+and `diskann_search` (a query). Two are built, one is left out.
+
+- *What a span could hold decided where each stands.* A span outside a timeline holds no
+  `barrier` and no `compute`. `dcp_save`'s write has two barriers in it (the gather of the
+  write results, and the one after `.metadata`), so its span, `shard`, is a rank's shard file
+  from its `mkdir` to its `close`: rank 0's `.metadata` and the waits on the other ranks are
+  outside it, and the phase `ckpt_write` still covers the whole. `dcp_load`'s span, `load`, is
+  a rank's restore from its open of `.metadata` to its shard's close, its last barrier outside.
+  Neither abstract draws, so no fingerprint and no shape number changed; each AST now carries
+  0.24, so its hash, its cases' locks, and their workload ids changed (two and four cases).
+- *The search's span is held, on evidence.* A query's rounds in a span (the query's CPU, a
+  `compute`, outside it) move the sites of the five draws in it, as said before the user
+  chose. The new sample at seed 1 puts one row of `sift1m-cache`'s capture outside its
+  tolerance: the reuse distance of a read after a read, distance 0.112 against 0.109 allowed,
+  so `aeiou-trace compare --judge` says "not accepted" where the capture records "accepted".
+  The row was at the edge before the span: over seeds 1 to 8, each judged with the other seven
+  as its spread, the committed abstract's distance is 0.102 to 0.108 against 0.106 to 0.108
+  allowed and is outside at two seeds (5 and 7); with the span it is 0.106 to 0.112 and
+  outside at four (1, 3, 5, 7). The trace's distances (p50 80 MiB, p90 192 MiB) are shorter
+  than the abstract's uniform picks give (96 MiB, 224 MiB) at every seed. So the recorded
+  "accepted" rests on seed 1's sample, and the span did not cause the difference, it drew a
+  sample that shows it. Three courses were put to the user: leave the search without a span;
+  record the row as outside with its reason, the capture's verdict becoming "not accepted"
+  (recommended); or refit the picks after the node cache so the distances agree.
+  *Decided the same day, the user:* "We have more work to do on the VDB cases, akin to how we
+  creates the cache primitive in support of KVCache workloads, so let's leave DiskANN without
+  a span for now." So `diskann_search` is as it was, its capture's verdict as recorded, and
+  the row's place at the edge of its tolerance is a finding for that work on the vector
+  database cases, where the span of a query belongs too. The span's patch is not committed.
+- *Tests.* The builder's test of the committed ASTs and the two assertions in the runner's
+  `run::write_then_restore_through_the_namespace_manifest` (four `shard` spans of two ranks
+  and two checkpoints, two `load` spans) were written first and seen red, then green. The
+  third's assertions were seen red and taken out with its span.
 
 **Item 78 read, and contract 0.25: a probe over several tiers; suggestion 2's first half set
 aside (2026-11-22; the user's "proceed" on the recommendation of that day).** The review's

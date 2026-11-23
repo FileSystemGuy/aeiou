@@ -45,23 +45,24 @@ with w.actor("gpu") as gpu:
             gpu.barrier("global")                                   # collective before save
             c = gpu.let("c", ckpt.object(step=step, rank=gpu_id))   # bound above both phases
             with gpu.phase("ckpt_write"):
-                gpu.mkdir(ckpt_dir.object(step=step), expect=["EEXIST"])
-                gpu.stat(ckpt_meta.object(step=step, name=".metadata"), expect=["ENOENT"])   # is there a checkpoint here already
-                gpu.open(c, "WRONLY|CREAT|TRUNC|CLOEXEC")
-                gpu.fstat(c)
-                gpu.ioctl(c, "TCGETS", expect=["ENOTTY"])
-                gpu.lseek(c, 0, "CUR")
-                with gpu.loop("t", P.items) as t:                   # one torch.save stream per write item
-                    gpu.lseek(c, 0, "CUR")                          # tell: the item's offset
-                    with gpu.when(P.item_bytes[t] > P.buf):
-                        gpu.write(c, P.hdr)
-                        gpu.write(c, P.item_bytes[t])               # the storage, past the buffer in one call
-                        gpu.write(c, P.trailer - P.item_bytes[t] % 64)
-                    with gpu.otherwise():
-                        gpu.write(c, P.hdr + P.item_bytes[t] + P.trailer - P.item_bytes[t] % 64)
-                    gpu.lseek(c, 0, "CUR")                          # tell: the item's length
-                gpu.fsync(c)
-                gpu.close(c)
+                with gpu.span("shard"):                             # a rank's shard file, mkdir to close: its elapsed time (0.24)
+                    gpu.mkdir(ckpt_dir.object(step=step), expect=["EEXIST"])
+                    gpu.stat(ckpt_meta.object(step=step, name=".metadata"), expect=["ENOENT"])   # is there a checkpoint here already
+                    gpu.open(c, "WRONLY|CREAT|TRUNC|CLOEXEC")
+                    gpu.fstat(c)
+                    gpu.ioctl(c, "TCGETS", expect=["ENOTTY"])
+                    gpu.lseek(c, 0, "CUR")
+                    with gpu.loop("t", P.items) as t:                   # one torch.save stream per write item
+                        gpu.lseek(c, 0, "CUR")                          # tell: the item's offset
+                        with gpu.when(P.item_bytes[t] > P.buf):
+                            gpu.write(c, P.hdr)
+                            gpu.write(c, P.item_bytes[t])               # the storage, past the buffer in one call
+                            gpu.write(c, P.trailer - P.item_bytes[t] % 64)
+                        with gpu.otherwise():
+                            gpu.write(c, P.hdr + P.item_bytes[t] + P.trailer - P.item_bytes[t] % 64)
+                        gpu.lseek(c, 0, "CUR")                          # tell: the item's length
+                    gpu.fsync(c)
+                    gpu.close(c)
                 gpu.barrier("global")                               # gather WriteResults
                 with gpu.when(gpu_id == 0):
                     m = gpu.let("m", ckpt_meta.object(step=step, name=".metadata.tmp"))

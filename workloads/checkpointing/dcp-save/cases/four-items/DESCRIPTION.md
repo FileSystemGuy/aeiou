@@ -44,23 +44,24 @@ The API the traced application used: `posix` sync (none declared); a run under a
     - Waits at a barrier with every actor on every host.
     - `c` is the object of `ckpt` named by step = `step`, rank = `actor id`.
     - Phase `ckpt_write`:
-      - `mkdir` the object of `ckpt_dir` named by step = `step` (may fail with EEXIST).
-      - `stat` the object of `ckpt_meta` named by step = `step`, name = `.metadata` (may fail with ENOENT).
-      - `open` `c` (WRONLY|CREAT|TRUNC|CLOEXEC).
-      - `fstat` `c`.
-      - `ioctl` `c` `TCGETS` (may fail with ENOTTY).
-      - `lseek` `c` to 0 from the current position.
-      - 4 times (`items`), `t` = 0 to 3:
+      - Measured as span `shard`, the elapsed time of what follows, each time it is entered:
+        - `mkdir` the object of `ckpt_dir` named by step = `step` (may fail with EEXIST).
+        - `stat` the object of `ckpt_meta` named by step = `step`, name = `.metadata` (may fail with ENOENT).
+        - `open` `c` (WRONLY|CREAT|TRUNC|CLOEXEC).
+        - `fstat` `c`.
+        - `ioctl` `c` `TCGETS` (may fail with ENOTTY).
         - `lseek` `c` to 0 from the current position.
-        - If `item_bytes[t] > buf`:
-          - `write` `c`: 704 bytes (`hdr`) at the file position.
-          - `write` `c`: `item_bytes[t]` at the file position.
-          - `write` `c`: `trailer − (item_bytes[t] mod 64)` at the file position.
-        - Otherwise:
-          - `write` `c`: `hdr + item_bytes[t] + trailer − (item_bytes[t] mod 64)` at the file position.
-        - `lseek` `c` to 0 from the current position.
-      - `fsync` `c`.
-      - `close` `c`.
+        - 4 times (`items`), `t` = 0 to 3:
+          - `lseek` `c` to 0 from the current position.
+          - If `item_bytes[t] > buf`:
+            - `write` `c`: 704 bytes (`hdr`) at the file position.
+            - `write` `c`: `item_bytes[t]` at the file position.
+            - `write` `c`: `trailer − (item_bytes[t] mod 64)` at the file position.
+          - Otherwise:
+            - `write` `c`: `hdr + item_bytes[t] + trailer − (item_bytes[t] mod 64)` at the file position.
+          - `lseek` `c` to 0 from the current position.
+        - `fsync` `c`.
+        - `close` `c`.
       - Waits at a barrier with every actor on every host.
       - If `actor id = 0`:
         - `m` is the object of `ckpt_meta` named by step = `step`, name = `.metadata.tmp`.

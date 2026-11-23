@@ -40,80 +40,81 @@ The API the traced application used: `posix` sync (none declared); a run under a
 ### The `gpu` actor (2 instances, one per GPU)
 
 - Phase `restore`:
-  - `m` is the object of `ckpt_meta` named by step = 100 (`restore_step`), name = `.metadata`.
-  - `open` `m` (RDONLY|CLOEXEC).
-  - `fstat` `m`.
-  - `ioctl` `m` `TCGETS` (may fail with ENOTTY).
-  - `lseek` `m` to 0 from the current position.
-  - Once (`⌈meta_bytes / meta_buf⌉`), `rep` = 0 to 0:
-    - `read` `m`: 1 MiB (`meta_buf`) at the file position.
-  - `close` `m`.
-  - `c` is the object of `ckpt` named by step = 100 (`restore_step`), rank = `actor id div replicas`.
-  - `open` `c` (RDONLY|CLOEXEC).
-  - `fstat` `c`.
-  - `ioctl` `c` `TCGETS` (may fail with ENOTTY).
-  - `lseek` `c` to 0 from the current position.
-  - 6 times (`items`), `k` = 0 to 5:
-    - `t` = `read_order[k]`.
-    - `o` = `item_off[t]`.
-    - `n` = `hdr + item_bytes[t] + trailer − (item_bytes[t] mod 64)`.
-    - `pb` = `(if k = 0 then -1 else bst@(k − 1))`.
-    - `head_in` = `pb ≥ 0 and pb ≤ o and o < min(pb + buf, item_off[items − 1] + hdr + item_bytes[items − 1] + trailer − (item_bytes[items − 1] mod 64))`.
-    - `be` = `min((if head_in then pb else o) + buf, item_off[items − 1] + hdr + item_bytes[items − 1] + trailer − (item_bytes[items − 1] mod 64))`.
-    - `end_in` = `o + n < be`.
-    - `far` = `n > buf`.
-    - `last` = `o + n = item_off[items − 1] + hdr + item_bytes[items − 1] + trailer − (item_bytes[items − 1] mod 64)`.
-    - `bst` = `(if not end_in and far and hdr + item_bytes[t] > buf then -1 else (if head_in and end_in then pb else o))`.
-    - If `not head_in`:
-      - `lseek` `c` to `o` from the start.
+  - Measured as span `load`, the elapsed time of what follows, each time it is entered:
+    - `m` is the object of `ckpt_meta` named by step = 100 (`restore_step`), name = `.metadata`.
+    - `open` `m` (RDONLY|CLOEXEC).
+    - `fstat` `m`.
+    - `ioctl` `m` `TCGETS` (may fail with ENOTTY).
+    - `lseek` `m` to 0 from the current position.
+    - Once (`⌈meta_bytes / meta_buf⌉`), `rep` = 0 to 0:
+      - `read` `m`: 1 MiB (`meta_buf`) at the file position.
+    - `close` `m`.
+    - `c` is the object of `ckpt` named by step = 100 (`restore_step`), rank = `actor id div replicas`.
+    - `open` `c` (RDONLY|CLOEXEC).
+    - `fstat` `c`.
+    - `ioctl` `c` `TCGETS` (may fail with ENOTTY).
     - `lseek` `c` to 0 from the current position.
-    - If `not head_in`:
-      - `lseek` `c` to `o` from the start.
-    - Twice, `i` = 0 to 1:
-      - `lseek` `c` to 0 from the current position.
-    - If `not head_in`:
-      - `read` `c`: 1 MiB (`buf`) at the file position.
-    - Twice, `i` = 0 to 1:
-      - `lseek` `c` to 0 from the current position.
-    - If `not end_in`:
-      - If `o + n > be`:
-        - `lseek` `c` to `o + n` from the start.
-      - `lseek` `c` to 0 from the current position.
-      - `lseek` `c` to `o` from the start.
-      - `lseek` `c` to `o` from the start.
-      - `lseek` `c` to 0 from the current position.
-      - `read` `c`: 1 MiB (`buf`) at the file position.
-      - If `far`:
-        - `lseek` `c` to `o + n − eocd_scan` from the start.
-      - `lseek` `c` to 0 from the current position.
-      - If `far`:
-        - `read` `c`: 1 MiB (`buf`) at the file position.
-      - If `last`:
-        - 6 times (`len(tail_back)`), `b` = 0 to 5:
-          - `lseek` `c` to `o + n − tail_back[b]` from the start.
-          - `read` `c`: 1 MiB (`buf`) at the file position.
-      - 8 times, `i` = 0 to 7:
-        - `lseek` `c` to 0 from the current position.
-      - If `far or last`:
-        - `lseek` `c` to `o + rec2` from the start.
-      - `lseek` `c` to 0 from the current position.
-      - If `far or last`:
-        - `read` `c`: 1 MiB (`buf`) at the file position.
-      - 5 times, `i` = 0 to 4:
-        - `lseek` `c` to 0 from the current position.
-      - If `far or last`:
+    - 6 times (`items`), `k` = 0 to 5:
+      - `t` = `read_order[k]`.
+      - `o` = `item_off[t]`.
+      - `n` = `hdr + item_bytes[t] + trailer − (item_bytes[t] mod 64)`.
+      - `pb` = `(if k = 0 then -1 else bst@(k − 1))`.
+      - `head_in` = `pb ≥ 0 and pb ≤ o and o < min(pb + buf, item_off[items − 1] + hdr + item_bytes[items − 1] + trailer − (item_bytes[items − 1] mod 64))`.
+      - `be` = `min((if head_in then pb else o) + buf, item_off[items − 1] + hdr + item_bytes[items − 1] + trailer − (item_bytes[items − 1] mod 64))`.
+      - `end_in` = `o + n < be`.
+      - `far` = `n > buf`.
+      - `last` = `o + n = item_off[items − 1] + hdr + item_bytes[items − 1] + trailer − (item_bytes[items − 1] mod 64)`.
+      - `bst` = `(if not end_in and far and hdr + item_bytes[t] > buf then -1 else (if head_in and end_in then pb else o))`.
+      - If `not head_in`:
         - `lseek` `c` to `o` from the start.
       - `lseek` `c` to 0 from the current position.
-      - If `far or last`:
+      - If `not head_in`:
+        - `lseek` `c` to `o` from the start.
+      - Twice, `i` = 0 to 1:
+        - `lseek` `c` to 0 from the current position.
+      - If `not head_in`:
         - `read` `c`: 1 MiB (`buf`) at the file position.
-      - 3 times, `i` = 0 to 2:
+      - Twice, `i` = 0 to 1:
         - `lseek` `c` to 0 from the current position.
-      - If `far and hdr + item_bytes[t] > buf`:
-        - `read` `c`: `hdr + item_bytes[t] − buf` at the file position.
-    - Otherwise:
-      - 21 times, `i` = 0 to 20:
+      - If `not end_in`:
+        - If `o + n > be`:
+          - `lseek` `c` to `o + n` from the start.
         - `lseek` `c` to 0 from the current position.
-  - `close` `c`.
+        - `lseek` `c` to `o` from the start.
+        - `lseek` `c` to `o` from the start.
+        - `lseek` `c` to 0 from the current position.
+        - `read` `c`: 1 MiB (`buf`) at the file position.
+        - If `far`:
+          - `lseek` `c` to `o + n − eocd_scan` from the start.
+        - `lseek` `c` to 0 from the current position.
+        - If `far`:
+          - `read` `c`: 1 MiB (`buf`) at the file position.
+        - If `last`:
+          - 6 times (`len(tail_back)`), `b` = 0 to 5:
+            - `lseek` `c` to `o + n − tail_back[b]` from the start.
+            - `read` `c`: 1 MiB (`buf`) at the file position.
+        - 8 times, `i` = 0 to 7:
+          - `lseek` `c` to 0 from the current position.
+        - If `far or last`:
+          - `lseek` `c` to `o + rec2` from the start.
+        - `lseek` `c` to 0 from the current position.
+        - If `far or last`:
+          - `read` `c`: 1 MiB (`buf`) at the file position.
+        - 5 times, `i` = 0 to 4:
+          - `lseek` `c` to 0 from the current position.
+        - If `far or last`:
+          - `lseek` `c` to `o` from the start.
+        - `lseek` `c` to 0 from the current position.
+        - If `far or last`:
+          - `read` `c`: 1 MiB (`buf`) at the file position.
+        - 3 times, `i` = 0 to 2:
+          - `lseek` `c` to 0 from the current position.
+        - If `far and hdr + item_bytes[t] > buf`:
+          - `read` `c`: `hdr + item_bytes[t] − buf` at the file position.
+      - Otherwise:
+        - 21 times, `i` = 0 to 20:
+          - `lseek` `c` to 0 from the current position.
+    - `close` `c`.
   - Waits at a barrier with every actor on every host.
 
 ### Measured shape
