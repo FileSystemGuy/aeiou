@@ -51,6 +51,7 @@ pub const SINCE: &[Since] = &[
     Since { version: "0.25", what: "a `probe` over several tiers", used: probe_over_tiers },
     Since { version: "0.26", what: "a `submit` its span waits for (`join`)", used: joined_submit },
     Since { version: "0.27", what: "a `used`, a tier's fill read by a lane", used: tier_used },
+    Since { version: "0.28", what: "a `holds` or a `set`, what a tier holds of a key range as a set", used: tier_sets },
 ];
 
 fn joined_submit(ast: &Ast) -> bool {
@@ -70,6 +71,19 @@ fn tier_used(ast: &Ast) -> bool {
     fn walk(nodes: &[Node]) -> bool {
         nodes.iter().any(|n| match n {
             Node::Used { .. } => true,
+            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
+            | Node::Submit { body, .. } | Node::Span { body, .. } => walk(body),
+            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
+            _ => false,
+        })
+    }
+    ast.actors.values().any(|a| walk(&a.body))
+}
+
+fn tier_sets(ast: &Ast) -> bool {
+    fn walk(nodes: &[Node]) -> bool {
+        nodes.iter().any(|n| match n {
+            Node::Holds { .. } | Node::Set { .. } => true,
             Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
             | Node::Submit { body, .. } | Node::Span { body, .. } => walk(body),
             Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
@@ -288,6 +302,9 @@ struct Scope<'a> {
     arrays: HashSet<&'a str>,
     /// the arrays a `store`'s `taken` binds, which vary with what the tier holds (V6)
     taken: HashSet<&'a str>,
+    /// the arrays a `holds` or a `set` bound (contract 0.28): ascending and distinct, what
+    /// `set`, `run`, and `below` take
+    sets: HashSet<&'a str>,
     /// the bindings whose definition reads `published`, `entry` (V30), or `prev` (V31), by the
     /// rule: `@` cannot recompute them
     unpositional: HashMap<&'a str, &'static str>,
@@ -336,7 +353,7 @@ struct ActorState<'a> {
 
 impl<'a> Scope<'a> {
     fn new(fields: HashSet<&'a str>) -> Self {
-        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new(), varying: vec![HashSet::new()], kinds: vec![HashMap::new()], reads: vec![HashMap::new()], count_varies: None, loop_body: vec![false], arrays: HashSet::new(), taken: HashSet::new(), unpositional: HashMap::new() }
+        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new(), varying: vec![HashSet::new()], kinds: vec![HashMap::new()], reads: vec![HashMap::new()], count_varies: None, loop_body: vec![false], arrays: HashSet::new(), taken: HashSet::new(), sets: HashSet::new(), unpositional: HashMap::new() }
     }
 
     fn child(&self) -> Self {
@@ -449,7 +466,7 @@ fn expr_refs<'a>(e: &'a Expr, out: &mut BTreeSet<&'a str>) {
             group.iter().for_each(|g| expr_refs(g, out));
             expr_refs(index, out)
         }
-        ExprNode::At { index, .. } | ExprNode::Elem { index, .. } => expr_refs(index, out),
+        ExprNode::At { index, .. } | ExprNode::Elem { index, .. } | ExprNode::Run { from: index, .. } | ExprNode::Below { bound: index, .. } => expr_refs(index, out),
         ExprNode::Prev { init, .. } => expr_refs(init, out),
         ExprNode::Fresh(f) => expr_refs(&f.n, out),
         ExprNode::SeqLen(e) => expr_refs(e, out),
@@ -516,7 +533,7 @@ fn unpositional(v: &ExprLike) -> Option<&'static str> {
         match n.as_ref() {
             ExprNode::Published(_) | ExprNode::Entry { .. } | ExprNode::Now(_) => Some("V30"),
             ExprNode::Prev { .. } => Some("V31"),
-            ExprNode::At { index, .. } | ExprNode::Elem { index, .. } => walk(index),
+            ExprNode::At { index, .. } | ExprNode::Elem { index, .. } | ExprNode::Run { from: index, .. } | ExprNode::Below { bound: index, .. } => walk(index),
             ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
             | ExprNode::Max(a) | ExprNode::Eq(a) | ExprNode::Ne(a) | ExprNode::Lt(a) | ExprNode::Le(a) | ExprNode::Gt(a) | ExprNode::Ge(a) => a.iter().find_map(walk),
             ExprNode::And(a) | ExprNode::Or(a) => a.iter().find_map(walk),
@@ -543,7 +560,7 @@ fn evict_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
     for (i, n) in nodes.iter().enumerate() {
         let np = p(pp, &[&i.to_string()]);
         match n {
-            Node::Compute { .. } | Node::Probe { .. } | Node::Used { .. } | Node::Touch { .. } | Node::Store { .. } | Node::Acquire { .. }
+            Node::Compute { .. } | Node::Probe { .. } | Node::Used { .. } | Node::Holds { .. } | Node::Touch { .. } | Node::Store { .. } | Node::Acquire { .. }
             | Node::Release { .. } | Node::Publish { .. } | Node::Parallel { .. } | Node::Loader { .. } | Node::Channel { .. } | Node::Put { .. }
             | Node::Take { .. } | Node::Barrier { .. } | Node::Timeline { .. } | Node::Trace { .. } | Node::Submit { .. } | Node::Span { .. } => out.push((np, n.kind())),
             Node::Loop { body, .. } | Node::Phase { body, .. } => evict_bans(body, &p(&np, &[n.kind(), "body"]), out),
@@ -651,6 +668,8 @@ fn plan_reads(e: &Expr, also: Option<&'static str>) -> Option<&'static str> {
         ExprNode::Draw(_) => Some("draw"),
         ExprNode::Elem { .. } => Some("elem"),
         ExprNode::Len(_) => Some("len"),
+        ExprNode::Run { .. } => Some("run"),
+        ExprNode::Below { .. } => Some("below"),
         ExprNode::Sum(_) => Some("sum"),
         ExprNode::Size(_) => Some("size"),
         ExprNode::Offset(_) => Some("offset"),
@@ -1126,6 +1145,7 @@ impl<'a> Checker<'a> {
             ExprNode::Ref(name) => scope.is_varying(name),
             ExprNode::Draw(_) => !scope.indices.is_empty(),
             ExprNode::Len(a) => scope.taken.contains(a.as_str()),
+            ExprNode::Run { .. } | ExprNode::Below { .. } => true,
             ExprNode::Param(_) | ExprNode::Actor(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => false,
             ExprNode::Elem { array, index } => scope.taken.contains(array.as_str()) || self.varies(index, scope),
             ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => self.handle_varies(h, scope),
@@ -1640,6 +1660,28 @@ impl<'a> Checker<'a> {
                 }
                 scope.bind(bind, &LOOKUP_DEF, true, Some("int"), (None, None));
                 scope.unpositional.insert(bind.as_str(), "V33");
+            }
+            Node::Holds { cache, tier, keys, bind } => {
+                // every index of a key range a tier holds (contract 0.28); as check.py's `n_holds`
+                self.keys_stmt("holds", cache, &[tier.as_str()], keys, pp, scope, st);
+                self.set_bind("holds", bind, pp, scope);
+            }
+            Node::Set { bind, op, of } => {
+                // arrays a `holds` or a `set` bound, combined (contract 0.28); as check.py's `n_set`
+                if !["union", "intersect", "minus"].contains(&op.as_str()) {
+                    self.err(pp, format!("set: `op` `{op}` is not `union`, `intersect`, or `minus` (V33)"));
+                }
+                if of.len() < 2 {
+                    self.err(pp, format!("set: `of` names {} array; an operation is over two or more (V33)", of.len()));
+                }
+                let mut said: Vec<&str> = Vec::new();
+                for a in of {
+                    if !scope.sets.contains(a.as_str()) && !said.contains(&a.as_str()) {
+                        said.push(a);
+                        self.err(pp, format!("set: `{a}` is no array a `holds` or a `set` bound before it (V33)"));
+                    }
+                }
+                self.set_bind("set", bind, pp, scope);
             }
             Node::Probe { cache, tier, tiers, keys, bind, held } => {
                 // over several tiers (contract 0.25): `tiers`, two or more and none twice, in
@@ -2208,7 +2250,7 @@ impl<'a> Checker<'a> {
                 None => self.ast.params.get(array).and_then(|p| p.items).map(Kind::name),
                 _ => None,
             },
-            ExprNode::Index(_) | ExprNode::Actor(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Len(_) | ExprNode::Published(_) | ExprNode::Size(_)
+            ExprNode::Index(_) | ExprNode::Actor(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Len(_) | ExprNode::Run { .. } | ExprNode::Below { .. } | ExprNode::Published(_) | ExprNode::Size(_)
             | ExprNode::Offset(_) | ExprNode::UnitIndex(_) | ExprNode::Units(_) | ExprNode::Chunks(_) | ExprNode::Now(_) | ExprNode::Cached(_) | ExprNode::Tier(_) | ExprNode::Victim(_) => Some("int"),
             ExprNode::Eq(_) | ExprNode::Ne(_) | ExprNode::Lt(_) | ExprNode::Le(_) | ExprNode::Gt(_) | ExprNode::Ge(_) | ExprNode::And(_)
             | ExprNode::Or(_) | ExprNode::Not(_) => Some("bool"),
@@ -2353,6 +2395,21 @@ impl<'a> Checker<'a> {
     /// tier of it, and acts on a key range: `from` and `count` integers, `key` an integer
     /// read with the range's `index` in scope, as an `array`'s value is. The tier's unit and
     /// what it does when full, when the names are found.
+    /// The array a `holds` or a `set` binds (contract 0.28): a name no parameter has, an array
+    /// that varies with what the tiers hold, as a store's `taken`.
+    fn set_bind(&mut self, what: &str, bind: &'a str, pp: &P, scope: &mut Scope<'a>) {
+        let bp = p(pp, &["bind"]);
+        if !is_ident(bind) {
+            self.err(&bp, "not an identifier");
+        }
+        if self.ast.params.contains_key(bind) {
+            self.err(&bp, format!("{what}: `bind` `{bind}` has the name of a parameter, which `elem` and `len` also read (V32)"));
+        }
+        scope.arrays.insert(bind);
+        scope.taken.insert(bind);
+        scope.sets.insert(bind);
+    }
+
     fn keys_stmt(&mut self, what: &str, cache: &str, named: &[&str], keys: &'a Keys, pp: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) -> Option<(TierUnit, Full)> {
         // the tiers named, one but for a `probe` over several (contract 0.25), each once
         let mut found = None;
@@ -2531,6 +2588,15 @@ impl<'a> Checker<'a> {
                 if !scope.arrays.contains(name.as_str()) {
                     self.array(name, "len", path, false);
                 }
+            }
+            // of an array a `holds` or a `set` bound alone (contract 0.28); as check.py's
+            ExprNode::Run { array, from: at } | ExprNode::Below { array, bound: at } => {
+                let (what, key) = if matches!(node, ExprNode::Run { .. }) { ("run", "from") } else { ("below", "bound") };
+                if !scope.sets.contains(array.as_str()) {
+                    self.err(path, format!("{what}: `{array}` is no array a `holds` or a `set` bound before it (V33)"));
+                }
+                self.expr(at, &p(path, &[key]), scope, st, None);
+                self.int(at, &p(path, &[key]), scope);
             }
             ExprNode::Now(_) => {
                 if st.timeline.is_none() {

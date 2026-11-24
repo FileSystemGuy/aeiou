@@ -420,6 +420,17 @@ class Elem(Expr):
         return {"elem": {"array": self.array, "index": ast_of(self.index)}}
 
 
+class SetMeasure(Expr):
+    """`run` or `below` of an array a `holds` or a `set` bound (contract 0.28)."""
+    __slots__ = ("kind", "array", "at")
+
+    def __init__(self, kind: str, array: str, at):
+        self.kind, self.array, self.at = kind, array, lift(at, kind)
+
+    def ast(self):
+        return {self.kind: {"array": self.array, "from" if self.kind == "run" else "bound": ast_of(self.at)}}
+
+
 class Reduce(Expr):
     __slots__ = ("kind", "array")
 

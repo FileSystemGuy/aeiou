@@ -331,12 +331,19 @@ def shape(name, doc, g4):
         # `vllm_multi_process_adapter.py`, `storage_manager.py`, `prefetch_controller.py`)
         # a chunk of the run that G2 holds past its own leading run counts toward the hit and is
         # not loaded (the controller read-locks every such key and takes it out of the load plan)
-        h3, _, a3, a4 = c.probe("lm", ["g2", "g3", "g4"], chunk_keys(sq, P.per, h2), tag + "h3", held=(tag + "a2", tag + "a3", tag + "a4"))
+        # the lookup, from sets (contract 0.28): what each tier holds of the chunks past G2's hit;
+        # the hit past it is the leading run of what any holds; G3 loads those of the run G2
+        # lacks, and G4 those neither G2 nor G3 has (the lowest adapter that holds a key loads it)
+        past = chunk_keys(sq, P.per, h2)
+        s2, s3, s4 = (c.holds("lm", t, past, tag + "s" + t[1]) for t in ("g2", "g3", "g4"))
+        h3 = c.let(tag + "h3", c.union(tag + "any", s2, s3, s4).run(h2))
+        a3, a4 = c.minus(tag + "a3", s3, s2), c.minus(tag + "a4", s4, s2, s3)
+        n3, n4 = c.let(tag + "n3", a3.below(h2 + h3)), c.let(tag + "n4", a4.below(h2 + h3))
         # the load is all or nothing (contract 0.27; `prefetch_controller.py`, `_reserve_load_buffers`,
         # read 2026-11-23): the server takes a G2 buffer for every chunk it would load, and when G2
         # has not the room nothing is loaded, the hit is G2's own, and the engine computes and
         # stores the rest again; G2's room is its planned one at the request's instant
-        fits = c.let(tag + "fits", a3.len + a4.len <= G2_CHUNKS - c.used("lm", "g2", tag + "u2"))
+        fits = c.let(tag + "fits", n3 + n4 <= G2_CHUNKS - c.used("lm", "g2", tag + "u2"))
         hit = c.let(tag + "hit", h2 + when(fits, h3, 0))
         # the request waits for its lookup and its loads, which each adapter's workers carry (contract
         # 0.26; traced 2026-11-22: an adapter's four threads issue all its calls): worker q of an
@@ -354,13 +361,13 @@ def shape(name, doc, g4):
                             c.stat(final(ns, chunk_key(sq, h2 + q + i * P.store_lanes, P.per)), expect=["ENOENT"])
         with c.when(fits):
             with c.span("load", staging="store"):
-                for tg, ns, arr, wk in (("r3", kv, a3, "store"), ("r4", kv4, a4, "store4")):
-                    with c.loop(tag + tg, min_(P.store_lanes, arr.len)) as q:
+                for tg, ns, arr, cnt, wk in (("r3", kv, a3, n3, "store"), ("r4", kv4, a4, n4, "store4")):
+                    with c.loop(tag + tg, min_(P.store_lanes, cnt)) as q:
                         with c.submit(wk, join=True):
-                            with c.loop(tag + tg + "i", ceil_div(arr.len - q, P.store_lanes)) as i:
+                            with c.loop(tag + tg + "i", ceil_div(cnt - q, P.store_lanes)) as i:
                                 native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[q + i * P.store_lanes], P.per))))
-            c.touch("lm", "g3", chunk_keys(sq, P.per, chunks=a3))
-            c.touch("lm", "g4", chunk_keys(sq, P.per, chunks=a4))
+            c.touch("lm", "g3", chunk_keys(sq, P.per, chunks=a3, count=n3))
+            c.touch("lm", "g4", chunk_keys(sq, P.per, chunks=a4, count=n4))
         t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")
         for tr, ns, wk in (("g3", kv, "store"), ("g4", kv4, "store4")):
             with c.loop(tag + "c" + tr, t2.len) as j:                   # a store's check: each chunk statted first, on the adapter's workers

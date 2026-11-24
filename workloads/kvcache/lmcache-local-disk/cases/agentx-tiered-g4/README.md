@@ -34,6 +34,15 @@ G3, 2,096,859 stats in each tier, 30.6 TiB read ~~in the hour~~ over the whole p
 applies (the largest load of one request is 2,068 chunks, G2 holding 15,680); G2's room is the
 plan's at the request's instant, the bytes of loads in flight during a run not in it.
 
+Since contract 0.28 (2026-11-23, the same day; another sample again, the statements having
+changed) the lookup is written from sets: what each of G2, G3, and G4 holds of the chunks past
+G2's hit, the hit the leading run of their union, G3 loading the chunks of it G2 lacks and G4
+those neither has. The rules are the ones above, now lines of the abstract; the probe form,
+given the same number of statements, plans the same ops to the last one (fingerprint
+`8edc49c45a97b621` both ways). At seed 1: 89,958 files written to each tier, 984,977 chunks
+read from the two, 69,000 files unlinked in G3, 2,161,935 stats in each tier, 30.1 TiB read
+over the plan's 51.9 hours.
+
 What LMCache does with two adapters is read from its source (0.5.5, `v1/distributed/
 storage_controllers/`) and, since 2026-11-22, seen in a capture of its multi-process server
 (`kit/captures/agentx-mp/`, the mechanism's README): every chunk G2 newly takes is stored in each

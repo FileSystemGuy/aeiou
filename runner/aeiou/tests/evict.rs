@@ -731,3 +731,165 @@ fn the_validator_holds_used_to_its_rules() {
     assert!(e[0].contains("holds nothing past contract `0.23`"), "{e:?}");
     assert_eq!(check(json!([tl(tiers_tu(9), json!([used("t", "f"), stat(r("f"))]))]), "0.27"), Vec::<String>::new());
 }
+
+// ---------------------------------------------------------------- what a tier holds of a key range, as a set (contract 0.28)
+
+fn holds(tier: &str, s: Value, from: i64, bind: &str) -> Value {
+    json!({"holds": {"cache": "c", "tier": tier, "keys": crate::common::chunk_keys(s, json!(1), json!(from), None), "bind": bind}})
+}
+
+fn set(bind: &str, op: &str, of: &[&str]) -> Value {
+    json!({"set": {"bind": bind, "op": op, "of": of}})
+}
+
+fn run_of(a: &str, from: Value) -> Value {
+    json!({"run": {"array": a, "from": from}})
+}
+
+fn below(a: &str, bound: Value) -> Value {
+    json!({"below": {"array": a, "bound": bound}})
+}
+
+/// A stat of each element of the first `n` of array `a`.
+fn each(a: &str, n: Value) -> Value {
+    json!({"loop": {"index": "k", "to": n, "body": [stat(json!({"elem": {"array": a, "index": {"index": "k"}}}))]}})
+}
+
+fn walk_28(body: Value) -> Vec<String> {
+    walk_doc(&doc(body).replacen("\"0.23\"", "\"0.28\"", 1), true).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// A's chunks stored one by one: those of `mask`'s bits, in tier `tier`.
+fn stored(tier: &str, mask: u32) -> Vec<Value> {
+    (0..8).filter(|i| mask >> i & 1 == 1).map(|i| store_in(tier, r("a"), json!({"from": i, "count": 1}))).collect()
+}
+
+/// Contract 0.28 (the user's proposal, 2026-11-23): `holds` binds the indices of a key range
+/// whose keys a tier holds, every one, not stopping at the first it lacks, and changes nothing;
+/// `set` combines such arrays; `run` and `below` measure one. What a lookup is made of, so that
+/// its rules (which run is the hit, which tier serves a key) are the abstract's statements.
+#[test]
+fn holds_binds_every_index_a_tier_holds_and_changes_nothing() {
+    // t holds A's chunks 0, 2, 3, and 6
+    let with = |more: Vec<Value>| json!([tl(tiers_tu(100), Value::Array(std::iter::once(let_("a", shared(1, 8))).chain(stored("t", 0b100_1101)).chain(more).collect()))]);
+    let body = with(vec![holds("t", r("a"), 0, "s"), stat(json!({"len": "s"})), each("s", json!({"len": "s"}))]);
+    assert_eq!(walk_28(body), ["d/4", "d/0", "d/2", "d/3", "d/6"]);
+    // from chunk 1: the range's indices, not counts from its start; a tier holding none, empty
+    let body = with(vec![holds("t", r("a"), 1, "s"), holds("u", r("a"), 0, "e"), each("s", json!({"len": "s"})), stat(json!({"len": "e"}))]);
+    assert_eq!(walk_28(body), ["d/2", "d/3", "d/6", "d/0"]);
+    // the value is the one at the statement, not a later one
+    let body = with(vec![holds("t", r("a"), 0, "s"), store_in("t", r("a"), json!({"from": 1, "count": 1})), holds("t", r("a"), 0, "s2"),
+        stat(json!({"len": "s"})), stat(json!({"len": "s2"}))]);
+    assert_eq!(walk_28(body), ["d/4", "d/5"]);
+    // nothing is changed: A's chunks keep their order, so B's one evicts A's first-stored
+    let lru = json!([{"name": "t", "order": [cached("touched"), cached("pos")], "capacity": 3}]);
+    let body = json!([tl(lru, json!([
+        let_("a", shared(1, 3)), store(r("a"), 0, 3), holds("t", r("a"), 0, "s"), store(shared(2, 1), 0, 1),
+        holds("t", r("a"), 0, "s2"), stat(json!({"len": "s"})), each("s2", json!({"len": "s2"}))]))]);
+    assert_eq!(walk_28(body), ["d/3", "d/1", "d/2"]);
+}
+
+#[test]
+fn sets_combine_and_run_and_below_measure_what_holds_bound() {
+    // t holds A's chunks 0, 2, 3, 6; u holds 1, 2, 4, 6; v nothing
+    let tiers = || { let mut t = tiers_tu(100); t.as_array_mut().unwrap().push(json!({"name": "v", "order": [cached("touched")], "capacity": 100})); t };
+    let with = |more: Vec<Value>| json!([tl(tiers(), Value::Array(std::iter::once(let_("a", shared(1, 8)))
+        .chain(stored("t", 0b100_1101)).chain(stored("u", 0b101_0110))
+        .chain([holds("t", r("a"), 0, "st"), holds("u", r("a"), 0, "su"), holds("v", r("a"), 0, "sv")]).chain(more).collect()))]);
+    let all = |a: &str| each(a, json!({"len": a}));
+    let body = with(vec![set("x", "union", &["st", "su"]), all("x")]);
+    assert_eq!(walk_28(body), ["d/0", "d/1", "d/2", "d/3", "d/4", "d/6"]);
+    let body = with(vec![set("x", "intersect", &["st", "su"]), all("x")]);
+    assert_eq!(walk_28(body), ["d/2", "d/6"]);
+    let body = with(vec![set("x", "minus", &["st", "su"]), all("x"), set("y", "minus", &["su", "st"]), all("y")]);
+    assert_eq!(walk_28(body), ["d/0", "d/3", "d/1", "d/4"]);
+    // more than two: the union of all, what all hold, the first less all the rest; an empty one
+    let body = with(vec![set("x", "union", &["sv", "st", "su"]), stat(json!({"len": "x"})), set("y", "intersect", &["st", "su", "sv"]), stat(json!({"len": "y"})),
+        set("m", "union", &["st", "su"]), set("z", "minus", &["m", "st", "sv"]), all("z"), set("w", "minus", &["sv", "st"]), stat(json!({"len": "w"}))]);
+    assert_eq!(walk_28(body), ["d/6", "d/0", "d/1", "d/4", "d/0"]);
+    // a set of a set, and an array with itself
+    let body = with(vec![set("x", "union", &["st", "su"]), set("y", "minus", &["x", "su"]), all("y"), set("z", "intersect", &["st", "st"]), stat(json!({"len": "z"})),
+        set("w", "minus", &["st", "st"]), stat(json!({"len": "w"}))]);
+    assert_eq!(walk_28(body), ["d/0", "d/3", "d/4", "d/0"]);
+    // run: the consecutive indices held from `from`; none when `from` is not held, or past the end
+    let body = with(vec![set("x", "union", &["st", "su"]), stat(run_of("x", json!(0))), stat(run_of("x", json!(2))), stat(run_of("x", json!(5))),
+        stat(run_of("x", json!(6))), stat(run_of("x", json!(9))), stat(run_of("st", json!(2))), stat(run_of("sv", json!(0))), stat(run_of("x", json!(-1)))]);
+    assert_eq!(walk_28(body), ["d/5", "d/3", "d/0", "d/1", "d/0", "d/2", "d/0", "d/0"]);
+    // below: how many elements are less than the bound
+    let body = with(vec![stat(below("st", json!(0))), stat(below("st", json!(1))), stat(below("st", json!(3))), stat(below("st", json!(6))),
+        stat(below("st", json!(100))), stat(below("sv", json!(5))), stat(below("st", json!(-3)))]);
+    assert_eq!(walk_28(body), ["d/0", "d/1", "d/2", "d/3", "d/4", "d/0", "d/0"]);
+}
+
+/// The proof that the functions suffice: over cache states and starts, a probe over two tiers
+/// (contract 0.25) and its composition from `holds`, `set`, `run`, and `below` give the same
+/// run and the same indices to each tier.
+#[test]
+fn a_probe_over_tiers_is_its_composition_from_sets() {
+    let masks = [(0u32, 0u32), (0b1, 0), (0, 0b1), (0b101, 0b10), (0b1111_1111, 0), (0, 0b1111_1111), (0b1010_1010, 0b0101_0101), (0b0110_0111, 0b0011_1100),
+        (0b1000_0001, 0b0111_1110), (0b0001_0111, 0b0001_1011), (0b1110_0000, 0b0001_1111), (0b0100_1101, 0b0101_0110)];
+    let mut runs = std::collections::BTreeSet::new();
+    for (mt, mu) in masks {
+        for from in [0i64, 1, 3, 7] {
+            for order in [["t", "u"], ["u", "t"]] {
+                let with = |more: Vec<Value>| json!([tl(tiers_tu(100), Value::Array(std::iter::once(let_("a", shared(1, 8)))
+                    .chain(stored("t", mt)).chain(stored("u", mu)).chain(more).collect()))]);
+                let probed = walk_25(with(vec![probe_tiers(json!(order), r("a"), from, "h", Some(json!(["a0", "a1"]))),
+                    stat(r("h")), each("a0", json!({"len": "a0"})), stat(json!(777)), each("a1", json!({"len": "a1"}))]));
+                let end = json!({"add": [from, r("h")]});
+                let composed = walk_28(with(vec![holds(order[0], r("a"), from, "s0"), holds(order[1], r("a"), from, "s1"),
+                    set("any", "union", &["s0", "s1"]), let_("h", run_of("any", json!(from))), set("r1", "minus", &["s1", "s0"]),
+                    stat(r("h")), each("s0", below("s0", end.clone())), stat(json!(777)), each("r1", below("r1", end))]));
+                assert_eq!(probed, composed, "t {mt:#b} u {mu:#b} from {from} order {order:?}");
+                runs.insert(probed[0].clone());
+            }
+        }
+    }
+    assert!(runs.len() >= 5, "{runs:?}");                // the states reach runs of several lengths
+}
+
+#[test]
+fn the_validator_holds_sets_to_their_rules() {
+    let check = |body: Value, version: &str| {
+        let text = doc(body).replacen("\"0.23\"", &format!("\"{version}\""), 1);
+        aeiou::validate::check(&aeiou::ast::parse(&text).expect("parses"))
+    };
+    let has = |body: Value, needle: &str| {
+        let e = check(body.clone(), "0.28");
+        assert!(e.iter().any(|m| m.contains(needle)), "wanted `{needle}` for {body}:\n{e:#?}");
+    };
+    let a = || shared(1, 4);
+    let in_tl = |body: Value| json!([tl(tiers_tu(9), body)]);
+    // holds: as a probe of one tier
+    has(json!([holds("t", a(), 0, "s")]), "holds: no timeline declares cache `c` around it (V33)");
+    has(in_tl(json!([holds("v", a(), 0, "s")])), "holds: cache `c` has no tier `v` (V33)");
+    has(in_tl(json!([holds("t", a(), 0, "1s")])), "not an identifier");
+    has(in_tl(json!([holds("t", a(), 0, "cap")])), "holds: `bind` `cap` has the name of a parameter, which `elem` and `len` also read (V32)");
+    // set: an operation of the three, over two or more arrays a `holds` or a `set` bound
+    has(in_tl(json!([holds("t", a(), 0, "s"), {"set": {"bind": "x", "op": "xor", "of": ["s", "s"]}}])), "set: `op` `xor` is not `union`, `intersect`, or `minus` (V33)");
+    has(in_tl(json!([holds("t", a(), 0, "s"), set("x", "union", &["s"])])), "set: `of` names 1 array; an operation is over two or more (V33)");
+    has(in_tl(json!([holds("t", a(), 0, "s"), set("x", "union", &["s", "q"])])), "set: `q` is no array a `holds` or a `set` bound before it (V33)");
+    has(in_tl(json!([store_in("t", a(), json!({"taken": "k"})), holds("t", a(), 0, "s"), set("x", "union", &["s", "k"])])),
+        "set: `k` is no array a `holds` or a `set` bound before it (V33)");
+    has(in_tl(json!([holds("t", a(), 0, "s"), set("1x", "union", &["s", "s"])])), "not an identifier");
+    has(in_tl(json!([holds("t", a(), 0, "s"), set("cap", "union", &["s", "s"])])), "set: `bind` `cap` has the name of a parameter, which `elem` and `len` also read (V32)");
+    // run and below: of such an array alone
+    has(in_tl(json!([store_in("t", a(), json!({"taken": "k"})), stat(run_of("k", json!(0)))])), "run: `k` is no array a `holds` or a `set` bound before it (V33)");
+    has(in_tl(json!([stat(below("q", json!(0)))])), "below: `q` is no array a `holds` or a `set` bound before it (V33)");
+    // a body that only issues ops reads no state of its timeline
+    let workers = |body: Value| json!([{"timeline": {"name": "tl", "caches": [{"name": "c", "tiers": tiers_tu(9)}],
+        "workers": [{"name": "w", "lanes": 1, "staging": 4096}], "body": body}}]);
+    has(workers(json!([{"submit": {"workers": "w", "body": [holds("t", a(), 0, "s")]}}])), "holds");
+    let evicting = json!([{"name": "t", "order": [cached("touched")], "capacity": 4, "on_evict": {"lanes": 1, "body": [holds("t", a(), 0, "s")]}}]);
+    has(json!([tl(evicting, json!([]))]), "holds");
+    // the version: a document with one carries 0.28, and one without does not
+    let e = check(in_tl(json!([holds("t", a(), 0, "s")])), "0.27");
+    assert_eq!(e, ["t: ast: version `0.27`, but the document holds a `holds` or a `set`, what a tier holds of a key range as a set, which contract `0.28` added: it carries `0.28`"]);
+    let e = check(in_tl(json!([probe_in("t", a(), 0, "h")])), "0.28");
+    assert!(e[0].contains("holds nothing past contract `0.23`"), "{e:?}");
+    // what they bind varies with what the tiers hold, as a store's `taken` does
+    let ok = in_tl(json!([let_("a", a()), holds("t", r("a"), 0, "s"), holds("u", r("a"), 0, "s2"), set("x", "union", &["s", "s2"]),
+        let_("n", below("x", json!({"add": [0, run_of("x", json!(0))]}))), each("x", r("n")),
+        {"touch": {"cache": "c", "tier": "u", "keys": crate::common::chunk_keys_of(r("a"), json!(1), "x")}}, stat(r("n"))]));
+    assert_eq!(check(ok, "0.28"), Vec::<String>::new());
+}

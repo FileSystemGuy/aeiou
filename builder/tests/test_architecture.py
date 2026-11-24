@@ -66,6 +66,8 @@ INSTANCES = {
     "publish": {"timeline": "tl", "values": {"a": 1}},
     "probe": {**CACHE, "bind": "b"},
     "used": {"cache": CACHE["cache"], "tier": CACHE["tier"], "bind": "b"},
+    "holds": {**CACHE, "bind": "b"},
+    "set": {"bind": "x", "op": "union", "of": ["s0", "s0"]},
     "touch": {**CACHE},
     "store": {**CACHE},
     "acquire": {"resource": "r", "n": 1, "hold": "h"},
@@ -230,7 +232,7 @@ def test_now_is_read_in_every_context_of_a_timeline(ctx):
     # the span's row gaining `time`: a `compute` in a span, which V36 refuses
     ("| A `span`'s body | `op`, ", "| A `span`'s body | `op`, `time`, ", "`compute` in context `span`: the table allows it, the checker refuses it"),
     # `probe` taken out of the first table: unclassified, so allowed everywhere by the table
-    ("| `read` | Reads timeline state | `probe`, `used`; the expressions `published` and `entry` |", "| `read` | Reads timeline state | `used`; the expressions `published` and `entry` |", "`probe` in context `outside`: the table allows it, the checker refuses it"),
+    ("| `read` | Reads timeline state | `probe`, `used`, `holds`; the expressions `published` and `entry` |", "| `read` | Reads timeline state | `used`, `holds`; the expressions `published` and `entry` |", "`probe` in context `outside`: the table allows it, the checker refuses it"),
     # `entry` taken out: its op allowed in a `submit` body by the table
     ("the expressions `published` and `entry` |", "the expression `published` |", "`entry (expression)` in context `submit`: the table allows it, the checker refuses it"),
     # the lane's row losing `write`

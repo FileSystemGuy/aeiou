@@ -297,6 +297,18 @@ each is a recorded decision and the golden tests pin them.
   flight. The planner marks the end of every submitted body on its worker lane; the executor
   queues a body behind the gate of its own submission alone, and stages a submission's writes
   when its gate opens, wherever its worker lane then is.
+- **What a tier holds of a key range, as a set** (contract 0.28, V33; `vm.rs`'s `Node::Holds`,
+  `Node::Set`, and `ExprNode::Run` and `Below`). `holds` tests every key of its range against
+  the tier's entries as they stand when the lane's walk reaches it and binds the indices
+  held, in the range's order, so ascending; nothing is touched or stored. `set` merges such
+  arrays: a union sorted and without repeats, an intersection and a difference by binary
+  search of the first array's elements in the others. `run` finds `from` by binary search
+  and counts the consecutive integers after it; `below` is the number of elements less than
+  its bound. Each costs the keys asked, never the tier's size: no tier's contents are a
+  value. The arrays are a store's `taken` to the validator (they vary with what the tier
+  holds) and more: only they are taken by `set`, `run`, and `below`. A probe over two tiers
+  and its composition from these give the same run and the same indices to each tier
+  (`evict.rs`, `a_probe_over_tiers_is_its_composition_from_sets`). Of the plan alone.
 - **A tier's fill read by a lane** (contract 0.27, V33; `vm.rs`'s `Node::Used`). `used` binds
   the tier's `used` as it stands when the lane's walk reaches the statement, in the tier's
   unit, the number its timed eviction's `tier used` reads; nothing is touched or stored. The

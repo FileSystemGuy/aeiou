@@ -1417,6 +1417,18 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Some(a) => Value::Int(a.len() as i64),
                 None => Value::Int(self.array(array, "len")?.len() as i64),
             },
+            // of an array a `holds` or a `set` bound, ascending and distinct (contract 0.28)
+            ExprNode::Run { array, from } => {
+                let from = self.expr(from)?.as_int()?;
+                let a = self.set_of(array, "run")?;
+                let at = a.partition_point(|&x| x < from);
+                Value::Int(a[at..].iter().zip(from..).take_while(|(x, want)| *x == want).count() as i64)
+            }
+            ExprNode::Below { array, bound } => {
+                let bound = self.expr(bound)?.as_int()?;
+                let a = self.set_of(array, "below")?;
+                Value::Int(a.partition_point(|&x| x < bound) as i64)
+            }
             ExprNode::Now(_) => {
                 self.positional_only("now")?;
                 if self.tl.is_none() {
@@ -1604,6 +1616,14 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     }
 
     /// The `array` named `name` in scope, if one is.
+    /// The integers of an array a `holds` or a `set` bound (contract 0.28).
+    fn set_of(&self, name: &str, what: &str) -> ER<Vec<i64>> {
+        match self.computed(name) {
+            Some(a) => Ok(a.iter().map(|v| v.as_int()).collect::<Result<Vec<i64>>>()?),
+            None => other(format!("{what}: `{name}` is no array a `holds` or a `set` bound before it (V33)")),
+        }
+    }
+
     fn computed(&self, name: &str) -> Option<Arc<[Value<'a>]>> {
         self.scopes.iter().rev().find_map(|s| s.arrays.get(name).cloned())
     }
@@ -2631,6 +2651,41 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 for (a, s) in held.iter().flatten().zip(serves) {
                     level.arrays.insert(a.as_str(), Arc::from(s));
                 }
+                Ok(None)
+            }
+            Node::Holds { cache, tier, keys, bind } => {
+                let ks = self.keys(keys, "holds")?;
+                let tl = self.cache_of(cache, "holds")?;
+                let g = tl.lock().unwrap();
+                let Some(t) = g.tiers.get(&(cache.as_str(), tier.as_str())) else {
+                    return other(format!("holds: cache `{cache}` has no tier `{tier}` (V33)"));
+                };
+                // the range's indices ascend, so the array does
+                let held: Vec<Value> = ks.iter().filter(|(k, _)| t.entries.contains_key(k)).map(|(_, pos)| Value::Int(*pos)).collect();
+                drop(g);
+                self.scopes.last_mut().unwrap().arrays.insert(bind.as_str(), Arc::from(held));
+                Ok(None)
+            }
+            Node::Set { bind, op, of } => {
+                let mut sets = Vec::with_capacity(of.len());
+                for a in of {
+                    sets.push(self.set_of(a, "set")?);
+                }
+                let Some((first, rest)) = sets.split_first() else {
+                    return other("set: `of` names no array (V33)");
+                };
+                let got: Vec<i64> = match op.as_str() {
+                    "union" => {
+                        let mut all: Vec<i64> = sets.concat();
+                        all.sort_unstable();
+                        all.dedup();
+                        all
+                    }
+                    "intersect" => first.iter().copied().filter(|x| rest.iter().all(|s| s.binary_search(x).is_ok())).collect(),
+                    "minus" => first.iter().copied().filter(|x| rest.iter().all(|s| s.binary_search(x).is_err())).collect(),
+                    _ => return other(format!("set: `op` `{op}` is not `union`, `intersect`, or `minus` (V33)")),
+                };
+                self.scopes.last_mut().unwrap().arrays.insert(bind.as_str(), got.into_iter().map(Value::Int).collect::<Vec<_>>().into());
                 Ok(None)
             }
             Node::Used { cache, tier, bind } => {

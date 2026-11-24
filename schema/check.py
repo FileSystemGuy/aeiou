@@ -57,6 +57,20 @@ def _probe_over_tiers(ast: dict) -> bool:
     return any(walk(a["body"]) for a in ast.get("actors", {}).values())
 
 
+def _tier_sets(ast: dict) -> bool:
+    def walk(nodes):
+        for node in nodes:
+            kind, a = next(iter(node.items()))
+            if kind in ("holds", "set"):
+                return True
+            if kind in ("loop", "parallel", "loader", "phase", "timeline", "submit", "span") and walk(a["body"]):
+                return True
+            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
+                return True
+        return False
+    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
+
+
 def _tier_used(ast: dict) -> bool:
     def walk(nodes):
         for node in nodes:
@@ -90,6 +104,7 @@ SINCE: list = [
     ("0.25", "a `probe` over several tiers", _probe_over_tiers),
     ("0.26", "a `submit` its span waits for (`join`)", _joined_submit),
     ("0.27", "a `used`, a tier's fill read by a lane", _tier_used),
+    ("0.28", "a `holds` or a `set`, what a tier holds of a key range as a set", _tier_sets),
 ]
 
 
@@ -121,7 +136,7 @@ def version_error(ast: dict):
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "phase", "trace", "timeline", "publish", "array",
-           "acquire", "release", "probe", "used", "touch", "store", "submit", "span"}
+           "acquire", "release", "probe", "used", "holds", "set", "touch", "store", "submit", "span"}
 # V30: what a timeline's lanes may not hold: they are planned, never waiting on one another
 NOT_IN_TIMELINE = {"loader", "channel", "put", "take", "barrier", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
@@ -367,6 +382,8 @@ def unpositional(v):
         return "V31"
     if k in ("at", "elem"):
         return unpositional(a["index"])
+    if k in ("run", "below"):
+        return unpositional(a["from" if k == "run" else "bound"])
     if k == "cond":
         return unpositional(a["if"]) or unpositional(a["then"]) or unpositional(a["else"])
     if k in ("add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "eq", "ne", "lt", "le",
@@ -437,7 +454,7 @@ def plan_reads(e, also):
 
 # V35: what an `on_evict` body may not hold: anything that plans time, holds, or changes a cache
 # or a timeline (a body issues its victim's ops at its tick)
-EVICT_BANS = {"compute", "probe", "used", "touch", "store", "acquire", "release", "publish", "parallel",
+EVICT_BANS = {"compute", "probe", "used", "holds", "touch", "store", "acquire", "release", "publish", "parallel",
               "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
 
 
@@ -884,7 +901,7 @@ class Check:
                 return self.ast["params"][a["array"]].get("items")
             kinds = {self.pkind(x) for x in v} if isinstance(v, list) else set()
             return kinds.pop() if len(kinds) == 1 else None
-        if k in ("index", "actor", "count", "dirs", "len", "published", "size", "offset", "unit_index", "units", "chunks",
+        if k in ("index", "actor", "count", "dirs", "len", "run", "below", "published", "size", "offset", "unit_index", "units", "chunks",
                  "seq_len", "chunk_key", "now", "cached", "tier", "victim"):
             return "int"
         if k in ("fresh", "shared", "prefix", "cat"):
@@ -1113,6 +1130,8 @@ class Check:
         if k in self.DRAWS:
             return bool(scope.indices)
         if k == "len" and a in scope.taken:
+            return True
+        if k in ("run", "below"):
             return True
         if k in self.INVARIANT:
             return False
@@ -1403,6 +1422,32 @@ class Check:
         scope.bind(a["bind"], 0, True, "int")
         scope.unpositional[a["bind"]] = "V33"
 
+    def set_bind(self, what, a, p, scope):
+        """The array a `holds` or a `set` binds (contract 0.28): a name no parameter has, an array
+        that varies with what the tiers hold, as a store's `taken`. As the runner's `set_bind`."""
+        bind = a["bind"]
+        if bind in self.params:
+            self.err(p + ["bind"], f"{what}: `bind` `{bind}` has the name of a parameter, which `elem` and `len` also read (V32)")
+        scope.arrays.add(bind)
+        scope.taken.add(bind)
+        scope.sets.add(bind)
+
+    def n_holds(self, a, p, scope):
+        """V33 (contract 0.28): every index of a key range a tier holds. As the runner's `Node::Holds`."""
+        self.keys_stmt("holds", a, p, scope)
+        self.set_bind("holds", a, p, scope)
+
+    def n_set(self, a, p, scope):
+        """V33 (contract 0.28): arrays a `holds` or a `set` bound, combined. As the runner's `Node::Set`."""
+        if a["op"] not in ("union", "intersect", "minus"):
+            self.err(p, f"set: `op` `{a['op']}` is not `union`, `intersect`, or `minus` (V33)")
+        if len(a["of"]) < 2:
+            self.err(p, f"set: `of` names {len(a['of'])} array; an operation is over two or more (V33)")
+        for name in dict.fromkeys(a["of"]):
+            if name not in scope.sets:
+                self.err(p, f"set: `{name}` is no array a `holds` or a `set` bound before it (V33)")
+        self.set_bind("set", a, p, scope)
+
     def n_used(self, a, p, scope):
         """V33 (contract 0.27): a tier's fill read by a lane. As the runner's `Node::Used`."""
         cache, tier = a["cache"], a["tier"]
@@ -1683,6 +1728,13 @@ class Check:
                 self.array(a["array"], "elem", p)
             self.expr(a["index"], p + ["index"], scope)
             self.typed(a["index"], p + ["index"], scope)
+        elif k in ("run", "below"):
+            # of an array a `holds` or a `set` bound alone (contract 0.28); as the runner's
+            if a["array"] not in scope.sets:
+                self.err(p, f"{k}: `{a['array']}` is no array a `holds` or a `set` bound before it (V33)")
+            key = "from" if k == "run" else "bound"
+            self.expr(a[key], p + [key], scope)
+            self.typed(a[key], p + [key], scope)
         elif k == "now":
             if self.timeline is None:
                 self.err(p, "now: outside a timeline, where nothing is planned (V30)")
@@ -2093,6 +2145,8 @@ class Scope:
         self.arrays = set(parent.arrays) if parent else set()   # the `array`s in scope (V32)
         # the arrays a `store`'s `taken` binds, which vary with what the tier holds (V6)
         self.taken = set(parent.taken) if parent else set()
+        # the arrays a `holds` or a `set` bound (contract 0.28): what `set`, `run`, `below` take
+        self.sets = set(parent.sets) if parent else set()
         # V30, V31: the bindings whose definition reads the timeline or `prev`, by the rule
         self.unpositional = dict(parent.unpositional) if parent else {}
 

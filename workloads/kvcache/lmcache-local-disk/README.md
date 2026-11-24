@@ -305,7 +305,9 @@ chunk file 3,145,728 bytes with no header; G3 a 2 GB directory, G4 6 GB):
   the ones the GPU already holds too, since the connector's lookup is the whole prompt and the
   server loads before the connector says what vLLM had computed. The server's log agrees as far
   as it goes: its prefetches retained 42,754 chunks where the engine retrieved 25,450. The load is
-  all or nothing, by the room G2 has (the same source; contract 0.27 in the G4 abstract).
+  all or nothing, by the room G2 has (the same source; contract 0.27 in the G4 abstract). Since
+  contract 0.28 the G4 abstract writes this lookup from sets (`holds` of each tier, the hit the
+  leading run of their union, each adapter's load a difference), the rules its own lines.
 - *An eviction:* `unlink`, in batches of 20 % of the files at 0.8 of the capacity, each adapter
   by its own count.
 - *Threads:* an adapter's four workers issue all of its calls, stats, stores, loads, and

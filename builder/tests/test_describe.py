@@ -123,6 +123,24 @@ def test_used_is_described():
     assert lines[-1].strip() == "- `f` is what tier `g2` of cache `lm` holds now, in the tier's unit; nothing changed.", lines
 
 
+def test_holds_and_sets_are_described():
+    """Contract 0.28: what a tier holds of a key range, the sets made of it, and their measures."""
+    d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)
+    ks = {"index": "j", "count": 4, "key": {"index": "j"}}
+    lines = d.body([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": [{"name": "g3", "capacity": 4}]}], "body": [
+        {"holds": {"cache": "lm", "tier": "g3", "keys": ks, "bind": "s3"}},
+        {"set": {"bind": "x", "op": "union", "of": ["s3", "s4"]}},
+        {"set": {"bind": "y", "op": "intersect", "of": ["s3", "s4"]}},
+        {"set": {"bind": "z", "op": "minus", "of": ["s4", "s3", "s2"]}},
+        {"let": {"name": "h", "value": {"add": [{"run": {"array": "x", "from": 0}}, {"below": {"array": "z", "bound": 3}}]}}}]}}], 0)
+    got = [l.strip() for l in lines[-5:]]
+    assert got[0] == "- `s3` is the indices, of the 4 keys `j`, `j` from `0`, whose keys tier `g3` of cache `lm` holds now, every one, ascending; nothing changed.", got
+    assert got[1] == "- `x` is the indices any of `s3`, `s4` holds, ascending.", got
+    assert got[2] == "- `y` is the indices all of `s3`, `s4` hold, ascending.", got
+    assert got[3] == "- `z` is the indices of `s4` that none of `s3`, `s2` holds, ascending.", got
+    assert "run(x from 0)" in got[4] and "below(z, 3)" in got[4], got
+
+
 def test_a_span_outside_a_timeline_is_described_as_elapsed_time():
     """Contract 0.24: outside a timeline a span is the elapsed time of its body; in one, a request's wait."""
     d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)

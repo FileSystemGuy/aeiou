@@ -170,6 +170,8 @@ fn expr(e: &Expr, p: &mut Path) {
             p.with(&["draw"], |p| distref(&d.dist, p));
         }
         ExprNode::Elem { index, .. } => p.with(&["elem", "index"], |p| expr(index, p)),
+        ExprNode::Run { from, .. } => p.with(&["run", "from"], |p| expr(from, p)),
+        ExprNode::Below { bound, .. } => p.with(&["below", "bound"], |p| expr(bound, p)),
         ExprNode::Size(h) => p.with(&["size"], |p| handle(h, p)),
         ExprNode::Offset(h) => p.with(&["offset"], |p| handle(h, p)),
         ExprNode::UnitIndex(h) => p.with(&["unit_index"], |p| handle(h, p)),
@@ -336,8 +338,8 @@ fn node(n: &Node, p: &mut Path) {
         }
         Node::Submit { body: b, .. } | Node::Span { body: b, .. } => p.with(&[k, "body"], |p| body(b, p)),
         Node::Acquire { n, .. } => p.with(&[k, "n"], |p| expr(n, p)),
-        Node::Release { .. } | Node::Used { .. } => {}
-        Node::Probe { keys, .. } | Node::Touch { keys, .. } => keys_of(keys, k, p),
+        Node::Release { .. } | Node::Used { .. } | Node::Set { .. } => {}
+        Node::Probe { keys, .. } | Node::Touch { keys, .. } | Node::Holds { keys, .. } => keys_of(keys, k, p),
         Node::Store { keys, size, .. } => {
             keys_of(keys, k, p);
             if let Some(e) = size {

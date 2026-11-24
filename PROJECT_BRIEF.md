@@ -1990,6 +1990,21 @@ numbers; the order is this note's.
     (c) DiskANN's node cache as a second user of the cache statements (item 79, review
     suggestion 1).
 
+82. **The cache statements from math functions (raised by the user 2026-11-23, `DESIGN_REVIEW.md`
+    §3.100, the note "Contract 0.28"; stage 1 built, stage 2 not decided).** The user: a cache
+    should "return the subset of the requested list that it holds, not stopping at the first
+    missing entry", the lookup's rules expressed "as math functions in the DSL", one cache
+    instance a G-layer. *Stage 1, built 2026-11-23 (contract 0.28):* `holds`, `set` (`union`,
+    `intersect`, `minus`), and the expressions `run` and `below`; `lmcache_local_disk_tiered_g4`'s
+    lookup rewritten from them, proved the same plan as the probe over tiers it replaced.
+    *Stage 2, not decided:* one cache a layer, the tier level gone (`store`, `touch`, `used`,
+    `holds` each lose an argument); the probe over several tiers removed, and perhaps the
+    one-tier probe (it is `holds` and `run`); a store's `present` as a store of a difference
+    and a touch of an intersection. A breaking change to contracts 0.23 to 0.28 for the two
+    tiered abstracts. *Asked by the user the same day, to be answered:* whether the technique
+    simplifies other primitives of the DSL. Item 70's move of the single-tier abstract to the
+    `fs_native` calls waits for this, so that it is written once.
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS

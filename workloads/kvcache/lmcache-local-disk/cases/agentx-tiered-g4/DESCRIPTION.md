@@ -6,7 +6,7 @@ mechanism's README) or what a storage system should do about it.
 
 ## In brief
 
-One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2, and two L2 adapters, G3 and G4, each a directory under test. In the catalog it is `kvcache/lmcache-local-disk`: application `vllm-lmcache`, format `lmcache-chunks`, phase inference, domain ai. Not yet decided between the two; the case's README says why (`agentx-tiered-g4`: agentic data, a llm model), its parameters holding at 1 GPU. Not traced yet. It writes the objects of `kv`, each 32 MiB. It writes the objects of `kv4`, each 32 MiB. The one `gpu` actor: lanes planned together: 40 in parallel, each: compute for `arrive × 1000000`; for each `i` below `nm`: when `i ≥ 1`, nothing; for each `m_q3` below `min(store_lanes, m_nch − m_h2)`: on a worker lane, for each `m_q3i` below `⌈(m_nch − m_h2 − m_q3) / store_lanes⌉`: stat; for each `m_q4` below `min(store_lanes, m_nch − m_h2)`: on a worker lane, for each `m_q4i` below `⌈(m_nch − m_h2 − m_q4) / store_lanes⌉`: stat; when `m_fits`, for each `m_r3` below `min(store_lanes, len(m_a3))`: on a worker lane, for each `m_r3i` below `⌈(len(m_a3) − m_r3) / store_lanes⌉`: on an object of `kv`, open, read 32 MiB, close; for each `m_r4` below `min(store_lanes, len(m_a4))`: on a worker lane, for each `m_r4i` below `⌈(len(m_a4) − m_r4) / store_lanes⌉`: on an object of `kv4`, open, read 32 MiB, close; for each `m_cg3` below `len(m_t2)`: on a worker lane, stat; for each `m_wg3` below `len(m_tg3)`: on a worker lane, on an object of `kv`, open for writing, write 32 MiB, close, rename; for each `m_cg4` below `len(m_t2)`: on a worker lane, stat; for each `m_wg4` below `len(m_tg4)`: on a worker lane, on an object of `kv4`, open for writing, write 32 MiB, close, rename; compute for `m_api × 1000000`; `nb` in parallel, each: when `pos = i and bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_q3` below `min(store_lanes, s_nch − s_h2)`: on a worker lane, for each `s_q3i` below `⌈(s_nch − s_h2 − s_q3) / store_lanes⌉`: stat; for each `s_q4` below `min(store_lanes, s_nch − s_h2)`: on a worker lane, for each `s_q4i` below `⌈(s_nch − s_h2 − s_q4) / store_lanes⌉`: stat; when `s_fits`, for each `s_r3` below `min(store_lanes, len(s_a3))`: on a worker lane, for each `s_r3i` below `⌈(len(s_a3) − s_r3) / store_lanes⌉`: on an object of `kv`, open, read 32 MiB, close; for each `s_r4` below `min(store_lanes, len(s_a4))`: on a worker lane, for each `s_r4i` below `⌈(len(s_a4) − s_r4) / store_lanes⌉`: on an object of `kv4`, open, read 32 MiB, close; for each `s_cg3` below `len(s_t2)`: on a worker lane, stat; for each `s_wg3` below `len(s_tg3)`: on a worker lane, on an object of `kv`, open for writing, write 32 MiB, close, rename; for each `s_cg4` below `len(s_t2)`: on a worker lane, stat; for each `s_wg4` below `len(s_tg4)`: on a worker lane, on an object of `kv4`, open for writing, write 32 MiB, close, rename; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; when `pos = i and not bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_q3` below `min(store_lanes, s_nch − s_h2)`: on a worker lane, for each `s_q3i` below `⌈(s_nch − s_h2 − s_q3) / store_lanes⌉`: stat; for each `s_q4` below `min(store_lanes, s_nch − s_h2)`: on a worker lane, for each `s_q4i` below `⌈(s_nch − s_h2 − s_q4) / store_lanes⌉`: stat; when `s_fits`, for each `s_r3` below `min(store_lanes, len(s_a3))`: on a worker lane, for each `s_r3i` below `⌈(len(s_a3) − s_r3) / store_lanes⌉`: on an object of `kv`, open, read 32 MiB, close; for each `s_r4` below `min(store_lanes, len(s_a4))`: on a worker lane, for each `s_r4i` below `⌈(len(s_a4) − s_r4) / store_lanes⌉`: on an object of `kv4`, open, read 32 MiB, close; for each `s_cg3` below `len(s_t2)`: on a worker lane, stat; for each `s_wg3` below `len(s_tg3)`: on a worker lane, on an object of `kv`, open for writing, write 32 MiB, close, rename; for each `s_cg4` below `len(s_t2)`: on a worker lane, stat; for each `s_wg4` below `len(s_tg4)`: on a worker lane, on an object of `kv4`, open for writing, write 32 MiB, close, rename; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; compute for `m_idle × 1000000`. Measured by dry run at 1 GPU (7,986,308 ops: 4,193,718 stat, 1,181,860 close, 1,181,860 open, 1,004,128 read, 177,732 rename, 177,732 write, 69,278 unlink; 30.6 TiB read, 5.4 TiB written): read runs: large (32 MiB); write runs: large (32 MiB); read requests: large (32 MiB); write requests: large (32 MiB); share of bytes read: read-mostly (88.5%); metadata ops per data op: high (5.84); reads its own writes: yes; share of bytes read that are re-reads: repeated (98.6%); share of accessed bytes on the most accessed 1% of bytes: skewed (32.2%).
+One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2, and two L2 adapters, G3 and G4, each a directory under test. In the catalog it is `kvcache/lmcache-local-disk`: application `vllm-lmcache`, format `lmcache-chunks`, phase inference, domain ai. Not yet decided between the two; the case's README says why (`agentx-tiered-g4`: agentic data, a llm model), its parameters holding at 1 GPU. Not traced yet. It writes the objects of `kv`, each 32 MiB. It writes the objects of `kv4`, each 32 MiB. The one `gpu` actor: lanes planned together: 40 in parallel, each: compute for `arrive × 1000000`; for each `i` below `nm`: when `i ≥ 1`, nothing; for each `m_q3` below `min(store_lanes, m_nch − m_h2)`: on a worker lane, for each `m_q3i` below `⌈(m_nch − m_h2 − m_q3) / store_lanes⌉`: stat; for each `m_q4` below `min(store_lanes, m_nch − m_h2)`: on a worker lane, for each `m_q4i` below `⌈(m_nch − m_h2 − m_q4) / store_lanes⌉`: stat; when `m_fits`, for each `m_r3` below `min(store_lanes, m_n3)`: on a worker lane, for each `m_r3i` below `⌈(m_n3 − m_r3) / store_lanes⌉`: on an object of `kv`, open, read 32 MiB, close; for each `m_r4` below `min(store_lanes, m_n4)`: on a worker lane, for each `m_r4i` below `⌈(m_n4 − m_r4) / store_lanes⌉`: on an object of `kv4`, open, read 32 MiB, close; for each `m_cg3` below `len(m_t2)`: on a worker lane, stat; for each `m_wg3` below `len(m_tg3)`: on a worker lane, on an object of `kv`, open for writing, write 32 MiB, close, rename; for each `m_cg4` below `len(m_t2)`: on a worker lane, stat; for each `m_wg4` below `len(m_tg4)`: on a worker lane, on an object of `kv4`, open for writing, write 32 MiB, close, rename; compute for `m_api × 1000000`; `nb` in parallel, each: when `pos = i and bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_q3` below `min(store_lanes, s_nch − s_h2)`: on a worker lane, for each `s_q3i` below `⌈(s_nch − s_h2 − s_q3) / store_lanes⌉`: stat; for each `s_q4` below `min(store_lanes, s_nch − s_h2)`: on a worker lane, for each `s_q4i` below `⌈(s_nch − s_h2 − s_q4) / store_lanes⌉`: stat; when `s_fits`, for each `s_r3` below `min(store_lanes, s_n3)`: on a worker lane, for each `s_r3i` below `⌈(s_n3 − s_r3) / store_lanes⌉`: on an object of `kv`, open, read 32 MiB, close; for each `s_r4` below `min(store_lanes, s_n4)`: on a worker lane, for each `s_r4i` below `⌈(s_n4 − s_r4) / store_lanes⌉`: on an object of `kv4`, open, read 32 MiB, close; for each `s_cg3` below `len(s_t2)`: on a worker lane, stat; for each `s_wg3` below `len(s_tg3)`: on a worker lane, on an object of `kv`, open for writing, write 32 MiB, close, rename; for each `s_cg4` below `len(s_t2)`: on a worker lane, stat; for each `s_wg4` below `len(s_tg4)`: on a worker lane, on an object of `kv4`, open for writing, write 32 MiB, close, rename; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; when `pos = i and not bsync[b]`, `bsize[b]` in parallel, each: compute for `st × 1000`; for each `j` below `ns`: when `j ≥ 1`, nothing; for each `s_q3` below `min(store_lanes, s_nch − s_h2)`: on a worker lane, for each `s_q3i` below `⌈(s_nch − s_h2 − s_q3) / store_lanes⌉`: stat; for each `s_q4` below `min(store_lanes, s_nch − s_h2)`: on a worker lane, for each `s_q4i` below `⌈(s_nch − s_h2 − s_q4) / store_lanes⌉`: stat; when `s_fits`, for each `s_r3` below `min(store_lanes, s_n3)`: on a worker lane, for each `s_r3i` below `⌈(s_n3 − s_r3) / store_lanes⌉`: on an object of `kv`, open, read 32 MiB, close; for each `s_r4` below `min(store_lanes, s_n4)`: on a worker lane, for each `s_r4i` below `⌈(s_n4 − s_r4) / store_lanes⌉`: on an object of `kv4`, open, read 32 MiB, close; for each `s_cg3` below `len(s_t2)`: on a worker lane, stat; for each `s_wg3` below `len(s_tg3)`: on a worker lane, on an object of `kv`, open for writing, write 32 MiB, close, rename; for each `s_cg4` below `len(s_t2)`: on a worker lane, stat; for each `s_wg4` below `len(s_tg4)`: on a worker lane, on an object of `kv4`, open for writing, write 32 MiB, close, rename; compute for `s_api × 1000000`; compute for `s_idle × 1000000`; compute for `m_idle × 1000000`. Measured by dry run at 1 GPU (8,067,465 ops: 4,323,870 stat, 1,164,893 close, 1,164,893 open, 984,977 read, 179,916 rename, 179,916 write, 69,000 unlink; 30.1 TiB read, 5.5 TiB written): read runs: large (32 MiB); write runs: large (32 MiB); read requests: large (32 MiB); write requests: large (32 MiB); share of bytes read: read-mostly (88.5%); metadata ops per data op: high (5.93); reads its own writes: yes; share of bytes read that are re-reads: repeated (98.5%); share of accessed bytes on the most accessed 1% of bytes: skewed (34.1%).
 
 ## The account
 
@@ -248,9 +248,17 @@ The API the traced application used: `posix` sync (none declared); a run under a
       - Stores, of the `seq_len(m_gs) div 1` keys `chunk_key(m_gs, j, 1)`, `j` from `0`, in tier `g1` of cache `gpu`, those it lacks, those held touched first, as one event; `m_gh` is the leading ones held before it. The lane holds them under `kv` until it releases it, so none is evicted meanwhile.
       - `m_nch` = `seq_len(m_seq) div per`.
       - Probes the `seq_len(m_seq) div per` keys `chunk_key(m_seq, j, per)`, `j` from `0`, in tier `g2` of cache `lm`: `m_h2` is the leading ones held, nothing changed.
-      - Probes the `max(0, (seq_len(m_seq) div per) − min(m_h2, seq_len(m_seq) div per))` keys `chunk_key(m_seq, j, per)`, `j` from `min(m_h2, seq_len(m_seq) div per)`, in tiers `g2`, `g3`, `g4` of cache `lm` together: `m_h3` is the leading ones some tier of them holds, nothing changed; `m_a2` is the indices of those `g2` serves, `m_a3` is the indices of those `g3` serves, `m_a4` is the indices of those `g4` serves, a key going to the first of the tiers that holds it.
+      - `m_s2` is the indices, of the `max(0, (seq_len(m_seq) div per) − min(m_h2, seq_len(m_seq) div per))` keys `chunk_key(m_seq, j, per)`, `j` from `min(m_h2, seq_len(m_seq) div per)`, whose keys tier `g2` of cache `lm` holds now, every one, ascending; nothing changed.
+      - `m_s3` is the indices, of the `max(0, (seq_len(m_seq) div per) − min(m_h2, seq_len(m_seq) div per))` keys `chunk_key(m_seq, j, per)`, `j` from `min(m_h2, seq_len(m_seq) div per)`, whose keys tier `g3` of cache `lm` holds now, every one, ascending; nothing changed.
+      - `m_s4` is the indices, of the `max(0, (seq_len(m_seq) div per) − min(m_h2, seq_len(m_seq) div per))` keys `chunk_key(m_seq, j, per)`, `j` from `min(m_h2, seq_len(m_seq) div per)`, whose keys tier `g4` of cache `lm` holds now, every one, ascending; nothing changed.
+      - `m_any` is the indices any of `m_s2`, `m_s3`, `m_s4` holds, ascending.
+      - `m_h3` = `run(m_any from m_h2)`.
+      - `m_a3` is the indices of `m_s3` that none of `m_s2` holds, ascending.
+      - `m_a4` is the indices of `m_s4` that none of `m_s2`, `m_s3` holds, ascending.
+      - `m_n3` = `below(m_a3, m_h2 + m_h3)`.
+      - `m_n4` = `below(m_a4, m_h2 + m_h3)`.
       - `m_u2` is what tier `g2` of cache `lm` holds now, in the tier's unit; nothing changed.
-      - `m_fits` = `len(m_a3) + len(m_a4) ≤ (g2_bytes div chunk_bytes) − m_u2`.
+      - `m_fits` = `m_n3 + m_n4 ≤ (g2_bytes div chunk_bytes) − m_u2`.
       - `m_hit` = `m_h2 + (if m_fits then m_h3 else 0)`.
       - Measured as span `lookup`, a request's own storage wait:
         - For `m_q3` from 0 while below `min(store_lanes, m_nch − m_h2)`:
@@ -263,22 +271,22 @@ The API the traced application used: `posix` sync (none declared); a run under a
               - `stat` the object of `kv4` named by key = `chunk_key(m_seq, m_h2 + m_q4 + m_q4i × store_lanes, per)`, ext = `data` (may fail with ENOENT).
       - If `m_fits`:
         - Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:
-          - For `m_r3` from 0 while below `min(store_lanes, len(m_a3))`:
+          - For `m_r3` from 0 while below `min(store_lanes, m_n3)`:
             - On a worker lane of `store`, at this lane's planned time, the span waiting for it:
-              - For `m_r3i` from 0 while below `⌈(len(m_a3) − m_r3) / store_lanes⌉`:
+              - For `m_r3i` from 0 while below `⌈(m_n3 − m_r3) / store_lanes⌉`:
                 - `m_r3f` is the object of `kv` named by key = `chunk_key(m_seq, m_a3[m_r3 + m_r3i × store_lanes], per)`, ext = `data`.
                 - `open` `m_r3f` (RDONLY).
                 - `read` `m_r3f`: 32 MiB (`chunk_bytes`) at the file position.
                 - `close` `m_r3f`.
-          - For `m_r4` from 0 while below `min(store_lanes, len(m_a4))`:
+          - For `m_r4` from 0 while below `min(store_lanes, m_n4)`:
             - On a worker lane of `store4`, at this lane's planned time, the span waiting for it:
-              - For `m_r4i` from 0 while below `⌈(len(m_a4) − m_r4) / store_lanes⌉`:
+              - For `m_r4i` from 0 while below `⌈(m_n4 − m_r4) / store_lanes⌉`:
                 - `m_r4f` is the object of `kv4` named by key = `chunk_key(m_seq, m_a4[m_r4 + m_r4i × store_lanes], per)`, ext = `data`.
                 - `open` `m_r4f` (RDONLY).
                 - `read` `m_r4f`: 32 MiB (`chunk_bytes`) at the file position.
                 - `close` `m_r4f`.
-        - Touches those of the `len(m_a3)` keys `chunk_key(m_seq, m_a3[j], per)`, `j` from `0`, that are held in tier `g3` of cache `lm`, as one event.
-        - Touches those of the `len(m_a4)` keys `chunk_key(m_seq, m_a4[j], per)`, `j` from `0`, that are held in tier `g4` of cache `lm`, as one event.
+        - Touches those of the `m_n3` keys `chunk_key(m_seq, m_a3[j], per)`, `j` from `0`, that are held in tier `g3` of cache `lm`, as one event.
+        - Touches those of the `m_n4` keys `chunk_key(m_seq, m_a4[j], per)`, `j` from `0`, that are held in tier `g4` of cache `lm`, as one event.
       - Stores, of the `max(0, min(m_nch − m_hit, (seq_len(m_seq) div per) − min(m_hit, seq_len(m_seq) div per)))` keys `chunk_key(m_seq, j, per)`, `j` from `min(m_hit, seq_len(m_seq) div per)`, in tier `g2` of cache `lm`, those it lacks, as one event; `m_t2` is the indices it stored.
       - For `m_cg3` from 0 while below `len(m_t2)`:
         - On a worker lane of `store`, at this lane's planned time:
@@ -472,9 +480,17 @@ The API the traced application used: `posix` sync (none declared); a run under a
               - Stores, of the `seq_len(s_gs) div 1` keys `chunk_key(s_gs, j, 1)`, `j` from `0`, in tier `g1` of cache `gpu`, those it lacks, those held touched first, as one event; `s_gh` is the leading ones held before it. The lane holds them under `kv` until it releases it, so none is evicted meanwhile.
               - `s_nch` = `seq_len(s_seq) div per`.
               - Probes the `seq_len(s_seq) div per` keys `chunk_key(s_seq, j, per)`, `j` from `0`, in tier `g2` of cache `lm`: `s_h2` is the leading ones held, nothing changed.
-              - Probes the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, in tiers `g2`, `g3`, `g4` of cache `lm` together: `s_h3` is the leading ones some tier of them holds, nothing changed; `s_a2` is the indices of those `g2` serves, `s_a3` is the indices of those `g3` serves, `s_a4` is the indices of those `g4` serves, a key going to the first of the tiers that holds it.
+              - `s_s2` is the indices, of the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, whose keys tier `g2` of cache `lm` holds now, every one, ascending; nothing changed.
+              - `s_s3` is the indices, of the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, whose keys tier `g3` of cache `lm` holds now, every one, ascending; nothing changed.
+              - `s_s4` is the indices, of the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, whose keys tier `g4` of cache `lm` holds now, every one, ascending; nothing changed.
+              - `s_any` is the indices any of `s_s2`, `s_s3`, `s_s4` holds, ascending.
+              - `s_h3` = `run(s_any from s_h2)`.
+              - `s_a3` is the indices of `s_s3` that none of `s_s2` holds, ascending.
+              - `s_a4` is the indices of `s_s4` that none of `s_s2`, `s_s3` holds, ascending.
+              - `s_n3` = `below(s_a3, s_h2 + s_h3)`.
+              - `s_n4` = `below(s_a4, s_h2 + s_h3)`.
               - `s_u2` is what tier `g2` of cache `lm` holds now, in the tier's unit; nothing changed.
-              - `s_fits` = `len(s_a3) + len(s_a4) ≤ (g2_bytes div chunk_bytes) − s_u2`.
+              - `s_fits` = `s_n3 + s_n4 ≤ (g2_bytes div chunk_bytes) − s_u2`.
               - `s_hit` = `s_h2 + (if s_fits then s_h3 else 0)`.
               - Measured as span `lookup`, a request's own storage wait:
                 - For `s_q3` from 0 while below `min(store_lanes, s_nch − s_h2)`:
@@ -487,22 +503,22 @@ The API the traced application used: `posix` sync (none declared); a run under a
                       - `stat` the object of `kv4` named by key = `chunk_key(s_seq, s_h2 + s_q4 + s_q4i × store_lanes, per)`, ext = `data` (may fail with ENOENT).
               - If `s_fits`:
                 - Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:
-                  - For `s_r3` from 0 while below `min(store_lanes, len(s_a3))`:
+                  - For `s_r3` from 0 while below `min(store_lanes, s_n3)`:
                     - On a worker lane of `store`, at this lane's planned time, the span waiting for it:
-                      - For `s_r3i` from 0 while below `⌈(len(s_a3) − s_r3) / store_lanes⌉`:
+                      - For `s_r3i` from 0 while below `⌈(s_n3 − s_r3) / store_lanes⌉`:
                         - `s_r3f` is the object of `kv` named by key = `chunk_key(s_seq, s_a3[s_r3 + s_r3i × store_lanes], per)`, ext = `data`.
                         - `open` `s_r3f` (RDONLY).
                         - `read` `s_r3f`: 32 MiB (`chunk_bytes`) at the file position.
                         - `close` `s_r3f`.
-                  - For `s_r4` from 0 while below `min(store_lanes, len(s_a4))`:
+                  - For `s_r4` from 0 while below `min(store_lanes, s_n4)`:
                     - On a worker lane of `store4`, at this lane's planned time, the span waiting for it:
-                      - For `s_r4i` from 0 while below `⌈(len(s_a4) − s_r4) / store_lanes⌉`:
+                      - For `s_r4i` from 0 while below `⌈(s_n4 − s_r4) / store_lanes⌉`:
                         - `s_r4f` is the object of `kv4` named by key = `chunk_key(s_seq, s_a4[s_r4 + s_r4i × store_lanes], per)`, ext = `data`.
                         - `open` `s_r4f` (RDONLY).
                         - `read` `s_r4f`: 32 MiB (`chunk_bytes`) at the file position.
                         - `close` `s_r4f`.
-                - Touches those of the `len(s_a3)` keys `chunk_key(s_seq, s_a3[j], per)`, `j` from `0`, that are held in tier `g3` of cache `lm`, as one event.
-                - Touches those of the `len(s_a4)` keys `chunk_key(s_seq, s_a4[j], per)`, `j` from `0`, that are held in tier `g4` of cache `lm`, as one event.
+                - Touches those of the `s_n3` keys `chunk_key(s_seq, s_a3[j], per)`, `j` from `0`, that are held in tier `g3` of cache `lm`, as one event.
+                - Touches those of the `s_n4` keys `chunk_key(s_seq, s_a4[j], per)`, `j` from `0`, that are held in tier `g4` of cache `lm`, as one event.
               - Stores, of the `max(0, min(s_nch − s_hit, (seq_len(s_seq) div per) − min(s_hit, seq_len(s_seq) div per)))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_hit, seq_len(s_seq) div per)`, in tier `g2` of cache `lm`, those it lacks, as one event; `s_t2` is the indices it stored.
               - For `s_cg3` from 0 while below `len(s_t2)`:
                 - On a worker lane of `store`, at this lane's planned time:
@@ -695,9 +711,17 @@ The API the traced application used: `posix` sync (none declared); a run under a
               - Stores, of the `seq_len(s_gs) div 1` keys `chunk_key(s_gs, j, 1)`, `j` from `0`, in tier `g1` of cache `gpu`, those it lacks, those held touched first, as one event; `s_gh` is the leading ones held before it. The lane holds them under `kv` until it releases it, so none is evicted meanwhile.
               - `s_nch` = `seq_len(s_seq) div per`.
               - Probes the `seq_len(s_seq) div per` keys `chunk_key(s_seq, j, per)`, `j` from `0`, in tier `g2` of cache `lm`: `s_h2` is the leading ones held, nothing changed.
-              - Probes the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, in tiers `g2`, `g3`, `g4` of cache `lm` together: `s_h3` is the leading ones some tier of them holds, nothing changed; `s_a2` is the indices of those `g2` serves, `s_a3` is the indices of those `g3` serves, `s_a4` is the indices of those `g4` serves, a key going to the first of the tiers that holds it.
+              - `s_s2` is the indices, of the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, whose keys tier `g2` of cache `lm` holds now, every one, ascending; nothing changed.
+              - `s_s3` is the indices, of the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, whose keys tier `g3` of cache `lm` holds now, every one, ascending; nothing changed.
+              - `s_s4` is the indices, of the `max(0, (seq_len(s_seq) div per) − min(s_h2, seq_len(s_seq) div per))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_h2, seq_len(s_seq) div per)`, whose keys tier `g4` of cache `lm` holds now, every one, ascending; nothing changed.
+              - `s_any` is the indices any of `s_s2`, `s_s3`, `s_s4` holds, ascending.
+              - `s_h3` = `run(s_any from s_h2)`.
+              - `s_a3` is the indices of `s_s3` that none of `s_s2` holds, ascending.
+              - `s_a4` is the indices of `s_s4` that none of `s_s2`, `s_s3` holds, ascending.
+              - `s_n3` = `below(s_a3, s_h2 + s_h3)`.
+              - `s_n4` = `below(s_a4, s_h2 + s_h3)`.
               - `s_u2` is what tier `g2` of cache `lm` holds now, in the tier's unit; nothing changed.
-              - `s_fits` = `len(s_a3) + len(s_a4) ≤ (g2_bytes div chunk_bytes) − s_u2`.
+              - `s_fits` = `s_n3 + s_n4 ≤ (g2_bytes div chunk_bytes) − s_u2`.
               - `s_hit` = `s_h2 + (if s_fits then s_h3 else 0)`.
               - Measured as span `lookup`, a request's own storage wait:
                 - For `s_q3` from 0 while below `min(store_lanes, s_nch − s_h2)`:
@@ -710,22 +734,22 @@ The API the traced application used: `posix` sync (none declared); a run under a
                       - `stat` the object of `kv4` named by key = `chunk_key(s_seq, s_h2 + s_q4 + s_q4i × store_lanes, per)`, ext = `data` (may fail with ENOENT).
               - If `s_fits`:
                 - Measured as span `load`, a request's own storage wait, its reads drawing on the staging of `store`:
-                  - For `s_r3` from 0 while below `min(store_lanes, len(s_a3))`:
+                  - For `s_r3` from 0 while below `min(store_lanes, s_n3)`:
                     - On a worker lane of `store`, at this lane's planned time, the span waiting for it:
-                      - For `s_r3i` from 0 while below `⌈(len(s_a3) − s_r3) / store_lanes⌉`:
+                      - For `s_r3i` from 0 while below `⌈(s_n3 − s_r3) / store_lanes⌉`:
                         - `s_r3f` is the object of `kv` named by key = `chunk_key(s_seq, s_a3[s_r3 + s_r3i × store_lanes], per)`, ext = `data`.
                         - `open` `s_r3f` (RDONLY).
                         - `read` `s_r3f`: 32 MiB (`chunk_bytes`) at the file position.
                         - `close` `s_r3f`.
-                  - For `s_r4` from 0 while below `min(store_lanes, len(s_a4))`:
+                  - For `s_r4` from 0 while below `min(store_lanes, s_n4)`:
                     - On a worker lane of `store4`, at this lane's planned time, the span waiting for it:
-                      - For `s_r4i` from 0 while below `⌈(len(s_a4) − s_r4) / store_lanes⌉`:
+                      - For `s_r4i` from 0 while below `⌈(s_n4 − s_r4) / store_lanes⌉`:
                         - `s_r4f` is the object of `kv4` named by key = `chunk_key(s_seq, s_a4[s_r4 + s_r4i × store_lanes], per)`, ext = `data`.
                         - `open` `s_r4f` (RDONLY).
                         - `read` `s_r4f`: 32 MiB (`chunk_bytes`) at the file position.
                         - `close` `s_r4f`.
-                - Touches those of the `len(s_a3)` keys `chunk_key(s_seq, s_a3[j], per)`, `j` from `0`, that are held in tier `g3` of cache `lm`, as one event.
-                - Touches those of the `len(s_a4)` keys `chunk_key(s_seq, s_a4[j], per)`, `j` from `0`, that are held in tier `g4` of cache `lm`, as one event.
+                - Touches those of the `s_n3` keys `chunk_key(s_seq, s_a3[j], per)`, `j` from `0`, that are held in tier `g3` of cache `lm`, as one event.
+                - Touches those of the `s_n4` keys `chunk_key(s_seq, s_a4[j], per)`, `j` from `0`, that are held in tier `g4` of cache `lm`, as one event.
               - Stores, of the `max(0, min(s_nch − s_hit, (seq_len(s_seq) div per) − min(s_hit, seq_len(s_seq) div per)))` keys `chunk_key(s_seq, j, per)`, `j` from `min(s_hit, seq_len(s_seq) div per)`, in tier `g2` of cache `lm`, those it lacks, as one event; `s_t2` is the indices it stored.
               - For `s_cg3` from 0 while below `len(s_t2)`:
                 - On a worker lane of `store`, at this lane's planned time:
@@ -760,7 +784,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
 
 From `aeiou dry-run --metrics-json` at 1 GPU, the median of seeds 1, 2, 3; the seeds differ on read_share, metadata, skew.
 
-Ops in all (seed 1): 7,986,308: 4,193,718 `stat`, 1,181,860 `close`, 1,181,860 `open`, 1,004,128 `read`, 177,732 `rename`, 177,732 `write`, 69,278 `unlink`; 30.6 TiB read, 5.4 TiB written.
+Ops in all (seed 1): 8,067,465: 4,323,870 `stat`, 1,164,893 `close`, 1,164,893 `open`, 984,977 `read`, 179,916 `rename`, 179,916 `write`, 69,000 `unlink`; 30.1 TiB read, 5.5 TiB written.
 
 | Attribute | Class | Value |
 |---|---|---|
@@ -769,7 +793,7 @@ Ops in all (seed 1): 7,986,308: 4,193,718 `stat`, 1,181,860 `close`, 1,181,860 `
 | `request_size_read` (read requests) | large | 32 MiB |
 | `request_size_write` (write requests) | large | 32 MiB |
 | `read_share` (share of bytes read) | read-mostly | 88.5% |
-| `metadata` (metadata ops per data op) | high | 5.84 |
+| `metadata` (metadata ops per data op) | high | 5.93 |
 | `reads_own_writes` (reads its own writes) | yes | yes |
-| `reread` (share of bytes read that are re-reads) | repeated | 98.6% |
-| `skew` (share of accessed bytes on the most accessed 1% of bytes) | skewed | 32.2% |
+| `reread` (share of bytes read that are re-reads) | repeated | 98.5% |
+| `skew` (share of accessed bytes on the most accessed 1% of bytes) | skewed | 34.1% |

@@ -16,7 +16,7 @@ use serde::Deserialize;
 /// (`validate::SINCE`), so an addition changes the hash of no abstract without it. A change
 /// that is not an addition raises the floor to its version.
 pub const AST_FLOOR: &str = "0.23";
-pub const AST_VERSION: &str = "0.27";
+pub const AST_VERSION: &str = "0.28";
 
 /// A version in order (`0.9` before `0.23`), `None` for what is not one in its one spelling.
 pub fn version_key(v: &str) -> Option<(u32, u32)> {
@@ -336,6 +336,11 @@ pub enum ExprNode {
     Draw(Draw),
     Elem { array: String, index: Expr },
     Len(String),
+    /// How many consecutive indices `from`, `from + 1`, ... an array a `holds` or a `set` bound
+    /// holds: its leading run from there (contract 0.28).
+    Run { array: String, from: Expr },
+    /// How many elements of such an array are less than `bound` (contract 0.28).
+    Below { array: String, bound: Expr },
     Sum(String),
     Size(Handle),
     Offset(Handle),
@@ -1096,6 +1101,12 @@ pub enum Node {
     /// What a tier of a cache of the enclosing timeline holds, in the tier's unit, at this lane's
     /// planned instant, bound to `bind`; nothing changed (contract 0.27, rule V33).
     Used { cache: String, tier: String, bind: String },
+    /// The indices of `keys` whose keys a tier of a cache of the enclosing timeline holds, every
+    /// one, ascending, bound to `bind` as an array; nothing changed (contract 0.28, rule V33).
+    Holds { cache: String, tier: String, keys: Keys, bind: String },
+    /// Arrays a `holds` or a `set` bound, combined: `union`, `intersect`, or `minus` (the first
+    /// less all the rest), bound to `bind`, ascending (contract 0.28, rule V33).
+    Set { bind: String, op: String, of: Vec<String> },
     /// Those of `keys` a tier holds, touched, as one event (contract 0.19; keys 0.23; rule V33).
     Touch { cache: String, tier: String, keys: Keys },
     /// Those of `keys` a tier lacks, stored, as one event; those it holds left (`present:
@@ -1168,6 +1179,8 @@ impl Node {
             Node::Release { .. } => "release",
             Node::Probe { .. } => "probe",
             Node::Used { .. } => "used",
+            Node::Holds { .. } => "holds",
+            Node::Set { .. } => "set",
             Node::Touch { .. } => "touch",
             Node::Store { .. } => "store",
             Node::Open { .. } => "open",
@@ -1199,7 +1212,7 @@ impl Node {
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
                 | Node::Cond { .. } | Node::Phase { .. } | Node::Trace { .. }
                 | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. }
-                | Node::Acquire { .. } | Node::Release { .. } | Node::Probe { .. } | Node::Used { .. } | Node::Touch { .. } | Node::Store { .. }
+                | Node::Acquire { .. } | Node::Release { .. } | Node::Probe { .. } | Node::Used { .. } | Node::Holds { .. } | Node::Set { .. } | Node::Touch { .. } | Node::Store { .. }
                 | Node::Submit { .. } | Node::Span { .. }
         )
     }

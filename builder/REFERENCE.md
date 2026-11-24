@@ -172,6 +172,16 @@ and the statements around them (what V35 bans in an eviction body, and `submit` 
 in waits for, with that span's lane: a request's lookups and loads that workers carry while it
 waits; its reads draw on the staging the span names. The builder refuses it outside a span, and
 an abstract with one carries 0.26.
+`c.holds(cache, tier, keys, bind)` (contract 0.28, 2026-11-23) binds the indices of a key range
+whose keys a tier holds, every one, and returns a `SetRef`: an `ArrayRef` (`[k]`, `.len`) with
+`.run(frm)`, its leading run from `frm`, and `.below(bound)`, how many of its elements are less
+than `bound`. `c.union(bind, a, b, ...)`, `c.intersect(...)`, and `c.minus(...)` (the first less
+all the rest) combine `SetRef`s into another. A lookup is written from them, its rules the
+script's own lines (`lmcache_local_disk_tiered_g4`: the hit is `union(...).run(h2)`, G3 loads
+`minus(s3, s2)`, G4 `minus(s4, s2, s3)`, each cut at the run with `.below`). `chunk_keys(seq,
+per, chunks=arr, count=n)` takes the first `n` of an array's chunks. An abstract with a `holds`
+or a set carries 0.28.
+
 `c.used(cache, tier, bind)` (contract 0.27, 2026-11-23) binds what a tier holds, in its unit,
 at the lane's planned instant, and returns the `Ref`; nothing is changed. It is what a lane
 decides by as an application's allocator does (`with c.when(n <= capacity - f):`), and an

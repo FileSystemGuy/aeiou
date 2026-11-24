@@ -32,10 +32,10 @@ from .pattern import Pattern
 OPS = ("open", "close", "read", "write", "lseek", "ioctl", "fadvise", "fstat", "stat", "fsync", "fdatasync",
        "unlink", "truncate", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
 STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond",
-              "phase", "trace", "timeline", "publish", "array", "acquire", "release", "probe", "used", "touch",
-              "store", "submit", "span") + OPS
+              "phase", "trace", "timeline", "publish", "array", "acquire", "release", "probe", "used", "holds",
+              "set", "touch", "store", "submit", "span") + OPS
 DISTS = ("const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture")
-EXPRS = ("param", "index", "ref", "at", "actor", "draw", "elem", "len", "sum", "size", "offset", "unit_index", "units",
+EXPRS = ("param", "index", "ref", "at", "actor", "draw", "elem", "len", "run", "below", "sum", "size", "offset", "unit_index", "units",
          "chunks", "count", "dirs", "add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "neg", "eq", "ne", "lt",
          "le", "gt", "ge", "and", "or", "not", "cond", "published", "entry", "prev", "fresh", "shared", "prefix", "cat",
          "seq_len", "chunk_key", "now", "cached", "tier", "victim")
@@ -242,7 +242,7 @@ class Describer:
             return self.units.get(a["ref"])
         if k in ("size", "offset"):
             return "bytes"
-        if k in ("count", "dirs", "len", "units", "chunks", "unit_index"):
+        if k in ("count", "dirs", "len", "run", "below", "units", "chunks", "unit_index"):
             return "count"
         if k == "draw":
             return self.unit_of(a)
@@ -336,6 +336,10 @@ class Describer:
             return f"draw({self.dist_short(a)})"
         if k == "elem":
             return f"{a['array']}[{self.sym(a['index'])}]"
+        if k == "run":
+            return f"run({a['array']} from {self.sym(a['from'])})"
+        if k == "below":
+            return f"below({a['array']}, {self.sym(a['bound'])})"
         if k in ("len", "sum", "count", "dirs"):
             return f"{k}({a})"
         if k in ("size", "offset", "unit_index", "units", "chunks"):
@@ -687,6 +691,15 @@ class Describer:
                 return out + self.body(a["body"], depth + 1)
             finally:
                 self._in_timeline = False
+        if k == "holds":
+            ks = a["keys"]
+            return [pad + f"`{a['bind']}` is the indices, of the {self.value(ks['count'], 'count')} keys `{self.sym(ks['key'])}`, `{ks['index']}` from "
+                    f"`{self.sym(ks.get('from', 0))}`, whose keys tier `{a['tier']}` of cache `{a['cache']}` holds now, every one, ascending; nothing changed."]
+        if k == "set":
+            of = [f"`{x}`" for x in a["of"]]
+            what = {"union": f"any of {', '.join(of)} holds", "intersect": f"all of {', '.join(of)} hold",
+                    "minus": f"of {of[0]} that none of {', '.join(of[1:])} holds"}[a["op"]]
+            return [pad + f"`{a['bind']}` is the indices {what}, ascending."]
         if k == "used":
             return [pad + f"`{a['bind']}` is what tier `{a['tier']}` of cache `{a['cache']}` holds now, in the tier's unit; nothing changed."]
         if k in ("probe", "touch", "store"):

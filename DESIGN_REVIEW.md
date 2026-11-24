@@ -13588,6 +13588,69 @@ user's "Yes, draft the design for item 2" and "proceed with the two spans").**
   against the one-span order. `test_trace.py`, the document's spans in turn, `lookup` holding
   stats and no staging, `load` reads and the staging: written first, seen red.
 
+**Contract 0.28: what a tier holds as a set, and a lookup written from math functions
+(2026-11-23; raised by the user, designed on "Yes, write up the stage 1 design", built on
+"proceed with your recommendations").**
+
+- *The question.* Asked whether one `cache` should hold several layers, I answered that the
+  tiers of a cache share only a key space and the `probe`, and that two caches "would need a
+  new statement that probes across caches, which is the multi-tier probe under another name".
+  The user took that assumption apart: "a more-orthogonal approach would be to ask a cache to
+  return the subset of the requested list that it holds, not stopping at the first missing
+  entry", with set operations over such lists ("an AND operation", and one for "the list of
+  desired blocks that are not in the cache"), "one cache instance per G-layer", and the
+  question "can we express these concepts as math functions in the DSL and thereby simplify
+  the cache primitive (and others)?" The assumption was mine: that the expression language
+  cannot merge two holdings is what it lacked, not a property of it.
+- *Why the user's form is better.* A `probe` over `tiers` (0.25) has two of LMCache's rules
+  built into the instruction: the hit is the leading run of the union, and the first tier
+  listed serves a key. Those are the application's, and by `ARCHITECTURE.md`'s own model they
+  belong in the abstract. Another engine (the later adapter first, or no prefix rule) would
+  have needed another probe; from sets it needs none.
+- *Decided, stage 1 (additive):* `holds {cache, tier, keys, bind}`, every index of a key range
+  a tier holds, ascending; `set {bind, op, of}` with `union`, `intersect`, `minus` (the first
+  less all the rest); the expressions `run {array, from}`, the leading run from an index, and
+  `below {array, bound}`, how many elements are less than a bound. The user's "NOR" is the
+  difference, and is named `minus`. Statements for the sets and expressions for the measures,
+  as arrays already are in the contract (bound by statements, read by `len` and `elem`);
+  array-valued expressions were passed over, a second kind of expression in two evaluators and
+  two checkers. `below` cuts a set at the run without another array: the arrays ascend, so the
+  elements inside the run are a prefix; a second `holds` over the run's keys was passed over
+  (each key tested twice, three more statements).
+- *The lines drawn.* The membership form, not the cache's contents as an operand: `holds`
+  costs the keys asked (at most a prompt's chunks, the keys the adapters `stat` anyway), and
+  no tier's contents are ever a value (G4 holds up to 228,881 chunks). `set`, `run`, and
+  `below` take only arrays a `holds` or a `set` bound, ascending and distinct by
+  construction; a store's `taken`, in the order acted on, is refused. `holds` reads timeline
+  state, with a one-tier probe's rules; `set` is computation with no effect and stands
+  wherever its arrays are in scope (first built banned from `submit` and `on_evict` bodies,
+  then freed: the ban was of a read it does not make, and `ARCHITECTURE.md`'s table test
+  showed it).
+- *What cannot become math:* what changes state or involves time: inserting, touching,
+  capacity and what a full tier drops, timed eviction, a lane waiting on a full pool, the
+  unlink lanes.
+- *The proof.* `evict.rs`, `a_probe_over_tiers_is_its_composition_from_sets`: over twelve
+  pairs of holdings, four starts, and both orders of the tiers, the probe's run and each
+  tier's indices equal the composition's. And the abstract: `lmcache_local_disk_tiered_g4`'s
+  lookup rewritten (three `holds`, a union and its `run`, two differences, two `below`). Its
+  statements grew from four to twelve, so the sites of the draws after them moved and it drew
+  another sample (984,977 reads where 1,004,128), which is no evidence either way; the probe
+  form padded with six `let`s to the same count plans exactly the same ops, fingerprint
+  `8edc49c45a97b621` both ways at the case's parameters, which is.
+- *The case's numbers at seed 1:* 89,958 files written to each tier, 984,977 chunks read,
+  69,000 files unlinked in G3, 2,161,935 stats in each tier, 30.1 TiB read over the plan's
+  51.9 hours.
+- *Not done.* Stage 2: one cache a layer and the tier level gone; the probe over several
+  tiers removed (no committed abstract uses it now) and perhaps the one-tier probe; a store's
+  `present` as a difference stored and an intersection touched. Not decided. The user's
+  second question, whether math functions simplify other primitives, is to be answered. Brief
+  item 82; item 70 waits for it.
+- *Tests.* Written first and seen red: `evict.rs`'s four (`holds` at each point of a walk,
+  the three operations with two and more arrays, `run` and `below` at their edges, the
+  equivalence, the validator's rules and the version); ten shared refusal cases; the
+  builder's, the description's; `test_trace.py`'s document test of the G4 abstract.
+  `ARCHITECTURE.md`'s tables: `holds` under `read`, `set` with no effect.
+
 **Spans in the checkpoint abstracts; the search's left out (2026-11-22; the user's "proceed with
 the three spans as recommended").** The recommendation was one span outside a timeline
 (contract 0.24) in each of `dcp_save` (a checkpoint's write), `dcp_load` (a checkpoint's load),

@@ -16,7 +16,7 @@ import typing
 from typing import Any
 
 from .pattern import Pattern
-from .nodes import (Actor, At, BuildError, Consume, Cond, DatasetMeta, DirHandle, Dist, Draw, Elem, Entry,
+from .nodes import (Actor, At, BuildError, Consume, Cond, DatasetMeta, DirHandle, Dist, Draw, Elem, SetMeasure, Entry,
                     InventoryHandle, Expr, FileHandle, FileOf, Handle, Index, Node, ObjectHandle, Op, Param,
                     Pick, Published, Reduce, Ref, ast_of, check_ident, distref, lift, lower_bound_of, walk)
 
@@ -706,7 +706,7 @@ class _Frame:
 
 # V36 (contract 0.20): what a `submit` body may not hold (it only issues its ops on a worker
 # lane), and what a `span` may not (what moves or waits on the planned clock), as check.py
-SUBMIT_BANS = {"compute", "probe", "used", "touch", "store", "acquire", "release", "publish", "parallel",
+SUBMIT_BANS = {"compute", "probe", "used", "holds", "touch", "store", "acquire", "release", "publish", "parallel",
                "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
 SPAN_BANS_OUTSIDE = {"compute", "barrier", "channel", "put", "take", "loader", "timeline", "trace"}   # outside a timeline (0.24)
 SPAN_BANS = {"compute", "parallel", "acquire"}       # and a store of present: touch, which may wait
@@ -1058,6 +1058,44 @@ class Cursor:
         self._emit({"probe": node})
         self._top.bindings[bind] = None
         return (Ref(bind), *(ArrayRef(h) for h in held)) if held is not None else Ref(bind)
+
+    def holds(self, cache: str, tier: str, keys, bind: str):
+        """The indices of `keys` (a key range) whose keys `tier` of `cache` holds at this lane's
+        planned instant, every one, not stopping at the first it lacks, ascending, bound to
+        `bind`; nothing changed (contract 0.28, rule V33). Returns its SetRef: an ArrayRef
+        (`[k]`, `.len`) with `.run(frm)` and `.below(bound)`, which `union`, `intersect`, and
+        `minus` combine. What a lookup is made of, its rules the abstract's own statements."""
+        node = self._keys("holds", cache, tier, keys)
+        return self._set_bind("holds", {"holds": {**node, "bind": bind}}, bind)
+
+    def _set_bind(self, what: str, node: dict, bind: str):
+        check_ident(bind, "binding")
+        if bind in self.wl._param_specs:
+            raise BuildError(f"{what}: `bind` {bind!r} has the name of a parameter (V32)")
+        self._emit(node)
+        return SetRef(bind)
+
+    def _set(self, op: str, bind: str, of):
+        if any(not isinstance(a, SetRef) for a in of):
+            bad = next(a for a in of if not isinstance(a, SetRef))
+            raise BuildError(f"set: its arrays are those a `holds` or a set bound, not {type(bad).__name__} (V33)")
+        if len(of) < 2:
+            raise BuildError(f"set: `of` names {len(of)} array; an operation is over two or more (V33)")
+        return self._set_bind("set", {"set": {"bind": bind, "op": op, "of": [a.name for a in of]}}, bind)
+
+    def union(self, bind: str, *of):
+        """The indices any of the sets `of` holds (each a `holds`'s or a set's SetRef, two or
+        more), ascending, bound to `bind` (contract 0.28, rule V33). Returns its SetRef."""
+        return self._set("union", bind, of)
+
+    def intersect(self, bind: str, *of):
+        """The indices all of the sets `of` hold, bound to `bind` (contract 0.28)."""
+        return self._set("intersect", bind, of)
+
+    def minus(self, bind: str, *of):
+        """The indices of the first of `of` that none of the rest holds, bound to `bind`
+        (contract 0.28)."""
+        return self._set("minus", bind, of)
 
     def used(self, cache: str, tier: str, bind: str):
         """What `tier` of `cache` holds, in the tier's unit, at this lane's planned instant, bound
@@ -1535,16 +1573,17 @@ def chunk_keys(seq, per, frm=0, count=None, *, chunks=None, index: str = "j", cl
     to `frm + count` (to the sequence's end with no `count`), cut at the sequence's end unless
     `clip=False`, each one's `pos` its chunk index; or the chunks whose indices the array
     `chunks` holds (an `array`'s or a `taken`'s ArrayRef, or a parameter array's name), in its
-    order, each one's `pos` its index in the array. Library over `keys` and `chunk_key`."""
+    order, each one's `pos` its index in the array, all of them or with `count` the first that
+    many. Library over `keys` and `chunk_key`."""
     from .dists import chunk_key, seq_len, min_, max_
     if not isinstance(seq, Ref):
         raise BuildError("chunk_keys: the sequence is a binding (let it first): written in the key, its expression "
                          "would be computed again at every index")
     if chunks is not None:
-        if count is not None or not (isinstance(frm, int) and frm == 0):
-            raise BuildError("chunk_keys: `chunks` in place of `frm` and `count`, not beside them")
+        if not (isinstance(frm, int) and frm == 0):
+            raise BuildError("chunk_keys: `chunks` in place of `frm`, not beside it")
         arr = chunks if isinstance(chunks, ArrayRef) else ArrayRef(check_ident(chunks, "chunks"))
-        return keys(index, arr.len, lambda j: chunk_key(seq, arr[j], per))
+        return keys(index, arr.len if count is None else count, lambda j: chunk_key(seq, arr[j], per))
     n = seq_len(seq) // per
     zero = isinstance(frm, int) and not isinstance(frm, bool) and frm == 0
     if clip and not zero:
@@ -1568,6 +1607,18 @@ class ArrayRef:
     @property
     def len(self) -> Expr:
         return Reduce("len", self.name)
+
+
+class SetRef(ArrayRef):
+    """The array a `holds` or a set operation bound (contract 0.28): ascending, distinct indices."""
+
+    def run(self, frm) -> Expr:
+        """How many consecutive indices `frm`, `frm + 1`, ... it holds: its leading run from there."""
+        return SetMeasure("run", self.name, frm)
+
+    def below(self, bound) -> Expr:
+        """How many of its elements are less than `bound`: its first that many."""
+        return SetMeasure("below", self.name, bound)
 
 
 class Sub:

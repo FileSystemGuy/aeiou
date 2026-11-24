@@ -2121,7 +2121,7 @@ def test_taken_chunks_and_present_serialize_and_validate():
 
 
 @pytest.mark.parametrize("build, needle", [
-    (lambda a: chunk_keys(a.let("s", fresh(4)), 1, 0, 1, chunks="x"), "`chunks` in place of `frm` and `count`"),
+    (lambda a: chunk_keys(a.let("s", fresh(4)), 1, 1, chunks="x"), "`chunks` in place of `frm`, not beside it"),
     (lambda a: chunk_keys(fresh(4), 1), "the sequence is a binding"),
     (lambda a: a.touch("lm", "g", fresh(4)), "its keys are a key range"),
     (lambda a: keys("J", 1, 0), "keys index"),
@@ -2458,6 +2458,62 @@ def test_what_used_refuses_is_refused_at_construction(build, needle):
         with w.actor("gpu") as a:
             with a.timeline("tl", caches={"lm": [tier("g", lru(), capacity=4)]}):
                 build(a)
+
+
+# ---- contract 0.28: what a tier holds of a key range, as a set (DESIGN_REVIEW.md §3.100) ----
+
+def test_holds_and_sets_serialize_validate_and_are_contract_0_28():
+    """Contract 0.28: `holds(cache, tier, keys, bind)` binds every index of a key range whose
+    key a tier holds; `union`, `intersect`, and `minus` combine such arrays; `.run(frm)` and
+    `.below(bound)` measure one. LMCache's lookup over two adapters written from them: the hit
+    the leading run of what either holds, each key the first adapter's that holds it. An
+    addition under the version range: a document with one carries 0.28."""
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with a.timeline("tl", caches={"lm": [tier("g3", lru(), capacity=P.n), tier("g4", lru(), capacity=P.n)]}):
+            s = a.let("s", fresh(8))
+            s3 = a.holds("lm", "g3", chunk_keys(s, 2), "s3")
+            s4 = a.holds("lm", "g4", chunk_keys(s, 2), "s4")
+            from aeiou.builder import ArrayRef
+            assert isinstance(s3, ArrayRef)
+            both = a.union("any", s3, s4)
+            h = a.let("h", both.run(0))
+            a4 = a.minus("a4", s4, s3)
+            a.intersect("twice", s3, s4)
+            a.touch("lm", "g4", chunk_keys(s, 2, chunks=a4, count=a4.below(h)))
+            with a.loop("r", s3.below(h)) as j:
+                a.stat(ds.file(s3[j]))
+            a.compute(10)
+    ast = w.build()
+    assert ast["ast"] == "0.28"
+    body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
+    assert body[1]["holds"]["tier"] == "g3" and body[1]["holds"]["bind"] == "s3" and "keys" in body[1]["holds"]
+    assert body[3] == {"set": {"bind": "any", "op": "union", "of": ["s3", "s4"]}}
+    assert body[4] == {"let": {"name": "h", "value": {"run": {"array": "any", "from": 0}}}}
+    assert body[5] == {"set": {"bind": "a4", "op": "minus", "of": ["s4", "s3"]}}
+    assert body[6] == {"set": {"bind": "twice", "op": "intersect", "of": ["s3", "s4"]}}
+    assert body[7]["touch"]["keys"]["count"] == {"below": {"array": "a4", "bound": {"ref": "h"}}}
+    assert body[8]["loop"]["to"] == {"below": {"array": "s3", "bound": {"ref": "h"}}}
+    validate(ast)
+    with pytest.raises(BuildError, match=r"ast: version `0.27`, but the document holds a `holds` or a `set`, what a tier holds of a key range as a set, which contract `0.28` added"):
+        validate({**ast, "ast": "0.27"})
+
+
+@pytest.mark.parametrize("build, needle", [
+    (lambda a, s: a.holds("lm", "g", chunk_keys(s, 2), "1f"), "binding '1f' must match"),
+    (lambda a, s: a.holds("lm", "no tier", chunk_keys(s, 2), "f"), "tier 'no tier' must match"),
+    (lambda a, s: a.holds("lm", "g", chunk_keys(s, 2), "n"), r"holds: `bind` 'n' has the name of a parameter \(V32\)"),
+    (lambda a, s: a.union("x", a.holds("lm", "g", chunk_keys(s, 2), "f")), r"set: `of` names 1 array; an operation is over two or more \(V33\)"),
+    (lambda a, s: a.minus("x", a.holds("lm", "g", chunk_keys(s, 2), "f"), a.store("lm", "g", chunk_keys(s, 2), taken="k")),
+     r"set: its arrays are those a `holds` or a set bound, not ArrayRef \(V33\)"),
+    (lambda a, s: a.union("n", *[a.holds("lm", "g", chunk_keys(s, 2), "f")] * 2), r"set: `bind` 'n' has the name of a parameter \(V32\)"),
+])
+def test_what_holds_and_sets_refuse_is_refused_at_construction(build, needle):
+    w, P, ds = _wl()
+    with pytest.raises(BuildError, match=needle):
+        with w.actor("gpu") as a:
+            with a.timeline("tl", caches={"lm": [tier("g", lru(), capacity=4)]}):
+                build(a, a.let("s", fresh(8)))
 
 
 # ---- contract 0.25: a probe over several tiers (brief item 78; DESIGN_REVIEW.md §3.100) ----

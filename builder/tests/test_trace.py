@@ -935,7 +935,7 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     assert len(lanes["kv"]) == len(lanes["kv4"]) == 4 and not lanes["kv"] & lanes["kv4"], lanes
     assert not {o["lane"] for o in ops if o["op"] == "unlink"} & (lanes["kv"] | lanes["kv4"])
     ast = json.loads(ast_path("lmcache_local_disk_tiered_g4").read_text())
-    assert "direct" not in ast["params"] and ast["ast"] == "0.27"
+    assert "direct" not in ast["params"] and ast["ast"] == "0.28"
 
     def nodes(x, kind):
         if isinstance(x, dict):
@@ -953,9 +953,16 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     # hit that some adapter holds, so the lookup's probe is the one that says which adapter serves
     # each, and no second probe starts at the chunk the GPU held; a chunk of the run G2 holds past
     # its own leading run counts toward the hit and is not loaded, so G2 is the probe's first tier
-    probes = [p for p in walk(ast, "probe") if "tiers" in p]
-    assert probes and all(p["tiers"] == ["g2", "g3", "g4"] and len(p["held"]) == 3
-                          and p["keys"]["from"]["min"][0]["ref"].endswith("_h2") for p in probes), probes
+    # since contract 0.28 the lookup is written from sets, its rules the abstract's own lines: what
+    # each of G2, G3, and G4 holds of the chunks past G2's hit, the hit the leading run of their
+    # union, G3 loading what G2 lacks and G4 what neither has; no probe over several tiers
+    assert not [p for p in walk(ast, "probe") if "tiers" in p]
+    held = list(walk(ast, "holds"))
+    assert held and [h["tier"] for h in held] == ["g2", "g3", "g4"] * (len(held) // 3), [h["tier"] for h in held]
+    assert all(h["keys"]["from"]["min"][0]["ref"].endswith("_h2") for h in held), held[0]
+    sets = list(walk(ast, "set"))
+    assert [(x["op"], len(x["of"])) for x in sets[:3]] == [("union", 3), ("minus", 2), ("minus", 3)], sets[:3]
+    assert '"run"' in json.dumps(ast) and '"below"' in json.dumps(ast)
     assert "_first" not in json.dumps(ast)
     # and the load is decided by G2's fill, read before the span (contract 0.27)
     assert [u for u in walk(ast, "used")] and all(u["cache"] == "lm" and u["tier"] == "g2" for u in walk(ast, "used"))
