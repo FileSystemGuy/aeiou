@@ -1,5 +1,5 @@
 {
-  "ast": "0.28",
+  "ast": "0.29",
   "name": "lmcache_local_disk_tiered_g4",
   "doc": "One engine's sessions on a timeline: slots, G1 (vLLM's pool), G2, and two L2 adapters, G3 and G4, each a directory under test.",
   "params": {
@@ -6267,302 +6267,292 @@
             "name": "tl",
             "caches": [
               {
-                "name": "lm",
-                "tiers": [
+                "name": "g2",
+                "order": [
                   {
-                    "name": "g2",
-                    "order": [
-                      {
-                        "cached": "touched"
-                      },
-                      {
-                        "neg": {
-                          "cached": "pos"
-                        }
-                      }
-                    ],
-                    "capacity": {
-                      "div": [
-                        {
-                          "param": "g2_bytes"
-                        },
-                        {
-                          "param": "chunk_bytes"
-                        }
-                      ]
-                    },
-                    "evict": {
-                      "every": 1000000000,
-                      "when": {
-                        "ge": [
-                          {
-                            "mul": [
-                              {
-                                "tier": "used"
-                              },
-                              10
-                            ]
-                          },
-                          {
-                            "mul": [
-                              {
-                                "div": [
-                                  {
-                                    "param": "g2_bytes"
-                                  },
-                                  {
-                                    "param": "chunk_bytes"
-                                  }
-                                ]
-                              },
-                              8
-                            ]
-                          }
-                        ]
-                      },
-                      "count": {
-                        "max": [
-                          1,
-                          {
-                            "div": [
-                              {
-                                "mul": [
-                                  {
-                                    "tier": "entries"
-                                  },
-                                  2
-                                ]
-                              },
-                              10
-                            ]
-                          }
-                        ]
-                      }
-                    }
+                    "cached": "touched"
                   },
                   {
-                    "name": "g3",
-                    "order": [
-                      {
-                        "cached": "touched"
-                      },
-                      {
-                        "neg": {
-                          "cached": "pos"
-                        }
-                      }
-                    ],
-                    "capacity": {
-                      "div": [
-                        {
-                          "param": "g3_bytes"
-                        },
-                        {
-                          "param": "chunk_bytes"
-                        }
-                      ]
-                    },
-                    "evict": {
-                      "every": 1000000000,
-                      "when": {
-                        "ge": [
-                          {
-                            "mul": [
-                              {
-                                "tier": "used"
-                              },
-                              10
-                            ]
-                          },
-                          {
-                            "mul": [
-                              {
-                                "div": [
-                                  {
-                                    "param": "g3_bytes"
-                                  },
-                                  {
-                                    "param": "chunk_bytes"
-                                  }
-                                ]
-                              },
-                              8
-                            ]
-                          }
-                        ]
-                      },
-                      "count": {
-                        "max": [
-                          1,
-                          {
-                            "div": [
-                              {
-                                "mul": [
-                                  {
-                                    "tier": "entries"
-                                  },
-                                  2
-                                ]
-                              },
-                              10
-                            ]
-                          }
-                        ]
-                      }
-                    },
-                    "on_evict": {
-                      "lanes": {
-                        "param": "evict_lanes"
-                      },
-                      "body": [
-                        {
-                          "unlink": {
-                            "file": {
-                              "object": {
-                                "namespace": "kv",
-                                "fields": {
-                                  "key": {
-                                    "victim": {}
-                                  },
-                                  "ext": "data"
-                                }
-                              }
-                            }
-                          }
-                        }
-                      ]
-                    }
-                  },
-                  {
-                    "name": "g4",
-                    "order": [
-                      {
-                        "cached": "touched"
-                      },
-                      {
-                        "neg": {
-                          "cached": "pos"
-                        }
-                      }
-                    ],
-                    "capacity": {
-                      "div": [
-                        {
-                          "param": "g4_bytes"
-                        },
-                        {
-                          "param": "chunk_bytes"
-                        }
-                      ]
-                    },
-                    "evict": {
-                      "every": 1000000000,
-                      "when": {
-                        "ge": [
-                          {
-                            "mul": [
-                              {
-                                "tier": "used"
-                              },
-                              10
-                            ]
-                          },
-                          {
-                            "mul": [
-                              {
-                                "div": [
-                                  {
-                                    "param": "g4_bytes"
-                                  },
-                                  {
-                                    "param": "chunk_bytes"
-                                  }
-                                ]
-                              },
-                              8
-                            ]
-                          }
-                        ]
-                      },
-                      "count": {
-                        "max": [
-                          1,
-                          {
-                            "div": [
-                              {
-                                "mul": [
-                                  {
-                                    "tier": "entries"
-                                  },
-                                  2
-                                ]
-                              },
-                              10
-                            ]
-                          }
-                        ]
-                      }
-                    },
-                    "on_evict": {
-                      "lanes": {
-                        "param": "evict_lanes"
-                      },
-                      "body": [
-                        {
-                          "unlink": {
-                            "file": {
-                              "object": {
-                                "namespace": "kv4",
-                                "fields": {
-                                  "key": {
-                                    "victim": {}
-                                  },
-                                  "ext": "data"
-                                }
-                              }
-                            }
-                          }
-                        }
-                      ]
+                    "neg": {
+                      "cached": "pos"
                     }
                   }
-                ]
+                ],
+                "capacity": {
+                  "div": [
+                    {
+                      "param": "g2_bytes"
+                    },
+                    {
+                      "param": "chunk_bytes"
+                    }
+                  ]
+                },
+                "evict": {
+                  "every": 1000000000,
+                  "when": {
+                    "ge": [
+                      {
+                        "mul": [
+                          {
+                            "used": "g2"
+                          },
+                          10
+                        ]
+                      },
+                      {
+                        "mul": [
+                          {
+                            "div": [
+                              {
+                                "param": "g2_bytes"
+                              },
+                              {
+                                "param": "chunk_bytes"
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      }
+                    ]
+                  },
+                  "count": {
+                    "max": [
+                      1,
+                      {
+                        "div": [
+                          {
+                            "mul": [
+                              {
+                                "entries": "g2"
+                              },
+                              2
+                            ]
+                          },
+                          10
+                        ]
+                      }
+                    ]
+                  }
+                }
               },
               {
-                "name": "gpu",
-                "tiers": [
+                "name": "g3",
+                "order": [
                   {
-                    "name": "g1",
-                    "order": [
+                    "cached": "touched"
+                  },
+                  {
+                    "neg": {
+                      "cached": "pos"
+                    }
+                  }
+                ],
+                "capacity": {
+                  "div": [
+                    {
+                      "param": "g3_bytes"
+                    },
+                    {
+                      "param": "chunk_bytes"
+                    }
+                  ]
+                },
+                "evict": {
+                  "every": 1000000000,
+                  "when": {
+                    "ge": [
                       {
-                        "cached": "freed"
+                        "mul": [
+                          {
+                            "used": "g3"
+                          },
+                          10
+                        ]
                       },
                       {
-                        "neg": {
-                          "cached": "pos"
+                        "mul": [
+                          {
+                            "div": [
+                              {
+                                "param": "g3_bytes"
+                              },
+                              {
+                                "param": "chunk_bytes"
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      }
+                    ]
+                  },
+                  "count": {
+                    "max": [
+                      1,
+                      {
+                        "div": [
+                          {
+                            "mul": [
+                              {
+                                "entries": "g3"
+                              },
+                              2
+                            ]
+                          },
+                          10
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "on_evict": {
+                  "lanes": {
+                    "param": "evict_lanes"
+                  },
+                  "body": [
+                    {
+                      "unlink": {
+                        "file": {
+                          "object": {
+                            "namespace": "kv",
+                            "fields": {
+                              "key": {
+                                "victim": {}
+                              },
+                              "ext": "data"
+                            }
+                          }
                         }
                       }
-                    ],
-                    "capacity": {
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "g4",
+                "order": [
+                  {
+                    "cached": "touched"
+                  },
+                  {
+                    "neg": {
+                      "cached": "pos"
+                    }
+                  }
+                ],
+                "capacity": {
+                  "div": [
+                    {
+                      "param": "g4_bytes"
+                    },
+                    {
+                      "param": "chunk_bytes"
+                    }
+                  ]
+                },
+                "evict": {
+                  "every": 1000000000,
+                  "when": {
+                    "ge": [
+                      {
+                        "mul": [
+                          {
+                            "used": "g4"
+                          },
+                          10
+                        ]
+                      },
+                      {
+                        "mul": [
+                          {
+                            "div": [
+                              {
+                                "param": "g4_bytes"
+                              },
+                              {
+                                "param": "chunk_bytes"
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      }
+                    ]
+                  },
+                  "count": {
+                    "max": [
+                      1,
+                      {
+                        "div": [
+                          {
+                            "mul": [
+                              {
+                                "entries": "g4"
+                              },
+                              2
+                            ]
+                          },
+                          10
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "on_evict": {
+                  "lanes": {
+                    "param": "evict_lanes"
+                  },
+                  "body": [
+                    {
+                      "unlink": {
+                        "file": {
+                          "object": {
+                            "namespace": "kv4",
+                            "fields": {
+                              "key": {
+                                "victim": {}
+                              },
+                              "ext": "data"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "g1",
+                "order": [
+                  {
+                    "cached": "freed"
+                  },
+                  {
+                    "neg": {
+                      "cached": "pos"
+                    }
+                  }
+                ],
+                "capacity": {
+                  "div": [
+                    {
+                      "param": "g1_bytes"
+                    },
+                    {
                       "div": [
                         {
-                          "param": "g1_bytes"
+                          "param": "chunk_bytes"
                         },
                         {
-                          "div": [
-                            {
-                              "param": "chunk_bytes"
-                            },
-                            {
-                              "param": "per"
-                            }
-                          ]
+                          "param": "per"
                         }
                       ]
-                    },
-                    "full": "wait"
-                  }
-                ]
+                    }
+                  ]
+                },
+                "full": "wait"
               }
             ],
             "resources": [
@@ -15105,8 +15095,7 @@
                           },
                           {
                             "store": {
-                              "cache": "gpu",
-                              "tier": "g1",
+                              "cache": "g1",
                               "keys": {
                                 "index": "j",
                                 "count": {
@@ -15154,9 +15143,8 @@
                             }
                           },
                           {
-                            "probe": {
-                              "cache": "lm",
-                              "tier": "g2",
+                            "holds": {
+                              "cache": "g2",
                               "keys": {
                                 "index": "j",
                                 "count": {
@@ -15190,14 +15178,16 @@
                           },
                           {
                             "holds": {
-                              "cache": "lm",
-                              "tier": "g2",
+                              "cache": "g2",
                               "keys": {
                                 "index": "j",
                                 "from": {
                                   "min": [
                                     {
-                                      "ref": "m_h2"
+                                      "run": {
+                                        "array": "m_h2",
+                                        "from": 0
+                                      }
                                     },
                                     {
                                       "div": [
@@ -15233,7 +15223,10 @@
                                         {
                                           "min": [
                                             {
-                                              "ref": "m_h2"
+                                              "run": {
+                                                "array": "m_h2",
+                                                "from": 0
+                                              }
                                             },
                                             {
                                               "div": [
@@ -15272,14 +15265,16 @@
                           },
                           {
                             "holds": {
-                              "cache": "lm",
-                              "tier": "g3",
+                              "cache": "g3",
                               "keys": {
                                 "index": "j",
                                 "from": {
                                   "min": [
                                     {
-                                      "ref": "m_h2"
+                                      "run": {
+                                        "array": "m_h2",
+                                        "from": 0
+                                      }
                                     },
                                     {
                                       "div": [
@@ -15315,7 +15310,10 @@
                                         {
                                           "min": [
                                             {
-                                              "ref": "m_h2"
+                                              "run": {
+                                                "array": "m_h2",
+                                                "from": 0
+                                              }
                                             },
                                             {
                                               "div": [
@@ -15354,14 +15352,16 @@
                           },
                           {
                             "holds": {
-                              "cache": "lm",
-                              "tier": "g4",
+                              "cache": "g4",
                               "keys": {
                                 "index": "j",
                                 "from": {
                                   "min": [
                                     {
-                                      "ref": "m_h2"
+                                      "run": {
+                                        "array": "m_h2",
+                                        "from": 0
+                                      }
                                     },
                                     {
                                       "div": [
@@ -15397,7 +15397,10 @@
                                         {
                                           "min": [
                                             {
-                                              "ref": "m_h2"
+                                              "run": {
+                                                "array": "m_h2",
+                                                "from": 0
+                                              }
                                             },
                                             {
                                               "div": [
@@ -15452,7 +15455,10 @@
                                 "run": {
                                   "array": "m_any",
                                   "from": {
-                                    "ref": "m_h2"
+                                    "run": {
+                                      "array": "m_h2",
+                                      "from": 0
+                                    }
                                   }
                                 }
                               }
@@ -15488,7 +15494,10 @@
                                   "bound": {
                                     "add": [
                                       {
-                                        "ref": "m_h2"
+                                        "run": {
+                                          "array": "m_h2",
+                                          "from": 0
+                                        }
                                       },
                                       {
                                         "ref": "m_h3"
@@ -15508,7 +15517,10 @@
                                   "bound": {
                                     "add": [
                                       {
-                                        "ref": "m_h2"
+                                        "run": {
+                                          "array": "m_h2",
+                                          "from": 0
+                                        }
                                       },
                                       {
                                         "ref": "m_h3"
@@ -15520,10 +15532,11 @@
                             }
                           },
                           {
-                            "used": {
-                              "cache": "lm",
-                              "tier": "g2",
-                              "bind": "m_u2"
+                            "let": {
+                              "name": "m_u2",
+                              "value": {
+                                "used": "g2"
+                              }
                             }
                           },
                           {
@@ -15568,7 +15581,10 @@
                               "value": {
                                 "add": [
                                   {
-                                    "ref": "m_h2"
+                                    "run": {
+                                      "array": "m_h2",
+                                      "from": 0
+                                    }
                                   },
                                   {
                                     "cond": {
@@ -15603,7 +15619,10 @@
                                               "ref": "m_nch"
                                             },
                                             {
-                                              "ref": "m_h2"
+                                              "run": {
+                                                "array": "m_h2",
+                                                "from": 0
+                                              }
                                             }
                                           ]
                                         }
@@ -15628,7 +15647,10 @@
                                                               "ref": "m_nch"
                                                             },
                                                             {
-                                                              "ref": "m_h2"
+                                                              "run": {
+                                                                "array": "m_h2",
+                                                                "from": 0
+                                                              }
                                                             }
                                                           ]
                                                         },
@@ -15659,7 +15681,10 @@
                                                                     {
                                                                       "add": [
                                                                         {
-                                                                          "ref": "m_h2"
+                                                                          "run": {
+                                                                            "array": "m_h2",
+                                                                            "from": 0
+                                                                          }
                                                                         },
                                                                         {
                                                                           "index": "m_q3"
@@ -15715,7 +15740,10 @@
                                               "ref": "m_nch"
                                             },
                                             {
-                                              "ref": "m_h2"
+                                              "run": {
+                                                "array": "m_h2",
+                                                "from": 0
+                                              }
                                             }
                                           ]
                                         }
@@ -15740,7 +15768,10 @@
                                                               "ref": "m_nch"
                                                             },
                                                             {
-                                                              "ref": "m_h2"
+                                                              "run": {
+                                                                "array": "m_h2",
+                                                                "from": 0
+                                                              }
                                                             }
                                                           ]
                                                         },
@@ -15771,7 +15802,10 @@
                                                                     {
                                                                       "add": [
                                                                         {
-                                                                          "ref": "m_h2"
+                                                                          "run": {
+                                                                            "array": "m_h2",
+                                                                            "from": 0
+                                                                          }
                                                                         },
                                                                         {
                                                                           "index": "m_q4"
@@ -16074,8 +16108,7 @@
                                 },
                                 {
                                   "touch": {
-                                    "cache": "lm",
-                                    "tier": "g3",
+                                    "cache": "g3",
                                     "keys": {
                                       "index": "j",
                                       "count": {
@@ -16104,8 +16137,7 @@
                                 },
                                 {
                                   "touch": {
-                                    "cache": "lm",
-                                    "tier": "g4",
+                                    "cache": "g4",
                                     "keys": {
                                       "index": "j",
                                       "count": {
@@ -16137,8 +16169,7 @@
                           },
                           {
                             "store": {
-                              "cache": "lm",
-                              "tier": "g2",
+                              "cache": "g2",
                               "keys": {
                                 "index": "j",
                                 "from": {
@@ -16283,8 +16314,7 @@
                           },
                           {
                             "store": {
-                              "cache": "lm",
-                              "tier": "g3",
+                              "cache": "g3",
                               "keys": {
                                 "index": "j",
                                 "count": {
@@ -16485,8 +16515,7 @@
                           },
                           {
                             "store": {
-                              "cache": "lm",
-                              "tier": "g4",
+                              "cache": "g4",
                               "keys": {
                                 "index": "j",
                                 "count": {
@@ -16649,8 +16678,7 @@
                           },
                           {
                             "touch": {
-                              "cache": "lm",
-                              "tier": "g2",
+                              "cache": "g2",
                               "keys": {
                                 "index": "j",
                                 "count": {
@@ -23451,8 +23479,7 @@
                                                   },
                                                   {
                                                     "store": {
-                                                      "cache": "gpu",
-                                                      "tier": "g1",
+                                                      "cache": "g1",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -23500,9 +23527,8 @@
                                                     }
                                                   },
                                                   {
-                                                    "probe": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
+                                                    "holds": {
+                                                      "cache": "g2",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -23536,14 +23562,16 @@
                                                   },
                                                   {
                                                     "holds": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
+                                                      "cache": "g2",
                                                       "keys": {
                                                         "index": "j",
                                                         "from": {
                                                           "min": [
                                                             {
-                                                              "ref": "s_h2"
+                                                              "run": {
+                                                                "array": "s_h2",
+                                                                "from": 0
+                                                              }
                                                             },
                                                             {
                                                               "div": [
@@ -23579,7 +23607,10 @@
                                                                 {
                                                                   "min": [
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     },
                                                                     {
                                                                       "div": [
@@ -23618,14 +23649,16 @@
                                                   },
                                                   {
                                                     "holds": {
-                                                      "cache": "lm",
-                                                      "tier": "g3",
+                                                      "cache": "g3",
                                                       "keys": {
                                                         "index": "j",
                                                         "from": {
                                                           "min": [
                                                             {
-                                                              "ref": "s_h2"
+                                                              "run": {
+                                                                "array": "s_h2",
+                                                                "from": 0
+                                                              }
                                                             },
                                                             {
                                                               "div": [
@@ -23661,7 +23694,10 @@
                                                                 {
                                                                   "min": [
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     },
                                                                     {
                                                                       "div": [
@@ -23700,14 +23736,16 @@
                                                   },
                                                   {
                                                     "holds": {
-                                                      "cache": "lm",
-                                                      "tier": "g4",
+                                                      "cache": "g4",
                                                       "keys": {
                                                         "index": "j",
                                                         "from": {
                                                           "min": [
                                                             {
-                                                              "ref": "s_h2"
+                                                              "run": {
+                                                                "array": "s_h2",
+                                                                "from": 0
+                                                              }
                                                             },
                                                             {
                                                               "div": [
@@ -23743,7 +23781,10 @@
                                                                 {
                                                                   "min": [
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     },
                                                                     {
                                                                       "div": [
@@ -23798,7 +23839,10 @@
                                                         "run": {
                                                           "array": "s_any",
                                                           "from": {
-                                                            "ref": "s_h2"
+                                                            "run": {
+                                                              "array": "s_h2",
+                                                              "from": 0
+                                                            }
                                                           }
                                                         }
                                                       }
@@ -23834,7 +23878,10 @@
                                                           "bound": {
                                                             "add": [
                                                               {
-                                                                "ref": "s_h2"
+                                                                "run": {
+                                                                  "array": "s_h2",
+                                                                  "from": 0
+                                                                }
                                                               },
                                                               {
                                                                 "ref": "s_h3"
@@ -23854,7 +23901,10 @@
                                                           "bound": {
                                                             "add": [
                                                               {
-                                                                "ref": "s_h2"
+                                                                "run": {
+                                                                  "array": "s_h2",
+                                                                  "from": 0
+                                                                }
                                                               },
                                                               {
                                                                 "ref": "s_h3"
@@ -23866,10 +23916,11 @@
                                                     }
                                                   },
                                                   {
-                                                    "used": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
-                                                      "bind": "s_u2"
+                                                    "let": {
+                                                      "name": "s_u2",
+                                                      "value": {
+                                                        "used": "g2"
+                                                      }
                                                     }
                                                   },
                                                   {
@@ -23914,7 +23965,10 @@
                                                       "value": {
                                                         "add": [
                                                           {
-                                                            "ref": "s_h2"
+                                                            "run": {
+                                                              "array": "s_h2",
+                                                              "from": 0
+                                                            }
                                                           },
                                                           {
                                                             "cond": {
@@ -23949,7 +24003,10 @@
                                                                       "ref": "s_nch"
                                                                     },
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     }
                                                                   ]
                                                                 }
@@ -23974,7 +24031,10 @@
                                                                                       "ref": "s_nch"
                                                                                     },
                                                                                     {
-                                                                                      "ref": "s_h2"
+                                                                                      "run": {
+                                                                                        "array": "s_h2",
+                                                                                        "from": 0
+                                                                                      }
                                                                                     }
                                                                                   ]
                                                                                 },
@@ -24005,7 +24065,10 @@
                                                                                             {
                                                                                               "add": [
                                                                                                 {
-                                                                                                  "ref": "s_h2"
+                                                                                                  "run": {
+                                                                                                    "array": "s_h2",
+                                                                                                    "from": 0
+                                                                                                  }
                                                                                                 },
                                                                                                 {
                                                                                                   "index": "s_q3"
@@ -24061,7 +24124,10 @@
                                                                       "ref": "s_nch"
                                                                     },
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     }
                                                                   ]
                                                                 }
@@ -24086,7 +24152,10 @@
                                                                                       "ref": "s_nch"
                                                                                     },
                                                                                     {
-                                                                                      "ref": "s_h2"
+                                                                                      "run": {
+                                                                                        "array": "s_h2",
+                                                                                        "from": 0
+                                                                                      }
                                                                                     }
                                                                                   ]
                                                                                 },
@@ -24117,7 +24186,10 @@
                                                                                             {
                                                                                               "add": [
                                                                                                 {
-                                                                                                  "ref": "s_h2"
+                                                                                                  "run": {
+                                                                                                    "array": "s_h2",
+                                                                                                    "from": 0
+                                                                                                  }
                                                                                                 },
                                                                                                 {
                                                                                                   "index": "s_q4"
@@ -24420,8 +24492,7 @@
                                                         },
                                                         {
                                                           "touch": {
-                                                            "cache": "lm",
-                                                            "tier": "g3",
+                                                            "cache": "g3",
                                                             "keys": {
                                                               "index": "j",
                                                               "count": {
@@ -24450,8 +24521,7 @@
                                                         },
                                                         {
                                                           "touch": {
-                                                            "cache": "lm",
-                                                            "tier": "g4",
+                                                            "cache": "g4",
                                                             "keys": {
                                                               "index": "j",
                                                               "count": {
@@ -24483,8 +24553,7 @@
                                                   },
                                                   {
                                                     "store": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
+                                                      "cache": "g2",
                                                       "keys": {
                                                         "index": "j",
                                                         "from": {
@@ -24629,8 +24698,7 @@
                                                   },
                                                   {
                                                     "store": {
-                                                      "cache": "lm",
-                                                      "tier": "g3",
+                                                      "cache": "g3",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -24831,8 +24899,7 @@
                                                   },
                                                   {
                                                     "store": {
-                                                      "cache": "lm",
-                                                      "tier": "g4",
+                                                      "cache": "g4",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -24995,8 +25062,7 @@
                                                   },
                                                   {
                                                     "touch": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
+                                                      "cache": "g2",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -31777,8 +31843,7 @@
                                                   },
                                                   {
                                                     "store": {
-                                                      "cache": "gpu",
-                                                      "tier": "g1",
+                                                      "cache": "g1",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -31826,9 +31891,8 @@
                                                     }
                                                   },
                                                   {
-                                                    "probe": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
+                                                    "holds": {
+                                                      "cache": "g2",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -31862,14 +31926,16 @@
                                                   },
                                                   {
                                                     "holds": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
+                                                      "cache": "g2",
                                                       "keys": {
                                                         "index": "j",
                                                         "from": {
                                                           "min": [
                                                             {
-                                                              "ref": "s_h2"
+                                                              "run": {
+                                                                "array": "s_h2",
+                                                                "from": 0
+                                                              }
                                                             },
                                                             {
                                                               "div": [
@@ -31905,7 +31971,10 @@
                                                                 {
                                                                   "min": [
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     },
                                                                     {
                                                                       "div": [
@@ -31944,14 +32013,16 @@
                                                   },
                                                   {
                                                     "holds": {
-                                                      "cache": "lm",
-                                                      "tier": "g3",
+                                                      "cache": "g3",
                                                       "keys": {
                                                         "index": "j",
                                                         "from": {
                                                           "min": [
                                                             {
-                                                              "ref": "s_h2"
+                                                              "run": {
+                                                                "array": "s_h2",
+                                                                "from": 0
+                                                              }
                                                             },
                                                             {
                                                               "div": [
@@ -31987,7 +32058,10 @@
                                                                 {
                                                                   "min": [
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     },
                                                                     {
                                                                       "div": [
@@ -32026,14 +32100,16 @@
                                                   },
                                                   {
                                                     "holds": {
-                                                      "cache": "lm",
-                                                      "tier": "g4",
+                                                      "cache": "g4",
                                                       "keys": {
                                                         "index": "j",
                                                         "from": {
                                                           "min": [
                                                             {
-                                                              "ref": "s_h2"
+                                                              "run": {
+                                                                "array": "s_h2",
+                                                                "from": 0
+                                                              }
                                                             },
                                                             {
                                                               "div": [
@@ -32069,7 +32145,10 @@
                                                                 {
                                                                   "min": [
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     },
                                                                     {
                                                                       "div": [
@@ -32124,7 +32203,10 @@
                                                         "run": {
                                                           "array": "s_any",
                                                           "from": {
-                                                            "ref": "s_h2"
+                                                            "run": {
+                                                              "array": "s_h2",
+                                                              "from": 0
+                                                            }
                                                           }
                                                         }
                                                       }
@@ -32160,7 +32242,10 @@
                                                           "bound": {
                                                             "add": [
                                                               {
-                                                                "ref": "s_h2"
+                                                                "run": {
+                                                                  "array": "s_h2",
+                                                                  "from": 0
+                                                                }
                                                               },
                                                               {
                                                                 "ref": "s_h3"
@@ -32180,7 +32265,10 @@
                                                           "bound": {
                                                             "add": [
                                                               {
-                                                                "ref": "s_h2"
+                                                                "run": {
+                                                                  "array": "s_h2",
+                                                                  "from": 0
+                                                                }
                                                               },
                                                               {
                                                                 "ref": "s_h3"
@@ -32192,10 +32280,11 @@
                                                     }
                                                   },
                                                   {
-                                                    "used": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
-                                                      "bind": "s_u2"
+                                                    "let": {
+                                                      "name": "s_u2",
+                                                      "value": {
+                                                        "used": "g2"
+                                                      }
                                                     }
                                                   },
                                                   {
@@ -32240,7 +32329,10 @@
                                                       "value": {
                                                         "add": [
                                                           {
-                                                            "ref": "s_h2"
+                                                            "run": {
+                                                              "array": "s_h2",
+                                                              "from": 0
+                                                            }
                                                           },
                                                           {
                                                             "cond": {
@@ -32275,7 +32367,10 @@
                                                                       "ref": "s_nch"
                                                                     },
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     }
                                                                   ]
                                                                 }
@@ -32300,7 +32395,10 @@
                                                                                       "ref": "s_nch"
                                                                                     },
                                                                                     {
-                                                                                      "ref": "s_h2"
+                                                                                      "run": {
+                                                                                        "array": "s_h2",
+                                                                                        "from": 0
+                                                                                      }
                                                                                     }
                                                                                   ]
                                                                                 },
@@ -32331,7 +32429,10 @@
                                                                                             {
                                                                                               "add": [
                                                                                                 {
-                                                                                                  "ref": "s_h2"
+                                                                                                  "run": {
+                                                                                                    "array": "s_h2",
+                                                                                                    "from": 0
+                                                                                                  }
                                                                                                 },
                                                                                                 {
                                                                                                   "index": "s_q3"
@@ -32387,7 +32488,10 @@
                                                                       "ref": "s_nch"
                                                                     },
                                                                     {
-                                                                      "ref": "s_h2"
+                                                                      "run": {
+                                                                        "array": "s_h2",
+                                                                        "from": 0
+                                                                      }
                                                                     }
                                                                   ]
                                                                 }
@@ -32412,7 +32516,10 @@
                                                                                       "ref": "s_nch"
                                                                                     },
                                                                                     {
-                                                                                      "ref": "s_h2"
+                                                                                      "run": {
+                                                                                        "array": "s_h2",
+                                                                                        "from": 0
+                                                                                      }
                                                                                     }
                                                                                   ]
                                                                                 },
@@ -32443,7 +32550,10 @@
                                                                                             {
                                                                                               "add": [
                                                                                                 {
-                                                                                                  "ref": "s_h2"
+                                                                                                  "run": {
+                                                                                                    "array": "s_h2",
+                                                                                                    "from": 0
+                                                                                                  }
                                                                                                 },
                                                                                                 {
                                                                                                   "index": "s_q4"
@@ -32746,8 +32856,7 @@
                                                         },
                                                         {
                                                           "touch": {
-                                                            "cache": "lm",
-                                                            "tier": "g3",
+                                                            "cache": "g3",
                                                             "keys": {
                                                               "index": "j",
                                                               "count": {
@@ -32776,8 +32885,7 @@
                                                         },
                                                         {
                                                           "touch": {
-                                                            "cache": "lm",
-                                                            "tier": "g4",
+                                                            "cache": "g4",
                                                             "keys": {
                                                               "index": "j",
                                                               "count": {
@@ -32809,8 +32917,7 @@
                                                   },
                                                   {
                                                     "store": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
+                                                      "cache": "g2",
                                                       "keys": {
                                                         "index": "j",
                                                         "from": {
@@ -32955,8 +33062,7 @@
                                                   },
                                                   {
                                                     "store": {
-                                                      "cache": "lm",
-                                                      "tier": "g3",
+                                                      "cache": "g3",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -33157,8 +33263,7 @@
                                                   },
                                                   {
                                                     "store": {
-                                                      "cache": "lm",
-                                                      "tier": "g4",
+                                                      "cache": "g4",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -33321,8 +33426,7 @@
                                                   },
                                                   {
                                                     "touch": {
-                                                      "cache": "lm",
-                                                      "tier": "g2",
+                                                      "cache": "g2",
                                                       "keys": {
                                                         "index": "j",
                                                         "count": {
@@ -33414,12 +33518,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk_tiered.py",
-      "sha256": "8749be3c275cf76fa874831bcd913ee04fd36c608d9fe41d4bc537500672336e",
+      "sha256": "01f7f993d9e5d58f4458a98c01e07ab7ffc626b4e8157d4d18e284dfd82447d6",
       "builder_version": "0.4.0",
-      "git": "7e40cdec5192-dirty"
+      "git": "a4f623f99345-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "df0d62b5b5ebb83685dc8b47e1b494d42f65664d5917c2d25ae3f9beffcfd585"
+    "ast_sha256": "17fa4f5703becb1ad75f6b779978954b5f4cd5c9a9d66e228ba4c19e6382e65c"
   }
 }

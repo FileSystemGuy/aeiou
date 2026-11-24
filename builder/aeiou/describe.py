@@ -32,13 +32,13 @@ from .pattern import Pattern
 OPS = ("open", "close", "read", "write", "lseek", "ioctl", "fadvise", "fstat", "stat", "fsync", "fdatasync",
        "unlink", "truncate", "ftruncate", "fallocate", "mkdir", "rmdir", "rename", "readdir")
 STATEMENTS = ("let", "loop", "parallel", "channel", "put", "take", "loader", "barrier", "compute", "cond",
-              "phase", "trace", "timeline", "publish", "array", "acquire", "release", "probe", "used", "holds",
+              "phase", "trace", "timeline", "publish", "array", "acquire", "release", "holds",
               "set", "touch", "store", "submit", "span") + OPS
 DISTS = ("const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture")
 EXPRS = ("param", "index", "ref", "at", "actor", "draw", "elem", "len", "run", "below", "sum", "size", "offset", "unit_index", "units",
          "chunks", "count", "dirs", "add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "neg", "eq", "ne", "lt",
          "le", "gt", "ge", "and", "or", "not", "cond", "published", "entry", "prev", "fresh", "shared", "prefix", "cat",
-         "seq_len", "chunk_key", "now", "cached", "tier", "victim")
+         "seq_len", "chunk_key", "now", "cached", "used", "entries", "victim")
 HANDLES = ("ref", "file", "dir", "object", "inventory", "consume", "pick", "unit", "column")
 
 # The measured attributes in a few words each (the dictionary has their meanings in full).
@@ -321,8 +321,8 @@ class Describer:
             return "now"
         if k == "cached":
             return f"cached.{a}"
-        if k == "tier":
-            return f"tier.{a}"
+        if k in ("used", "entries"):
+            return f"{a}.{k}"
         if k == "victim":
             return "victim"
         if k == "chunk_key":
@@ -637,8 +637,8 @@ class Describer:
             out += self.statement(node, depth)
         return out
 
-    def tier(self, t: dict) -> str:
-        """A tier in words (contract 0.18)."""
+    def cache(self, t: dict) -> str:
+        """A cache in words (contract 0.18; one layer since 0.29)."""
         unit = t.get("unit", "entries")
         if "capacity" in t:
             cap = self.value(t["capacity"], "bytes") if unit == "bytes" else f"{self.bare(t['capacity'], 'count')} entries"
@@ -658,7 +658,7 @@ class Describer:
         full = {"skip": "", "wait": "; a store that finds no room waits for a release", "fail": "; a store that finds no room fails"}[t.get("full", "skip")]
         if "evict" in t and t.get("full", "skip") == "skip":
             full = "; a store past it is dropped"
-        return f"tier `{t['name']}`, {keep}{full}"
+        return f"cache `{t['name']}`, {keep}{full}"
 
     def statement(self, node: dict, depth: int) -> list[str]:
         k, a = _only(node)
@@ -672,20 +672,17 @@ class Describer:
             end = "joined at the end" if a.get("join", True) else "not joined: the lane goes on at once"
             return [pad + f"{w} in parallel, `{a['index']}` = 0 onward, {end}:"] + self.body(a["body"], depth + 1)
         if k == "timeline":
-            caches = "".join(
-                f" Its cache `{c['name']}`: " + "; ".join(self.tier(t) for t in c["tiers"]) + "."
-                for c in a.get("caches", []))
+            caches = (" Its caches: " + "; ".join(self.cache(t) for t in a["caches"]) + ".") if a.get("caches") else ""
             res = "".join(f" Its resource `{r['name']}` of {self.value(r['capacity'], 'count')} units." for r in a.get("resources", []))
             res += "".join(f" Its workers `{w['name']}`: {self.value(w['lanes'], 'count')} worker lanes, staging "
                            f"{self.value(w['staging'], 'bytes')}." for w in a.get("workers", []))
             out = [pad + f"A timeline `{a['name']}`: its lanes, this one and every parallel sub-actor in it, "
                    "planned together and taken in planned order." + caches + res]
-            for c in a.get("caches", []):
-                for t in c["tiers"]:
-                    if "on_evict" in t:
-                        out.append("  " * (depth + 1) + f"- Each victim of tier `{t['name']}`, on "
-                                   f"{self.value(t['on_evict']['lanes'], 'count')} eviction lanes at its eviction's planned time:")
-                        out += self.body(t["on_evict"]["body"], depth + 2)
+            for t in a.get("caches", []):
+                if "on_evict" in t:
+                    out.append("  " * (depth + 1) + f"- Each victim of cache `{t['name']}`, on "
+                               f"{self.value(t['on_evict']['lanes'], 'count')} eviction lanes at its eviction's planned time:")
+                    out += self.body(t["on_evict"]["body"], depth + 2)
             self._in_timeline = True
             try:
                 return out + self.body(a["body"], depth + 1)
@@ -694,33 +691,22 @@ class Describer:
         if k == "holds":
             ks = a["keys"]
             return [pad + f"`{a['bind']}` is the indices, of the {self.value(ks['count'], 'count')} keys `{self.sym(ks['key'])}`, `{ks['index']}` from "
-                    f"`{self.sym(ks.get('from', 0))}`, whose keys tier `{a['tier']}` of cache `{a['cache']}` holds now, every one, ascending; nothing changed."]
+                    f"`{self.sym(ks.get('from', 0))}`, whose keys cache `{a['cache']}` holds now, every one, ascending; nothing changed."]
         if k == "set":
             of = [f"`{x}`" for x in a["of"]]
             what = {"union": f"any of {', '.join(of)} holds", "intersect": f"all of {', '.join(of)} hold",
                     "minus": f"of {of[0]} that none of {', '.join(of[1:])} holds"}[a["op"]]
             return [pad + f"`{a['bind']}` is the indices {what}, ascending."]
-        if k == "used":
-            return [pad + f"`{a['bind']}` is what tier `{a['tier']}` of cache `{a['cache']}` holds now, in the tier's unit; nothing changed."]
-        if k in ("probe", "touch", "store"):
+        if k in ("touch", "store"):
             ks = a["keys"]
             rng = (f"the {self.value(ks['count'], 'count')} keys `{self.sym(ks['key'])}`, `{ks['index']}` from "
                    f"`{self.sym(ks.get('from', 0))}`,")
-            if k == "probe" and "tiers" in a:
-                names = ", ".join(f"`{t}`" for t in a["tiers"])
-                held = ("; " + ", ".join(f"`{h}` is the indices of those `{t}` serves" for h, t in zip(a["held"], a["tiers"]))
-                        + ", a key going to the first of the tiers that holds it") if "held" in a else ""
-                return [pad + f"Probes {rng} in tiers {names} of cache `{a['cache']}` together: `{a['bind']}` is the leading ones "
-                              f"some tier of them holds, nothing changed{held}."]
-            where = f"in tier `{a['tier']}` of cache `{a['cache']}`"
-            if k == "probe":
-                return [pad + f"Probes {rng} {where}: `{a['bind']}` is the leading ones held, nothing changed."]
+            where = f"in cache `{a['cache']}`"
             if k == "touch":
                 return [pad + f"Touches those of {rng} that are held {where}, as one event."]
-            tail = {"keep": "those it lacks, as one event", "renew": "those it lacks and those held stored again, as one event",
+            tail = {"keep": "those it lacks, as one event",
                     "touch": "those it lacks, those held touched first, as one event"}[a.get("present", "keep")]
             tail += "".join(f"; `{a[k]}` is " + t for k, t in (("found", "the leading ones held before it"),
-                                                               ("bind", "the leading ones held after it"),
                                                                ("taken", "the indices it stored")) if k in a) + "."
             if "hold" in a:
                 tail += f" The lane holds them under `{a['hold']}` until it releases it, so none is evicted meanwhile."
@@ -942,7 +928,7 @@ class Describer:
         if k == "timeline":
             inner = self.gist(a["body"])
             return f"lanes planned together: {inner}" if inner else ""
-        return ""                                       # a channel's declaration, a publish, an array, a probe, touch, or store
+        return ""                                       # a channel's declaration, a publish, an array, a holds, touch, or store
 
     def handle_gist(self, h, pending: str | None = None) -> str:
         """A handle in a few words; `pending` is the one the last binding named, no op between."""

@@ -313,14 +313,14 @@ struct Res {
     used: i64,
 }
 
-/// What a lane waits on: a tier, by cache and tier, or a resource, as ("", name) (a cache's
-/// name is an identifier, never empty).
+/// What a lane waits on: a cache, as (name, ""), or a resource, as ("", name) (a name is an
+/// identifier, never empty). Until contract 0.29 the first was a cache and one of its tiers.
 type Waitable<'a> = (&'a str, &'a str);
 
 /// What a lane holds under a name (contract 0.18): a tier's entries, or a resource's units.
 #[derive(Clone)]
 enum Hold<'a> {
-    Tier { cache: &'a str, tier: &'a str, keys: Vec<i64> },
+    Tier { cache: &'a str, keys: Vec<i64> },
     Resource { name: &'a str, n: i64 },
 }
 
@@ -610,8 +610,8 @@ struct TlShared<'a> {
     name: &'a str,
     /// By group (contract 0.17; 0 when a `publish` gives none), each group's in planned order.
     entries: HashMap<i64, Vec<(i64, Vec<(&'a str, Value<'a>)>)>>,
-    /// Its caches' tiers, by cache and tier name (contract 0.16).
-    tiers: HashMap<(&'a str, &'a str), Tier<'a>>,
+    /// Its caches, each by (name, "") (contract 0.16; one layer each since 0.29).
+    tiers: HashMap<Waitable<'a>, Tier<'a>>,
     /// Its resources, by name (contract 0.18).
     resources: HashMap<&'a str, Res>,
     /// The lanes waiting on each tier or resource, first come first.
@@ -729,19 +729,19 @@ impl<'m, 'a> TlRun<'m, 'a> {
             };
             let (w, e) = &mut self.evict[i];
             let w = *w;
-            let (rule, every, at) = e.timed.expect("a tick is a timed tier's");
+            let (rule, every, at) = e.timed.expect("a tick is a timed cache's");
             e.timed = Some((rule, every, at.checked_add(every).ok_or_else(|| anyhow!("a planned time past 2^63-1 ns"))?));
             let mut g = self.shared.lock().unwrap();
             let name = g.name;
-            let t = g.tiers.get_mut(&w).expect("a timed tier is declared");
+            let t = g.tiers.get_mut(&w).expect("a timed cache is declared");
             let state = [t.used, t.entries.len() as i64];
-            let ev = self.eval.as_mut().expect("a timeline with a timed tier has its evaluator");
-            ev.tier_state = Some(state);
+            let ev = self.eval.as_mut().expect("a timeline with a timed cache has its evaluator");
+            ev.tier_state = Some((w.0, state));
             let r = (|| -> ER<(bool, i64)> { Ok((ev.expr(&rule.when)?.as_bool()?, ev.expr(&rule.count)?.as_int()?)) })();
             ev.tier_state = None;
             let (go, count) = r.map_err(|e| match e {
-                EvalError::Other(e) => e.context(format!("timeline `{}`: tier `{}` of cache `{}`: its `evict` at {at} ns", name, w.1, w.0)),
-                EvalError::BelowFrom => anyhow!("timeline `{}`: tier `{}` of cache `{}`: its `evict` at {at} ns", name, w.1, w.0),
+                EvalError::Other(e) => e.context(format!("timeline `{}`: cache `{}`: its `evict` at {at} ns", name, w.0)),
+                EvalError::BelowFrom => anyhow!("timeline `{}`: cache `{}`: its `evict` at {at} ns", name, w.0),
             })?;
             if !go || count <= 0 {
                 continue;
@@ -749,7 +749,7 @@ impl<'m, 'a> TlRun<'m, 'a> {
             let mut gone = Vec::new();
             while (gone.len() as i64) < count {
                 let Some((_, k)) = t.victims.pop_first() else { break };
-                let v = t.entries.remove(&k).expect("a victim is held in the tier");
+                let v = t.entries.remove(&k).expect("a victim is held in the cache");
                 t.used -= v.size;
                 t.unheld -= v.size;
                 gone.push(k);
@@ -824,8 +824,9 @@ pub struct Vm<'m, 'a> {
     key_memo: Vec<(Arc<Seq>, i64, Arc<Vec<u64>>)>,
     /// While a tier's `order` is computed: the entry's values `cached` reads.
     cached: Option<[i64; 6]>,
-    /// While a timed tier's `when` and `count` are computed: what `tier` reads (contract 0.19).
-    tier_state: Option<[i64; 2]>,
+    /// While a timed cache's `when` and `count` are computed: the cache, and what `used` and
+    /// `entries` read of it at the tick (contract 0.19; by those names since 0.29).
+    tier_state: Option<(&'a str, [i64; 2])>,
     /// In an eviction lane: its victim's key, which `victim` reads (contract 0.19).
     victim: Option<i64>,
     /// Where its timelines note what they do to their lanes (`note_lanes`).
@@ -1090,7 +1091,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     None => {
                         let g = run.shared.lock().unwrap();
                         if let Some(((c, t), _)) = g.waiters.iter().filter(|(_, q)| !q.is_empty()).min_by_key(|(w, _)| **w) {
-                            let what = if c.is_empty() { format!("resource `{t}`") } else { format!("tier `{t}` of cache `{c}`") };
+                            let what = if c.is_empty() { format!("resource `{t}`") } else { format!("cache `{c}`") };
                             bail!("timeline `{}`: lanes wait on {what}, and no lane that could release it is left (V34)", g.name);
                         }
                         return Ok(None);
@@ -1438,15 +1439,30 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             }
             ExprNode::Cached(a) => match self.cached {
                 Some(v) => Value::Int(v[*a as usize]),
-                None => return other(format!("cached `{}`: outside a tier's `order` (V33)", a.name())),
+                None => return other(format!("cached `{}`: outside a cache's `order` (V33)", a.name())),
             },
-            ExprNode::Tier(a) => match self.tier_state {
-                Some(v) => Value::Int(v[*a as usize]),
-                None => return other(format!("tier `{}`: outside a tier's `evict` (V33)", a.name())),
-            },
+            ExprNode::Used(c) | ExprNode::Entries(c) => {
+                let (what, i) = if matches!(node, ExprNode::Used(_)) { ("used", 0) } else { ("entries", 1) };
+                match (self.tier_state, &self.tl) {
+                    (Some((own, v)), _) if own == c.as_str() => Value::Int(v[i]),
+                    (Some((own, _)), _) => return other(format!("{what}: cache `{c}` in the `evict` of cache `{own}`, which reads its own alone (V33)")),
+                    (None, Some(tl)) => {
+                        // never under the timeline's lock: the validator keeps these out of an
+                        // `order` and a rule, which alone are evaluated while it is held
+                        let Ok(g) = tl.try_lock() else {
+                            return other(format!("{what}: cache `{c}` read while the timeline's state is being changed (V33)"));
+                        };
+                        match g.tiers.get(&(c.as_str(), "")) {
+                            Some(t) => Value::Int(if i == 0 { t.used } else { t.entries.len() as i64 }),
+                            None => return other(format!("{what}: no timeline declares cache `{c}` around it (V33)")),
+                        }
+                    }
+                    (None, None) => return other(format!("{what}: no timeline declares cache `{c}` around it (V33)")),
+                }
+            }
             ExprNode::Victim(_) => match self.victim {
                 Some(k) => Value::Int(k),
-                None => return other("victim: outside a tier's `on_evict` body (V35)"),
+                None => return other("victim: outside a cache's `on_evict` body (V35)"),
             },
             ExprNode::Published(arg) => {
                 self.positional_only("published")?;
@@ -1692,7 +1708,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             let Some((_, victim)) = t.victims.pop_first() else {
                 return false;
             };
-            let v = t.entries.remove(&victim).expect("a victim is held in the tier");
+            let v = t.entries.remove(&victim).expect("a victim is held in the cache");
             t.used -= v.size;
             t.unheld -= v.size;
             gone.push(victim);
@@ -2529,58 +2545,56 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 let mut tiers = HashMap::new();
                 let mut evict = Vec::new();
                 let mut idx = 0i64;
-                for c in caches {
-                    for t in &c.tiers {
-                        let capacity = match &t.capacity {
-                            Some(e) => {
-                                let n = self.expr(e)?.as_int()?;
-                                if n < 0 {
-                                    return other(format!("tier `{}` of cache `{}`: capacity {n}", t.name, c.name));
-                                }
-                                Some(n)
+                for t in caches {
+                    let capacity = match &t.capacity {
+                        Some(e) => {
+                            let n = self.expr(e)?.as_int()?;
+                            if n < 0 {
+                                return other(format!("cache `{}`: capacity {n}", t.name));
                             }
-                            None => None,
-                        };
-                        let timed = match &t.evict {
-                            Some(ev) => {
-                                let every = self.expr(&ev.every)?.as_int()?;
-                                if every <= 0 {
-                                    return other(format!("tier `{}` of cache `{}`: evict every {every} ns, not positive", t.name, c.name));
-                                }
-                                Some((ev, every, every))
-                            }
-                            None => None,
-                        };
-                        let body = match &t.on_evict {
-                            Some(oe) => {
-                                let lanes = self.expr(&oe.lanes)?.as_int()?;
-                                if lanes <= 0 {
-                                    return other(format!("tier `{}` of cache `{}`: on_evict lanes {lanes}, not positive", t.name, c.name));
-                                }
-                                let snap = Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &self.frames, &self.scopes, &self.phases, &self.open, &self.written, &oe.body);
-                                Some((snap, lanes))
-                            }
-                            None => None,
-                        };
-                        if timed.is_some() || body.is_some() {
-                            evict.push(((c.name.as_str(), t.name.as_str()), EvictLanes { idx, timed, body, batches: 0 }));
+                            Some(n)
                         }
-                        idx += 1;
-                        let tier = Tier {
-                            capacity,
-                            bytes: t.unit == TierUnit::Bytes,
-                            full: t.full,
-                            order: t.order.as_deref(),
-                            timed: t.evict.is_some(),
-                            on_evict: t.on_evict.is_some(),
-                            used: 0,
-                            unheld: 0,
-                            stamp: 0,
-                            entries: HashMap::new(),
-                            victims: Default::default(),
-                        };
-                        tiers.insert((c.name.as_str(), t.name.as_str()), tier);
+                        None => None,
+                    };
+                    let timed = match &t.evict {
+                        Some(ev) => {
+                            let every = self.expr(&ev.every)?.as_int()?;
+                            if every <= 0 {
+                                return other(format!("cache `{}`: evict every {every} ns, not positive", t.name));
+                            }
+                            Some((ev, every, every))
+                        }
+                        None => None,
+                    };
+                    let body = match &t.on_evict {
+                        Some(oe) => {
+                            let lanes = self.expr(&oe.lanes)?.as_int()?;
+                            if lanes <= 0 {
+                                return other(format!("cache `{}`: on_evict lanes {lanes}, not positive", t.name));
+                            }
+                            let snap = Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &self.frames, &self.scopes, &self.phases, &self.open, &self.written, &oe.body);
+                            Some((snap, lanes))
+                        }
+                        None => None,
+                    };
+                    if timed.is_some() || body.is_some() {
+                        evict.push(((t.name.as_str(), ""), EvictLanes { idx, timed, body, batches: 0 }));
                     }
+                    idx += 1;
+                    let tier = Tier {
+                        capacity,
+                        bytes: t.unit == CacheUnit::Bytes,
+                        full: t.full,
+                        order: t.order.as_deref(),
+                        timed: t.evict.is_some(),
+                        on_evict: t.on_evict.is_some(),
+                        used: 0,
+                        unheld: 0,
+                        stamp: 0,
+                        entries: HashMap::new(),
+                        victims: Default::default(),
+                    };
+                    tiers.insert((t.name.as_str(), ""), tier);
                 }
                 let mut res = HashMap::new();
                 for r in resources {
@@ -2623,42 +2637,12 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 tl.lock().unwrap().entries.entry(group).or_default().push((self.clock, got));
                 Ok(None)
             }
-            Node::Probe { cache, tier, tiers, keys, bind, held } => {
-                let ks = self.keys(keys, "probe")?;
-                let tl = self.cache_of(cache, "probe")?;
-                let g = tl.lock().unwrap();
-                // one tier, or several (contract 0.25): the run of the keys some tier holds,
-                // each key the first listed tier's that holds it
-                let mut over = Vec::new();
-                for tier in tiers.iter().flatten().chain(tier) {
-                    let Some(t) = g.tiers.get(&(cache.as_str(), tier.as_str())) else {
-                        return other(format!("probe: cache `{cache}` has no tier `{tier}` (V33)"));
-                    };
-                    over.push(t);
-                }
-                let mut serves: Vec<Vec<Value>> = vec![Vec::new(); if held.is_some() { over.len() } else { 0 }];
-                let mut hit = 0;
-                for (k, pos) in &ks {
-                    let Some(i) = over.iter().position(|t| t.entries.contains_key(k)) else { break };
-                    if let Some(s) = serves.get_mut(i) {
-                        s.push(Value::Int(*pos));
-                    }
-                    hit += 1;
-                }
-                drop(g);
-                let level = self.scopes.last_mut().unwrap();
-                level.bindings.insert(bind.as_str(), Binding { value: Value::Int(hit as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
-                for (a, s) in held.iter().flatten().zip(serves) {
-                    level.arrays.insert(a.as_str(), Arc::from(s));
-                }
-                Ok(None)
-            }
-            Node::Holds { cache, tier, keys, bind } => {
+            Node::Holds { cache, keys, bind } => {
                 let ks = self.keys(keys, "holds")?;
                 let tl = self.cache_of(cache, "holds")?;
                 let g = tl.lock().unwrap();
-                let Some(t) = g.tiers.get(&(cache.as_str(), tier.as_str())) else {
-                    return other(format!("holds: cache `{cache}` has no tier `{tier}` (V33)"));
+                let Some(t) = g.tiers.get(&(cache.as_str(), "")) else {
+                    return other(format!("holds: no timeline declares cache `{cache}` around it (V33)"));
                 };
                 // the range's indices ascend, so the array does
                 let held: Vec<Value> = ks.iter().filter(|(k, _)| t.entries.contains_key(k)).map(|(_, pos)| Value::Int(*pos)).collect();
@@ -2688,22 +2672,12 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 self.scopes.last_mut().unwrap().arrays.insert(bind.as_str(), got.into_iter().map(Value::Int).collect::<Vec<_>>().into());
                 Ok(None)
             }
-            Node::Used { cache, tier, bind } => {
-                let tl = self.cache_of(cache, "used")?;
-                let used = match tl.lock().unwrap().tiers.get(&(cache.as_str(), tier.as_str())) {
-                    Some(t) => t.used,
-                    None => return other(format!("used: cache `{cache}` has no tier `{tier}` (V33)")),
-                };
-                let level = self.scopes.last_mut().unwrap();
-                level.bindings.insert(bind.as_str(), Binding { value: Value::Int(used), body: level.body, def: &LOOKUP_DEF, walked: true });
-                Ok(None)
-            }
-            Node::Touch { cache, tier, keys } => {
+            Node::Touch { cache, keys } => {
                 let ks = self.keys(keys, "touch")?;
                 let tl = self.cache_of(cache, "touch")?;
                 let mut guard = tl.lock().unwrap();
-                let Some(t) = guard.tiers.get_mut(&(cache.as_str(), tier.as_str())) else {
-                    return other(format!("touch: cache `{cache}` has no tier `{tier}` (V33)"));
+                let Some(t) = guard.tiers.get_mut(&(cache.as_str(), "")) else {
+                    return other(format!("touch: no timeline declares cache `{cache}` around it (V33)"));
                 };
                 // one event for the statement: `pos` orders the keys it touches
                 t.stamp += 1;
@@ -2728,7 +2702,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 Ok(None)
             }
-            Node::Store { cache, tier, keys, size, present, hold, found, bind, taken } => {
+            Node::Store { cache, keys, size, present, hold, found, taken } => {
                 let ks = self.keys(keys, "store")?;
                 let size = match size {
                     Some(e) => self.expr(e)?.as_int()?,
@@ -2740,9 +2714,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 let mut guard = tl.lock().unwrap();
                 let g = &mut *guard;
-                let w: Waitable<'a> = (cache.as_str(), tier.as_str());
+                let w: Waitable<'a> = (cache.as_str(), "");
                 let Some(t) = g.tiers.get_mut(&w) else {
-                    return other(format!("store: cache `{cache}` has no tier `{tier}` (V33)"));
+                    return other(format!("store: no timeline declares cache `{cache}` around it (V33)"));
                 };
                 let unit = if t.bytes { size } else { 1 };
                 // the keys once each, at the index each first comes at
@@ -2765,11 +2739,11 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         let free = cap - t.used + if t.order.is_some() && !t.timed { t.unheld - found_unheld } else { 0 };
                         let waiting = g.waiters.get(&w).is_some_and(|q| q.front().is_some_and(|&l| l != self.lane));
                         if need > cap {
-                            return other(format!("store: {need} of new entries in tier `{tier}` of cache `{cache}`, past its capacity {cap}, can never fit"));
+                            return other(format!("store: {need} of new entries in cache `{cache}`, past its capacity {cap}, can never fit"));
                         }
                         if need > free || (waiting && t.full == Full::Wait) {
                             if t.full == Full::Fail {
-                                return other(format!("store: tier `{tier}` of cache `{cache}` is full: {need} more past its capacity {cap} (full: fail)"));
+                                return other(format!("store: cache `{cache}` is full: {need} more past its capacity {cap} (full: fail)"));
                             }
                             let q = g.waiters.entry(w).or_default();
                             if !q.contains(&self.lane) {
@@ -2825,24 +2799,15 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     if touched.contains(&k) {
                         continue;
                     }
-                    if let Some(e) = t.entries.get(&k) {
-                        // renew: the held entry goes, without being a victim, and is stored new
-                        if *present != Present::Renew || e.holds > 0 {
-                            continue;
-                        }
-                        let e = t.entries.remove(&k).expect("held");
-                        if let Some(o) = e.ord {
-                            t.victims.remove(&o);
-                            t.unheld -= e.size;
-                        }
-                        t.used -= e.size;
+                    if t.entries.contains_key(&k) {
+                        continue;
                     }
                     if let Some(cap) = t.capacity {
                         if !Self::make_room(t, unit, cap, &mut gone) {
                             match (*present, t.full) {
                                 (Present::Touch, Full::Skip) => continue,
-                                (Present::Touch, _) => return other(format!("store: tier `{tier}` of cache `{cache}` found no room it had counted")),
-                                (_, Full::Fail) => return other(format!("store: tier `{tier}` of cache `{cache}` is full: past its capacity {cap} (full: fail)")),
+                                (Present::Touch, _) => return other(format!("store: cache `{cache}` found no room it had counted")),
+                                (_, Full::Fail) => return other(format!("store: cache `{cache}` is full: past its capacity {cap} (full: fail)")),
                                 _ => continue,
                             }
                         }
@@ -2861,19 +2826,16 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     t.entries.insert(k, e);
                     took.push(Value::Int(pos));
                 }
-                let after = if bind.is_some() { ks.iter().take_while(|(k, _)| t.entries.contains_key(k)).count() } else { 0 };
                 if t.on_evict && !gone.is_empty() {
                     g.evicted.push((w, self.clock, gone));
                 }
                 drop(guard);
                 if let Some(h) = hold {
-                    self.holds.push((h.as_str(), Hold::Tier { cache: cache.as_str(), tier: tier.as_str(), keys: held }));
+                    self.holds.push((h.as_str(), Hold::Tier { cache: cache.as_str(), keys: held }));
                 }
                 let level = self.scopes.last_mut().unwrap();
-                for (name, n) in [(found, before), (bind, after)] {
-                    if let Some(b) = name {
-                        level.bindings.insert(b.as_str(), Binding { value: Value::Int(n as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
-                    }
+                if let Some(b) = found {
+                    level.bindings.insert(b.as_str(), Binding { value: Value::Int(before as i64), body: level.body, def: &LOOKUP_DEF, walked: true });
                 }
                 if let Some(a) = taken {
                     level.arrays.insert(a.as_str(), Arc::from(took));
@@ -2929,8 +2891,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         g.resources.get_mut(name).expect("a held resource is declared").used -= n;
                         g.wake.push((("", name), self.clock));
                     }
-                    Hold::Tier { cache, tier, keys } => {
-                        let t = g.tiers.get_mut(&(cache, tier)).expect("a held tier is declared");
+                    Hold::Tier { cache, keys } => {
+                        let t = g.tiers.get_mut(&(cache, "")).expect("a held cache is declared");
                         t.stamp += 1;
                         let now = t.stamp;
                         for k in keys {
@@ -2946,7 +2908,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                                 }
                             }
                         }
-                        g.wake.push(((cache, tier), self.clock));
+                        g.wake.push(((cache, ""), self.clock));
                     }
                 }
                 Ok(None)
@@ -3550,7 +3512,7 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.23", "name": "t",
+                r#"{{"ast": "0.29", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#

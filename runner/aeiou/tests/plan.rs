@@ -9,7 +9,7 @@ use aeiou::vm::{actor_counts, op_hash, run_actor, Control, Op, OpCtx, Sink};
 use serde_json::{json, Value};
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.23", "name": "t",
+    json!({"ast": "0.29", "name": "t",
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 4096, "seed": 1}},
            "actors": {"gpu": {"count": 1, "body": body}}}).to_string()
@@ -206,7 +206,7 @@ fn submitted_bodies_share_the_workers_lanes() {
 /// `join` (contract 0.26) the mark names the lane whose span waits for it.
 #[test]
 fn a_joined_bodys_end_is_marked_after_its_ops() {
-    let ast = json!({"ast": "0.26", "name": "t",
+    let ast = json!({"ast": "0.29", "name": "t",
         "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "workers": [{"name": "w", "lanes": 2, "staging": 4096}], "body": [
             {"span": {"name": "s", "body": [{"submit": {"workers": "w", "join": true, "body": [stat(json!(1)), stat(json!(2))]}},
@@ -230,8 +230,8 @@ fn eviction_lanes_persist_across_batches() {
         "on_evict": {"lanes": 2, "body": [stat(json!({"mod": [{"victim": {}}, 1000]}))]},
         "evict": {"every": 100, "when": true, "count": 3}}]);
     let body = json!([{"let": {"name": "a", "value": {"shared": {"id": 1, "n": 6}}}},
-        {"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(6)))}}, compute(json!(250))]);
-    let ast = json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}], "body": body}}]);
+        {"store": {"cache": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(6)))}}, compute(json!(250))]);
+    let ast = json!([{"timeline": {"name": "tl", "caches": tiers, "body": body}}]);
     let recs = records(ast);
     assert_eq!(recs.len(), 6, "two batches of three");
     assert_eq!(recs.iter().map(|r| r.plan).collect::<Vec<_>>(), [100, 100, 100, 200, 200, 200]);
@@ -366,9 +366,9 @@ fn lane_events_come_before_the_ops_they_order() {
         {"parallel": {"index": "k", "width": 2, "body": [compute(json!({"mul": [{"index": "k"}, 10]})), stat(json!({"index": "k"}))]}},
         {"submit": {"workers": "w", "body": [stat(json!(5))]}},
         {"let": {"name": "a", "value": {"shared": {"id": 1, "n": 3}}}},
-        {"store": {"cache": "lm", "tier": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(3)))}},
+        {"store": {"cache": "t", "keys": crate::common::chunk_keys(r("a"), json!(1), json!(0), Some(json!(3)))}},
         {"span": {"name": "s", "body": [stat(json!(9))]}}]);
-    let p = planned(json!([{"timeline": {"name": "tl", "caches": [{"name": "lm", "tiers": tiers}],
+    let p = planned(json!([{"timeline": {"name": "tl", "caches": tiers,
         "workers": [{"name": "w", "lanes": 2, "staging": 4096}], "body": body}}]));
     let words: Vec<String> = p.iter().map(|x| match x {
         Planned::Op(r) => format!("op {} {}", r.lane, r.path),

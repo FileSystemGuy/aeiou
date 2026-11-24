@@ -29,83 +29,9 @@ FLOOR = VERSIONS[0]
 # An addition to the contract is a row here and in the runner's validate.rs, with the version
 # in the schema's list; a change that is not an addition (a removal, another meaning) raises
 # the floor to its version and empties the table, and every abstract is regenerated.
-def _span_outside_a_timeline(ast: dict) -> bool:
-    def walk(nodes):
-        for node in nodes:
-            kind, a = next(iter(node.items()))
-            if kind == "span":
-                return True
-            if kind in ("loop", "parallel", "loader", "phase") and walk(a["body"]):
-                return True
-            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
-                return True
-        return False
-    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
-
-
-def _probe_over_tiers(ast: dict) -> bool:
-    def walk(nodes):
-        for node in nodes:
-            kind, a = next(iter(node.items()))
-            if kind == "probe" and "tiers" in a:
-                return True
-            if kind in ("loop", "parallel", "loader", "phase", "timeline", "submit", "span") and walk(a["body"]):
-                return True
-            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
-                return True
-        return False
-    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
-
-
-def _tier_sets(ast: dict) -> bool:
-    def walk(nodes):
-        for node in nodes:
-            kind, a = next(iter(node.items()))
-            if kind in ("holds", "set"):
-                return True
-            if kind in ("loop", "parallel", "loader", "phase", "timeline", "submit", "span") and walk(a["body"]):
-                return True
-            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
-                return True
-        return False
-    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
-
-
-def _tier_used(ast: dict) -> bool:
-    def walk(nodes):
-        for node in nodes:
-            kind, a = next(iter(node.items()))
-            if kind == "used":
-                return True
-            if kind in ("loop", "parallel", "loader", "phase", "timeline", "submit", "span") and walk(a["body"]):
-                return True
-            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
-                return True
-        return False
-    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
-
-
-def _joined_submit(ast: dict) -> bool:
-    def walk(nodes):
-        for node in nodes:
-            kind, a = next(iter(node.items()))
-            if kind == "submit" and a.get("join"):
-                return True
-            if kind in ("loop", "parallel", "loader", "phase", "timeline", "span") and walk(a["body"]):
-                return True
-            if kind == "cond" and (walk(a["then"]) or walk(a.get("else", []))):
-                return True
-        return False
-    return any(walk(a["body"]) for a in ast.get("actors", {}).values())
-
-
-SINCE: list = [
-    ("0.24", "a `span` outside a timeline", _span_outside_a_timeline),
-    ("0.25", "a `probe` over several tiers", _probe_over_tiers),
-    ("0.26", "a `submit` its span waits for (`join`)", _joined_submit),
-    ("0.27", "a `used`, a tier's fill read by a lane", _tier_used),
-    ("0.28", "a `holds` or a `set`, what a tier holds of a key range as a set", _tier_sets),
-]
+# Empty since the floor rose to 0.29 (2026-11-23, brief item 82 stage 2): every row until then,
+# 0.24 to 0.28, is below it.
+SINCE: list = []
 
 
 def version_key(v: str):
@@ -136,7 +62,7 @@ def version_error(ast: dict):
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "phase", "trace", "timeline", "publish", "array",
-           "acquire", "release", "probe", "used", "holds", "set", "touch", "store", "submit", "span"}
+           "acquire", "release", "holds", "set", "touch", "store", "submit", "span"}
 # V30: what a timeline's lanes may not hold: they are planned, never waiting on one another
 NOT_IN_TIMELINE = {"loader", "channel", "put", "take", "barrier", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
@@ -380,10 +306,12 @@ def unpositional(v):
         return "V30"
     if k == "prev":
         return "V31"
+    if k in ("run", "below", "used", "entries"):
+        # what a cache holds as the step being walked sees it (contract 0.29: these stand where
+        # a `probe` and a `used` bound a name)
+        return "V33r"
     if k in ("at", "elem"):
         return unpositional(a["index"])
-    if k in ("run", "below"):
-        return unpositional(a["from" if k == "run" else "bound"])
     if k == "cond":
         return unpositional(a["if"]) or unpositional(a["then"]) or unpositional(a["else"])
     if k in ("add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "eq", "ne", "lt", "le",
@@ -422,28 +350,28 @@ def holds(nodes, out):
             holds(a.get("else", []), out)
 
 
-# V33: what a tier's `order` may read through: arithmetic, comparisons, logic, and `cond`
+# V33: what a cache's `order` may read through: arithmetic, comparisons, logic, and `cond`
 ORDER_THROUGH = {"add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "eq", "ne", "lt", "le",
                  "gt", "ge", "and", "or", "neg", "not"}
 
 
 def order_reads(e):
-    """V33: the first thing a tier's `order` reads that it may not (an order reads parameters,
+    """V33: the first thing a cache's `order` reads that it may not (an order reads parameters,
     literals, and `cached`), by its JSON key. As the runner's `order_reads`."""
     return plan_reads(e, "cached")
 
 
 def plan_reads(e, also):
-    """V33 (contract 0.19): what a tier's `order` (`also` "cached"), `evict` `when` and
-    `count` (`also` "tier"), or `evict` `every` and `on_evict` `lanes` (`also` None) reads
-    that it may not: parameters, literals, and `also`, through arithmetic, comparisons, logic,
-    and `cond`. As the runner's `plan_reads`."""
+    """V33 (contract 0.19): what a cache's `order` (`also` "cached"), `evict` `when` and
+    `count` (`also` "used": its own `used` and `entries`), or `evict` `every` and `on_evict`
+    `lanes` (`also` None) reads that it may not: parameters, literals, and `also`, through
+    arithmetic, comparisons, logic, and `cond`. As the runner's `plan_reads`."""
     if isinstance(e, list):
         return next((r for r in (plan_reads(x, also) for x in e) if r), None)
     if not isinstance(e, dict):
         return None
     k, a = next(iter(e.items()))
-    if k == "param" or (also is not None and k == also):
+    if k == "param" or (also is not None and k == also) or (also == "used" and k == "entries"):
         return None
     if k in ORDER_THROUGH:
         return plan_reads(a, also)
@@ -454,7 +382,7 @@ def plan_reads(e, also):
 
 # V35: what an `on_evict` body may not hold: anything that plans time, holds, or changes a cache
 # or a timeline (a body issues its victim's ops at its tick)
-EVICT_BANS = {"compute", "probe", "used", "holds", "touch", "store", "acquire", "release", "publish", "parallel",
+EVICT_BANS = {"compute", "holds", "touch", "store", "acquire", "release", "publish", "parallel",
               "loader", "channel", "put", "take", "barrier", "timeline", "trace", "submit", "span"}
 
 
@@ -475,7 +403,7 @@ def evict_bans(nodes, p, out):
 
 # V36: what a `span` may not hold: what moves the lane's planned clock or waits in planned time,
 # which D, a storage wait, must not include (a `submit`'s body is a worker's, not the span's); a
-# `store` of `present: touch` may wait for its tier (contract 0.23)
+# `store` of `present: touch` may wait for its cache (contract 0.23)
 SPAN_BANS = {"compute", "parallel", "acquire"}
 
 
@@ -556,12 +484,13 @@ class Check:
         self.drawing = set()
         # V30: the enclosing timeline's name and the keys its `publish`es give
         self.timeline = None
-        # V33: the enclosing timeline's caches, each tier with its unit
+        # V33: the enclosing timeline's caches, each with its unit and what it does when full
         self.caches = {}
-        # V33: checking a tier's `order`, where `cached` may be read
+        # V33: checking a cache's `order`, where `cached` may be read
         self.in_order = False
-        # V33: checking a tier's `evict` `when` and `count`, where `tier` may be read
-        self.in_evict = False
+        # V33: checking a cache's `evict` `when` and `count`, where `used` and `entries` read
+        # that cache at the tick (contract 0.29): its name
+        self.in_evict = None
         # V35: checking an `on_evict` body, where `victim` may be read
         self.in_on_evict = False
         # V35, V36 (contract 0.22): checking a body that only issues ops, an `on_evict`'s or a
@@ -902,7 +831,7 @@ class Check:
             kinds = {self.pkind(x) for x in v} if isinstance(v, list) else set()
             return kinds.pop() if len(kinds) == 1 else None
         if k in ("index", "actor", "count", "dirs", "len", "run", "below", "published", "size", "offset", "unit_index", "units", "chunks",
-                 "seq_len", "chunk_key", "now", "cached", "tier", "victim"):
+                 "seq_len", "chunk_key", "now", "cached", "used", "entries", "victim"):
             return "int"
         if k in ("fresh", "shared", "prefix", "cat"):
             return "seq"
@@ -1119,7 +1048,7 @@ class Check:
         if not isinstance(e, dict):
             return False
         k, a = next(iter(e.items()))
-        if k in ("index", "at", "published", "entry", "prev", "now", "cached", "tier", "victim"):
+        if k in ("index", "at", "published", "entry", "prev", "now", "cached", "used", "entries", "victim"):
             return True
         if k == "fresh":                     # new blocks at every position, as a draw
             return bool(scope.indices) or self.varies(a, scope)
@@ -1244,74 +1173,70 @@ class Check:
             return
         self.caches = {}
         on_evict = []
-        for i, c in enumerate(a.get("caches", [])):
-            cp = p + ["caches", i]
-            if c["name"] in self.caches:
-                self.err(cp, f"cache `{c['name']}` declared twice (V33)")
+        # declared to the timeline's body only once every one is checked: a capacity or an order
+        # reads no cache, and a rule its own alone
+        declared = {}
+        for i, t in enumerate(a.get("caches", [])):
+            tp = p + ["caches", i]
+            if t["name"] in declared:
+                self.err(tp, f"cache `{t['name']}` declared twice (V33)")
                 continue
-            if not c["tiers"]:
-                self.err(cp, f"cache `{c['name']}` has no tiers (V33)")
-            tiers = {}
-            for j, t in enumerate(c["tiers"]):
-                tp = cp + ["tiers", j]
-                if t["name"] in tiers:
-                    self.err(tp, f"tier `{t['name']}` declared twice in cache `{c['name']}` (V33)")
+            if "capacity" not in t:
+                if "order" in t:
+                    self.err(tp, f"cache `{t['name']}`: an `order` with no `capacity`, so nothing is ever evicted (V33)")
+                if t.get("full", "skip") != "skip":
+                    self.err(tp, f"cache `{t['name']}`: `full` `{t['full']}` with no `capacity`, so it is never full (V33)")
+            if t.get("order") == []:
+                self.err(tp + ["order"], f"cache `{t['name']}`: an empty `order` (V33)")
+            if "capacity" in t:
+                self.expr(t["capacity"], tp + ["capacity"], scope)
+                self.typed(t["capacity"], tp + ["capacity"], scope)
+            for o, e in enumerate(t.get("order", [])):
+                op = tp + ["order", o]
+                bad = order_reads(e)
+                if bad:
+                    self.err(op, f"cache `{t['name']}`: its `order` reads `{bad}`; an order reads only parameters, literals, and `cached` (V33)")
+                    continue
+                self.in_order = True
+                self.expr(e, op, scope)
+                self.in_order = False
+                self.typed(e, op, scope)
+            if "evict" in t:
+                ev, ep = t["evict"], tp + ["evict"]
                 if "capacity" not in t:
-                    if "order" in t:
-                        self.err(tp, f"tier `{t['name']}`: an `order` with no `capacity`, so nothing is ever evicted (V33)")
-                    if t.get("full", "skip") != "skip":
-                        self.err(tp, f"tier `{t['name']}`: `full` `{t['full']}` with no `capacity`, so it is never full (V33)")
-                if t.get("order") == []:
-                    self.err(tp + ["order"], f"tier `{t['name']}`: an empty `order` (V33)")
-                if "capacity" in t:
-                    self.expr(t["capacity"], tp + ["capacity"], scope)
-                    self.typed(t["capacity"], tp + ["capacity"], scope)
-                for o, e in enumerate(t.get("order", [])):
-                    op = tp + ["order", o]
-                    bad = order_reads(e)
+                    self.err(tp, f"cache `{t['name']}`: `evict` with no `capacity` (V33)")
+                if "order" not in t:
+                    self.err(tp, f"cache `{t['name']}`: `evict` with no `order`, so it has no victims (V33)")
+                if t.get("full") == "wait":
+                    self.err(tp, f"cache `{t['name']}`: `evict` with `full` `wait`; a timed cache's room comes at its ticks, not at a release (V33)")
+                for k, also in (("every", None), ("when", "used"), ("count", "used")):
+                    bad = plan_reads(ev[k], also)
                     if bad:
-                        self.err(op, f"tier `{t['name']}`: its `order` reads `{bad}`; an order reads only parameters, literals, and `cached` (V33)")
+                        what = "parameters, literals, and its own `used` and `entries`" if also else "parameters and literals"
+                        self.err(ep + [k], f"cache `{t['name']}`: its `evict` `{k}` reads `{bad}`; it reads only {what} (V33)")
                         continue
-                    self.in_order = True
-                    self.expr(e, op, scope)
-                    self.in_order = False
-                    self.typed(e, op, scope)
-                if "evict" in t:
-                    ev, ep = t["evict"], tp + ["evict"]
-                    if "capacity" not in t:
-                        self.err(tp, f"tier `{t['name']}`: `evict` with no `capacity` (V33)")
-                    if "order" not in t:
-                        self.err(tp, f"tier `{t['name']}`: `evict` with no `order`, so it has no victims (V33)")
-                    if t.get("full") == "wait":
-                        self.err(tp, f"tier `{t['name']}`: `evict` with `full` `wait`; a timed tier's room comes at its ticks, not at a release (V33)")
-                    for k, also in (("every", None), ("when", "tier"), ("count", "tier")):
-                        bad = plan_reads(ev[k], also)
-                        if bad:
-                            what = "parameters, literals, and `tier`" if also else "parameters and literals"
-                            self.err(ep + [k], f"tier `{t['name']}`: its `evict` `{k}` reads `{bad}`; it reads only {what} (V33)")
-                            continue
-                        self.in_evict = True
-                        self.expr(ev[k], ep + [k], scope)
-                        self.in_evict = False
-                        if k != "when":
-                            self.typed(ev[k], ep + [k], scope)
-                if "on_evict" in t:
-                    oe, op = t["on_evict"], tp + ["on_evict"]
-                    if "order" not in t:
-                        self.err(tp, f"tier `{t['name']}`: `on_evict` with no `order`, so nothing is evicted (V35)")
-                    bad = plan_reads(oe["lanes"], None)
-                    if bad:
-                        self.err(op + ["lanes"], f"tier `{t['name']}`: its `on_evict` `lanes` reads `{bad}`; it reads only parameters and literals (V35)")
-                    else:
-                        self.expr(oe["lanes"], op + ["lanes"], scope)
-                        self.typed(oe["lanes"], op + ["lanes"], scope)
-                    bans = []
-                    evict_bans(oe["body"], op + ["body"], bans)
-                    for bp, what in bans:
-                        self.err(bp, f"a `{what}` in an `on_evict` body, which only issues the victim's ops at its tick (V35)")
-                    on_evict.append((oe["body"], op + ["body"]))
-                tiers[t["name"]] = (t.get("unit", "entries"), t.get("full", "skip"))
-            self.caches[c["name"]] = tiers
+                    self.in_evict = t["name"]
+                    self.expr(ev[k], ep + [k], scope)
+                    self.in_evict = None
+                    if k != "when":
+                        self.typed(ev[k], ep + [k], scope)
+            if "on_evict" in t:
+                oe, op = t["on_evict"], tp + ["on_evict"]
+                if "order" not in t:
+                    self.err(tp, f"cache `{t['name']}`: `on_evict` with no `order`, so nothing is evicted (V35)")
+                bad = plan_reads(oe["lanes"], None)
+                if bad:
+                    self.err(op + ["lanes"], f"cache `{t['name']}`: its `on_evict` `lanes` reads `{bad}`; it reads only parameters and literals (V35)")
+                else:
+                    self.expr(oe["lanes"], op + ["lanes"], scope)
+                    self.typed(oe["lanes"], op + ["lanes"], scope)
+                bans = []
+                evict_bans(oe["body"], op + ["body"], bans)
+                for bp, what in bans:
+                    self.err(bp, f"a `{what}` in an `on_evict` body, which only issues the victim's ops at its tick (V35)")
+                on_evict.append((oe["body"], op + ["body"]))
+            declared[t["name"]] = (t.get("unit", "entries"), t.get("full", "skip"))
+        self.caches = declared
         self.resources = set()
         for i, r in enumerate(a.get("resources", [])):
             rp = p + ["resources", i]
@@ -1366,22 +1291,15 @@ class Check:
         elif a["hold"] not in self.holds:
             self.err(p, f"release: no `acquire` or `store` of timeline `{self.timeline[0]}` holds `{a['hold']}` (V34)")
 
-    def keys_stmt(self, what, a, p, scope, tiers=None):
-        """V33 (contract 0.23): a `probe`, `touch`, or `store` names a cache of its timeline and a
-        tier of it (a `probe` over several, contract 0.25, each of `tiers`), and acts on a key
-        range: `from` and `count` integers, `key` an integer read with the range's `index` in
-        scope, as an `array`'s value is. The tier's unit and `full`, when it is declared. As the
-        runner's `keys_stmt`."""
+    def keys_stmt(self, what, a, p, scope):
+        """V33 (contract 0.23): a `holds`, `touch`, or `store` names a cache of its timeline (one
+        layer since contract 0.29) and acts on a key range: `from` and `count` integers, `key`
+        an integer read with the range's `index` in scope, as an `array`'s value is. The
+        cache's unit and `full`, when it is declared. As the runner's `keys_stmt`."""
         cache = a["cache"]
-        found = None
-        if cache not in self.caches:
+        found = self.caches.get(cache)
+        if found is None:
             self.err(p, f"{what}: no timeline declares cache `{cache}` around it (V33)")
-        else:
-            for tier in dict.fromkeys([a["tier"]] if tiers is None else tiers):
-                if tier not in self.caches[cache]:
-                    self.err(p, f"{what}: cache `{cache}` has no tier `{tier}` (V33)")
-                else:
-                    found = self.caches[cache][tier]
         keys, kp = a["keys"], p + ["keys"]
         for k in ("from", "count"):
             if k in keys:
@@ -1392,39 +1310,9 @@ class Check:
         self.typed(keys["key"], kp + ["key"], inner)
         return found
 
-    def n_probe(self, a, p, scope):
-        """V33; over several tiers (contract 0.25): `tiers`, two or more and none twice, in place
-        of `tier`, and `held`, an array a tier, only with it. As the runner's `Node::Probe`."""
-        tiers = a.get("tiers")
-        if "tier" in a and tiers is not None:
-            self.err(p, "probe: `tier` and `tiers` both; it names one tier or a list of them (V33)")
-        elif "tier" not in a and tiers is None:
-            self.err(p, "probe: neither `tier` nor `tiers` (V33)")
-        if tiers is not None:
-            if len(tiers) < 2:
-                self.err(p, f"probe: `tiers` names {len(tiers)} tier; a probe of one tier names it by `tier` (V33)")
-            for t in dict.fromkeys(t for i, t in enumerate(tiers) if t in tiers[:i]):
-                self.err(p, f"probe: tier `{t}` named twice in `tiers` (V33)")
-        self.keys_stmt("probe", a, p, scope, tiers if tiers is not None or "tier" in a else [])
-        held = a.get("held")
-        if held is not None:
-            if tiers is None:
-                self.err(p, "probe: `held` without `tiers`; a probe of one tier binds its run alone (V33)")
-            elif len(held) != len(tiers):
-                self.err(p, f"probe: `held` names {len(held)} arrays for {len(tiers)} tiers (V33)")
-            for i, h in enumerate(held):
-                if h in held[:i]:
-                    self.err(p + ["held", i], f"probe: `held` `{h}` named twice (V33)")
-                if h in self.params:
-                    self.err(p + ["held", i], f"probe: `held` `{h}` has the name of a parameter, which `elem` and `len` also read (V32)")
-                scope.arrays.add(h)
-                scope.taken.add(h)
-        scope.bind(a["bind"], 0, True, "int")
-        scope.unpositional[a["bind"]] = "V33"
-
     def set_bind(self, what, a, p, scope):
         """The array a `holds` or a `set` binds (contract 0.28): a name no parameter has, an array
-        that varies with what the tiers hold, as a store's `taken`. As the runner's `set_bind`."""
+        that varies with what the caches hold, as a store's `taken`. As the runner's `set_bind`."""
         bind = a["bind"]
         if bind in self.params:
             self.err(p + ["bind"], f"{what}: `bind` `{bind}` has the name of a parameter, which `elem` and `len` also read (V32)")
@@ -1433,7 +1321,7 @@ class Check:
         scope.sets.add(bind)
 
     def n_holds(self, a, p, scope):
-        """V33 (contract 0.28): every index of a key range a tier holds. As the runner's `Node::Holds`."""
+        """V33 (contract 0.28): every index of a key range a cache holds. As the runner's `Node::Holds`."""
         self.keys_stmt("holds", a, p, scope)
         self.set_bind("holds", a, p, scope)
 
@@ -1448,21 +1336,11 @@ class Check:
                 self.err(p, f"set: `{name}` is no array a `holds` or a `set` bound before it (V33)")
         self.set_bind("set", a, p, scope)
 
-    def n_used(self, a, p, scope):
-        """V33 (contract 0.27): a tier's fill read by a lane. As the runner's `Node::Used`."""
-        cache, tier = a["cache"], a["tier"]
-        if cache not in self.caches:
-            self.err(p, f"used: no timeline declares cache `{cache}` around it (V33)")
-        elif tier not in self.caches[cache]:
-            self.err(p, f"used: cache `{cache}` has no tier `{tier}` (V33)")
-        scope.bind(a["bind"], 0, True, "int")
-        scope.unpositional[a["bind"]] = "V33"
-
     def n_touch(self, a, p, scope):
         self.keys_stmt("touch", a, p, scope)
 
     def n_store(self, a, p, scope):
-        tier = a["tier"]
+        cache = a["cache"]
         touch = a.get("present") == "touch"
         if "taken" in a and a["taken"] in self.params:
             self.err(p + ["taken"], f"store: `taken` `{a['taken']}` has the name of a parameter, which `elem` and `len` also read (V32)")
@@ -1470,20 +1348,19 @@ class Check:
         if found is not None:
             unit, full = found
             if unit == "bytes" and "size" not in a:
-                self.err(p, f"store: tier `{tier}` counts bytes, so the store needs a `size` (V33)")
+                self.err(p, f"store: cache `{cache}` counts bytes, so the store needs a `size` (V33)")
             if unit == "entries" and "size" in a:
-                self.err(p, f"store: tier `{tier}` counts entries, so the store takes no `size` (V33)")
+                self.err(p, f"store: cache `{cache}` counts entries, so the store takes no `size` (V33)")
             if full == "wait" and not touch:
-                self.err(p, f"store: tier `{tier}` waits when full, which only a store of `present: touch` decides before it changes anything (V33)")
+                self.err(p, f"store: cache `{cache}` waits when full, which only a store of `present: touch` decides before it changes anything (V33)")
         if "hold" in a and not touch:
             self.err(p, f"store: `hold` `{a['hold']}` holds what a store of `present: touch` touches and stores, and this one is not (V34)")
         if "size" in a:
             self.expr(a["size"], p + ["size"], scope)
             self.typed(a["size"], p + ["size"], scope)
-        for k in ("found", "bind"):
-            if k in a:
-                scope.bind(a[k], 0, True, "int")
-                scope.unpositional[a[k]] = "V33"
+        if "found" in a:
+            scope.bind(a["found"], 0, True, "int")
+            scope.unpositional[a["found"]] = "V33"
         if "taken" in a:
             scope.arrays.add(a["taken"])
             scope.taken.add(a["taken"])
@@ -1740,13 +1617,20 @@ class Check:
                 self.err(p, "now: outside a timeline, where nothing is planned (V30)")
         elif k == "cached":
             if not self.in_order:
-                self.err(p, f"cached `{a}`: outside a tier's `order` (V33)")
-        elif k == "tier":
-            if not self.in_evict:
-                self.err(p, f"tier `{a}`: outside a tier's `evict` (V33)")
+                self.err(p, f"cached `{a}`: outside a cache's `order` (V33)")
+        elif k in ("used", "entries"):
+            # a cache's fill (contract 0.29): on a lane of the timeline that declares it, at the
+            # lane's planned instant, or in the cache's own `evict`; as the runner's
+            if self.in_evict is not None:
+                if a != self.in_evict:
+                    self.err(p, f"{k}: cache `{a}` in the `evict` of cache `{self.in_evict}`, which reads its own alone (V33)")
+            else:
+                if a not in self.caches:
+                    self.err(p, f"{k}: no timeline declares cache `{a}` around it (V33)")
+                self.reads_state(k, p)
         elif k == "victim":
             if not self.in_on_evict:
-                self.err(p, "victim: outside a tier's `on_evict` body (V35)")
+                self.err(p, "victim: outside a cache's `on_evict` body (V35)")
         elif k == "published":
             self.reads_state("published", p)
             if isinstance(a, dict):              # a timeline and a group (contract 0.17)
@@ -1774,7 +1658,7 @@ class Check:
             elif not s.loop_body:
                 self.err(p, f"prev: `{name}` is not bound directly in a loop's body, so it has no previous iteration (V31)")
             if scope.lookup_unpositional(name) == "V33":
-                self.err(p, f"prev: `{name}` is bound by a `probe`, a `used`, or a `store`, not a `let` (V31)")
+                self.err(p, f"prev: `{name}` is bound by a `store`, not a `let` (V31)")
             self.expr(a["init"], p + ["init"], scope)
         elif k == "fresh":
             self.expr(a, p + ["fresh"], scope)
@@ -1891,7 +1775,9 @@ class Check:
                             f"{{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1")
         rule = scope.lookup_unpositional(name)
         if rule == "V33":
-            self.err(p, f"`{name} @`: it is bound by a `probe`, a `used`, or a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)")
+            self.err(p, f"`{name} @`: it is bound by a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)")
+        elif rule == "V33r":
+            self.err(p, f"`{name} @`: its definition reads `run`, `below`, `used`, or `entries`, what a cache holds as the step being walked sees it, which `@` cannot recompute at another index; carry it with `prev` (V33)")
         elif rule:
             self.err(p, f"`{name} @`: its definition reads `published`, `entry`, `now`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})")
         # of two `let`s of one name in this body, which one an `at` reads is not defined
@@ -2143,7 +2029,7 @@ class Scope:
         self.fields = set(fields) | (parent.fields if parent else set())
         self.loop_body = False   # the body of a `loop` (V31)
         self.arrays = set(parent.arrays) if parent else set()   # the `array`s in scope (V32)
-        # the arrays a `store`'s `taken` binds, which vary with what the tier holds (V6)
+        # the arrays a `store`'s `taken` binds, which vary with what the cache holds (V6)
         self.taken = set(parent.taken) if parent else set()
         # the arrays a `holds` or a `set` bound (contract 0.28): what `set`, `run`, `below` take
         self.sets = set(parent.sets) if parent else set()

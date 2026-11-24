@@ -135,7 +135,7 @@ def test_a_required_parameter_in_an_at_offset_is_judged_when_given():
             a.let("x", when(d <= r, a.ref("x").at(r - d), 0))
             a.stat(ds.file(a.ref("x")))
     ast = w.build()
-    assert ast["ast"] == "0.23"
+    assert ast["ast"] == "0.29"
     assert ast["params"]["gap"] == {"kind": "dist"}
     assert not check.Check(copy.deepcopy(ast), "t").run()
     assert AP.given_rules(ast, {}) == []                                   # a fragment that leaves it to another
@@ -343,7 +343,7 @@ def test_an_inventory_is_a_constant_name_in_a_consumed_datasets_root():
             g.write(inv, 1)
         g.close(inv)
     ast = w.build()
-    assert ast["ast"] == "0.23"
+    assert ast["ast"] == "0.29"
     assert ast["datasets"]["train"]["inventory"] == {"name": "inventory.txt", "entry": {"param": "entry"}}
     assert ast["actors"]["gpu"]["body"][0]["let"]["value"] == {"inventory": "train"}
     _, check = _load()
@@ -391,7 +391,7 @@ def test_a_parameter_is_required_scale_or_storage_reported():
             g.open(f, "RDONLY"); g.read(f, w.P.hdr_read, repeat="until_eof"); g.close(f)
         g.compute(w.P.step_time)
     ast = w.build()
-    assert ast["ast"] == "0.23"
+    assert ast["ast"] == "0.29"
     assert ast["params"]["batch"] == {"kind": "int", "unit": "count"}
     assert ast["params"]["step_time"] == {"kind": "dist", "unit": "ns"}
     assert ast["params"]["sizes"] == {"kind": "array", "items": "int"}
@@ -426,7 +426,7 @@ def test_a_storage_reported_value_may_name_a_namespace():
         o = g.let("o", out.object(n=0))
         g.open(o, "WRONLY|CREAT|TRUNC"); g.write(o, w.P.buf); g.close(o)
     ast = w.build()
-    assert ast["ast"] == "0.23"
+    assert ast["ast"] == "0.29"
     assert ast["params"]["buf"]["default"] == {"from": "st_blksize", "of": "out", "fallback": 1 * MiB}
     _, check = _load()
     assert not check.Check(copy.deepcopy(ast), "x").run()
@@ -489,7 +489,7 @@ def test_a_sub_actor_positions_its_ops_on_an_inherited_handle():
     from aeiou.validate import _load
     _, check = _load()
     f = {"file": {"dataset": "d", "id": 0}}
-    ast = {"ast": "0.23", "name": "t",
+    ast = {"ast": "0.29", "name": "t",
            "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 1,
                               "size": {"const": 4096}, "seed": 1}},
            "actors": {"gpu": {"body": [
@@ -892,7 +892,7 @@ def test_check_py_v12_refuses_mkdir_and_rmdir_on_a_dataset_directory():
     import copy
     from aeiou.validate import _load
     _, check = _load()
-    base = {"ast": "0.23", "name": "m", "params": {},
+    base = {"ast": "0.29", "name": "m", "params": {},
             "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "map",
                                "count": 8, "size": {"const": 4096}, "seed": 1}},
             "actors": {"gpu": {"count": 1, "body": []}}}
@@ -907,7 +907,7 @@ def test_check_py_v12_refuses_mkdir_and_rmdir_on_a_dataset_directory():
 def _v3_chain(dist, params=None):
     """The `x @ i - d` loop of the rule V3 review (RC1, bug 30), `d` drawn from `dist`."""
     return {
-        "ast": "0.23", "name": "v3_chain", "params": params or {},
+        "ast": "0.29", "name": "v3_chain", "params": params or {},
         "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 4,
                            "size": {"const": 4096}, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"loop": {"index": "i", "to": 4, "body": [
@@ -1014,7 +1014,7 @@ def test_a_dataset_size_is_never_below_zero():
         d = {"layout": layout, "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": size, "seed": 1}
         if layout == "array":
             d.update(pattern="d/all", slot=64)
-        ast = {"ast": "0.23", "name": "t", "params": params or {}, "datasets": {"d": d},
+        ast = {"ast": "0.29", "name": "t", "params": params or {}, "datasets": {"d": d},
                "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": 0}}}}]}}}
         return check.Check(ast, "t").run()
 
@@ -1110,7 +1110,7 @@ def test_at_names_the_binding_its_body_shadows():
 
     def doc(inner):
         return {
-            "ast": "0.23", "name": "shadow",
+            "ast": "0.29", "name": "shadow",
             "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
             "actors": {"gpu": {"count": 1, "body": [{"loop": {"index": "i", "to": 3, "body": [
                 {"let": {"name": "x", "value": {"mul": [{"index": "i"}, 1000]}}},
@@ -1213,7 +1213,7 @@ def test_a_consume_is_under_loops_of_fixed_count(tmp_path):
 def _size_errs(size):
     from aeiou.validate import _load
     _, check = _load()
-    ast = {"ast": "0.23", "name": "t",
+    ast = {"ast": "0.29", "name": "t",
            "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4,
                               "size": size, "seed": 1}},
            "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": 0}}}}]}}}
@@ -1287,7 +1287,7 @@ def test_a_channel_or_loader_inside_a_fork_is_refused():
     _, check = _load()
 
     def errs(*body):
-        return check.Check({"ast": "0.23", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+        return check.Check({"ast": "0.29", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
 
     chan = {"channel": {"name": "c", "capacity": 2}}
 
@@ -1379,7 +1379,7 @@ def test_a_channel_a_loaders_workers_use_is_declared_once_or_beside_it():
     _, check = _load()
 
     def errs(*body):
-        return check.Check({"ast": "0.23", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+        return check.Check({"ast": "0.29", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
 
     chan = {"channel": {"name": "c", "capacity": 2}}
 
@@ -1429,7 +1429,7 @@ def test_a_value_of_a_kind_the_runner_refuses_is_refused_at_check():
         if count is not None:
             actor["count"] = count
         return check.Check({
-            "ast": "0.23", "name": "v27",
+            "ast": "0.29", "name": "v27",
             "params": {"s": {"default": "x"}, "n": {"default": 2}, "d": {"default": {"uniform": {"lo": 1, "hi": 4}}},
                        "a": {"default": [1, 2]}},
             "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 10, "seed": 1}},
@@ -1482,7 +1482,7 @@ def test_a_take_inside_a_loader_body_is_refused():
     _, check = _load()
 
     def errs(*body):
-        return check.Check({"ast": "0.23", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+        return check.Check({"ast": "0.29", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
 
     chan = {"channel": {"name": "c", "capacity": 4}}
 
@@ -1546,7 +1546,7 @@ def test_a_parameter_defined_through_itself_is_refused_with_its_cycle(tmp_path):
     returned. Both checkers refuse every parameter on a cycle, with the cycle, the same path
     and message, and judge the document no further; a parameter naming another is accepted."""
     def doc(params):
-        return json.dumps({"ast": "0.23", "name": "cyc", "params": params,
+        return json.dumps({"ast": "0.29", "name": "cyc", "params": params,
                            "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4,
                                               "size": {"param": "pa"}, "seed": 1}},
                            "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"draw": {"param": "pa"}}}}}}]}}})
@@ -1586,7 +1586,7 @@ def test_a_draw_of_a_kind_the_runner_refuses_is_refused_at_check(tmp_path):
     U = {"uniform": {"lo": 1, "hi": 4}}
 
     def doc(size, *body):
-        return {"ast": "0.23", "name": "v27",
+        return {"ast": "0.29", "name": "v27",
                 "params": {"n": {"default": 3}, "d": {"default": U}, "cd": {"default": {"const": {"param": "d"}}},
                            "cn": {"default": {"const": {"param": "n"}}}, "cs": {"default": {"const": "x"}}},
                 "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": size, "seed": 1}},
@@ -1667,7 +1667,7 @@ def test_a_comparison_or_array_read_the_runner_refuses_is_refused_at_check(tmp_p
     _, check = _load()
 
     def doc(body):
-        return {"ast": "0.23", "name": "v27",
+        return {"ast": "0.29", "name": "v27",
                 "params": {"n": {"default": 3}, "s": {"default": "x"}, "z": {"default": None}, "arr": {"default": [1, 2.5]},
                            "sarr": {"default": ["a", "b"]}, "d": {"default": {"uniform": {"lo": 1, "hi": 4}}}},
                 "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 10, "seed": 1}},
@@ -1771,7 +1771,7 @@ def test_a_timeline_its_publishes_reads_prev_and_an_array_serialize_and_validate
                 a.stat(ds.file(when(x > 0, tl.entry(x - 1, "v"), 0)))
     ast = w.build()
     body = ast["actors"]["gpu"]["body"][0]["timeline"]
-    assert body["name"] == "tl" and ast["ast"] == "0.23"
+    assert body["name"] == "tl" and ast["ast"] == "0.29"
     arr, par, loop = body["body"]
     assert arr == {"array": {"name": "bs", "count": 3, "index": "b", "value": {"draw": {"uniform": {"lo": 1, "hi": 9}}}}}
     assert par["parallel"]["join"] is False
@@ -1824,24 +1824,26 @@ def test_what_contract_0_15_refuses_is_refused_at_construction(build, needle):
 def test_a_seq_a_cache_and_a_lookup_serialize_and_validate():
     w, P, ds = _wl()
     with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"lm": [tier("disk", lru(), capacity=P.n), tier("all")]}) as tl:
+        disk, every = cache("disk", lru(), capacity=P.n), cache("all")
+        with a.timeline("tl", caches=[disk, every]) as tl:
             with a.loop("i", 3):
                 s = a.let("s", cat(prefix(a.ref("s").prev(shared(1, 4)), 4), fresh(4)))
-                h = a.lookup("lm", "disk", chunk_keys(s, 4), "h")
-                a.lookup("lm", "all", chunk_keys(s, 4), "g")
+                h = a.lookup(disk, chunk_keys(s, 4), "h")
+                a.lookup(every, chunk_keys(s, 4), "g")
                 a.publish(tl, p=s)
                 with a.loop("c", seq_len(s) // 4, start=h) as c:
                     a.stat(ds.file(chunk_key(s, c, 4) % 1000))
     ast = w.build()
     t = ast["actors"]["gpu"]["body"][0]["timeline"]
-    assert ast["ast"] == "0.23"
-    assert t["caches"] == [{"name": "lm", "tiers": [{"name": "disk", "order": [{"cached": "touched"}, {"cached": "pos"}], "capacity": {"param": "n"}}, {"name": "all"}]}]
+    assert ast["ast"] == "0.29"
+    # a cache is one layer (contract 0.29): the list is the caches, with no `tiers` under them
+    assert t["caches"] == [{"name": "disk", "order": [{"cached": "touched"}, {"cached": "pos"}], "capacity": {"param": "n"}}, {"name": "all"}]
     body = t["body"][0]["loop"]["body"]
     assert body[0]["let"]["value"] == {"cat": [{"prefix": [{"prev": {"ref": "s", "init": {"shared": {"id": 1, "n": 4}}}}, 4]}, {"fresh": 4}]}
     # a lookup is library (contract 0.23): one store that touches what it finds, `found` its hit
     whole = {"index": "j", "count": {"div": [{"seq_len": {"ref": "s"}}, 4]},
              "key": {"chunk_key": {"seq": {"ref": "s"}, "chunk": {"index": "j"}, "per": 4}}}
-    assert body[1] == {"store": {"cache": "lm", "tier": "disk", "keys": whole, "present": "touch", "found": "h"}}
+    assert body[1] == {"store": {"cache": "disk", "keys": whole, "present": "touch", "found": "h"}}
     assert "lookup" not in json.dumps(ast)
     assert body[4]["loop"]["from"] == {"ref": "h"}
     assert body[4]["loop"]["to"] == {"div": [{"seq_len": {"ref": "s"}}, 4]}
@@ -1849,25 +1851,28 @@ def test_a_seq_a_cache_and_a_lookup_serialize_and_validate():
     validate(ast)          # raises on an error
 
 
-def test_a_byte_tier_and_its_lookup_size():
+def test_a_byte_cache_and_its_lookup_size():
     w, P, ds = _wl()
     with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"lm": [tier("disk", lru(), capacity=1 * MiB, unit="bytes")]}):
-            a.lookup("lm", "disk", chunk_keys(a.let("s", fresh(8)), 4), "h", size=4096)
+        disk = cache("disk", lru(), capacity=1 * MiB, unit="bytes")
+        with a.timeline("tl", caches=[disk]):
+            a.lookup(disk, chunk_keys(a.let("s", fresh(8)), 4), "h", size=4096)
     t = w.build()["actors"]["gpu"]["body"][0]["timeline"]
-    assert t["caches"][0]["tiers"][0]["unit"] == "bytes"
+    assert t["caches"][0]["unit"] == "bytes"
     assert t["body"][1]["store"]["size"] == 4096
     validate(w.build())
 
 
 @pytest.mark.parametrize("build, needle", [
-    (lambda a: a.lookup("lm", "disk", keys("j", 1, 0), "h"), "no timeline declares cache"),
-    (lambda a: tier("x", lru()), "needs a capacity"),
-    (lambda a: tier("x", full="wait"), "needs a capacity"),
-    (lambda a: tier("x", [], capacity=3), "an empty `order`"),
-    (lambda a: tier("x", full="later", capacity=3), "`skip`, `wait`, or `fail`"),
+    (lambda a: a.lookup(cache("disk"), keys("j", 1, 0), "h"), "no timeline declares cache"),
+    (lambda a: a.lookup("disk", keys("j", 1, 0), "h"), "its cache is one cache\\(...\\) made"),
+    (lambda a: cache("x", lru()), "needs a capacity"),
+    (lambda a: cache("x", full="wait"), "needs a capacity"),
+    (lambda a: cache("x", [], capacity=3), "an empty `order`"),
+    (lambda a: cache("x", full="later", capacity=3), "`skip`, `wait`, or `fail`"),
     (lambda a: cached("age"), "one of stored"),
-    (lambda a: tier("x", unit="pages"), "`entries` or `bytes`"),
+    (lambda a: cache("x", unit="pages"), "`entries` or `bytes`"),
+    (lambda a: cache("X y"), "cache"),
     (lambda a: a.acquire("slots", 1, "s"), "no timeline declares resource"),
     (lambda a: a.release("s"), "outside a timeline"),
 ])
@@ -1884,23 +1889,24 @@ def test_an_order_holds_a_resource_and_now_serialize_and_validate():
     w, P, ds = _wl()
     vllm = [cached("freed"), -cached("pos")]
     with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"gpu": [tier("hbm", vllm, capacity=P.n, full="wait")]}, resources={"slots": 2}):
+        hbm = cache("hbm", vllm, capacity=P.n, full="wait")
+        with a.timeline("tl", caches=[hbm], resources={"slots": 2}):
             with a.parallel("k", 3, join=False) as s:
                 s.acquire("slots", 1, "slot")
-                h = s.lookup("gpu", "hbm", keys("j", 4, lambda j: j + s.index * 4), "h", hold="kv")
+                h = s.lookup(hbm, keys("j", 4, lambda j: j + s.index * 4), "h", hold="kv")
                 s.stat(ds.file((h + now()) % 1000))
                 s.compute(5)
                 s.release("kv")
                 s.release("slot")
     ast = w.build()
     t = ast["actors"]["gpu"]["body"][0]["timeline"]
-    assert ast["ast"] == "0.23"
-    assert t["caches"] == [{"name": "gpu", "tiers": [{"name": "hbm", "order": [{"cached": "freed"}, {"neg": {"cached": "pos"}}],
-                                                      "capacity": {"param": "n"}, "full": "wait"}]}]
+    assert ast["ast"] == "0.29"
+    assert t["caches"] == [{"name": "hbm", "order": [{"cached": "freed"}, {"neg": {"cached": "pos"}}],
+                            "capacity": {"param": "n"}, "full": "wait"}]
     assert t["resources"] == [{"name": "slots", "capacity": 2}]
     body = t["body"][0]["parallel"]["body"]
     assert body[0] == {"acquire": {"resource": "slots", "n": 1, "hold": "slot"}}
-    assert body[1]["store"] == {"cache": "gpu", "tier": "hbm", "present": "touch", "hold": "kv", "found": "h",
+    assert body[1]["store"] == {"cache": "hbm", "present": "touch", "hold": "kv", "found": "h",
                                 "keys": {"index": "j", "count": 4, "key": {"add": [{"index": "j"}, {"mul": [{"index": "k"}, 4]}]}}}
     assert body[2]["stat"]["file"]["file"]["id"] == {"mod": [{"add": [{"ref": "h"}, {"now": {}}]}, 1000]}
     assert body[4:] == [{"release": {"hold": "kv"}}, {"release": {"hold": "slot"}}]
@@ -1911,44 +1917,96 @@ def test_an_order_holds_a_resource_and_now_serialize_and_validate():
 
 def test_timed_eviction_an_eviction_body_and_ranges_serialize_and_validate():
     w, P, ds = _wl()
-    lmc = timed(1_000_000_000, tier_attr("used") * 10 >= P.n * 8, max_(1, tier_attr("entries") * 2 // 10))
+    # a rule reads its own cache's fill, so it is a function of the cache (contract 0.29)
+    lmc = lambda me: timed(1_000_000_000, me.used * 10 >= P.n * 8, max_(1, me.entries * 2 // 10))
     with w.actor("gpu") as a:
         base = a.let("base", 7)
-        with a.timeline("tl", caches={"lm": [
-                tier("g3", [cached("touched"), -cached("pos")], capacity=P.n, evict=lmc,
-                     on_evict=(4, lambda b: b.stat(ds.file((victim() + base) % 1000))))]}):
+        g3 = cache("g3", [cached("touched"), -cached("pos")], capacity=P.n, evict=lmc,
+                   on_evict=(4, lambda b: b.stat(ds.file((victim() + base) % 1000))))
+        with a.timeline("tl", caches=[g3]):
             s = a.let("s", fresh(8))
-            h = a.probe("lm", "g3", chunk_keys(s, 2), "h")
-            a.touch("lm", "g3", chunk_keys(s, 2, 0, h))
-            n = a.store("lm", "g3", chunk_keys(s, 2, h, 4, clip=False), bind="n")
-            assert a.store("lm", "g3", chunk_keys(s, 2, h, 1)) is None
+            h = a.let("h", a.probe(g3, chunk_keys(s, 2), "hs"))
+            a.touch(g3, chunk_keys(s, 2, 0, h))
+            assert a.store(g3, chunk_keys(s, 2, h, 4, clip=False)) is None
+            n = a.probe(g3, chunk_keys(s, 2, h, 4, clip=False), "ns")
+            a.store(g3, chunk_keys(s, 2, h, 1))
             a.stat(ds.file(n % 1000))
             a.compute(10)
     ast = w.build()
     t = ast["actors"]["gpu"]["body"][1]["timeline"]
-    g3 = t["caches"][0]["tiers"][0]
-    assert g3["evict"] == {"every": 1_000_000_000,
-                           "when": {"ge": [{"mul": [{"tier": "used"}, 10]}, {"mul": [{"param": "n"}, 8]}]},
-                           "count": {"max": [1, {"div": [{"mul": [{"tier": "entries"}, 2]}, 10]}]}}
-    assert g3["on_evict"] == {"lanes": 4, "body": [
+    got = t["caches"][0]
+    assert got["evict"] == {"every": 1_000_000_000,
+                            "when": {"ge": [{"mul": [{"used": "g3"}, 10]}, {"mul": [{"param": "n"}, 8]}]},
+                            "count": {"max": [1, {"div": [{"mul": [{"entries": "g3"}, 2]}, 10]}]}}
+    assert got["on_evict"] == {"lanes": 4, "body": [
         {"stat": {"file": {"file": {"dataset": "d", "id": {"mod": [{"add": [{"victim": {}}, {"ref": "base"}]}, 1000]}}}}}]}
     body = t["body"]
     # key ranges (contract 0.23): `chunk_keys` writes the range, cut at the sequence's end unless clip=False
     n_ = {"div": [{"seq_len": {"ref": "s"}}, 2]}
     key = {"chunk_key": {"seq": {"ref": "s"}, "chunk": {"index": "j"}, "per": 2}}
-    assert body[1] == {"probe": {"cache": "lm", "tier": "g3", "keys": {"index": "j", "count": n_, "key": key}, "bind": "h"}}
-    assert body[2] == {"touch": {"cache": "lm", "tier": "g3", "keys": {"index": "j", "count": {"max": [0, {"min": [{"ref": "h"}, n_]}]}, "key": key}}}
-    assert body[3] == {"store": {"cache": "lm", "tier": "g3", "keys": {"index": "j", "from": {"ref": "h"}, "count": 4, "key": key}, "bind": "n"}}
+    # `probe` is library (contract 0.29): one `holds`, and the `run` of its array from the range's first index
+    assert body[1] == {"holds": {"cache": "g3", "keys": {"index": "j", "count": n_, "key": key}, "bind": "hs"}}
+    assert body[2] == {"let": {"name": "h", "value": {"run": {"array": "hs", "from": 0}}}}
+    assert body[3] == {"touch": {"cache": "g3", "keys": {"index": "j", "count": {"max": [0, {"min": [{"ref": "h"}, n_]}]}, "key": key}}}
+    after = {"index": "j", "from": {"ref": "h"}, "count": 4, "key": key}
+    assert body[4] == {"store": {"cache": "g3", "keys": after}}
+    assert body[5] == {"holds": {"cache": "g3", "keys": after, "bind": "ns"}}
     frm = {"min": [{"ref": "h"}, n_]}
-    assert body[4] == {"store": {"cache": "lm", "tier": "g3", "keys": {"index": "j", "from": frm, "count": {"max": [0, {"min": [1, {"sub": [n_, frm]}]}]}, "key": key}}}
+    assert body[6] == {"store": {"cache": "g3", "keys": {"index": "j", "from": frm, "count": {"max": [0, {"min": [1, {"sub": [n_, frm]}]}]}, "key": key}}}
+    assert body[7]["stat"]["file"]["file"]["id"] == {"mod": [{"run": {"array": "ns", "from": {"ref": "h"}}}, 1000]}
+    assert "probe" not in json.dumps(ast) and "tier" not in json.dumps(ast)
     validate(ast)
-    # a byte tier's store takes a size
+    # a byte cache's store takes a size
     w, P, ds = _wl()
     with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"lm": [tier("g2", lru(), capacity=1 * MiB, unit="bytes")]}):
-            a.store("lm", "g2", keys("j", 4, lambda j: j * 7), size=4096)
+        g2 = cache("g2", lru(), capacity=1 * MiB, unit="bytes")
+        with a.timeline("tl", caches=[g2]):
+            a.store(g2, keys("j", 4, lambda j: j * 7), size=4096)
     assert w.build()["actors"]["gpu"]["body"][0]["timeline"]["body"][0]["store"] == {
-        "cache": "lm", "tier": "g2", "keys": {"index": "j", "count": 4, "key": {"mul": [{"index": "j"}, 7]}}, "size": 4096}
+        "cache": "g2", "keys": {"index": "j", "count": 4, "key": {"mul": [{"index": "j"}, 7]}}, "size": 4096}
+
+
+def test_a_caches_fill_is_two_expressions_of_the_cache_object():
+    """Contract 0.29 (brief item 82, stage 2; the user's `g2.used`, 2026-11-23): a cache is an
+    object; `g2.used` and `g2.entries` are expressions, `used: g2` and `entries: g2` in the
+    document, read on a lane where they stand; a statement names the cache by the object, and
+    one that its timeline does not declare is refused when written."""
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        g2, g3 = cache("g2", lru(), capacity=P.n), cache("g3", lru(), capacity=P.n)
+        other = cache("g4")
+        assert isinstance(g2, Cache) and g2.name == "g2"
+        with a.timeline("tl", caches=[g2, g3]):
+            s = a.let("s", fresh(8))
+            a.store(g2, chunk_keys(s, 1))
+            room = a.let("room", P.n - g2.used)
+            with a.when(room >= g3.entries):
+                a.stat(ds.file(g2.entries))
+            with pytest.raises(BuildError, match=r"holds: cache 'g4' is not one timeline `tl` declares \(V33\)"):
+                a.holds(other, chunk_keys(s, 1), "x")
+            with pytest.raises(BuildError, match=r"store: its cache is one cache\(...\) made"):
+                a.store("g2", chunk_keys(s, 1))
+    ast = w.build()
+    body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
+    assert body[2] == {"let": {"name": "room", "value": {"sub": [{"param": "n"}, {"used": "g2"}]}}}
+    assert body[3]["cond"]["if"] == {"ge": [{"ref": "room"}, {"entries": "g3"}]}
+    assert ast["ast"] == "0.29"
+    validate(ast)
+    # the same cache twice, or something that is no cache, in a timeline's list
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        with pytest.raises(BuildError, match=r"cache 'g2' declared twice \(V33\)"):
+            a.timeline("tl", caches=[cache("g2"), cache("g2")]).__enter__()
+        with pytest.raises(BuildError, match=r"its caches are a list of cache\(...\), not dict"):
+            a.timeline("tl", caches=[{"name": "g2"}]).__enter__()
+        with pytest.raises(BuildError, match=r"`evict` is timed\(...\), or a function of the cache"):
+            cache("g2", lru(), capacity=4, evict=lambda me: me.used)
+    # a fill read where no timeline declares the cache is the checker's refusal at build
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        a.stat(ds.file(cache("g2").used))
+    with pytest.raises(BuildError, match=r"used: no timeline declares cache `g2` around it \(V33\)"):
+        w.build()
 
 
 # ---- contract 0.20: workers, submit, span (DESIGN_REVIEW.md §3.99, the note "The run side of timelines") ----
@@ -1971,7 +2029,7 @@ def test_workers_submit_and_span_serialize_and_validate():
     assert body[0] == {"span": {"name": "load", "body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"index": "i"}}}}}]}}
     assert body[1]["submit"]["workers"] == "store"
     assert [next(iter(n)) for n in body[1]["submit"]["body"]] == ["let", "stat"]
-    assert ast["ast"] == "0.23"
+    assert ast["ast"] == "0.29"
     validate(ast)
 
 
@@ -2012,7 +2070,7 @@ def test_a_submit_its_span_waits_for_serializes_and_is_refused_outside_a_span():
     sub = body[0]["span"]["body"][0]["loop"]["body"][0]["submit"]
     assert sub["join"] is True and sub["workers"] == "io" and list(sub) == ["workers", "join", "body"]
     assert "join" not in body[1]["submit"]
-    assert ast["ast"] == "0.26"
+    assert ast["ast"] == "0.29"
     validate(ast)
 
 
@@ -2053,8 +2111,8 @@ def test_a_body_that_only_issues_ops_reads_no_timeline_state():
     def build(in_submit, in_evict):
         w, P, ds = _wl()
         with w.actor("gpu") as a:
-            tiers = [tier("t", lru(), capacity=3, on_evict=(1, lambda b: b.stat(ds.file(in_evict(aeiou.builder.Timeline("tl"))))))]
-            with a.timeline("tl", workers={"store": (1, 1024)}, caches={"c": tiers}) as tl:
+            caches = [cache("t", lru(), capacity=3, on_evict=(1, lambda b: b.stat(ds.file(in_evict(aeiou.builder.Timeline("tl"))))))]
+            with a.timeline("tl", workers={"store": (1, 1024)}, caches=caches) as tl:
                 a.publish(tl, a=1)
                 seen = a.let("seen", tl.published)
                 with a.submit("store"):
@@ -2069,97 +2127,101 @@ def test_a_body_that_only_issues_ops_reads_no_timeline_state():
 
 
 def test_a_store_that_touches_holds_and_binds_what_it_found():
-    """Contract 0.23: `store` with `present="touch"`, `hold`, and `found`, on a tier that waits,
-    which takes no other store; the Refs come back in the order found, bind, taken."""
+    """Contract 0.23: `store` with `present="touch"`, `hold`, and `found`, on a cache that waits,
+    which takes no other store; the Refs come back in the order found, taken."""
     w, P, ds = _wl()
     with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"c": [tier("t", [cached("freed"), cached("pos")], capacity=P.n, full="wait")]}):
-            f, b, tk = a.store("c", "t", keys("j", 2, lambda j: j + 10, frm=3), present="touch", hold="p",
-                               found="f", bind="b", taken="tk")
-            a.compute(f + b + tk.len)
+        t = cache("t", [cached("freed"), cached("pos")], capacity=P.n, full="wait")
+        with a.timeline("tl", caches=[t]):
+            f, tk = a.store(t, keys("j", 2, lambda j: j + 10, frm=3), present="touch", hold="p", found="f", taken="tk")
+            a.compute(f + tk.len)
             a.release("p")
     ast = w.build()
     body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
-    assert body[0] == {"store": {"cache": "c", "tier": "t", "keys": {"index": "j", "from": 3, "count": 2, "key": {"add": [{"index": "j"}, 10]}},
-                                 "present": "touch", "hold": "p", "found": "f", "bind": "b", "taken": "tk"}}
+    assert body[0] == {"store": {"cache": "t", "keys": {"index": "j", "from": 3, "count": 2, "key": {"add": [{"index": "j"}, 10]}},
+                                 "present": "touch", "hold": "p", "found": "f", "taken": "tk"}}
     validate(ast)
-    # a tier that waits takes only a store that touches; a span holds none that may wait
+    # a cache that waits takes only a store that touches; a span holds none that may wait
     w, P, ds = _wl()
     with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"c": [tier("t", lru(), capacity=4, full="wait")]}):
-            a.store("c", "t", keys("j", 1, 0))
+        t = cache("t", lru(), capacity=4, full="wait")
+        with a.timeline("tl", caches=[t]):
+            a.store(t, keys("j", 1, 0))
     with pytest.raises(BuildError, match="waits when full, which only a store of `present: touch` decides"):
         w.build()
     w, P, ds = _wl()
     with pytest.raises(BuildError, match="a `store` in span `load`"):
         with w.actor("gpu") as a:
-            with a.timeline("tl", caches={"c": [tier("t", lru(), capacity=4)]}):
+            t = cache("t", lru(), capacity=4)
+            with a.timeline("tl", caches=[t]):
                 with a.span("load"):
-                    a.store("c", "t", keys("j", 1, 0), present="touch")
+                    a.store(t, keys("j", 1, 0), present="touch")
+    # a store's `bind` and `present="renew"` went with contract 0.29
+    w, P, ds = _wl()
+    with w.actor("gpu") as a:
+        t = cache("t", lru(), capacity=4)
+        with a.timeline("tl", caches=[t]):
+            with pytest.raises(TypeError, match="bind"):
+                a.store(t, keys("j", 1, 0), bind="n")
+            with pytest.raises(BuildError, match="store present: one of keep, touch, not 'renew'"):
+                a.store(t, keys("j", 1, 0), present="renew")
 
 
 def test_taken_chunks_and_present_serialize_and_validate():
-    """Contract 0.19: LMCache's G2 in front of G3: G3 stores again only the chunks G2 newly took."""
+    """Contract 0.19: LMCache's G2 in front of G3: G3 stores only the chunks G2 newly took."""
     w, P, ds = _wl()
     with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"lm": [tier("g2", lru(), capacity=P.n), tier("g3", lru(), capacity=P.n)]}):
+        g2, g3 = cache("g2", lru(), capacity=P.n), cache("g3", lru(), capacity=P.n)
+        with a.timeline("tl", caches=[g2, g3]):
             s = a.let("s", fresh(8))
-            t2 = a.store("lm", "g2", chunk_keys(s, 1, 0, 8, clip=False), taken="t2")
-            n, t3 = a.store("lm", "g3", chunk_keys(s, 1, chunks=t2), present="renew", bind="n", taken="t3")
-            a.touch("lm", "g3", chunk_keys(s, 1, chunks="t3", index="i"))
+            t2 = a.store(g2, chunk_keys(s, 1, 0, 8, clip=False), taken="t2")
+            t3 = a.store(g3, chunk_keys(s, 1, chunks=t2), taken="t3")
+            a.touch(g3, chunk_keys(s, 1, chunks="t3", index="i"))
             with a.loop("j", t3.len) as j:
-                a.stat(ds.file((t3[j] + n) % 1000))
+                a.stat(ds.file(t3[j] % 1000))
     ast = w.build()
     body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
     key = lambda chunk: {"chunk_key": {"seq": {"ref": "s"}, "chunk": chunk, "per": 1}}
     of = lambda arr, i: {"index": i, "count": {"len": arr}, "key": key({"elem": {"array": arr, "index": {"index": i}}})}
-    assert body[1] == {"store": {"cache": "lm", "tier": "g2", "keys": {"index": "j", "count": 8, "key": key({"index": "j"})}, "taken": "t2"}}
+    assert body[1] == {"store": {"cache": "g2", "keys": {"index": "j", "count": 8, "key": key({"index": "j"})}, "taken": "t2"}}
     # the chunks an array names: `pos` and `taken` are then indices into the array
-    assert body[2] == {"store": {"cache": "lm", "tier": "g3", "keys": of("t2", "j"), "present": "renew", "bind": "n", "taken": "t3"}}
-    assert body[3] == {"touch": {"cache": "lm", "tier": "g3", "keys": of("t3", "i")}}
+    assert body[2] == {"store": {"cache": "g3", "keys": of("t2", "j"), "taken": "t3"}}
+    assert body[3] == {"touch": {"cache": "g3", "keys": of("t3", "i")}}
     validate(ast)
 
 
 @pytest.mark.parametrize("build, needle", [
-    (lambda a: chunk_keys(a.let("s", fresh(4)), 1, 1, chunks="x"), "`chunks` in place of `frm`, not beside it"),
-    (lambda a: chunk_keys(fresh(4), 1), "the sequence is a binding"),
-    (lambda a: a.touch("lm", "g", fresh(4)), "its keys are a key range"),
-    (lambda a: keys("J", 1, 0), "keys index"),
-    (lambda a: a.store("lm", "g", keys("j", 1, 0), present="always"), "present: one of keep, renew, touch"),
-    (lambda a: a.store("lm", "g", keys("j", 1, 0), hold="p"), "holds what a store of present"),
-    (lambda a: a.store("lm", "g", keys("j", 1, 0), taken="n"), "has the name of a parameter"),
+    (lambda a, g: chunk_keys(a.let("s", fresh(4)), 1, 1, chunks="x"), "`chunks` in place of `frm`, not beside it"),
+    (lambda a, g: chunk_keys(fresh(4), 1), "the sequence is a binding"),
+    (lambda a, g: a.touch(g, fresh(4)), "its keys are a key range"),
+    (lambda a, g: keys("J", 1, 0), "keys index"),
+    (lambda a, g: a.store(g, keys("j", 1, 0), present="always"), "present: one of keep, touch"),
+    (lambda a, g: a.store(g, keys("j", 1, 0), hold="p"), "holds what a store of present"),
+    (lambda a, g: a.store(g, keys("j", 1, 0), taken="n"), "has the name of a parameter"),
 ])
 def test_what_taken_chunks_and_present_refuse_is_refused_at_construction(build, needle):
     w, P, ds = _wl()
     with pytest.raises(BuildError, match=needle):
         with w.actor("gpu") as a:
-            with a.timeline("tl", caches={"lm": [tier("g", lru(), capacity=4)]}):
-                build(a)
+            g = cache("g", lru(), capacity=4)
+            with a.timeline("tl", caches=[g]):
+                build(a, g)
 
 
 @pytest.mark.parametrize("build, needle", [
-    (lambda a: a.probe("lm", "t", keys("j", 1, 0), "h"), "probe: no timeline declares cache"),
-    (lambda a: a.touch("lm", "t", keys("j", 1, 0)), "touch: no timeline declares cache"),
-    (lambda a: a.store("lm", "t", keys("j", 1, 0)), "store: no timeline declares cache"),
-    (lambda a: tier("x", capacity=3, evict=timed(1, True, 1)), "`evict` needs a capacity and an order"),
-    (lambda a: tier("x", lru(), evict=timed(1, True, 1)), "needs a capacity"),
-    (lambda a: tier("x", capacity=3, on_evict=(1, lambda b: None)), "`on_evict` with no `order`"),
-    (lambda a: tier("x", lru(), capacity=3, on_evict=(1, None)), "fn writing the body"),
-    (lambda a: tier_attr("free"), "one of used, entries"),
+    (lambda a: a.probe(cache("t"), keys("j", 1, 0), "h"), "holds: no timeline declares cache"),
+    (lambda a: a.touch(cache("t"), keys("j", 1, 0)), "touch: no timeline declares cache"),
+    (lambda a: a.store(cache("t"), keys("j", 1, 0)), "store: no timeline declares cache"),
+    (lambda a: cache("x", capacity=3, evict=timed(1, True, 1)), "`evict` needs a capacity and an order"),
+    (lambda a: cache("x", lru(), evict=timed(1, True, 1)), "needs a capacity"),
+    (lambda a: cache("x", capacity=3, on_evict=(1, lambda b: None)), "`on_evict` with no `order`"),
+    (lambda a: cache("x", lru(), capacity=3, on_evict=(1, None)), "fn writing the body"),
 ])
 def test_what_contract_0_19_refuses_is_refused_at_construction(build, needle):
     w, P, ds = _wl()
     with pytest.raises(BuildError, match=needle):
         with w.actor("gpu") as a:
             build(a)
-
-
-def test_a_cache_without_tiers_is_refused_at_construction():
-    w, P, ds = _wl()
-    with pytest.raises(BuildError, match="has no tiers"):
-        with w.actor("gpu") as a:
-            with a.timeline("tl", caches={"lm": []}):
-                pass
 
 
 # ---- contract 0.17: a timeline's entries in groups (DESIGN_REVIEW.md §3.99) ----
@@ -2174,7 +2236,7 @@ def test_entries_in_groups_serialize_and_validate():
                 s.stat(ds.file(when(g.published > 0, g.entry(g.published - 1, "v"), 0)))
             a.stat(ds.file(tl.published))
     ast = w.build()
-    assert ast["ast"] == "0.23"
+    assert ast["ast"] == "0.29"
     par = ast["actors"]["gpu"]["body"][0]["timeline"]["body"][0]["parallel"]["body"]
     assert par[0] == {"publish": {"timeline": "tl", "group": {"index": "s"}, "values": {"v": {"index": "s"}}}}
     got = par[1]["stat"]["file"]["file"]["id"]["cond"]
@@ -2317,9 +2379,11 @@ def test_a_document_carries_the_lowest_version_that_holds_what_it_uses(monkeypat
     stamps that version; a document carrying another, lower or higher, is refused."""
     from aeiou.validate import _load
     schema, check = _load()
-    assert check.VERSIONS == schema["properties"]["ast"]["enum"] and check.FLOOR == check.VERSIONS[0] == "0.23"
+    assert check.VERSIONS == schema["properties"]["ast"]["enum"] and check.FLOOR == check.VERSIONS[0] == "0.29"
     assert sorted(check.VERSIONS, key=check.version_key) == check.VERSIONS
     assert all(v in check.VERSIONS[1:] for v, _, _ in check.SINCE)       # nothing is "added" at the floor
+    # the floor rose to 0.29 (2026-11-23, a cache one layer): a change that is no addition empties the table
+    assert check.SINCE == [] and check.VERSIONS == ["0.29"]
     plain = _versioned(False).build()
     assert plain["ast"] == check.FLOOR
     check = _later_contract(monkeypatch)
@@ -2328,13 +2392,15 @@ def test_a_document_carries_the_lowest_version_that_holds_what_it_uses(monkeypat
     synced = _versioned(True).build()
     assert synced["ast"] == "0.99"
     validate(plain), validate(synced)
-    with pytest.raises(BuildError, match=r"v: ast: version `0.23`, but the document holds an `fsync`, which contract `0.99` added"):
-        validate({**synced, "ast": "0.23"})
-    with pytest.raises(BuildError, match=r"v: ast: version `0.99`, but the document holds nothing past contract `0.23`: "
+    with pytest.raises(BuildError, match=r"v: ast: version `0.29`, but the document holds an `fsync`, which contract `0.99` added"):
+        validate({**synced, "ast": "0.29"})
+    with pytest.raises(BuildError, match=r"v: ast: version `0.99`, but the document holds nothing past contract `0.29`: "
                                          r"an abstract carries the lowest version that holds what it uses"):
         validate({**plain, "ast": "0.99"})
     with pytest.raises(BuildError, match="v: ast: "):                    # a version outside the range: the schema's refusal
         validate({**plain, "ast": "0.22"})
+    with pytest.raises(BuildError, match="v: ast: "):                    # below the floor since it rose: 0.23 to 0.28
+        validate({**plain, "ast": "0.28"})
 
 
 def test_every_committed_abstract_is_read_unchanged_one_version_on(monkeypatch):
@@ -2371,8 +2437,8 @@ def _span_outside(body=None, **kw):
 def test_a_span_outside_a_timeline_serializes_validates_and_is_contract_0_24():
     """Contract 0.24: a `span` may stand outside a timeline, where a run reports the elapsed
     time of its body each time it is entered (the time to load a model, to write a checkpoint,
-    of one query). It holds ops and a joined `parallel`; it is the first addition under the
-    version range (brief item 80): this abstract carries 0.24, one without such a span 0.23."""
+    of one query). It holds ops and a joined `parallel`. The first addition under the version
+    range (brief item 80), below the floor since the floor rose to 0.29."""
     w, P, ds = _wl()
     with w.actor("gpu") as a:
         with a.loop("i", 3):
@@ -2382,22 +2448,17 @@ def test_a_span_outside_a_timeline_serializes_validates_and_is_contract_0_24():
                     with s.phase("part"):
                         s.stat(ds.file(s.index))
     ast = w.build()
-    assert ast["ast"] == "0.24"
+    assert ast["ast"] == "0.29"
     sp = ast["actors"]["gpu"]["body"][0]["loop"]["body"][0]
     assert sp["span"]["name"] == "load" and [next(iter(n)) for n in sp["span"]["body"]] == ["stat", "parallel"]
     validate(ast)
-    with pytest.raises(BuildError, match=r"ast: version `0.23`, but the document holds a `span` outside a timeline, which contract `0.24` added"):
-        validate({**ast, "ast": "0.23"})
-    # a span in a timeline is what it was, and so is its document's version
+    # a span in a timeline, as it was
     w, P, ds = _wl()
     with w.actor("gpu") as a:
         with a.timeline("tl"):
             with a.span("load"):
                 a.stat(ds.file(1))
-    inside = w.build()
-    assert inside["ast"] == "0.23"
-    with pytest.raises(BuildError, match="but the document holds nothing past contract `0.23`"):
-        validate({**inside, "ast": "0.24"})
+    assert w.build()["ast"] == "0.29"
 
 
 @pytest.mark.parametrize("body, what", [
@@ -2424,70 +2485,35 @@ def test_a_span_outside_a_timeline_takes_no_staging_and_no_span():
         _span_outside(nested).build()
 
 
-# ---- contract 0.27: a tier's fill read by a lane (brief item 74; DESIGN_REVIEW.md §3.100) ----
-
-def test_used_serializes_validates_and_is_contract_0_27():
-    """Contract 0.27: `used(cache, tier, bind)` binds what a tier holds, in its unit, at the
-    lane's planned instant, nothing changed: what a lane decides by as LMCache's server does
-    whether a lookup's hits fit in G2, all loaded or none. An addition under the version range:
-    a document with one carries 0.27."""
-    w, P, ds = _wl()
-    with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"lm": [tier("g2", lru(), capacity=P.n)]}):
-            f = a.used("lm", "g2", "f")
-            assert isinstance(f, Ref)
-            with a.when(P.n - f >= 2):
-                a.stat(ds.file(f))
-            a.compute(10)
-    ast = w.build()
-    assert ast["ast"] == "0.27"
-    body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
-    assert body[0] == {"used": {"cache": "lm", "tier": "g2", "bind": "f"}}
-    validate(ast)
-    with pytest.raises(BuildError, match=r"ast: version `0.26`, but the document holds a `used`, a tier's fill read by a lane, which contract `0.27` added"):
-        validate({**ast, "ast": "0.26"})
-
-
-@pytest.mark.parametrize("build, needle", [
-    (lambda a: a.used("lm", "g", "1f"), "binding '1f' must match"),
-    (lambda a: a.used("lm", "no tier", "f"), "tier 'no tier' must match"),
-])
-def test_what_used_refuses_is_refused_at_construction(build, needle):
-    w, P, ds = _wl()
-    with pytest.raises(BuildError, match=needle):
-        with w.actor("gpu") as a:
-            with a.timeline("tl", caches={"lm": [tier("g", lru(), capacity=4)]}):
-                build(a)
-
-
-# ---- contract 0.28: what a tier holds of a key range, as a set (DESIGN_REVIEW.md §3.100) ----
+# ---- contract 0.28: what a cache holds of a key range, as a set (DESIGN_REVIEW.md §3.100) ----
+# (contract 0.27's statement `used` is 0.29's expressions: test_a_caches_fill_is_two_expressions_of_the_cache_object)
 
 def test_holds_and_sets_serialize_validate_and_are_contract_0_28():
-    """Contract 0.28: `holds(cache, tier, keys, bind)` binds every index of a key range whose
-    key a tier holds; `union`, `intersect`, and `minus` combine such arrays; `.run(frm)` and
+    """Contract 0.28: `holds(cache, keys, bind)` binds every index of a key range whose key a
+    cache holds; `union`, `intersect`, and `minus` combine such arrays; `.run(frm)` and
     `.below(bound)` measure one. LMCache's lookup over two adapters written from them: the hit
-    the leading run of what either holds, each key the first adapter's that holds it. An
-    addition under the version range: a document with one carries 0.28."""
+    the leading run of what either holds, each key the first adapter's that holds it."""
     w, P, ds = _wl()
     with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"lm": [tier("g3", lru(), capacity=P.n), tier("g4", lru(), capacity=P.n)]}):
+        g3, g4 = cache("g3", lru(), capacity=P.n), cache("g4", lru(), capacity=P.n)
+        with a.timeline("tl", caches=[g3, g4]):
             s = a.let("s", fresh(8))
-            s3 = a.holds("lm", "g3", chunk_keys(s, 2), "s3")
-            s4 = a.holds("lm", "g4", chunk_keys(s, 2), "s4")
+            s3 = a.holds(g3, chunk_keys(s, 2), "s3")
+            s4 = a.holds(g4, chunk_keys(s, 2), "s4")
             from aeiou.builder import ArrayRef
             assert isinstance(s3, ArrayRef)
             both = a.union("any", s3, s4)
             h = a.let("h", both.run(0))
             a4 = a.minus("a4", s4, s3)
             a.intersect("twice", s3, s4)
-            a.touch("lm", "g4", chunk_keys(s, 2, chunks=a4, count=a4.below(h)))
+            a.touch(g4, chunk_keys(s, 2, chunks=a4, count=a4.below(h)))
             with a.loop("r", s3.below(h)) as j:
                 a.stat(ds.file(s3[j]))
             a.compute(10)
     ast = w.build()
-    assert ast["ast"] == "0.28"
+    assert ast["ast"] == "0.29"
     body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
-    assert body[1]["holds"]["tier"] == "g3" and body[1]["holds"]["bind"] == "s3" and "keys" in body[1]["holds"]
+    assert body[1]["holds"]["cache"] == "g3" and body[1]["holds"]["bind"] == "s3" and "keys" in body[1]["holds"]
     assert body[3] == {"set": {"bind": "any", "op": "union", "of": ["s3", "s4"]}}
     assert body[4] == {"let": {"name": "h", "value": {"run": {"array": "any", "from": 0}}}}
     assert body[5] == {"set": {"bind": "a4", "op": "minus", "of": ["s4", "s3"]}}
@@ -2495,85 +2521,48 @@ def test_holds_and_sets_serialize_validate_and_are_contract_0_28():
     assert body[7]["touch"]["keys"]["count"] == {"below": {"array": "a4", "bound": {"ref": "h"}}}
     assert body[8]["loop"]["to"] == {"below": {"array": "s3", "bound": {"ref": "h"}}}
     validate(ast)
-    with pytest.raises(BuildError, match=r"ast: version `0.27`, but the document holds a `holds` or a `set`, what a tier holds of a key range as a set, which contract `0.28` added"):
-        validate({**ast, "ast": "0.27"})
 
 
 @pytest.mark.parametrize("build, needle", [
-    (lambda a, s: a.holds("lm", "g", chunk_keys(s, 2), "1f"), "binding '1f' must match"),
-    (lambda a, s: a.holds("lm", "no tier", chunk_keys(s, 2), "f"), "tier 'no tier' must match"),
-    (lambda a, s: a.holds("lm", "g", chunk_keys(s, 2), "n"), r"holds: `bind` 'n' has the name of a parameter \(V32\)"),
-    (lambda a, s: a.union("x", a.holds("lm", "g", chunk_keys(s, 2), "f")), r"set: `of` names 1 array; an operation is over two or more \(V33\)"),
-    (lambda a, s: a.minus("x", a.holds("lm", "g", chunk_keys(s, 2), "f"), a.store("lm", "g", chunk_keys(s, 2), taken="k")),
+    (lambda a, g, s: a.holds(g, chunk_keys(s, 2), "1f"), "binding '1f' must match"),
+    (lambda a, g, s: a.holds(g, chunk_keys(s, 2), "n"), r"holds: `bind` 'n' has the name of a parameter \(V32\)"),
+    (lambda a, g, s: a.union("x", a.holds(g, chunk_keys(s, 2), "f")), r"set: `of` names 1 array; an operation is over two or more \(V33\)"),
+    (lambda a, g, s: a.minus("x", a.holds(g, chunk_keys(s, 2), "f"), a.store(g, chunk_keys(s, 2), taken="k")),
      r"set: its arrays are those a `holds` or a set bound, not ArrayRef \(V33\)"),
-    (lambda a, s: a.union("n", *[a.holds("lm", "g", chunk_keys(s, 2), "f")] * 2), r"set: `bind` 'n' has the name of a parameter \(V32\)"),
+    (lambda a, g, s: a.union("n", *[a.holds(g, chunk_keys(s, 2), "f")] * 2), r"set: `bind` 'n' has the name of a parameter \(V32\)"),
 ])
 def test_what_holds_and_sets_refuse_is_refused_at_construction(build, needle):
     w, P, ds = _wl()
     with pytest.raises(BuildError, match=needle):
         with w.actor("gpu") as a:
-            with a.timeline("tl", caches={"lm": [tier("g", lru(), capacity=4)]}):
-                build(a, a.let("s", fresh(8)))
+            g = cache("g", lru(), capacity=4)
+            with a.timeline("tl", caches=[g]):
+                build(a, g, a.let("s", fresh(8)))
 
 
-# ---- contract 0.25: a probe over several tiers (brief item 78; DESIGN_REVIEW.md §3.100) ----
-
-def test_a_probe_over_several_tiers_serializes_validates_and_is_contract_0_25():
-    """Contract 0.25: a `probe` naming `tiers` reads the leading run of the keys that some tier
-    of the list holds, and with `held` binds, a tier, the array of the run's indices that tier
-    serves, a key going to the first tier listed that holds it: LMCache's lookup over two L2
-    adapters (G3 and G4). An addition under the version range: a document with one carries
-    0.25, a probe of one tier leaves its document where it was."""
+def test_a_probe_over_two_caches_is_the_abstracts_own_lines():
+    """Contract 0.25's `probe` over several tiers, gone with 0.29: the run some cache holds and
+    which cache serves each key are written from `holds` and the set functions (the equivalence
+    was held by the runner's tests under 0.28), and the old spellings are no longer the
+    builder's."""
     w, P, ds = _wl()
     with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"lm": [tier("g3", lru(), capacity=P.n), tier("g4", lru(), capacity=P.n)]}):
+        g3, g4 = cache("g3", lru(), capacity=P.n), cache("g4", lru(), capacity=P.n)
+        with a.timeline("tl", caches=[g3, g4]):
             s = a.let("s", fresh(8))
-            u = a.probe("lm", ["g3", "g4"], chunk_keys(s, 2), "u")
-            assert isinstance(u, Ref)
-            h, a3, a4 = a.probe("lm", ["g3", "g4"], chunk_keys(s, 2, 1, u), "h", held=("a3", "a4"))
-            a.touch("lm", "g3", chunk_keys(s, 2, chunks=a3))
-            with a.loop("r", a4.len) as j:
-                a.stat(ds.file(a4[j] + h))
-            a.compute(10)
-    ast = w.build()
-    assert ast["ast"] == "0.25"
-    body = ast["actors"]["gpu"]["body"][0]["timeline"]["body"]
-    n_ = {"div": [{"seq_len": {"ref": "s"}}, 2]}
-    key = {"chunk_key": {"seq": {"ref": "s"}, "chunk": {"index": "j"}, "per": 2}}
-    assert body[1] == {"probe": {"cache": "lm", "tiers": ["g3", "g4"], "keys": {"index": "j", "count": n_, "key": key}, "bind": "u"}}
-    assert body[2]["probe"]["tiers"] == ["g3", "g4"] and body[2]["probe"]["held"] == ["a3", "a4"] and "tier" not in body[2]["probe"]
-    validate(ast)
-    with pytest.raises(BuildError, match=r"ast: version `0.23`, but the document holds a `probe` over several tiers, which contract `0.25` added"):
-        validate({**ast, "ast": "0.23"})
-    # a probe of one tier is what it was, and so is its document's version
-    w, P, ds = _wl()
-    with w.actor("gpu") as a:
-        with a.timeline("tl", caches={"lm": [tier("g3", lru(), capacity=P.n)]}):
-            a.probe("lm", "g3", keys("j", 1, 0), "h")
-            a.compute(10)
-    assert w.build()["ast"] == "0.23"
-
-
-@pytest.mark.parametrize("build, needle", [
-    (lambda a: a.probe("lm", ["g"], keys("j", 1, 0), "h"), "a probe of one tier names it by `tier`"),
-    (lambda a: a.probe("lm", ["g", "g"], keys("j", 1, 0), "h"), "tier `g` named twice"),
-    (lambda a: a.probe("lm", "g", keys("j", 1, 0), "h", held=("x",)), "`held` without `tiers`"),
-    (lambda a: a.probe("lm", ["g", "k"], keys("j", 1, 0), "h", held=("x",)), "`held` names 1 arrays for 2 tiers"),
-    (lambda a: a.probe("lm", ["g", "k"], keys("j", 1, 0), "h", held=("x", "x")), "`held` `x` named twice"),
-    (lambda a: a.probe("lm", ["g", "k"], keys("j", 1, 0), "h", held=("x", "n")), "has the name of a parameter"),
-])
-def test_what_a_probe_over_several_tiers_refuses_is_refused_at_construction(build, needle):
-    w, P, ds = _wl()
-    with pytest.raises(BuildError, match=needle):
-        with w.actor("gpu") as a:
-            with a.timeline("tl", caches={"lm": [tier("g", lru(), capacity=4), tier("k", lru(), capacity=4)]}):
-                build(a)
+            with pytest.raises(BuildError, match=r"holds: its cache is one cache\(...\) made"):
+                a.probe([g3, g4], chunk_keys(s, 2), "u")
+            with pytest.raises(TypeError):
+                a.probe("lm", "g3", keys("j", 1, 0), "h")
+            assert not hasattr(a, "used")
+    import aeiou
+    assert not hasattr(aeiou, "tier") and not hasattr(aeiou, "tier_attr")
 
 
 def test_two_committed_abstracts_time_a_region_with_a_span_outside_a_timeline():
     """Contract 0.24 in use (the user's "proceed with the three spans as recommended", 2026-11-22):
     a rank's shard write in dcp_save and a rank's restore in dcp_load are each one span, outside
-    a timeline, so each carries 0.24; a span holds no `compute` and no `barrier`, so each stops
+    a timeline; a span holds no `compute` and no `barrier`, so each stops
     short of the barrier its region ends with. The third, a query's rounds in diskann_search, is
     left out by the user's decision of the same day: its new sample puts a capture's row outside
     its tolerance, and it waits for the work on the vector database cases (brief item 79)."""
@@ -2591,5 +2580,5 @@ def test_two_committed_abstracts_time_a_region_with_a_span_outside_a_timeline():
         doc = json.loads(ast_path(name).read_text())
         found = spans(doc["actors"]["gpu"]["body"], [])
         assert [n for n, _ in found] == [span], name
-        assert doc["ast"] == "0.24", name
+        assert doc["ast"] == "0.29", name
         assert '"compute"' not in found[0][1] and '"barrier"' not in found[0][1] and '"timeline"' not in json.dumps(doc), name

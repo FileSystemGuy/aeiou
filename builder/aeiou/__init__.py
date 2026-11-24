@@ -23,8 +23,8 @@ __version__ = "0.4.0"
 from .nodes import BuildError, Expr, Dist, Handle, Ref, Index, Param  # noqa: E402
 from .dists import (const, uniform, uniform64, normal, lognormal, empirical, zipf, hotset,  # noqa: E402
                     mixture, none, draw, when, ceil_div, min_, max_,
-                    fresh, shared, prefix, cat, seq_len, chunk_key, tier, cached, now, lru,
-                    tier_attr, victim, timed, quantile, quantile_at)
+                    fresh, shared, prefix, cat, seq_len, chunk_key, cache, Cache, cached, now, lru,
+                    victim, timed, quantile, quantile_at)
 from .builder import Workload, Cursor, Dataset, Namespace, gpu_id, actor_count, st_blksize, keys, chunk_keys  # noqa: E402
 from .units import KiB, MiB, GiB, TiB, KB, MB, GB, ns, us, ms, s, minute  # noqa: E402
 
@@ -33,7 +33,7 @@ __all__ = [
     "Index", "Param", "gpu_id", "actor_count", "st_blksize",
     "const", "uniform", "uniform64", "normal", "lognormal", "empirical", "zipf", "hotset", "mixture",
     "none", "draw", "when", "ceil_div", "min_", "max_",
-    "fresh", "shared", "prefix", "cat", "seq_len", "chunk_key", "tier", "cached", "now", "lru",
-    "tier_attr", "victim", "timed", "quantile", "quantile_at", "keys", "chunk_keys",
+    "fresh", "shared", "prefix", "cat", "seq_len", "chunk_key", "cache", "Cache", "cached", "now", "lru",
+    "victim", "timed", "quantile", "quantile_at", "keys", "chunk_keys",
     "KiB", "MiB", "GiB", "TiB", "KB", "MB", "GB", "ns", "us", "ms", "s", "minute",
 ]

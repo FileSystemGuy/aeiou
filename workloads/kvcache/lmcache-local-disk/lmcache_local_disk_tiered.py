@@ -27,7 +27,9 @@ first. The lookup's stats and the loads are on the adapter's workers, the reques
 for them (contract 0.26's joined `submit`), the loads in a span `load` of their own, submitted
 only once the lookup has answered (the server's load phase, its source read 2026-11-23); its
 unlinks stay on eviction lanes of their own, where a run times each batch. The lookup is written
-from sets (contract 0.28). The second abstract, `_g4`, is the same with a second adapter, G4, on
+from sets (contract 0.28), and each of G1 to G4 is a cache of its own, one layer, G2's room the
+expression `used` of it (contract 0.29; one cache `lm` with G2 to G4 its tiers, and another for
+G1, until then: the same plan, the fingerprints unchanged). The second abstract, `_g4`, is the same with a second adapter, G4, on
 shared storage: one code path, the list of adapters the difference.
 
 Until 2026-11-23 this abstract had the in-process connector's calls (Python's `open` around one
@@ -126,7 +128,8 @@ def shape(name, doc, g4):
     # fs_native: `NAME.tmp` renamed to `NAME.data`, one flat directory an adapter (traced 2026-11-22)
     kv = w.namespace("kv", pattern="kv/{key:016x}.{ext}", fields={"key": int, "ext": str}, size=P.chunk_bytes, seed=0x5eed_da85)
     final = lambda ns, key: ns.object(key=key, ext="data")             # noqa: E731
-    ADAPTERS = [("g3", kv, "store")]                # each L2 adapter: its tier, its namespace, its workers
+    LAYER = {}                                        # the timeline's caches by name, one a layer: g1, g2, g3, and g4 when it is on
+    ADAPTERS = [("g3", kv, "store")]                # each L2 adapter: its cache, its namespace, its workers
     if g4:                                          # G4's directory a namespace of its own, so `--endpoint kv4=DIR` places it on the shared system
         G4_CHUNKS = P.g4_bytes // P.chunk_bytes
         kv4 = w.namespace("kv4", pattern="kv4/{key:016x}.{ext}", fields={"key": int, "ext": str}, size=P.chunk_bytes, seed=0x5eed_da86)
@@ -251,11 +254,11 @@ def shape(name, doc, g4):
         """A slot, then the prompt and its reply's blocks held in G1; the blocks G1 already held."""
         c.acquire("slots", 1, "slot")
         gs = c.let(tag + "gs", cat(sq, fresh(ceil_div(out, BL))))
-        return c.lookup("gpu", "g1", chunk_keys(gs, 1), tag + "gh", hold="kv")
+        return c.lookup(LAYER["g1"], chunk_keys(gs, 1), tag + "gh", hold="kv")
 
 
     def finish(c, sq):
-        c.touch("lm", "g2", chunk_keys(sq, P.per))                      # LMCache touches every chunk at a request's end
+        c.touch(LAYER["g2"], chunk_keys(sq, P.per))                      # LMCache touches every chunk at a request's end
         c.release("kv")
         c.release("slot")
 
@@ -271,19 +274,19 @@ def shape(name, doc, g4):
         on its own workers. The calls on a chunk file are `fs_native`'s, traced 2026-11-22 with two
         adapters (brief item 74); with one, the same adapter's code, read and not traced (item 70)."""
         n = c.let(tag + "nch", seq_len(sq) // P.per)
-        h2 = c.probe("lm", "g2", chunk_keys(sq, P.per), tag + "h2")
+        h2 = c.probe(LAYER["g2"], chunk_keys(sq, P.per), tag + "h2")
         # every chunk of that run is loaded, the ones the GPU holds too: the connector's lookup is the
         # whole prompt and carries no GPU hit, and the server's prefetch loads the run before the
         # connector frees what vLLM had computed (source read 2026-11-23, not traced:
         # `vllm_multi_process_adapter.py`, `storage_manager.py`, `prefetch_controller.py`)
         # a chunk of the run that G2 holds past its own leading run counts toward the hit and is
         # not loaded (the controller read-locks every such key and takes it out of the load plan)
-        # the lookup, from sets (contract 0.28): what each tier holds of the chunks past G2's hit;
+        # the lookup, from sets (contract 0.28): what each layer holds of the chunks past G2's hit;
         # the hit past it is the leading run of what any holds; G3 loads those of the run G2
         # lacks, and G4 those neither G2 nor G3 has (the lowest adapter that holds a key loads it)
         past = chunk_keys(sq, P.per, h2)
-        s2 = c.holds("lm", "g2", past, tag + "s2")
-        held = [c.holds("lm", t, past, tag + "s" + t[1]) for t, _, _ in ADAPTERS]
+        s2 = c.holds(LAYER["g2"], past, tag + "s2")
+        held = [c.holds(LAYER[t], past, tag + "s" + t[1]) for t, _, _ in ADAPTERS]
         h3 = c.let(tag + "h3", c.union(tag + "any", s2, *held).run(h2))
         loads = [c.minus(tag + "a" + t[1], s, s2, *held[:k]) for k, ((t, _, _), s) in enumerate(zip(ADAPTERS, held))]
         counts = [c.let(tag + "n" + t[1], a.below(h2 + h3)) for (t, _, _), a in zip(ADAPTERS, loads)]
@@ -291,7 +294,7 @@ def shape(name, doc, g4):
         # read 2026-11-23): the server takes a G2 buffer for every chunk it would load, and when G2
         # has not the room nothing is loaded, the hit is G2's own, and the engine computes and
         # stores the rest again; G2's room is its planned one at the request's instant
-        fits = c.let(tag + "fits", functools.reduce(lambda x, y: x + y, counts) <= G2_CHUNKS - c.used("lm", "g2", tag + "u2"))
+        fits = c.let(tag + "fits", functools.reduce(lambda x, y: x + y, counts) <= G2_CHUNKS - c.let(tag + "u2", LAYER["g2"].used))
         hit = c.let(tag + "hit", h2 + when(fits, h3, 0))
         # the request waits for its lookup and its loads, which each adapter's workers carry (contract
         # 0.26; traced 2026-11-22: an adapter's four threads issue all its calls): worker q of an
@@ -317,13 +320,13 @@ def shape(name, doc, g4):
                             with c.loop(tag + tg + "i", ceil_div(cnt - q, P.store_lanes)) as i:
                                 native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[q + i * P.store_lanes], P.per))))
             for (t, _, _), arr, cnt in zip(ADAPTERS, loads, counts):
-                c.touch("lm", t, chunk_keys(sq, P.per, chunks=arr, count=cnt))
-        t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")
+                c.touch(LAYER[t], chunk_keys(sq, P.per, chunks=arr, count=cnt))
+        t2 = c.store(LAYER["g2"], chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")
         for tr, ns, wk in ADAPTERS:
             with c.loop(tag + "c" + tr, t2.len) as j:                   # a store's check: each chunk statted first, on the adapter's workers
                 with c.submit(wk):
                     c.stat(final(ns, chunk_key(sq, t2[j], P.per)), expect=["ENOENT"])
-            tk = c.store("lm", tr, chunk_keys(sq, P.per, chunks=t2), taken=tag + "t" + tr)   # indices into t2; a chunk the adapter holds is left, never rewritten (traced)
+            tk = c.store(LAYER[tr], chunk_keys(sq, P.per, chunks=t2), taken=tag + "t" + tr)   # indices into t2; a chunk the adapter holds is left, never rewritten (traced)
             with c.loop(tag + "w" + tr, tk.len) as j:
                 with c.submit(wk):
                     native_write(c, tag + "wf" + tr, ns, chunk_key(sq, t2[tk[j]], P.per))
@@ -370,16 +373,17 @@ def shape(name, doc, g4):
         vllm = [cached("freed"), -cached("pos")]                       # vLLM's free queue: freed least recently first, a tail first
         lmc_order = [cached("touched"), -cached("pos")]                # LMCache's LRU, a batch inserted in reverse
         def lmc_rule(cap):                                             # every second, at 0.8 of the capacity, 20 % of the keys
-            return timed(1_000_000_000, tier_attr("used") * 10 >= cap * 8, max_(1, tier_attr("entries") * 2 // 10))
-        g2 = tier("g2", lmc_order, capacity=G2_CHUNKS, evict=lmc_rule(G2_CHUNKS))
-        g3 = tier("g3", lmc_order, capacity=G3_CHUNKS, evict=lmc_rule(G3_CHUNKS),
-                  on_evict=(P.evict_lanes, lambda b: b.unlink(final(kv, victim()))))
-        lm, workers = [g2, g3], {"store": (P.store_lanes, P.g2_bytes)}
+            return lambda me: timed(1_000_000_000, me.used * 10 >= cap * 8, max_(1, me.entries * 2 // 10))
+        LAYER["g2"] = cache("g2", lmc_order, capacity=G2_CHUNKS, evict=lmc_rule(G2_CHUNKS))
+        LAYER["g3"] = cache("g3", lmc_order, capacity=G3_CHUNKS, evict=lmc_rule(G3_CHUNKS),
+                        on_evict=(P.evict_lanes, lambda b: b.unlink(final(kv, victim()))))
+        workers = {"store": (P.store_lanes, P.g2_bytes)}
         if g4:                                                         # each adapter evicts by its own rule and has its own workers
-            lm.append(tier("g4", lmc_order, capacity=G4_CHUNKS, evict=lmc_rule(G4_CHUNKS),
-                           on_evict=(P.evict_lanes, lambda b: b.unlink(final(kv4, victim())))))
+            LAYER["g4"] = cache("g4", lmc_order, capacity=G4_CHUNKS, evict=lmc_rule(G4_CHUNKS),
+                            on_evict=(P.evict_lanes, lambda b: b.unlink(final(kv4, victim()))))
             workers["store4"] = (P.store_lanes, P.g2_bytes)
-        with gpu.timeline("tl", caches={"lm": lm, "gpu": [tier("g1", vllm, capacity=G1_BLOCKS, full="wait")]},
+        LAYER["g1"] = cache("g1", vllm, capacity=G1_BLOCKS, full="wait")   # the GPU's own blocks, declared last as it always was
+        with gpu.timeline("tl", caches=list(LAYER.values()),
                           resources={"slots": P.slots},
                           # a chunk whose write has not landed stays pinned in LMCache's L1 (G2), so G2's bytes are
                           # what a run's unfinished stores may hold before one would have been dropped

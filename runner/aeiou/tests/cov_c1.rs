@@ -144,7 +144,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(params: Value, datasets: Value, namespaces: Value, body: Value) -> String {
-    json!({"ast": "0.23", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
+    json!({"ast": "0.29", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
 }
 
 /// One plain dataset `d` of ten one-byte files.
@@ -200,7 +200,7 @@ fn stat(ds: &str, id: i64) -> Value {
 /// proportion to the weights, never an arm of weight 0, the same again for the same seed.
 #[test]
 fn choose_and_lookup_are_no_longer_nodes_and_a_drawn_arm_goes_by_weight() {
-    for gone in [json!({"choose": {"arms": [{"weight": 1, "body": []}]}}), json!({"lookup": {"cache": "c", "tier": "t", "seq": {"fresh": 1}, "per": 1, "bind": "h"}})] {
+    for gone in [json!({"choose": {"arms": [{"weight": 1, "body": []}]}}), json!({"lookup": {"cache": "t", "seq": {"fresh": 1}, "per": 1, "bind": "h"}})] {
         let kind = gone.as_object().unwrap().keys().next().unwrap().clone();
         let e = aeiou::ast::parse(&doc(json!({}), d(), json!({}), json!([gone]))).unwrap_err().to_string();
         assert!(e.contains(&format!("unknown variant `{kind}`")), "{e}");

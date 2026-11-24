@@ -42,6 +42,10 @@ given the same number of statements, plans the same ops to the last one (fingerp
 `8edc49c45a97b621` both ways). At seed 1: 89,958 files written to each tier, 984,977 chunks
 read from the two, 69,000 files unlinked in G3, 2,161,935 stats in each tier, 30.1 TiB read
 over the plan's 51.9 hours.
+Since contract 0.29 (2026-11-23, the same day; the same sample, the statement count kept) each
+of G1 to G4 is a cache of its own, one layer, and G2's room the expression `used: g2`: the
+same ops, fingerprint `8edc49c45a97b621` at seed 1 and `4d31e3cf229c2f0d` at seed 2 before and
+after; this lock and its workload id changed with the contract's version.
 
 What LMCache does with two adapters is read from its source (0.5.5, `v1/distributed/
 storage_controllers/`) and, since 2026-11-22, seen in a capture of its multi-process server
@@ -71,5 +75,5 @@ Its sample is not `agentx-tiered`'s: an abstract's draws are keyed by where they
 document, and this one has statements the other lacks, so the same seed gives other sessions.
 
 No capture of its own. The planned trace at seed 1 was checked for consistency (no read of a file not yet
-written or already unlinked, in planned order); the probe over both tiers is held by the runner's
-tests (`evict.rs`).
+written or already unlinked, in planned order); ~~the probe over both tiers is held by the runner's
+tests (`evict.rs`)~~ the set functions the lookup is written from are held by the runner's tests (`evict.rs`), which under contract 0.28 also held them equal to the probe over both tiers that 0.29 removed.

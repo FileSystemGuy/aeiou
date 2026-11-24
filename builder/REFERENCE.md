@@ -131,12 +131,14 @@ outside one, an array in a loop or named as a parameter); `check.py` the rest.
 Since contract 0.16 (the same day, brief item 75, provisional likewise): the `seq` functions
 `fresh(n)`, `shared(id, n)`, `prefix(s, k)`, `cat(a, b)`, `seq_len(s)`, and `chunk_key(s, chunk,
 per)` (a sequence is not a number: `+` on one is refused by V27, use `cat`);
-`c.timeline(name, caches={"lm": [tier("disk", lru(), capacity=..., unit="bytes"), ...]})`, a
-~~`tier(name, evict="none"|"lru", capacity=None, unit="entries"|"bytes")`~~ `tier(name,
-order=None, capacity=None, unit="entries"|"bytes", full="skip"|"wait"|"fail")` (contract 0.18)
-checked as it is made; and ~~`c.lookup(cache, tier, seq, per, bind, size=None, hold=None)`~~ `c.lookup(cache, tier, keys, bind, size=None, hold=None)`,
+~~`c.timeline(name, caches={"lm": [tier("disk", lru(), capacity=..., unit="bytes"), ...]})`, a
+`tier(name, evict="none"|"lru", capacity=None, unit="entries"|"bytes")`~~ ~~`tier(name,
+order=None, capacity=None, unit="entries"|"bytes", full="skip"|"wait"|"fail")` (contract 0.18)~~
+`c.timeline(name, caches=[disk, ...])`, each a cache object `disk = cache("disk", lru(),
+capacity=..., unit="bytes", full="skip"|"wait"|"fail")` (contract 0.29, below: a cache is one
+layer and `tier(...)` is gone) checked as it is made; and ~~`c.lookup(cache, tier, seq, per, bind, size=None, hold=None)`~~ ~~`c.lookup(cache, tier, keys, bind, size=None, hold=None)`~~ `c.lookup(cache, keys, bind, size=None, hold=None)`,
 returning the binding of the leading keys held (V33; library since contract 0.23, below). The builder refuses a `lookup` outside a
-timeline and a cache without tiers.
+timeline ~~and a cache without tiers~~.
 Since contract 0.17: `tl.group(g)`, a group of the timeline's entries, with `.published` and
 `.entry(n, key)` counted within it, and `c.publish(tl.group(g), ...)` putting an entry there.
 Since contract 0.18 (the same day, brief items 72 and 75): a tier's `order`, a list of integer
@@ -148,9 +150,12 @@ and `c.release(hold)` (V34); a `lookup`'s `hold`; and `now()`, the lane's planne
 The builder refuses `acquire` and `release` outside a timeline, an unknown `cached` attribute,
 and an `order` or `full` with no capacity.
 Since contract 0.19 (2026-11-13, `DESIGN_REVIEW.md` §3.99, the note "Contract 0.19 proposed"):
-`tier(..., evict=timed(every, when, count), on_evict=(lanes, fn))`, timed eviction with
+~~`tier(..., evict=timed(every, when, count), on_evict=(lanes, fn))`, timed eviction with
 `when` and `count` over `tier_attr("used")` and `tier_attr("entries")` (LMCache's rule:
-`timed(10**9, tier_attr("used") * 10 >= cap * 8, max_(1, tier_attr("entries") * 2 // 10))`),
+`timed(10**9, tier_attr("used") * 10 >= cap * 8, max_(1, tier_attr("entries") * 2 // 10))`)~~
+`cache(..., evict=lambda me: timed(every, when, count), on_evict=(lanes, fn))`, timed eviction
+with `when` and `count` over the cache's own `me.used` and `me.entries` (contract 0.29,
+below; `tier(...)` and `tier_attr` until then),
 and an eviction body that `fn(b)` writes on the builder `b`, where the timeline stands, with
 `victim()` the evicted entry's key (V35); `c.probe(cache, tier, seq, per, frm, bind)`,
 `c.touch(cache, tier, seq, per, frm, count, *, chunks=None)`, and `c.store(cache, tier, seq,
@@ -158,8 +163,8 @@ per, frm, count, size=None, bind=None, *, chunks=None, present=None, taken=None)
 of chunks, or over the chunks whose indices an array holds (`chunks`, an `ArrayRef` or a name);
 `present="renew"` stores again what the tier holds, and `taken` names the array of the indices
 the store stored, returned as an `ArrayRef` (a pair `(Ref, ArrayRef)` with `bind`) (V33). The builder refuses them outside a
-timeline, an `evict` with no capacity or order, an `on_evict` with no order, and an unknown
-`tier_attr`.
+timeline, an `evict` with no capacity or order, an `on_evict` with no order ~~, and an unknown
+`tier_attr`~~. (The signatures of `probe`, `touch`, and `store` in this paragraph are contract 0.19's; 0.23 and 0.29, below, changed them.)
 Since contract 0.20 (2026-11-13, `DESIGN_REVIEW.md` §3.99, the note "The run side of
 timelines"): `c.timeline(..., workers={"store": (lanes, staging)})`, a timeline's store workers;
 `with c.submit("store"):`, a body run on a worker lane at this lane's planned time (its ops
@@ -172,26 +177,49 @@ and the statements around them (what V35 bans in an eviction body, and `submit` 
 in waits for, with that span's lane: a request's lookups and loads that workers carry while it
 waits; its reads draw on the staging the span names. The builder refuses it outside a span, and
 an abstract with one carries 0.26.
-`c.holds(cache, tier, keys, bind)` (contract 0.28, 2026-11-23) binds the indices of a key range
-whose keys a tier holds, every one, and returns a `SetRef`: an `ArrayRef` (`[k]`, `.len`) with
+`c.holds(cache, keys, bind)` (contract 0.28, 2026-11-23; ~~`c.holds(cache, tier, keys, bind)`~~ until 0.29) binds the indices of a key range
+whose keys a cache holds, every one, and returns a `SetRef`: an `ArrayRef` (`[k]`, `.len`) with
 `.run(frm)`, its leading run from `frm`, and `.below(bound)`, how many of its elements are less
 than `bound`. `c.union(bind, a, b, ...)`, `c.intersect(...)`, and `c.minus(...)` (the first less
 all the rest) combine `SetRef`s into another. A lookup is written from them, its rules the
 script's own lines (`lmcache_local_disk_tiered_g4`: the hit is `union(...).run(h2)`, G3 loads
-`minus(s3, s2)`, G4 `minus(s4, s2, s3)`, each cut at the run with `.below`). `chunk_keys(seq,
-per, chunks=arr, count=n)` takes the first `n` of an array's chunks. An abstract with a `holds`
-or a set carries 0.28.
+`minus(s3, s2)`, G4 `minus(s4, s2, s3)`, each cut at the run with `.below`; the single-tier abstract the same with one adapter, since brief item 70). `chunk_keys(seq,
+per, chunks=arr, count=n)` takes the first `n` of an array's chunks. ~~An abstract with a `holds`
+or a set carries 0.28.~~
 
-`c.used(cache, tier, bind)` (contract 0.27, 2026-11-23) binds what a tier holds, in its unit,
+~~`c.used(cache, tier, bind)` (contract 0.27, 2026-11-23) binds what a tier holds, in its unit,
 at the lane's planned instant, and returns the `Ref`; nothing is changed. It is what a lane
 decides by as an application's allocator does (`with c.when(n <= capacity - f):`), and an
-abstract with one carries 0.27.
+abstract with one carries 0.27.~~ (An expression of the cache object since contract 0.29: `g2.used`.)
+
+Since contract 0.29 (2026-11-23, brief item 82 stage 2; `DESIGN_REVIEW.md` §3.100, the note
+"Contract 0.29"): **a cache is an object, and one layer.** `g2 = cache(name, order=None,
+capacity=None, unit="entries", full="skip", evict=None, on_evict=None)` makes it (what
+`tier(...)` took, which is gone with `tier_attr`), and `c.timeline(name, caches=[g1, g2, g3])`
+declares it; two layers of an application are two caches. Its fill is two expressions,
+`g2.used` (its entries' size in its unit) and `g2.entries` (`used: g2` and `entries: g2` in the
+document), read on a lane where they stand: `room = c.let("room", cap - g2.used)`. A rule
+reads its own cache's fill, so `evict` is given as a function of the cache: `evict=lambda me:
+timed(10**9, me.used * 10 >= cap * 8, max_(1, me.entries * 2 // 10))` (LMCache's). The
+statements stay the cursor's and take the object: `c.holds(g2, keys, bind)`, `c.touch(g2,
+keys)`, `c.store(g2, keys, size=None, *, present=None, hold=None, found=None, taken=None)`,
+`c.lookup(g2, keys, bind, size=None, hold=None)`. `c.probe(g2, keys, bind)` is library now, as
+`lookup` is: one `holds` whose array is named `bind`, and the expression `run` of it from the
+range's first index, which it returns (bind it with `c.let` to name it; inline, it is read
+wherever it is written). Gone: a probe over a list of tiers (write `c.union(...)`.run(...)` and
+`c.minus(...)`, as `lmcache_local_disk_tiered.py` does), `c.used`, a store's `bind` (a
+`c.probe` after the store), `present="renew"`. Refused as written: a statement naming a cache
+by a string, a cache its timeline does not declare, the same cache twice in a timeline's
+list, an `evict` that is no `timed(...)`. Refused at `build()` by the checker: a fill read
+where no timeline declares the cache, in another cache's rule, in an `order`, or in a
+`submit`'s or an eviction's body. The contract's floor rose to 0.29 with this, so every
+abstract carries 0.29 until the next addition.
 Since contract 0.24 (2026-11-22, the note "Suggestion 4 built"): `with c.span(name):` outside a
 timeline, the elapsed time of its body each time it is entered (a model's load, a checkpoint's
 write, one query), around ops and a joined `parallel`; the builder refuses a `staging` there and a
 `compute`, `barrier`, channel, `loader`, `timeline`, or `trace` in it. A script names no contract
 version: the builder stamps the lowest that holds what the abstract uses (brief item 80), so
-an abstract with such a span carries 0.24 and one without 0.23. Wrapping statements that
+~~an abstract with such a span carries 0.24 and one without 0.23~~ every abstract carries 0.29 since the floor rose to it (2026-11-23). Wrapping statements that
 hold a draw in a span moves the draw's site, and so the fingerprint, as any wrapping does.
 Since contract 0.23 (2026-11-22, `DESIGN_REVIEW.md` §3.100, the note "Suggestion 1 built") the
 cache statements take a key range, made by one of two library functions: `keys(index, count,
@@ -199,14 +227,14 @@ key, frm=0)`, `key` a function of the index (`keys("j", 4, lambda j: j * 7)`), f
 any origin; and `chunk_keys(seq, per, frm=0, count=None, *, chunks=None, index="j",
 clip=True)`, the keys of a bound sequence's whole chunks, cut at its end as the runner cut them
 until 0.22 (the `min` and `max` are written into the range; `clip=False` leaves them out), or
-of the chunks whose indices an array holds. `c.probe(cache, tier, keys, bind, *, held=None)`
+of the chunks whose indices an array holds. ~~`c.probe(cache, tier, keys, bind, *, held=None)`
 (with `tier` a list of two or more tiers, contract 0.25, the leading run some tier of them holds,
 and with `held`, a name a tier, the binding and one ArrayRef a tier returned as a tuple, each
 array the run's indices that tier serves, a key going to the first tier listed that holds it;
 an abstract with such a probe carries 0.25),
 `c.touch(cache, tier, keys)`, and `c.store(cache, tier, keys, size=None, *, present=None,
 hold=None, found=None, bind=None, taken=None)`, which returns the Refs of `found` and `bind`
-and the ArrayRef of `taken`, those given, in that order. `c.lookup(...)` is one such store
+and the ArrayRef of `taken`, those given, in that order.~~ (Their signatures since contract 0.29 are in its paragraph above: a cache object in place of a cache's and a tier's names, no list of tiers, no `bind`.) `c.store` returns the Ref of `found` and the ArrayRef of `taken`, those given, in that order. `c.lookup(...)` is one such store
 with `present="touch"` and `found=bind`. Two things an author meets: the sequence is bound by
 `c.let` first (its expression, written in the key, would be computed at every index, and a
 `fresh` in it would be other blocks each time), and a `taken` of a store over

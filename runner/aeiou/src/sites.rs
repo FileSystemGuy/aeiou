@@ -148,7 +148,7 @@ fn expr(e: &Expr, p: &mut Path) {
     };
     match node {
         ExprNode::Param(_) | ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_)
-        | ExprNode::Now(_) | ExprNode::Cached(_) | ExprNode::Tier(_) | ExprNode::Victim(_) => {}
+        | ExprNode::Now(_) | ExprNode::Cached(_) | ExprNode::Used(_) | ExprNode::Entries(_) | ExprNode::Victim(_) => {}
         ExprNode::Published(arg) => {
             if let Some(g) = arg.group() {
                 p.with(&["published", "group"], |p| expr(g, p));
@@ -308,23 +308,21 @@ fn node(n: &Node, p: &mut Path) {
         }
         Node::Compute { ns } => p.with(&[k, "ns"], |p| expr(ns, p)),
         Node::Timeline { caches, resources, workers, body: b, .. } => {
-            for (i, c) in caches.iter().enumerate() {
-                for (j, t) in c.tiers.iter().enumerate() {
-                    if let Some(e) = &t.capacity {
-                        p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "capacity"], |p| expr(e, p));
+            for (i, t) in caches.iter().enumerate() {
+                if let Some(e) = &t.capacity {
+                    p.with(&[k, "caches", &i.to_string(), "capacity"], |p| expr(e, p));
+                }
+                for (o, e) in t.order.iter().flatten().enumerate() {
+                    p.with(&[k, "caches", &i.to_string(), "order", &o.to_string()], |p| expr(e, p));
+                }
+                if let Some(ev) = &t.evict {
+                    for (f, e) in [("every", &ev.every), ("when", &ev.when), ("count", &ev.count)] {
+                        p.with(&[k, "caches", &i.to_string(), "evict", f], |p| expr(e, p));
                     }
-                    for (o, e) in t.order.iter().flatten().enumerate() {
-                        p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "order", &o.to_string()], |p| expr(e, p));
-                    }
-                    if let Some(ev) = &t.evict {
-                        for (f, e) in [("every", &ev.every), ("when", &ev.when), ("count", &ev.count)] {
-                            p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "evict", f], |p| expr(e, p));
-                        }
-                    }
-                    if let Some(oe) = &t.on_evict {
-                        p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "on_evict", "lanes"], |p| expr(&oe.lanes, p));
-                        p.with(&[k, "caches", &i.to_string(), "tiers", &j.to_string(), "on_evict", "body"], |p| body(&oe.body, p));
-                    }
+                }
+                if let Some(oe) = &t.on_evict {
+                    p.with(&[k, "caches", &i.to_string(), "on_evict", "lanes"], |p| expr(&oe.lanes, p));
+                    p.with(&[k, "caches", &i.to_string(), "on_evict", "body"], |p| body(&oe.body, p));
                 }
             }
             for (i, r) in resources.iter().enumerate() {
@@ -338,8 +336,8 @@ fn node(n: &Node, p: &mut Path) {
         }
         Node::Submit { body: b, .. } | Node::Span { body: b, .. } => p.with(&[k, "body"], |p| body(b, p)),
         Node::Acquire { n, .. } => p.with(&[k, "n"], |p| expr(n, p)),
-        Node::Release { .. } | Node::Used { .. } | Node::Set { .. } => {}
-        Node::Probe { keys, .. } | Node::Touch { keys, .. } | Node::Holds { keys, .. } => keys_of(keys, k, p),
+        Node::Release { .. } | Node::Set { .. } => {}
+        Node::Touch { keys, .. } | Node::Holds { keys, .. } => keys_of(keys, k, p),
         Node::Store { keys, size, .. } => {
             keys_of(keys, k, p);
             if let Some(e) = size {

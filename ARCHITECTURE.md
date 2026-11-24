@@ -131,7 +131,7 @@ worker lanes after every other lane at theirs. The state is:
 |---|---|---|---|
 | Each lane's planned clock | `compute`; a wait for a resource, a `full: wait` tier, or a join | `now` | The live lanes |
 | The published log, by group | `publish` | `published`, `entry` | The entries published (a known gap: nothing bounds it but the abstract) |
-| A tier's entries and their attributes (`stored`, `touched`, `freed`, `hits`, `pos`, `size`), and which a lane holds | `store`, `touch`, `release`, an eviction | `probe`, `used` (its fill, contract 0.27), `holds` (every index of a key range it holds, contract 0.28), the tier's `order` (through `cached`), its `evict` (through `tier`) | The tier's capacity, a parameter |
+| A cache's entries (a tier's until contract 0.29, when a cache became one layer) and their attributes (`stored`, `touched`, `freed`, `hits`, `pos`, `size`), and which a lane holds | `store`, `touch`, `release`, an eviction | `holds` (every index of a key range it holds, contract 0.28; ~~`probe`~~, its leading run, is `run` of that since 0.29), the expressions `used` and `entries` (its fill; a statement `used` in 0.27, expressions since 0.29), the cache's `order` (through `cached`), its `evict` (through its own `used` and `entries`; ~~`tier`~~) | The cache's capacity, a parameter |
 | A resource's free units and its queue of waiting lanes | `acquire`, `release` | `acquire` | The live lanes |
 | An `array`, and a `store`'s `taken` | Where it stands, once | `elem`, `len` | Its count |
 
@@ -151,7 +151,7 @@ within a GPU outside a timeline is not architectural and is never hashed.
 
 ### 3. Maps (new framing; one proposal; not yet written)
 
-The state structures a timeline may declare: the tier, the published log, the counted resource,
+The state structures a timeline may declare: the cache (one layer since contract 0.29; "the tier" in what follows, written before), the published log, the counted resource,
 the `array`. For each: its state, its order, what bounds its memory (the table in section 1 is
 the start).
 
@@ -159,7 +159,7 @@ the start).
 
 ### 4. Helpers (new; not yet written)
 
-`probe`, `used`, `holds`, `set`, `touch`, `store`, `acquire`, `release`, `publish`, `submit`, `span`, each with
+~~`probe`, `used`,~~ `holds`, `set`, `touch`, `store`, `acquire`, `release`, `publish`, `submit`, `span` (and, since contract 0.29, the expressions `used` and `entries` where a statement stood), each with
 a declared effect signature in section 5's terms.
 
 ### 5. The verifier (new; one proposal)
@@ -176,7 +176,7 @@ in it.
 | `op` | Issues an op to the system under test | The POSIX ops (`open` to `readdir`) |
 | `time` | Moves the lane's clock (planned, in a timeline; a real delay outside one) | `compute` |
 | `wait` | May wait in planned time for another lane | `acquire`; a store of `present: touch` (on a `full: wait` tier; ~~`lookup`~~, a builder function over it since contract 0.23) |
-| `read` | Reads timeline state | `probe`, `used`, `holds`; the expressions `published` and `entry` |
+| `read` | Reads timeline state | `holds`; the expressions `published`, `entry`, `used`, and `entries` |
 | `write` | Changes timeline state | `publish`, `touch`, `store`, `release` |
 | `fork` | Starts lanes that plan their own time | `parallel` (joined, or with `join: false`) |
 | `hand` | Hands ops to a worker lane | `submit` |
@@ -184,9 +184,11 @@ in it.
 | `sync` | Waits on another actor in real time | `channel`, `put`, `take`, `barrier`, `loader` |
 | `nest` | Opens a scope of its own | `timeline`, `trace` |
 
-`let`, `loop`, `cond`, `phase`, `array`, and `set` have no effect of their own. Two expressions
+`let`, `loop`, `cond`, `phase`, `array`, and `set` have no effect of their own. Four expressions
 carry an effect, and give it to the statement they stand in: `published` and `entry` read the
-timeline's log (contract 0.22; see "What the check found" below). `now` carries none: it is the
+timeline's log (contract 0.22; see "What the check found" below), and `used` and `entries` a
+cache's fill (contract 0.29; a statement `used` in 0.27 and 0.28, and until 0.29 a statement
+`probe` stood here too, which is now `holds` and the expression `run`). `now` carries none: it is the
 lane's own clock, accepted wherever a timeline encloses it.
 
 **The contexts.** Each context allows a set of effects. The reason is in the last column.
@@ -198,7 +200,7 @@ lane's own clock, accepted wherever a timeline encloses it.
 | A timeline's lane | `op`, `time`, `wait`, `read`, `write`, `fork` (joined or not), `hand`, `measure` | Lanes wait on one another only in planned time, so no `sync`; one planned order, so no `nest` |
 | A `span`'s body | `op`, `read`, `write`, `hand` | Its D is a storage wait, so nothing in it may move or wait on the planned clock |
 | A `submit`'s body | `op` | A worker's ops stand at the submitting lane's instant: it plans no time, and neither reads nor changes the timeline's state |
-| A tier's `on_evict` body | `op` | The same, at the eviction's instant |
+| A cache's `on_evict` body | `op` | The same, at the eviction's instant |
 
 Read against `schema/README.md` §4, this table gives V30's list (a timeline's lane lacks `sync`
 and `nest`), V35's (an eviction body allows `op` alone), V36's for `submit` (the same) and for
@@ -275,7 +277,7 @@ Three places a capability can live, and the test for which.
   six calls of Python's `open()`.
 - **Intrinsic.** A capability the runner carries because it needs an order across lanes or
   state kept efficiently, neither of which expressions can give. Today: the timeline and its
-  planned order; the tier (a sorted victim index) with `probe`, `used`, `holds`, `touch`, `store`; the resource
+  planned order; the cache (a sorted victim index; the tier until contract 0.29) with `holds`, `touch`, `store`, and its fill `used` and `entries` (~~`probe`, `used`~~ as statements until 0.29); the resource
   with `acquire` and `release`; the published log; `workers` and `submit`; `span`; the Feistel
   shuffle behind `consume`; `channel`, `put`, `take`, and `barrier`.
 - **Instruction.** The core that neither of the above can be reduced to: binding, loops,
@@ -375,6 +377,8 @@ days (0.15 to 0.22) each regenerated 14 ASTs and relocked 25 cases, and the shap
 group publishes reference hashes, an addition made for one new workload would split the
 results of every other workload from those before it.
 
+*The floor raised for the first time, 2026-11-23 (contract 0.29).* A cache became one layer and four spellings left, a change that is not an addition, so by the rule the user set on 2026-11-22 the floor rose from 0.23 to 0.29 and the table of additions emptied: 15 ASTs regenerated, 26 cases relocked, every shape re-measured, no fingerprint moved. The cost was the one this section counted before the range was built, once, for six versions' worth of provisional pieces settled together.
+
 - *Proposal (a):* the runner accepts every contract version from a stated floor up to its own,
   and an abstract carries the lowest version that holds everything it uses. An addition then
   touches no committed AST, lock, or workload id; eBPF's rule that a program loads on every
@@ -409,6 +413,7 @@ needed them.
 | 0.22 | A refusal | none | A provisional piece narrowed (7.4) |
 | 0.26 | A `submit` its span waits for (`join`) | 3 | A key on an existing helper; no context changed (a `submit` was already allowed in a span, which did not wait for it); run side only, nothing in the plan; under 7.5's range |
 | 0.27 | `used`, a tier's fill read by a lane | 3 | A helper beside `probe`, with its context (it reads timeline state and changes nothing, on a lane only); plan side only, nothing in the run; under 7.5's range |
+| 0.29 | A cache one layer (`tiers` gone); its fill the expressions `used` and `entries`; `probe` (both forms), the statement `used`, a store's `bind`, and `present: renew` removed | none | A provisional piece reshaped (7.4), the second after 0.23: the user's proposal of 2026-11-23, one cache a G-layer and math functions over what each holds. What the removed statements did is written from 0.28's functions, and one of them, the one-tier `probe`, is a library function now (7.1), as `lookup` became in 0.23. Not an addition, so the first raising of 7.5's floor (0.23 to 0.29): every AST, lock, workload id, and shape hash moved, no fingerprint (the two abstracts with a cache plan the same ops) |
 | 0.28 | `holds`, `set`, and the expressions `run` and `below`: what a tier holds of a key range as a set, and sets combined and measured | 3 | A lookup's rules (which run is the hit, which tier serves a key) moved from the instruction (`probe` over `tiers`) into the abstract's own statements, the user's proposal of 2026-11-23; `holds` reads timeline state as `probe` does, `set` is computation with no effect; plan side only; under 7.5's range |
 | 0.25 | A `probe` over several tiers (`tiers`, `held`) | 3 | Keys on an existing helper; no context changed (section 5: `probe` reads timeline state and changes nothing, as before); under 7.5's range, so no committed lock or workload id moved |
 | 0.24 | A `span` outside a timeline | 3 | A helper allowed in a second context (section 5); the first version under 7.5's range, so no committed AST, lock, or workload id moved |

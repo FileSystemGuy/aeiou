@@ -98,7 +98,7 @@ fn an_emitted_file_runs_as_a_trace_node_of_the_same_numbers() {
     std::fs::write(
         &ast,
         format!(
-            r#"{{"ast": "0.23", "name": "node", "doc": "the emitted file", "params": {{}}, "datasets": {{}},
+            r#"{{"ast": "0.29", "name": "node", "doc": "the emitted file", "params": {{}}, "datasets": {{}},
                 "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "a.jsonl", "sha256": "{sha}"}}}}]}}}}}}"#
         ),
     )
@@ -165,7 +165,7 @@ fn a_timelines_ops_are_emitted_at_their_planned_times() {
         {"compute": {"ns": {"mul": [{"index": "k"}, 1_000_000]}}},
         {"let": {"name": "f", "value": {"object": {"namespace": "kv", "fields": {"key": {"index": "k"}}}}}},
         {"open": {"file": rf("f"), "flags": ["WRONLY", "CREAT"]}}, {"compute": {"ns": 5000}}, {"close": {"file": rf("f")}}]);
-    let text = serde_json::json!({"ast": "0.23", "name": "t",
+    let text = serde_json::json!({"ast": "0.29", "name": "t",
         "namespaces": {"kv": {"pattern": "kv/{key}", "fields": {"key": "int"}, "size": 0, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"timeline": {"name": "tl", "body": [{"parallel": {"index": "k", "width": 2, "body": session}}]}}]}}}).to_string();
     let d = crate::common::tmpdir("emit", "timeline");
@@ -189,7 +189,7 @@ fn a_timelines_ops_are_emitted_at_their_planned_times() {
     assert_eq!(got, want);
     // the file loads and runs as a trace node: its two lanes, their four ops
     let sha: String = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
-    let node = format!(r#"{{"ast": "0.23", "name": "n", "params": {{}}, "datasets": {{}}, "namespaces": {{"kv": {{"pattern": "kv/{{key}}", "fields": {{"key": "int"}}, "size": 0, "seed": 1}}}},
+    let node = format!(r#"{{"ast": "0.29", "name": "n", "params": {{}}, "datasets": {{}}, "namespaces": {{"kv": {{"pattern": "kv/{{key}}", "fields": {{"key": "int"}}, "size": 0, "seed": 1}}}},
         "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "t.trace.jsonl", "sha256": "{sha}"}}}}]}}}}}}"#);
     let nast = d.join("n.ast.json");
     std::fs::write(&nast, node).unwrap();

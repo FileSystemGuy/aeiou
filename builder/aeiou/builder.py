@@ -911,14 +911,15 @@ class Cursor:
             yield Sub(self, idx)
 
     @contextlib.contextmanager
-    def timeline(self, name: str, caches: dict | None = None, resources: dict | None = None,
+    def timeline(self, name: str, caches: list | None = None, resources: dict | None = None,
                  workers: dict | None = None):
         """Lanes planned together (contract 0.15, rule V30): this body's main line and every
         sub-actor of a `parallel` in it, each with a planned clock that `compute` moves; the
         lane planned soonest takes the next step. Yields the timeline, whose `published` and
         `entry(n, key)` read what its lanes published before the step being walked. `caches`
-        (contract 0.16, rule V33) maps a cache's name to its tiers (`tier(...)`), walked with
-        the lanes in planned order and read by `lookup`; `resources` (contract 0.18, rule V34)
+        (contract 0.16, rule V33; one layer each since 0.29) is a list of `cache(...)`, walked
+        with the lanes in planned order and named, as those objects, by `holds`, `touch`,
+        `store`, `probe`, and `lookup`; `resources` (contract 0.18, rule V34)
         a counted resource's name to its capacity, held by `acquire`; `workers` (contract 0.20,
         rule V36) a workers' name to `(lanes, staging)`, the worker lanes `submit` puts bodies
         on and the bytes a run may hold staged for them, both of parameters and literals."""
@@ -927,12 +928,15 @@ class Cursor:
             raise BuildError(f"timeline {name!r} inside a timeline (V30)")
         body: list = []
         node = {"name": name}
+        from .dists import Cache
+        caches = list(caches or ())
+        for c in caches:
+            if not isinstance(c, Cache):
+                raise BuildError(f"timeline {name!r}: its caches are a list of cache(...), not {type(c).__name__} (V33)")
+            if sum(1 for o in caches if o.name == c.name) > 1:
+                raise BuildError(f"cache {c.name!r} declared twice (V33)")
         if caches:
-            for c, tiers in caches.items():
-                check_ident(c, "cache")
-                if not tiers:
-                    raise BuildError(f"cache {c!r} has no tiers (V33)")
-            node["caches"] = [{"name": c, "tiers": [dict(t) for t in tiers]} for c, tiers in caches.items()]
+            node["caches"] = [dict(c.node) for c in caches]
         if resources:
             node["resources"] = [{"name": check_ident(r, "resource"), "capacity": ast_of(lift(n, f"resource {r} capacity"))}
                                  for r, n in resources.items()]
@@ -942,14 +946,13 @@ class Cursor:
         node["body"] = body
         self._emit({"timeline": node})
         # an eviction body (contract 0.19): its statements written where the timeline stands
-        for c in node.get("caches", []):
-            for t in c["tiers"]:
-                if "on_evict" in t:
-                    fn, ebody = t["on_evict"]["body"], []
-                    t["on_evict"] = {"lanes": t["on_evict"]["lanes"], "body": ebody}
-                    with self._push(ebody, "on_evict"):
-                        fn(self)
-        with self._push(body, "timeline", label=(name, set(workers or ()))):
+        for t in node.get("caches", []):
+            if "on_evict" in t:
+                fn, ebody = t["on_evict"]["body"], []
+                t["on_evict"] = {"lanes": t["on_evict"]["lanes"], "body": ebody}
+                with self._push(ebody, "on_evict"):
+                    fn(self)
+        with self._push(body, "timeline", label=(name, set(workers or ()), tuple(caches))):
             yield Timeline(name)
 
     def _timeline_frame(self):
@@ -1015,57 +1018,36 @@ class Cursor:
         node["values"] = {check_ident(k, "entry key"): ast_of(lift(v, f"publish {k}")) for k, v in values.items()}
         self._emit({"publish": node})
 
-    def _keys(self, what: str, cache: str, tier: str, keys) -> dict:
-        if not any(f.kind == "timeline" for f in self._frames):
-            raise BuildError(f"{what}: no timeline declares cache {cache!r} around it (V33)")
+    def _keys(self, what: str, cache, keys) -> dict:
+        from .dists import Cache
+        if not isinstance(cache, Cache):
+            raise BuildError(f"{what}: its cache is one cache(...) made, as its timeline declares it, not {type(cache).__name__} (V33)")
+        tl = self._timeline_frame()
+        if tl is None:
+            raise BuildError(f"{what}: no timeline declares cache {cache.name!r} around it (V33)")
+        if not any(c is cache for c in tl.label[2]):
+            raise BuildError(f"{what}: cache {cache.name!r} is not one timeline `{tl.label[0]}` declares (V33)")
         if not isinstance(keys, Keys):
             raise BuildError(f"{what}: its keys are a key range, keys(...) or chunk_keys(...), not {type(keys).__name__} (V33)")
-        if isinstance(tier, (list, tuple)):
-            return {"cache": check_ident(cache, "cache"), "tiers": [check_ident(t, "tier") for t in tier], "keys": keys.node}
-        return {"cache": check_ident(cache, "cache"), "tier": check_ident(tier, "tier"), "keys": keys.node}
+        return {"cache": cache.name, "keys": keys.node}
 
-    def probe(self, cache: str, tier, keys, bind: str, *, held=None):
-        """The longest leading run of `keys` (a key range, `keys(...)` or `chunk_keys(...)`) held
-        in `tier` of `cache`, bound to `bind`; nothing changed (contract 0.19, keys 0.23, rule
-        V33). Returns the binding, which `@` and `prev` may not read. Over several tiers
-        (contract 0.25): `tier` a list of two or more, the run of the keys some tier of it
-        holds; with `held`, a name a tier, each is bound to the array of the run's indices that
-        tier serves, a key going to the first tier listed that holds it, and the binding and
-        those ArrayRefs are returned, a tuple in the list's order."""
-        check_ident(bind, "binding")
-        several = isinstance(tier, (list, tuple))
-        if several:
-            if len(tier) < 2:
-                raise BuildError(f"probe: `tiers` names {len(tier)} tier; a probe of one tier names it by `tier` (V33)")
-            for t in tier:
-                if list(tier).count(t) > 1:
-                    raise BuildError(f"probe: tier `{t}` named twice in `tiers` (V33)")
-        node = self._keys("probe", cache, tier, keys)
-        node["bind"] = bind
-        if held is not None:
-            held = list(held)
-            if not several:
-                raise BuildError("probe: `held` without `tiers`; a probe of one tier binds its run alone (V33)")
-            if len(held) != len(tier):
-                raise BuildError(f"probe: `held` names {len(held)} arrays for {len(tier)} tiers (V33)")
-            for h in held:
-                check_ident(h, "held")
-                if held.count(h) > 1:
-                    raise BuildError(f"probe: `held` `{h}` named twice (V33)")
-                if h in self.wl._param_specs:
-                    raise BuildError(f"probe: `held` {h!r} has the name of a parameter (V32)")
-            node["held"] = held
-        self._emit({"probe": node})
-        self._top.bindings[bind] = None
-        return (Ref(bind), *(ArrayRef(h) for h in held)) if held is not None else Ref(bind)
+    def probe(self, cache, keys, bind: str) -> Expr:
+        """The longest leading run of `keys` (a key range, `keys(...)` or `chunk_keys(...)`) that
+        `cache` holds; nothing changed. Library, not contract (ARCHITECTURE.md 7.1; the `probe`
+        node of contracts 0.19 to 0.28): one `holds`, whose array is named `bind`, and the
+        expression `run` of it from the range's first index, which is returned. One statement,
+        as the node was, so no site moved when it went. A `let` of the expression is not
+        reached by `@`; `prev` carries it."""
+        return self.holds(cache, keys, bind).run(keys.frm)
 
-    def holds(self, cache: str, tier: str, keys, bind: str):
-        """The indices of `keys` (a key range) whose keys `tier` of `cache` holds at this lane's
+    def holds(self, cache, keys, bind: str):
+        """The indices of `keys` (a key range) whose keys `cache` (a `cache(...)` of the
+        enclosing timeline) holds at this lane's
         planned instant, every one, not stopping at the first it lacks, ascending, bound to
         `bind`; nothing changed (contract 0.28, rule V33). Returns its SetRef: an ArrayRef
         (`[k]`, `.len`) with `.run(frm)` and `.below(bound)`, which `union`, `intersect`, and
         `minus` combine. What a lookup is made of, its rules the abstract's own statements."""
-        node = self._keys("holds", cache, tier, keys)
+        node = self._keys("holds", cache, keys)
         return self._set_bind("holds", {"holds": {**node, "bind": bind}}, bind)
 
     def _set_bind(self, what: str, node: dict, bind: str):
@@ -1097,46 +1079,35 @@ class Cursor:
         (contract 0.28)."""
         return self._set("minus", bind, of)
 
-    def used(self, cache: str, tier: str, bind: str):
-        """What `tier` of `cache` holds, in the tier's unit, at this lane's planned instant, bound
-        to `bind`; nothing changed (contract 0.27, rule V33). Returns the binding, which `@` and
-        `prev` may not read. What a lane decides by as an application's allocator does: LMCache's
-        server loads a lookup's hits into G2 all or none, by the room G2 has."""
-        check_ident(bind, "binding")
-        self._emit({"used": {"cache": check_ident(cache, "cache"), "tier": check_ident(tier, "tier"), "bind": bind}})
-        self._top.bindings[bind] = None
-        return Ref(bind)
+    def touch(self, cache, keys):
+        """Those of `keys` that `cache` holds, touched as one event (contract 0.19, keys 0.23,
+        rule V33)."""
+        self._emit({"touch": self._keys("touch", cache, keys)})
 
-    def touch(self, cache: str, tier: str, keys):
-        """Those of `keys` that `tier` of `cache` holds, touched as one event (contract 0.19,
-        keys 0.23, rule V33)."""
-        self._emit({"touch": self._keys("touch", cache, tier, keys)})
-
-    def store(self, cache: str, tier: str, keys, size=None, *, present: str | None = None, hold: str | None = None,
-              found: str | None = None, bind: str | None = None, taken: str | None = None):
-        """Those of `keys` that `tier` of `cache` lacks, stored as one event, `size` each in a
-        tier that counts bytes; those it holds left (`present="keep"`, the default), stored
-        again as if absent (`"renew"`), or touched (`"touch"`, contract 0.23), before anything
-        is stored. With `hold` (only with `present="touch"`, rule V34), what it touched and
-        stored is this lane's until `release(hold)`. With `found`, the leading run of the keys
-        held before it changed anything; with `bind`, the leading run held after it (a planned
-        drop leaves it short); with `taken`, an array of the indices it stored. Returns the
-        Refs of `found` and `bind` and the ArrayRef of `taken`, those given, one alone or a
-        tuple in that order, or None (contract 0.19, keys 0.23, rule V33)."""
-        node = self._keys("store", cache, tier, keys)
+    def store(self, cache, keys, size=None, *, present: str | None = None, hold: str | None = None,
+              found: str | None = None, taken: str | None = None):
+        """Those of `keys` that `cache` lacks, stored as one event, `size` each in a cache that
+        counts bytes; those it holds left (`present="keep"`, the default) or touched
+        (`"touch"`, contract 0.23), before anything is stored. With `hold` (only with
+        `present="touch"`, rule V34), what it touched and stored is this lane's until
+        `release(hold)`. With `found`, the leading run of the keys held before it changed
+        anything; with `taken`, an array of the indices it stored. Returns the Ref of `found`
+        and the ArrayRef of `taken`, those given, one alone or a tuple in that order, or None
+        (contract 0.19, keys 0.23, rule V33). The run held after it, its `bind` until contract
+        0.29, is `probe` after it; `present="renew"` went with 0.29 too."""
+        node = self._keys("store", cache, keys)
         if size is not None:
             node["size"] = ast_of(lift(size, "store size"))
         if present is not None:
-            if present not in ("keep", "renew", "touch"):
-                raise BuildError(f"store present: one of keep, renew, touch, not {present!r}")
+            if present not in ("keep", "touch"):
+                raise BuildError(f"store present: one of keep, touch, not {present!r}")
             node["present"] = present
         if hold is not None:
             if present != "touch":
                 raise BuildError(f"store: `hold` {hold!r} holds what a store of present=\"touch\" touches and stores (V34)")
             node["hold"] = check_ident(hold, "hold")
-        for k, b in (("found", found), ("bind", bind)):
-            if b is not None:
-                node[k] = check_ident(b, "binding")
+        if found is not None:
+            node["found"] = check_ident(found, "binding")
         if taken is not None:
             check_ident(taken, "taken")
             if taken in self.wl._param_specs:
@@ -1144,22 +1115,21 @@ class Cursor:
             node["taken"] = taken
         self._emit({"store": node})
         out = []
-        for b in (found, bind):
-            if b is not None:
-                self._top.bindings[b] = None
-                out.append(Ref(b))
+        if found is not None:
+            self._top.bindings[found] = None
+            out.append(Ref(found))
         if taken is not None:
             out.append(ArrayRef(taken))
         return None if not out else out[0] if len(out) == 1 else tuple(out)
 
-    def lookup(self, cache: str, tier: str, keys, bind: str, size=None, hold: str | None = None) -> Ref:
+    def lookup(self, cache, keys, bind: str, size=None, hold: str | None = None) -> Ref:
         """A lookup that stores what it missed: the longest leading run of `keys` held in
-        `tier` of `cache`, bound to `bind`; the keys it holds touched, the others stored, and
-        with `hold` all of them this lane's until `release(hold)`. On a tier that waits when
+        `cache`, bound to `bind`; the keys it holds touched, the others stored, and
+        with `hold` all of them this lane's until `release(hold)`. On a cache that waits when
         full it waits, before it changes anything, until all of it fits. Library, not contract
         (ARCHITECTURE.md 7.1; the `lookup` node of contracts 0.16 to 0.22): one `store` of
         `present="touch"` with `found`."""
-        return self.store(cache, tier, keys, size, present="touch", hold=hold, found=bind)
+        return self.store(cache, keys, size, present="touch", hold=hold, found=bind)
 
     def acquire(self, resource: str, n, hold: str):
         """`n` units of a resource of the enclosing timeline, this lane's under `hold` until
@@ -1547,11 +1517,12 @@ class TimelineGroup:
 
 
 class Keys:
-    """A key range of a `probe`, `touch`, or `store` (contract 0.23): made by `keys` or
+    """A key range of a `holds`, `touch`, or `store` (contract 0.23): made by `keys` or
     `chunk_keys`."""
 
-    def __init__(self, node: dict):
+    def __init__(self, node: dict, frm=0):
         self.node = node
+        self.frm = frm              # its first index, as written in `from` (0 when left out)
 
 
 def keys(index: str, count, key, frm=0) -> Keys:
@@ -1565,7 +1536,7 @@ def keys(index: str, count, key, frm=0) -> Keys:
         node["from"] = ast_of(lift(frm, "keys from"))
     node["count"] = ast_of(lift(count, "keys count"))
     node["key"] = ast_of(lift(k, "keys key"))
-    return Keys(node)
+    return Keys(node, frm)
 
 
 def chunk_keys(seq, per, frm=0, count=None, *, chunks=None, index: str = "j", clip: bool = True) -> Keys:

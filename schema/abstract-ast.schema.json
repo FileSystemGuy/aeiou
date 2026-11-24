@@ -30,14 +30,9 @@
   "properties": {
     "ast": {
       "enum": [
-        "0.23",
-        "0.24",
-        "0.25",
-        "0.26",
-        "0.27",
-        "0.28"
+        "0.29"
       ],
-      "description": "The contract version this document conforms to: the lowest that holds everything it uses (brief item 80), one of those listed, the floor first. A checker reads every version from the floor to its own, so an addition to the contract changes the hash of no document that does not use it; what each version past the floor added is the table `SINCE` of schema/check.py and of the runner's validate.rs."
+      "description": "The contract version this document conforms to: the lowest that holds everything it uses (brief item 80), one of those listed, the floor first. A checker reads every version from the floor to its own, so an addition to the contract changes the hash of no document that does not use it; what each version past the floor added is the table `SINCE` of schema/check.py and of the runner's validate.rs. The floor has been 0.29 since 2026-11-23 (a cache one layer, brief item 82 stage 2): a change that is not an addition raises the floor to its version, and the table is empty until the next addition."
     },
     "name": {
       "$ref": "#/$defs/ident"
@@ -814,14 +809,15 @@
                 "pos",
                 "size"
               ],
-              "description": "An attribute of the entry a tier's `order` is computed for (contract 0.18, rule V33), only there: `stored`, `touched`, `freed` the tier's event counts when it was stored, last looked up, and last released (`stored` until then); `hits` the lookups that found it; `pos` its index in the sequence of the lookup that last found or stored it; `size` its size in the tier's unit."
+              "description": "An attribute of the entry a cache's `order` is computed for (contract 0.18, rule V33), only there: `stored`, `touched`, `freed` the cache's event counts when it was stored, last looked up, and last released (`stored` until then); `hits` the lookups that found it; `pos` its index in the sequence of the lookup that last found or stored it; `size` its size in the cache's unit."
             },
-            "tier": {
-              "enum": [
-                "used",
-                "entries"
-              ],
-              "description": "What a tier holds, read by its timed eviction's `when` and `count` (contract 0.19, rule V33), only there: `used` its entries' size in the tier's unit, `entries` how many it holds."
+            "used": {
+              "$ref": "#/$defs/ident",
+              "description": "What a cache of the enclosing timeline holds, its entries' size in the cache's unit, at this lane's planned instant (contract 0.29, rule V33; a statement `used` with a `bind` in 0.27 and 0.28). Read where it stands and changing nothing; not positional: a `let` of it is not reached by `@`, and `prev` carries it. Never in a body that only issues ops (an `on_evict`'s, a `submit`'s). In a cache's timed eviction's `when` and `count` it names that cache alone and is its fill at the tick (`tier: used` until 0.29). What a lane decides by as an application's admission does: LMCache's server loads a hit's chunks into its L1 only when all of them fit in what L1 has free."
+            },
+            "entries": {
+              "$ref": "#/$defs/ident",
+              "description": "How many entries a cache of the enclosing timeline holds; where and how `used` is read (contract 0.29, rule V33; `tier: entries` in a rule until then)."
             },
             "victim": {
               "type": "object",
@@ -2167,7 +2163,7 @@
               "$ref": "#/$defs/ident"
             }
           },
-          "description": "What this lane holds under `hold`, given back (contract 0.18, rule V34): a resource's units, or a tier's entries, which become victims again with `freed` the release. A lane ends holding nothing."
+          "description": "What this lane holds under `hold`, given back (contract 0.18, rule V34): a resource's units, or a cache's entries, which become victims again with `freed` the release. A lane ends holding nothing."
         },
         "submit": {
           "type": "object",
@@ -2211,77 +2207,16 @@
           },
           "description": "A measured part of a timeline's lane (contract 0.20, rule V36): in a run, its D, from its launch (planned time plus the lane's lag on entry) to its last op's completion, is reported by `name`, a request's own storage wait. No effect on the plan or the fingerprint. Never in another span or a `submit` body, and never holding a `compute`, `parallel`, `acquire`, or a `store` of `present: touch` (a `lookup` until contract 0.22), which move or wait on the planned clock. With `staging` (contract 0.21) its reads draw on those workers' staging. Outside a timeline (contract 0.24, rule V36): the elapsed time of its body each time it is entered, from the instant its actor reaches it to its last op's completion and the end of every `parallel` in it, reported by `name` under the same statistics; there it takes no `staging` and holds no `compute`, `barrier`, `channel`, `put`, `take`, `loader`, `timeline`, or `trace`, anywhere in it: its own ops and a joined `parallel`'s, never emulated compute or a wait on another actor."
         },
-        "probe": {
-          "type": "object",
-          "required": [
-            "cache",
-            "keys",
-            "bind"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "cache": {
-              "$ref": "#/$defs/ident"
-            },
-            "tier": {
-              "$ref": "#/$defs/ident"
-            },
-            "tiers": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ident"
-              }
-            },
-            "keys": {
-              "$ref": "#/$defs/keys"
-            },
-            "bind": {
-              "$ref": "#/$defs/ident"
-            },
-            "held": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ident"
-              }
-            }
-          },
-          "description": "The longest leading run of `keys` held in a tier of a cache of the enclosing timeline, bound to `bind` as an integer; nothing changed (contract 0.19; a key range since contract 0.23; rule V33). Not positional: `@` and `prev` may not reach `bind`. Over several tiers (contract 0.25): `tiers`, two or more of the cache's, in place of `tier`; the run is of the keys some tier of the list holds, and `held`, a name a tier in the list's order, binds for each the array of the run's indices that tier serves, a key going to the first tier listed that holds it; read with `len` and `elem` after it, as a store's `taken`. Which of `tier` and `tiers`, their number, and `held` are rule V33's, stated by both checkers."
-        },
-        "used": {
-          "type": "object",
-          "required": [
-            "cache",
-            "tier",
-            "bind"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "cache": {
-              "$ref": "#/$defs/ident"
-            },
-            "tier": {
-              "$ref": "#/$defs/ident"
-            },
-            "bind": {
-              "$ref": "#/$defs/ident"
-            }
-          },
-          "description": "What a tier of a cache of the enclosing timeline holds, in the tier's unit, at this lane's planned instant, bound to `bind` as an integer; nothing changed (contract 0.27, rule V33). Not positional: `@` and `prev` may not read it. What a lane decides by as an application's allocator does: LMCache's server loads a lookup's hits into G2 all or none, by the room G2 has."
-        },
         "holds": {
           "type": "object",
           "required": [
             "cache",
-            "tier",
             "keys",
             "bind"
           ],
           "additionalProperties": false,
           "properties": {
             "cache": {
-              "$ref": "#/$defs/ident"
-            },
-            "tier": {
               "$ref": "#/$defs/ident"
             },
             "keys": {
@@ -2291,7 +2226,7 @@
               "$ref": "#/$defs/ident"
             }
           },
-          "description": "The indices of `keys` whose keys a tier of a cache of the enclosing timeline holds at this lane's planned instant, every one, not stopping at the first it lacks, ascending, bound to `bind` as an array read with `len`, `elem`, `run`, and `below`; nothing changed (contract 0.28, rule V33). What a lookup is made of: with `set`, `run`, and `below` an abstract states which run is its hit and which tier serves each key, where a `probe` over `tiers` fixes both."
+          "description": "The indices of `keys` whose keys a cache of the enclosing timeline holds at this lane's planned instant, every one, not stopping at the first it lacks, ascending, bound to `bind` as an array read with `len`, `elem`, `run`, and `below`; nothing changed (contract 0.28, rule V33; a cache one layer, with no `tier`, since 0.29). The membership form: it costs the keys asked, never the cache's contents. A lookup's leading run, which a `probe` bound until 0.29, is `run` of this array from the range's first index. Never in a body that only issues ops."
         },
         "set": {
           "type": "object",
@@ -2325,36 +2260,28 @@
           "type": "object",
           "required": [
             "cache",
-            "tier",
             "keys"
           ],
           "additionalProperties": false,
           "properties": {
             "cache": {
-              "$ref": "#/$defs/ident"
-            },
-            "tier": {
               "$ref": "#/$defs/ident"
             },
             "keys": {
               "$ref": "#/$defs/keys"
             }
           },
-          "description": "Those of `keys` a tier holds, touched as one event: the same `touched` for all, `pos` each one's index (contract 0.19; a key range since contract 0.23; rule V33)."
+          "description": "Those of `keys` a cache holds, touched as one event: the same `touched` for all, `pos` each one's index (contract 0.19; a key range since contract 0.23; rule V33)."
         },
         "store": {
           "type": "object",
           "required": [
             "cache",
-            "tier",
             "keys"
           ],
           "additionalProperties": false,
           "properties": {
             "cache": {
-              "$ref": "#/$defs/ident"
-            },
-            "tier": {
               "$ref": "#/$defs/ident"
             },
             "keys": {
@@ -2366,7 +2293,6 @@
             "present": {
               "enum": [
                 "keep",
-                "renew",
                 "touch"
               ]
             },
@@ -2376,14 +2302,11 @@
             "found": {
               "$ref": "#/$defs/ident"
             },
-            "bind": {
-              "$ref": "#/$defs/ident"
-            },
             "taken": {
               "$ref": "#/$defs/ident"
             }
           },
-          "description": "Those of `keys` a tier lacks, stored as one event (the same `stored` for all, `pos` each one's index), `size` each exactly when the tier counts bytes. Those it holds are left as they are (`present: keep`, the default), stored again as if absent (`renew`: a new entry, taken; one a lane holds is left), or touched in the same event before anything is stored (`touch`, contract 0.23). With `hold` (contract 0.23, rule V34; only with `present: touch`), the entries it touched and stored are this lane's under that name until its `release`, never victims meanwhile. On a tier whose `full` is `wait` or `fail`, a store of `present: touch` decides before it changes anything: all it would store fits, or the lane waits in planned time (or the walk fails); a tier of `full: wait` takes no other store. With `found`, the leading run of the keys held before it changed anything, bound as an integer; with `bind`, the leading run held after it, short by a planned drop; with `taken`, an array of the indices it stored, in the order acted on, read with `len` and `elem` after it. `found` and `bind` are not positional. A lookup that stores what it missed, the `lookup` node of contracts 0.16 to 0.22, is a store of `present: touch` with `found` (contract 0.19; a key range since contract 0.23; rule V33)."
+          "description": "Those of `keys` a cache lacks, stored as one event (the same `stored` for all, `pos` each one's index), `size` each exactly when the cache counts bytes. Those it holds are left as they are (`present: keep`, the default) or touched in the same event before anything is stored (`touch`, contract 0.23); `renew`, which stored them again as new, went with contract 0.29. With `hold` (contract 0.23, rule V34; only with `present: touch`), the entries it touched and stored are this lane's under that name until its `release`, never victims meanwhile. On a cache whose `full` is `wait` or `fail`, a store of `present: touch` decides before it changes anything: all it would store fits, or the lane waits in planned time (or the walk fails); a cache of `full: wait` takes no other store. With `found`, the leading run of the keys held before it changed anything, bound as an integer, not positional; with `taken`, an array of the indices it stored, in the order acted on, read with `len` and `elem` after it. The leading run held after it, a store's `bind` until 0.29, is a `holds` after it and its `run`. A lookup that stores what it missed, the `lookup` node of contracts 0.16 to 0.22, is a store of `present: touch` with `found` (contract 0.19; a key range since contract 0.23; rule V33)."
         }
       }
     },
@@ -2481,26 +2404,6 @@
     "cache": {
       "type": "object",
       "required": [
-        "name",
-        "tiers"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "name": {
-          "$ref": "#/$defs/ident"
-        },
-        "tiers": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/tier"
-          }
-        }
-      },
-      "description": "A cache of a timeline (contract 0.16, brief item 75): its tiers by name."
-    },
-    "tier": {
-      "type": "object",
-      "required": [
         "name"
       ],
       "additionalProperties": false,
@@ -2530,7 +2433,7 @@
             "wait",
             "fail"
           ],
-          "description": "What a store does when the tier has no room and no victim left (contract 0.18): `skip` (the default) leaves the entry out; `wait` holds the lane, in planned time, until a release makes room for the whole lookup, first come first; `fail` refuses the walk. `wait` and `fail` need a `capacity`."
+          "description": "What a store does when the cache has no room and no victim left (contract 0.18): `skip` (the default) leaves the entry out; `wait` holds the lane, in planned time, until a release makes room for the whole lookup, first come first; `fail` refuses the walk. `wait` and `fail` need a `capacity`."
         },
         "evict": {
           "type": "object",
@@ -2551,7 +2454,7 @@
               "$ref": "#/$defs/expr"
             }
           },
-          "description": "Timed eviction (contract 0.19, rule V33): at every planned instant k \u00d7 `every` ns from the timeline's start, while lanes remain and before any lane's step at that instant, if `when` holds, the `count` entries least in `order` that no lane holds are evicted; never at store. `when` and `count` read parameters, literals, and `tier`; `every` parameters and literals. Needs a `capacity` and an `order`; not with `full` `wait`."
+          "description": "Timed eviction (contract 0.19, rule V33): at every planned instant k \u00d7 `every` ns from the timeline's start, while lanes remain and before any lane's step at that instant, if `when` holds, the `count` entries least in `order` that no lane holds are evicted; never at store. `when` and `count` read parameters, literals, and `cache`; `every` parameters and literals. Needs a `capacity` and an `order`; not with `full` `wait`."
         },
         "on_evict": {
           "type": "object",
@@ -2568,10 +2471,10 @@
               "$ref": "#/$defs/body"
             }
           },
-          "description": "What each victim runs (contract 0.19, rule V35): `body`, with `victim` its key, on eviction lanes of the timeline, victim i of a batch on lane i mod `lanes`, at the planned instant of the tick or the store that evicted it, before any other lane's step at that instant. The body sees the bindings around the timeline and parameters; it holds no `compute`, `lookup`, `probe`, `touch`, `store`, `acquire`, `release`, `publish`, `parallel`, `loader`, channel, barrier, timeline, or trace, and (contract 0.22) reads no `published` or `entry`; `now` in it is the eviction's planned instant. `lanes` reads parameters and literals. Needs an `order`."
+          "description": "What each victim runs (contract 0.19, rule V35): `body`, with `victim` its key, on eviction lanes of the timeline, victim i of a batch on lane i mod `lanes`, at the planned instant of the tick or the store that evicted it, before any other lane's step at that instant. The body sees the bindings around the timeline and parameters; it holds no `compute`, `holds`, `touch`, `store`, `acquire`, `release`, `publish`, `parallel`, `loader`, channel, barrier, timeline, or trace, and (contract 0.22) reads no `published` or `entry`; `now` in it is the eviction's planned instant. `lanes` reads parameters and literals. Needs an `order`."
         }
       },
-      "description": "A tier (contracts 0.16, 0.18, and 0.19, rule V33): at most `capacity` (counted in entries, the default, or bytes) of entries no lane holds evicted by `order`, at store or, with `evict`, at planned ticks; held entries are never victims; an entry larger than the tier is not stored."
+      "description": "A cache of a timeline (contracts 0.16, 0.18, and 0.19, rule V33), one layer (contract 0.29; from 0.16 to 0.28 a cache held `tiers` and a statement named a cache and a tier of it): at most `capacity` (counted in entries, the default, or bytes) of entries no lane holds evicted by `order`, at store or, with `evict`, at planned ticks; held entries are never victims; an entry larger than the cache is not stored. Two layers of one application are two caches, and what a lookup over both finds is the abstract's own lines, from `holds`, `set`, `run`, and `below`."
     },
     "resource": {
       "type": "object",

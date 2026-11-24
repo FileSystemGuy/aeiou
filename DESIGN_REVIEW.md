@@ -13651,6 +13651,69 @@ user's "Yes, draft the design for item 2" and "proceed with the two spans").**
   builder's, the description's; `test_trace.py`'s document test of the G4 abstract.
   `ARCHITECTURE.md`'s tables: `holds` under `read`, `set` with no effect.
 
+**Contract 0.29: a cache is one layer; the floor raised (2026-11-23; the user's "Approved; raise
+the floor, item 70 first as you recommend" on the design in the note below).** Stage 2 of brief
+item 82, built as designed, with what building it settled.
+
+- *What changed in the contract.* A timeline's `caches` is a list of caches, each `{name,
+  order, capacity, unit, full, evict, on_evict}`; the `tiers` level is gone, and `holds`,
+  `touch`, and `store` name a cache alone. A cache's fill is two expressions, `used: CACHE`
+  and `entries: CACHE`: on a lane, what the cache holds when the expression is evaluated; in a
+  cache's own `evict`, its fill at the tick (`tier: used|entries` before). Removed: `probe`
+  (one tier, 0.19; several, 0.25), the statement `used` (0.27), a store's `bind`, `present:
+  renew`. Kept: the store of `present: touch` with `hold` and `found`, `taken`, timed eviction,
+  `on_evict`, `acquire`, `release`.
+- *The floor.* Not an addition, so by the rule of 2026-11-22 the floor rose, 0.23 to 0.29, the
+  first time since brief item 80 was built. `SINCE` is empty in both checkers; the tests of
+  the boundaries between 0.23 and 0.28 are retired (the mechanism's own test, with its
+  stand-in version 0.99, stays); 15 ASTs regenerated, 26 cases relocked, every shape
+  re-measured.
+- *Accepted on the design's test.* Every committed abstract keeps its fingerprint. The
+  thirteen without a cache changed in the version's two characters. The two KV abstracts were
+  rewritten and plan the same ops: at their cases' parameters, `lmcache_local_disk_tiered`
+  `f5eb1fc05c198957` at seed 1 and `65019982e18a5977` at seed 2, `_g4` `8edc49c45a97b621` and
+  `4d31e3cf229c2f0d`, before (the 0.28 runner on the 0.28 documents) and after. Three things
+  kept the plan: the caches are declared in the order their tiers stood (`g2`, `g3`, `g4`,
+  `g1`), an eviction lane's key starting with that index; the builder's `probe` writes one
+  statement where the node stood, a `holds`, and returns the expression `run`, so no later
+  draw's site moved; and G2's fill is bound by a `let` where the statement `used` stood. No
+  draw is in a key range or an eviction body of either abstract, whose paths did change
+  (`caches/1/tiers/0/on_evict` is `caches/1/on_evict`, `probe/keys` is `holds/keys`): an
+  abstract with a draw there would have drawn another sample, and none exists.
+- *Settled while building.*
+  - A `let` that reads `run`, `below`, `used`, or `entries` is refused under `x @ i`, as a
+    probe's and a `used`'s binding were: its value is the step's own. Contract 0.28 had let
+    `@` reach a `let` of a `run`, an omission with no user; closed here. `prev` carries such
+    a `let`, as it could not carry a statement's binding.
+  - Where the fill may stand: on a lane, of a cache its timeline declares; in a rule, of that
+    cache alone; never in an `order`, a `capacity`, a rule's `every`, an `on_evict`'s `lanes`,
+    a `submit`'s body, or an eviction's body. The last two are section 5's reason (such a
+    body reads no timeline state). The first group is the planner's: an order and a rule are
+    evaluated while the timeline's state is held, and a capacity before it exists.
+  - A cache's and a resource's names are separate (a lane waits on one or the other); the
+    planner keeps one map for both, a cache as (name, "") and a resource as ("", name).
+  - `probe` over one cache tests every key of the range now, where the node stopped at the
+    first it lacked. The keys were computed for the whole range before either way; the
+    difference is one table lookup a key. The G4 case's dry run at seed 1 took 57 s before and
+    47 s after on this host, a difference other load on it explains; no slowdown was seen.
+  - The builder refuses, as written, a statement that names a cache by a string or names one
+    its timeline does not declare; the fill of a cache read where no timeline declares it is
+    the checker's refusal at `build()`, since an expression does not know where it will stand.
+- *The proof of stage 1 is retired with what it proved.* `evict.rs`'s
+  `a_probe_over_tiers_is_its_composition_from_sets` compared the probe over tiers with the set
+  functions; with no probe it cannot run. It ran under 0.28 (commit 7e40cde), and the G4
+  abstract's fingerprint, unchanged from the probe form through the set form to this one, is
+  the standing evidence.
+- *Not done.* A store's `present` from sets (the note below says why `present: touch` stays an
+  instruction); functions for the vector database work (brief item 81); nothing on the run
+  side, which reads none of this.
+- *Tests.* Written first and seen red (the runner refused every document of the new form):
+  `evict.rs` (the fill's expressions and their rules, the removed spellings refused when
+  read), `seqcache.rs`, `tiers.rs`, `timeline.rs`'s run over two caches, the shared refusal
+  cases converted and checked against both checkers (254, with three of 0.29), the builder's
+  (cache objects, the fill, `probe` as library, what is refused as written), the
+  description's, the architecture table's.
+
 **Item 70: the single-tier abstract on the adapter; and stage 2 designed (2026-11-23; the
 user's "Proceed with the plan for item 70", then "Approved; raise the floor, item 70 first as you
 recommend").**

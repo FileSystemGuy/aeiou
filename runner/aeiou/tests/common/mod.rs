@@ -265,3 +265,37 @@ pub fn chunk_keys(s: Value, per: Value, from: Value, count: Option<Value>) -> Va
 pub fn chunk_keys_of(s: Value, per: Value, array: &str) -> Value {
     json!({"index": "j", "count": {"len": array}, "key": {"chunk_key": {"seq": s, "chunk": {"elem": {"array": array, "index": {"index": "j"}}}, "per": per}}})
 }
+
+/// What a probe of one cache is since contract 0.29, which has no `probe`: a `holds` of the key
+/// range and a `let` of the leading run of what it bound, from the range's first index. Two
+/// statements, given as one value that `flat` opens where it stands in a body.
+#[allow(dead_code)]
+pub fn probe(cache: &str, keys: Value, bind: &str) -> Value {
+    let held = format!("{bind}_held");
+    let from = keys.get("from").cloned().unwrap_or(serde_json::json!(0));
+    serde_json::json!({"__seq": [
+        {"holds": {"cache": cache, "keys": keys, "bind": held}},
+        {"let": {"name": bind, "value": {"run": {"array": held, "from": from}}}}]})
+}
+
+/// `v` with every `{"__seq": [...]}` in an array replaced by its statements, at any depth.
+#[allow(dead_code)]
+pub fn flat(v: Value) -> Value {
+    match v {
+        Value::Array(a) => {
+            let mut out = Vec::with_capacity(a.len());
+            for x in a {
+                match x {
+                    Value::Object(mut o) if o.len() == 1 && o.contains_key("__seq") => match flat(o.remove("__seq").unwrap()) {
+                        Value::Array(inner) => out.extend(inner),
+                        other => out.push(other),
+                    },
+                    other => out.push(flat(other)),
+                }
+            }
+            Value::Array(out)
+        }
+        Value::Object(o) => Value::Object(o.into_iter().map(|(k, x)| (k, flat(x))).collect()),
+        other => other,
+    }
+}

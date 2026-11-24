@@ -297,7 +297,26 @@ each is a recorded decision and the golden tests pin them.
   flight. The planner marks the end of every submitted body on its worker lane; the executor
   queues a body behind the gate of its own submission alone, and stages a submission's writes
   when its gate opens, wherever its worker lane then is.
-- **What a tier holds of a key range, as a set** (contract 0.28, V33; `vm.rs`'s `Node::Holds`,
+- **A cache is one layer** (contract 0.29, V33; brief item 82 stage 2; `vm.rs`'s `Tier`, which
+  keeps its name, and the `Node::Timeline` arm). What the entries of this list say of a tier,
+  from contract 0.16 on, is said of a cache: a timeline's `caches` are made when it starts,
+  in the order declared, each with its own entries, victim order, event count, timed rule,
+  and eviction body, and a `holds`, `touch`, or `store` names one by its name alone. An
+  eviction lane's key starts with the cache's index in that order, which is what a tier's
+  index among all its timeline's tiers was, so an abstract rewritten with its caches in the
+  order its tiers stood plans the same ops (the two KV abstracts: the same fingerprints at
+  seeds 1 and 2). A cache's fill is read by two expressions, `used: NAME` and `entries: NAME`
+  (`ExprNode::Used` and `Entries`): on a lane, the cache's `used` and its number of entries as
+  they stand when the walk evaluates the expression, nothing touched; in a cache's timed
+  rule, what the tick's evaluator is given of that cache, as `tier used|entries` was. They
+  are never evaluated while the timeline's state is locked (an `order` and a rule are, and
+  the validator keeps them out of an `order` and another cache's out of a rule; the walk
+  refuses rather than waits if it meets one there). A `let` whose value reads `run`, `below`,
+  `used`, or `entries` is refused under `x @ i`: its value is the step's own. Removed with it:
+  the `probe` statement, of one tier and of several (a `holds` and `run`; `union` and `minus`),
+  the `used` statement (the expression), a store's `bind` (a `holds` after it), and `present:
+  renew`; the entries below that describe them are struck. Of the plan alone.
+- **What a ~~tier~~ cache holds of a key range, as a set** (contract 0.28, V33; `vm.rs`'s `Node::Holds`,
   `Node::Set`, and `ExprNode::Run` and `Below`). `holds` tests every key of its range against
   the tier's entries as they stand when the lane's walk reaches it and binds the indices
   held, in the range's order, so ascending; nothing is touched or stored. `set` merges such
@@ -307,14 +326,16 @@ each is a recorded decision and the golden tests pin them.
   its bound. Each costs the keys asked, never the tier's size: no tier's contents are a
   value. The arrays are a store's `taken` to the validator (they vary with what the tier
   holds) and more: only they are taken by `set`, `run`, and `below`. A probe over two tiers
-  and its composition from these give the same run and the same indices to each tier
-  (`evict.rs`, `a_probe_over_tiers_is_its_composition_from_sets`). Of the plan alone.
-- **A tier's fill read by a lane** (contract 0.27, V33; `vm.rs`'s `Node::Used`). `used` binds
+  and its composition from these ~~give~~ gave the same run and the same indices to each tier
+  (`evict.rs`, `a_probe_over_tiers_is_its_composition_from_sets`, run under 0.28 and retired
+  with the probe in 0.29). Of the plan alone.
+- ~~**A tier's fill read by a lane** (contract 0.27, V33; `vm.rs`'s `Node::Used`). `used` binds
   the tier's `used` as it stands when the lane's walk reaches the statement, in the tier's
   unit, the number its timed eviction's `tier used` reads; nothing is touched or stored. The
-  binding is a probe's: refused under `x @ i` and to `prev`. It is of the plan alone: a run
-  issues nothing for it, and what a run's loads hold in flight is not in it.
-- **A probe over several tiers** (contract 0.25, V33; `vm.rs`'s `Node::Probe`). With `tiers`
+  binding is a probe's: refused under `x @ i` and to `prev`.~~ (An expression since contract
+  0.29, above.) It is of the plan alone: a run issues nothing for it, and what a run's loads
+  hold in flight is not in it.
+- ~~**A probe over several tiers**~~ (removed in contract 0.29; what it did, for the record) (contract 0.25, V33; `vm.rs`'s `Node::Probe`). With `tiers`
   the walk takes the range's keys in order and, for each, the first tier of the list that
   holds it; the first key no tier holds ends the run, whose length is `bind`. With `held`,
   each tier's array gets the indices (the range's, `from` and up, never counts from its start)

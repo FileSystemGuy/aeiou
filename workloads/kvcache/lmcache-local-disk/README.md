@@ -230,8 +230,8 @@ aeiou dry-run --case agentx-tiered --workloads ../.. --gpus 1
 Since 2026-11-22 the script emits a second abstract, `lmcache_local_disk_tiered_g4` (brief item
 78; contract 0.25): the same engine with LMCache's two L2 adapters active together, G3 in namespace
 `kv` and G4 in `kv4`, each placed by `--endpoint` (G3 on the node's drive, G4 on the shared
-system). Every chunk G2 newly takes is written to both; a lookup past G2's hit is one `probe` over
-both tiers, each chunk of the hit read from the first that holds it; each tier evicts and unlinks
+system). Every chunk G2 newly takes is written to both; a lookup past G2's hit is ~~one `probe` over
+both tiers~~ written from what each layer holds (sets since contract 0.28; the `probe` over tiers left the contract in 0.29), each chunk of the hit read from the first that holds it; each tier evicts and unlinks
 on its own. ~~Read from LMCache 0.5.5's source, not traced~~ Read from LMCache 0.5.5's source and,
 since 2026-11-22, held to a capture of its multi-process server (the next section); its case,
 `agentx-tiered-g4`, says what is not settled. The first abstract's contents are as they were (its
@@ -308,6 +308,13 @@ chunk file 3,145,728 bytes with no header; G3 a 2 GB directory, G4 6 GB):
   all or nothing, by the room G2 has (the same source; contract 0.27 in the G4 abstract). Since
   contract 0.28 the G4 abstract writes this lookup from sets (`holds` of each tier, the hit the
   leading run of their union, each adapter's load a difference), the rules its own lines.
+- *One cache a layer* (2026-11-23, contract 0.29, brief item 82 stage 2): both abstracts
+  declare G1 to G4 as caches of their own, `g2`, `g3`, `g4` (when it is on), and `g1`, where
+  one cache `lm` held G2 to G4 as tiers and another, `gpu`, G1; G2's own hit is a `holds` and
+  its `run`, and G2's room is read by the expression `used: g2`. The script writes them as
+  objects (`LAYER["g2"].used`). Nothing in the plan changed: both cases' fingerprints at seeds
+  1 and 2 are what they were (`f5eb1fc05c198957` and `8edc49c45a97b621` at seed 1); their
+  locks and workload ids changed with the contract's version.
 - *One adapter* (2026-11-23, brief item 70): `lmcache_local_disk_tiered` is the same code path
   with G3 alone, in place of the in-process connector's calls it had (their captures stay in
   `kit/captures/` as evidence, and `kit/lmcache.agentx.odirect.yaml`'s `O_DIRECT` run with

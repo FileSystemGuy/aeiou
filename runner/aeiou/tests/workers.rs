@@ -28,7 +28,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.23", "name": "t", "params": {"n": {"default": 2}},
+    json!({"ast": "0.29", "name": "t", "params": {"n": {"default": 2}},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -241,13 +241,13 @@ fn the_validator_holds_workers_submit_and_span_to_their_rules() {
     }
     // an eviction body issues its victim's ops, and submits nothing
     let ev = json!([{"timeline": {"name": "tl", "workers": [{"name": "w", "lanes": 1, "staging": 1}],
-        "caches": [{"name": "c", "tiers": [{"name": "t", "capacity": 1, "order": [{"cached": "stored"}],
-            "on_evict": {"lanes": 1, "body": [submit(json!([]))]}}]}], "body": []}}]);
+        "caches": [{"name": "t", "capacity": 1, "order": [{"cached": "stored"}],
+            "on_evict": {"lanes": 1, "body": [submit(json!([]))]}}], "body": []}}]);
     has(&refused(ev), "a `submit` in an `on_evict` body, which only issues the victim's ops at its tick (V35)");
 
     // span
-    // outside a timeline a span is contract 0.24's (tests/spans.rs); under 0.23 it is refused by its version
-    has(&refused(json!([span("load", json!([]))])), "ast: version `0.23`, but the document holds a `span` outside a timeline, which contract `0.24` added: it carries `0.24`");
+    // outside a timeline a span is contract 0.24's (tests/spans.rs), accepted at the floor since it rose to 0.29
+    assert_eq!(refused(json!([span("load", json!([]))])), Vec::<String>::new());
     has(&refused(tl(json!([span("a b", json!([]))]))), "not an identifier");
     has(&refused(tl(json!([span("a", json!([span("b", json!([]))]))]))), "a span inside span `a`: a lane's wait is measured once (V36)");
     for (n, what) in [

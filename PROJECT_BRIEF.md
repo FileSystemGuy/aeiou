@@ -1998,7 +1998,7 @@ numbers; the order is this note's.
     suggestion 1).
 
 82. **The cache statements from math functions (raised by the user 2026-11-23, `DESIGN_REVIEW.md`
-    §3.100, the note "Contract 0.28"; stage 1 built, stage 2 not decided).** The user: a cache
+    §3.100, the note "Contract 0.28"; stage 1 built, ~~stage 2 not decided~~ stage 2 built 2026-11-23 as contract 0.29, the note "Contract 0.29").** The user: a cache
     should "return the subset of the requested list that it holds, not stopping at the first
     missing entry", the lookup's rules expressed "as math functions in the DSL", one cache
     instance a G-layer. *Stage 1, built 2026-11-23 (contract 0.28):* `holds`, `set` (`union`,
@@ -2014,6 +2014,20 @@ numbers; the order is this note's.
     the user 2026-11-23 ("Approved; raise the floor, item 70 first as you recommend"), not built:*
     the design is in the note "Stage 2 designed"; item 70's move was built first (the same day),
     so that the floor is raised once, with `present: renew` already without a user.
+    *Stage 2 built 2026-11-23, contract 0.29, the new floor:* a cache is one layer (a
+    timeline's `caches` a list of them, `tiers` gone; the KV abstracts' are `g2`, `g3`, `g4`,
+    `g1`); `holds`, `touch`, `store` name a cache alone; its fill is the expressions `used:
+    CACHE` and `entries: CACHE`, on a lane and in its own rule; removed are both `probe`s, the
+    statement `used`, a store's `bind`, and `present: renew`; the builder has cache objects
+    (`g2 = cache(...)`, `g2.used`, `c.holds(g2, keys, bind)`) and keeps `c.probe` as a library
+    function. Accepted on the design's own test: both KV abstracts plan the same ops as before
+    (fingerprints at seeds 1 and 2 of their cases unchanged), and the thirteen others changed
+    in their version alone. Every AST, lock, workload id, and shape hash changed. *Not done,
+    and not designed:* a store's `present` written as a store of a difference and a touch of
+    an intersection (the store of `present: touch` stays one instruction, since on a cache
+    that waits it is one decision); the eviction rules, the resources, and the timeline's log
+    as functions (answered no in the note "Stage 2 designed"); the functions for the vector
+    database work (item 81).
 
 ## 7. Environment
 

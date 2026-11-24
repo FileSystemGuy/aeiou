@@ -28,7 +28,8 @@ _, check = _load()
 KINDS = set(check.SCHEMA["$defs"]["node"]["properties"])
 OPS = KINDS - check.CONTROL
 # the expressions the first table gives an effect: each is placed as the file id of a `stat`
-EXPRS = {"published": {"published": "tl"}, "entry": {"entry": {"timeline": "tl", "index": 0, "key": "a"}}}
+EXPRS = {"published": {"published": "tl"}, "entry": {"entry": {"timeline": "tl", "index": 0, "key": "a"}},
+         "used": {"used": "u"}, "entries": {"entries": "u"}}        # a cache's fill (contract 0.29)
 
 # the contexts, by the words of the table's first column
 # a row is the first context whose words it holds, so the longer names go first
@@ -44,7 +45,7 @@ O = {"object": {"namespace": "o", "fields": {"k": 0}}}
 DIR = {"dir": {"dataset": "d", "id": 0}}
 SEQ = {"shared": {"id": 1, "n": 2}}
 STAT = {"stat": {"file": F}}
-CACHE = {"cache": "c", "tier": "u", "keys": {"index": "j", "count": 2, "key": {"chunk_key": {"seq": SEQ, "chunk": {"index": "j"}, "per": 1}}}}
+CACHE = {"cache": "u", "keys": {"index": "j", "count": 2, "key": {"chunk_key": {"seq": SEQ, "chunk": {"index": "j"}, "per": 1}}}}
 
 # one small instance of every statement of the schema; a body holds one `stat`, so a statement
 # that only encloses others shows the effect `op` alone
@@ -64,8 +65,6 @@ INSTANCES = {
     "trace": {"file": "t.jsonl", "sha256": "0" * 64},
     "timeline": {"name": "t2", "body": []},
     "publish": {"timeline": "tl", "values": {"a": 1}},
-    "probe": {**CACHE, "bind": "b"},
-    "used": {"cache": CACHE["cache"], "tier": CACHE["tier"], "bind": "b"},
     "holds": {**CACHE, "bind": "b"},
     "set": {"bind": "x", "op": "union", "of": ["s0", "s0"]},
     "touch": {**CACHE},
@@ -127,7 +126,7 @@ def document(ctx: str, node: dict) -> dict:
     ordered = {"name": "t", "order": [{"cached": "touched"}], "capacity": {"param": "n"}}
     tl = {"name": "tl", "workers": [{"name": "w", "lanes": 1, "staging": 1024}],
           "resources": [{"name": "r", "capacity": 4}],
-          "caches": [{"name": "c", "tiers": [ordered, {"name": "u"}]}],
+          "caches": [ordered, {"name": "u"}],
           "body": [{"publish": {"timeline": "tl", "values": {"a": 1}}}, {"acquire": {"resource": "r", "n": 1, "hold": "h0"}}]}
     if ctx == "lane":
         tl["body"].append(node)
@@ -231,10 +230,12 @@ def test_now_is_read_in_every_context_of_a_timeline(ctx):
 @pytest.mark.parametrize("old, new, found", [
     # the span's row gaining `time`: a `compute` in a span, which V36 refuses
     ("| A `span`'s body | `op`, ", "| A `span`'s body | `op`, `time`, ", "`compute` in context `span`: the table allows it, the checker refuses it"),
-    # `probe` taken out of the first table: unclassified, so allowed everywhere by the table
-    ("| `read` | Reads timeline state | `probe`, `used`, `holds`; the expressions `published` and `entry` |", "| `read` | Reads timeline state | `used`, `holds`; the expressions `published` and `entry` |", "`probe` in context `outside`: the table allows it, the checker refuses it"),
+    # `holds` taken out of the first table: unclassified, so allowed everywhere by the table
+    ("| `read` | Reads timeline state | `holds`; the expressions `published`, `entry`, `used`, and `entries` |", "| `read` | Reads timeline state | the expressions `published`, `entry`, `used`, and `entries` |", "`holds` in context `outside`: the table allows it, the checker refuses it"),
     # `entry` taken out: its op allowed in a `submit` body by the table
-    ("the expressions `published` and `entry` |", "the expression `published` |", "`entry (expression)` in context `submit`: the table allows it, the checker refuses it"),
+    ("the expressions `published`, `entry`, `used`, and `entries` |", "the expressions `published`, `used`, and `entries` |", "`entry (expression)` in context `submit`: the table allows it, the checker refuses it"),
+    # a cache's fill taken out: read in an eviction body by the table
+    ("the expressions `published`, `entry`, `used`, and `entries` |", "the expressions `published` and `entry` |", "`used (expression)` in context `evict`: the table allows it, the checker refuses it"),
     # the lane's row losing `write`
     ("`wait`, `read`, `write`, `fork` (joined or not)", "`wait`, `read`, `fork` (joined or not)", "`publish` in context `lane`: the table refuses it, the checker allows it"),
 ])

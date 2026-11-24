@@ -470,7 +470,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     assert r.returncode == 0, r.stderr
     sha = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("sha256 "))
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.23", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.29", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": exported.name, "sha256": sha}}]}}}))
     node_dry = tmp_path / "node.dry.json"
     r = run(RUNNER, "dry-run", node_ast, "--gpus", "1", "--metrics-json", node_dry)
@@ -821,10 +821,12 @@ def test_kv_tiered_issues_storage_ops_on_g3_alone(tmp_path):
     workers = {o["lane"] for o in recs if o["op"] in ("stat", "open", "rename")}
     assert len(workers) == 4 and not workers & {o["lane"] for o in recs if o["op"] == "unlink"}
     ast = json.loads(ast_path("lmcache_local_disk_tiered").read_text())
-    assert "direct" not in ast["params"] and ast["ast"] == "0.28"
-    assert not [p for p in walk(ast, "probe") if "tiers" in p]
+    assert "direct" not in ast["params"] and ast["ast"] == "0.29"
+    # a cache a layer (contract 0.29): no `probe`, no tier; G2's own run is a `holds` and its `run`
+    assert not list(walk(ast, "probe")) and '"tier' not in json.dumps(ast["actors"])
+    assert [c["name"] for t in walk(ast, "timeline") for c in t["caches"]] == ["g2", "g3", "g1"]
     held = list(walk(ast, "holds"))
-    assert held and [h["tier"] for h in held] == ["g2", "g3"] * (len(held) // 2)
+    assert held and [h["cache"] for h in held] == ["g2", "g2", "g3"] * (len(held) // 3)
     spans = list(walk(ast, "span"))
     assert spans and [s["name"] for s in spans] == ["lookup", "load"] * (len(spans) // 2)
     assert not [s for s in walk(ast, "store") if s.get("present") == "renew"]
@@ -940,7 +942,7 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     assert len(lanes["kv"]) == len(lanes["kv4"]) == 4 and not lanes["kv"] & lanes["kv4"], lanes
     assert not {o["lane"] for o in ops if o["op"] == "unlink"} & (lanes["kv"] | lanes["kv4"])
     ast = json.loads(ast_path("lmcache_local_disk_tiered_g4").read_text())
-    assert "direct" not in ast["params"] and ast["ast"] == "0.28"
+    assert "direct" not in ast["params"] and ast["ast"] == "0.29"
 
     def nodes(x, kind):
         if isinstance(x, dict):
@@ -961,16 +963,21 @@ def test_kv_tiered_g4_calls_on_a_chunk_file_are_the_native_adapters(tmp_path):
     # since contract 0.28 the lookup is written from sets, its rules the abstract's own lines: what
     # each of G2, G3, and G4 holds of the chunks past G2's hit, the hit the leading run of their
     # union, G3 loading what G2 lacks and G4 what neither has; no probe over several tiers
-    assert not [p for p in walk(ast, "probe") if "tiers" in p]
+    # a cache a layer since 0.29: no `probe` and no tier; G2's own run a `holds` and its `run`
+    assert not list(walk(ast, "probe")) and '"tier' not in json.dumps(ast["actors"])
+    assert [c["name"] for t in walk(ast, "timeline") for c in t["caches"]] == ["g2", "g3", "g4", "g1"]
     held = list(walk(ast, "holds"))
-    assert held and [h["tier"] for h in held] == ["g2", "g3", "g4"] * (len(held) // 3), [h["tier"] for h in held]
-    assert all(h["keys"]["from"]["min"][0]["ref"].endswith("_h2") for h in held), held[0]
+    assert held and [h["cache"] for h in held] == ["g2", "g2", "g3", "g4"] * (len(held) // 4), [h["cache"] for h in held]
+    past = [h for h in held if "from" in h["keys"]]
+    assert len(past) == 3 * len(held) // 4 and all(
+        h["keys"]["from"]["min"][0]["run"]["array"].endswith("_h2") and h["keys"]["from"]["min"][0]["run"]["from"] == 0 for h in past), past[0]
     sets = list(walk(ast, "set"))
     assert [(x["op"], len(x["of"])) for x in sets[:3]] == [("union", 3), ("minus", 2), ("minus", 3)], sets[:3]
     assert '"run"' in json.dumps(ast) and '"below"' in json.dumps(ast)
     assert "_first" not in json.dumps(ast)
-    # and the load is decided by G2's fill, read before the span (contract 0.27)
-    assert [u for u in walk(ast, "used")] and all(u["cache"] == "lm" and u["tier"] == "g2" for u in walk(ast, "used"))
+    # and the load is decided by G2's fill, read before the span (an expression since contract 0.29)
+    fills = [l for l in walk(ast, "let") if l["name"].endswith("_u2")]
+    assert fills and all(l["value"] == {"used": "g2"} for l in fills)
     # the loads are submitted only once every adapter's lookup has answered (the server's load
     # phase, its source read 2026-11-23): two spans in turn, `lookup` holding every stat a span
     # waits for and `load` every read, the second reached only when the first has ended
@@ -1186,7 +1193,7 @@ def test_the_runner_loads_an_export_whose_first_line_did_not_start_first(tmp_pat
     out = tmp_path / "app.jsonl"
     sha = write_export(str(out), h, ev)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.23", "name": "trace_started_first", "doc": "a call that returned last started first", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.29", "name": "trace_started_first", "doc": "a call that returned last started first", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -1484,7 +1491,7 @@ def test_the_runner_loads_an_export_that_mkdirs_its_root(tmp_path):
     out = tmp_path / "app.jsonl"
     sha = write_export(str(out), h, ev)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.23", "name": "trace_root", "doc": "calls on the root itself", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.29", "name": "trace_root", "doc": "calls on the root itself", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -1528,7 +1535,7 @@ def test_a_short_or_failed_write_moves_what_it_returned(tmp_path):
 def test_the_trace_nodes_dry_run_moves_what_a_short_write_returned(tmp_path):
     _, _, out, sha = _short_write_export(tmp_path)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.23", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.29", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     dry = tmp_path / "node.dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1", "--metrics-json", str(dry)], capture_output=True, text=True)
@@ -1545,7 +1552,7 @@ def test_the_trace_nodes_run_leaves_the_file_a_short_write_left(tmp_path):
     backend, the sync one's `write(2)` at the file position included."""
     _, _, out, sha = _short_write_export(tmp_path)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.23", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.29", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     for backend in ("sync", "io_uring", "libaio"):
         root = tmp_path / ("root-" + backend)

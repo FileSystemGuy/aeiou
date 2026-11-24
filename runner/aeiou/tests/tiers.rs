@@ -20,7 +20,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(body: Value) -> String {
-    json!({"ast": "0.23", "name": "t", "params": {"cap": {"default": 4}},
+    json!({"ast": "0.29", "name": "t", "params": {"cap": {"default": 4}},
            "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 1000, "size": {"const": 1}, "seed": 1}},
            "actors": {"gpu": {"body": body}}}).to_string()
 }
@@ -93,13 +93,13 @@ fn cached(a: &str) -> Value {
     json!({"cached": a})
 }
 
-/// A lookup of `s`, one key a block, in tier `t` of cache `c`.
+/// A lookup of `s`, one key a block, in cache `t`.
 fn lk(s: Value, bind: &str) -> Value {
-    json!({"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(0), None), "present": "touch", "found": bind}})
+    json!({"store": {"cache": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(0), None), "present": "touch", "found": bind}})
 }
 
 fn lk_hold(s: Value, bind: &str, hold: &str) -> Value {
-    json!({"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(0), None), "present": "touch", "found": bind, "hold": hold}})
+    json!({"store": {"cache": "t", "keys": crate::common::chunk_keys(s, json!(1), json!(0), None), "present": "touch", "found": bind, "hold": hold}})
 }
 
 fn release(hold: &str) -> Value {
@@ -115,7 +115,7 @@ fn tier(order: Value, capacity: i64, full: &str) -> Value {
 }
 
 fn tl(tiers: Value, body: Value) -> Value {
-    json!({"timeline": {"name": "tl", "caches": [{"name": "c", "tiers": tiers}], "body": body}})
+    json!({"timeline": {"name": "tl", "caches": tiers, "body": body}})
 }
 
 fn tl_res(resources: Value, body: Value) -> Value {
@@ -192,10 +192,10 @@ fn held_entries_are_not_victims() {
     assert_eq!(walk(body), ["d/2", "d/0"]);
     fails(json!([tl(tier(json!([cached("touched")]), 2, "fail"), json!([
         lk_hold(shared(1, 2), "a0", "p"), lk(shared(2, 1), "b0"), release("p")]))]),
-        "store: tier `t` of cache `c` is full: 1 more past its capacity 2 (full: fail)");
+        "store: cache `t` is full: 1 more past its capacity 2 (full: fail)");
     // a lookup larger than the tier can never fit, whether it would wait or fail
     fails(json!([tl(tier(json!([cached("touched")]), 2, "wait"), json!([lk(shared(1, 3), "a")]))]),
-        "store: 3 of new entries in tier `t` of cache `c`, past its capacity 2, can never fit");
+        "store: 3 of new entries in cache `t`, past its capacity 2, can never fit");
     // a tier with no order evicts nothing: full past its capacity
     fails(json!([tl(json!([{"name": "t", "capacity": 2, "full": "fail"}]), json!([lk(shared(1, 2), "a"), lk(shared(2, 1), "b")]))]),
         "is full: 1 more past its capacity 2 (full: fail)");
@@ -207,7 +207,7 @@ fn held_entries_are_not_victims() {
 #[test]
 fn a_full_tier_makes_a_lane_wait_for_a_release() {
     let body = json!([tl(tier(json!([cached("freed")]), 4, "wait"), json!([lanes(3, json!([
-        {"store": {"cache": "c", "tier": "t", "keys": crate::common::chunk_keys(json!({"fresh": 3}), json!(1), json!(0), None), "present": "touch", "found": "h", "hold": "p"}},
+        {"store": {"cache": "t", "keys": crate::common::chunk_keys(json!({"fresh": 3}), json!(1), json!(0), None), "present": "touch", "found": "h", "hold": "p"}},
         stat(now()), compute(json!(10)), release("p")]))]))]);
     // three lanes at 0, 1, 2 each holding 3 of 4 entries for 10: admitted at 0, 10, 20
     assert_eq!(walk(body), ["d/0", "d/10", "d/20"]);
@@ -259,7 +259,7 @@ fn holds_used_wrongly_are_refused_when_walked() {
     walk_fails(json!([tl_res(slots.clone(), json!([acquire("t", 1, "a")]))]), "acquire: no timeline declares resource `t` around it (V34)");
     walk_fails(json!([release("a")]), "release: outside a timeline, where nothing is planned (V34)");
     walk_fails(json!([stat(now())]), "now: outside a timeline, where nothing is planned (V30)");
-    walk_fails(json!([stat(cached("hits"))]), "cached `hits`: outside a tier's `order` (V33)");
+    walk_fails(json!([stat(cached("hits"))]), "cached `hits`: outside a cache's `order` (V33)");
 }
 
 /// `now` is the lane's planned time, a value of the walk as a timeline read is: `@` cannot
@@ -282,11 +282,11 @@ fn the_validator_holds_orders_holds_and_resources_to_their_rules() {
         let e = refused(body.clone());
         assert!(e.iter().any(|m| m.contains(needle)), "wanted `{needle}` for {body}:\n{e:#?}");
     };
-    has(json!([tl(tier(json!([r("x")]), 4, "skip"), json!([]))]), "tier `t`: its `order` reads `ref`; an order reads only parameters, literals, and `cached` (V33)");
+    has(json!([tl(tier(json!([r("x")]), 4, "skip"), json!([]))]), "cache `t`: its `order` reads `ref`; an order reads only parameters, literals, and `cached` (V33)");
     has(json!([tl(tier(json!([{"add": [cached("pos"), {"draw": {"const": 1}}]}]), 4, "skip"), json!([]))]), "its `order` reads `draw`");
     has(json!([tl(tier(json!([{"cond": {"if": true, "then": now(), "else": 1}}]), 4, "skip"), json!([]))]), "its `order` reads `now`");
     has(json!([tl(tier(json!([{"cond": {"if": {"gt": [cached("pos"), 1]}, "then": 1, "else": {"neg": cached("hits")}}}, "x"]), 4, "skip"), json!([]))]), "expected an integer");
-    has(json!([stat(cached("pos"))]), "cached `pos`: outside a tier's `order` (V33)");
+    has(json!([stat(cached("pos"))]), "cached `pos`: outside a cache's `order` (V33)");
     has(json!([stat(now())]), "now: outside a timeline, where nothing is planned (V30)");
     has(json!([acquire("s", 1, "a")]), "acquire: outside a timeline, where nothing is planned (V34)");
     has(json!([release("a")]), "release: outside a timeline, where nothing is planned (V34)");
@@ -297,7 +297,7 @@ fn the_validator_holds_orders_holds_and_resources_to_their_rules() {
     has(json!([tl_res(json!([{"name": "s", "capacity": 1}]), json!([acquire("s", 1, "a b"), release("a b")]))]), "not an identifier");
     has(json!([tl(tier(json!([cached("touched")]), 4, "skip"), json!([lk_hold(shared(1, 1), "x", "a-b"), release("a-b")]))]), "not an identifier");
     let ok = json!([{"timeline": {"name": "tl", "resources": [{"name": "slots", "capacity": {"param": "cap"}}],
-        "caches": [{"name": "c", "tiers": tier(json!([cached("freed"), {"neg": cached("pos")}]), 4, "wait")}],
+        "caches": tier(json!([cached("freed"), {"neg": cached("pos")}]), 4, "wait"),
         "body": [lanes(2, json!([
             acquire("slots", 1, "s"), lk_hold(shared(1, 2), "h", "p"), stat(r("h")), stat(now()),
             {"cond": {"if": {"gt": [r("h"), 0]}, "then": [release("p")], "else": [release("p")]}}, release("s")]))]}}]);

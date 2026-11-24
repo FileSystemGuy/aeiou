@@ -15,8 +15,8 @@ use serde::Deserialize;
 /// from the floor to its own. A document carries the lowest that holds what it uses
 /// (`validate::SINCE`), so an addition changes the hash of no abstract without it. A change
 /// that is not an addition raises the floor to its version.
-pub const AST_FLOOR: &str = "0.23";
-pub const AST_VERSION: &str = "0.28";
+pub const AST_FLOOR: &str = "0.29";
+pub const AST_VERSION: &str = "0.29";
 
 /// A version in order (`0.9` before `0.23`), `None` for what is not one in its one spelling.
 pub fn version_key(v: &str) -> Option<(u32, u32)> {
@@ -395,28 +395,14 @@ pub enum ExprNode {
     Now(NowArg),
     /// An attribute of the entry a tier's `order` is computed for (contract 0.18, rule V33).
     Cached(CachedAttr),
-    /// What a tier holds, read by its timed eviction's `when` and `count` (contract 0.19, V33).
-    Tier(TierAttr),
+    /// What a cache of the enclosing timeline holds at the lane's planned instant, in the
+    /// cache's unit; in a cache's timed eviction's `when` and `count`, of that cache at the tick
+    /// (contract 0.29, rule V33; until then a statement `used` and, in the rule, `tier: used`).
+    Used(String),
+    /// How many entries a cache holds; as `used` (contract 0.29, rule V33).
+    Entries(String),
     /// The key of the entry an `on_evict` body runs for (contract 0.19, rule V35).
     Victim(NowArg),
-}
-
-/// What a tier's `evict` may read of the tier (contract 0.19): `used`, its entries' size in the
-/// tier's unit; `entries`, how many it holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TierAttr {
-    Used,
-    Entries,
-}
-
-impl TierAttr {
-    pub fn name(self) -> &'static str {
-        match self {
-            TierAttr::Used => "used",
-            TierAttr::Entries => "entries",
-        }
-    }
 }
 
 /// `now` and `victim` take no argument: `{"now": {}}`.
@@ -1082,42 +1068,22 @@ pub enum Node {
     Acquire { resource: String, n: Expr, hold: String },
     /// What this lane holds under `hold`, given back (contract 0.18, rule V34).
     Release { hold: String },
-    /// The longest leading run of `keys` held in a tier of a cache of the enclosing timeline,
-    /// bound to `bind`; nothing changed (contract 0.19; keys contract 0.23; rule V33). Over
-    /// several tiers (contract 0.25): `tiers` in place of `tier`, the run of the keys some tier
-    /// of the list holds, and `held`, an array a tier, the run's indices that tier serves, a
-    /// key going to the first tier listed that holds it.
-    Probe {
-        cache: String,
-        #[serde(default)]
-        tier: Option<String>,
-        #[serde(default)]
-        tiers: Option<Vec<String>>,
-        keys: Keys,
-        bind: String,
-        #[serde(default)]
-        held: Option<Vec<String>>,
-    },
-    /// What a tier of a cache of the enclosing timeline holds, in the tier's unit, at this lane's
-    /// planned instant, bound to `bind`; nothing changed (contract 0.27, rule V33).
-    Used { cache: String, tier: String, bind: String },
-    /// The indices of `keys` whose keys a tier of a cache of the enclosing timeline holds, every
-    /// one, ascending, bound to `bind` as an array; nothing changed (contract 0.28, rule V33).
-    Holds { cache: String, tier: String, keys: Keys, bind: String },
+    /// The indices of `keys` whose keys a cache of the enclosing timeline holds, every one,
+    /// ascending, bound to `bind` as an array; nothing changed (contract 0.28, rule V33; a
+    /// cache one layer, with no tier, since 0.29).
+    Holds { cache: String, keys: Keys, bind: String },
     /// Arrays a `holds` or a `set` bound, combined: `union`, `intersect`, or `minus` (the first
     /// less all the rest), bound to `bind`, ascending (contract 0.28, rule V33).
     Set { bind: String, op: String, of: Vec<String> },
-    /// Those of `keys` a tier holds, touched, as one event (contract 0.19; keys 0.23; rule V33).
-    Touch { cache: String, tier: String, keys: Keys },
-    /// Those of `keys` a tier lacks, stored, as one event; those it holds left (`present:
-    /// keep`), stored again (`renew`), or touched (`touch`, contract 0.23). With `hold`
-    /// (contract 0.23, rule V34; only with `present: touch`), what it touched and stored is this
-    /// lane's until a `release`. With `found`, the leading run of the keys held before it
-    /// changed anything; with `bind`, the leading run held after it; with `taken`, an array of
-    /// the indices it stored (contract 0.19; keys 0.23; rule V33).
+    /// Those of `keys` a cache holds, touched, as one event (contract 0.19; keys 0.23; rule V33).
+    Touch { cache: String, keys: Keys },
+    /// Those of `keys` a cache lacks, stored, as one event; those it holds left (`present:
+    /// keep`) or touched (`touch`, contract 0.23). With `hold` (contract 0.23, rule V34; only
+    /// with `present: touch`), what it touched and stored is this lane's until a `release`. With
+    /// `found`, the leading run of the keys held before it changed anything; with `taken`, an
+    /// array of the indices it stored (contract 0.19; keys 0.23; rule V33).
     Store {
         cache: String,
-        tier: String,
         keys: Keys,
         #[serde(default)]
         size: Option<Expr>,
@@ -1127,8 +1093,6 @@ pub enum Node {
         hold: Option<String>,
         #[serde(default)]
         found: Option<String>,
-        #[serde(default)]
-        bind: Option<String>,
         #[serde(default)]
         taken: Option<String>,
     },
@@ -1177,8 +1141,6 @@ impl Node {
             Node::Array { .. } => "array",
             Node::Acquire { .. } => "acquire",
             Node::Release { .. } => "release",
-            Node::Probe { .. } => "probe",
-            Node::Used { .. } => "used",
             Node::Holds { .. } => "holds",
             Node::Set { .. } => "set",
             Node::Touch { .. } => "touch",
@@ -1212,7 +1174,7 @@ impl Node {
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
                 | Node::Cond { .. } | Node::Phase { .. } | Node::Trace { .. }
                 | Node::Timeline { .. } | Node::Publish { .. } | Node::Array { .. }
-                | Node::Acquire { .. } | Node::Release { .. } | Node::Probe { .. } | Node::Used { .. } | Node::Holds { .. } | Node::Set { .. } | Node::Touch { .. } | Node::Store { .. }
+                | Node::Acquire { .. } | Node::Release { .. } | Node::Holds { .. } | Node::Set { .. } | Node::Touch { .. } | Node::Store { .. }
                 | Node::Submit { .. } | Node::Span { .. }
         )
     }
@@ -1222,20 +1184,13 @@ impl Node {
 /// has no `let`.
 pub static LOOKUP_DEF: ExprLike = ExprLike::Expr(Expr::Lit(Literal::Int(0)));
 
-/// A cache of a timeline (contract 0.16, rule V33): its tiers, walked in planned order.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CacheDecl {
-    pub name: String,
-    pub tiers: Vec<TierDecl>,
-}
-
-/// A tier of a cache: its capacity, the order its victims are taken in, and what a store
-/// that finds no victim does (contract 0.18); when its victims go, and what each runs (contract
+/// A cache of a timeline (contract 0.16, rule V33), one layer (contract 0.29; until then a
+/// cache held tiers): its capacity, the order its victims are taken in, and what a store that
+/// finds no victim does (contract 0.18); when its victims go, and what each runs (contract
 /// 0.19).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TierDecl {
+pub struct CacheDecl {
     pub name: String,
     /// The victim order: the entry whose values are least, compared in turn, is evicted first,
     /// a tie to the entry stored first. Absent, nothing is evicted.
@@ -1244,7 +1199,7 @@ pub struct TierDecl {
     #[serde(default)]
     pub capacity: Option<Expr>,
     #[serde(default)]
-    pub unit: TierUnit,
+    pub unit: CacheUnit,
     #[serde(default)]
     pub full: Full,
     /// Timed eviction (contract 0.19): victims taken at planned ticks, never at store.
@@ -1282,8 +1237,6 @@ pub enum Present {
     /// Left as it is.
     #[default]
     Keep,
-    /// Stored again, as if it were absent: a new entry, and taken.
-    Renew,
     /// Touched, in the store's event, before anything is stored (contract 0.23): what a lookup
     /// that stores what it missed does.
     Touch,
@@ -1334,7 +1287,7 @@ pub struct WorkersDecl {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum TierUnit {
+pub enum CacheUnit {
     #[default]
     Entries,
     Bytes,

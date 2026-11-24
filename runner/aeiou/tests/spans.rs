@@ -40,7 +40,7 @@ fn a_span_outside_a_timeline_leaves_the_plan_as_it_was() {
     let dir = crate::common::tmpdir("spans", "plan");
     let aeiou = env!("CARGO_BIN_EXE_aeiou");
     let mut fps = Vec::new();
-    for (name, version, wrap) in [("bare", "0.23", false), ("span", "0.24", true)] {
+    for (name, version, wrap) in [("bare", "0.29", false), ("span", "0.29", true)] {
         let p = dir.join(format!("{name}.ast.json"));
         std::fs::write(&p, doc(version, passes(wrap))).unwrap();
         let o = std::process::Command::new(aeiou).args(["dry-run", p.to_str().unwrap(), "--gpus", "1"]).output().unwrap();
@@ -60,7 +60,7 @@ fn a_run_reports_a_span_outside_a_timeline_on_every_backend() {
     let dir = crate::common::tmpdir("spans", "run");
     let aeiou = env!("CARGO_BIN_EXE_aeiou");
     let p = dir.join("t.ast.json");
-    std::fs::write(&p, doc("0.24", passes(true))).unwrap();
+    std::fs::write(&p, doc("0.29", passes(true))).unwrap();
     let a = p.to_str().unwrap();
     let dry = std::process::Command::new(aeiou).args(["dry-run", a, "--gpus", "1"]).output().unwrap();
     assert!(dry.status.success(), "{}", String::from_utf8_lossy(&dry.stderr));
@@ -104,7 +104,7 @@ fn a_span_in_a_parallels_sub_actors_is_timed_in_each() {
         {"compute": {"ns": 1000}}]);
     let body = json!([{"parallel": {"index": "th", "width": 2, "body": [{"loop": {"index": "q", "to": 3, "body": query}}]}}]);
     let p = dir.join("t.ast.json");
-    std::fs::write(&p, doc("0.24", body)).unwrap();
+    std::fs::write(&p, doc("0.29", body)).unwrap();
     for posix in ["sync", "io_uring", "libaio", "posix-aio", "mmap"] {
         let root = dir.join(posix);
         std::fs::create_dir_all(&root).unwrap();
@@ -129,20 +129,18 @@ fn the_validator_holds_a_span_outside_a_timeline_to_its_rules() {
     let refused = |version: &str, body: Value| aeiou::validate::check(&aeiou::ast::parse(&doc(version, body)).expect("parses"));
     let stat = json!({"stat": {"file": obj(json!(0))}});
     let span = |name: &str, body: Value| json!({"span": {"name": name, "body": body}});
-    assert_eq!(refused("0.24", json!([span("a", json!([stat.clone(), {"parallel": {"index": "k", "width": 2, "body": [stat.clone()]}}]))])), Vec::<String>::new());
+    assert_eq!(refused("0.29", json!([span("a", json!([stat.clone(), {"parallel": {"index": "k", "width": 2, "body": [stat.clone()]}}]))])), Vec::<String>::new());
     let why = "outside a timeline a span measures its own ops and a joined `parallel`'s, never compute or a wait on another actor (V36)";
     for (node, what) in [(json!({"compute": {"ns": 1}}), "compute"), (json!({"barrier": {"scope": "host"}}), "barrier"),
                          (json!({"loader": {"name": "q", "index": "b", "workers": 1, "prefetch": 1, "batches": 1, "body": []}}), "loader"),
                          (json!({"timeline": {"name": "tl", "body": []}}), "timeline")] {
-        let e = refused("0.24", json!([span("a", json!([{"loop": {"index": "i", "to": 1, "body": [node]}}]))]));
+        let e = refused("0.29", json!([span("a", json!([{"loop": {"index": "i", "to": 1, "body": [node]}}]))]));
         assert!(e.iter().any(|m| m.ends_with(&format!("a `{what}` in span `a`: {why}"))), "{what}: {e:#?}");
     }
-    let e = refused("0.24", json!([{"span": {"name": "a", "staging": "w", "body": []}}]));
+    let e = refused("0.29", json!([{"span": {"name": "a", "staging": "w", "body": []}}]));
     assert!(e.iter().any(|m| m.ends_with("span `a`: `staging` names a timeline's workers, and no timeline encloses it (V36)")), "{e:#?}");
-    let e = refused("0.24", json!([span("a", json!([{"parallel": {"index": "k", "width": 1, "body": [span("b", json!([]))]}}]))]));
+    let e = refused("0.29", json!([span("a", json!([{"parallel": {"index": "k", "width": 1, "body": [span("b", json!([]))]}}]))]));
     assert!(e.iter().any(|m| m.ends_with("a span inside span `a`: a lane's wait is measured once (V36)")), "{e:#?}");
-    let e = refused("0.23", json!([span("a", json!([]))]));
-    assert_eq!(e, ["t: ast: version `0.23`, but the document holds a `span` outside a timeline, which contract `0.24` added: it carries `0.24`"]);
-    let e = refused("0.24", json!([stat]));
-    assert_eq!(e, ["t: ast: version `0.24`, but the document holds nothing past contract `0.23`: an abstract carries the lowest version that holds what it uses, `0.23`"]);
+    // contract 0.24 is below the floor since 2026-11-23: no version distinguishes a document with such a span
+    assert_eq!(refused("0.29", json!([span("a", json!([]))])), Vec::<String>::new());
 }

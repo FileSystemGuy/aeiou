@@ -46,77 +46,9 @@ pub struct Since {
     pub used: fn(&Ast) -> bool,
 }
 
-pub const SINCE: &[Since] = &[
-    Since { version: "0.24", what: "a `span` outside a timeline", used: span_outside_a_timeline },
-    Since { version: "0.25", what: "a `probe` over several tiers", used: probe_over_tiers },
-    Since { version: "0.26", what: "a `submit` its span waits for (`join`)", used: joined_submit },
-    Since { version: "0.27", what: "a `used`, a tier's fill read by a lane", used: tier_used },
-    Since { version: "0.28", what: "a `holds` or a `set`, what a tier holds of a key range as a set", used: tier_sets },
-];
-
-fn joined_submit(ast: &Ast) -> bool {
-    fn walk(nodes: &[Node]) -> bool {
-        nodes.iter().any(|n| match n {
-            Node::Submit { join, .. } => *join,
-            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
-            | Node::Span { body, .. } => walk(body),
-            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
-            _ => false,
-        })
-    }
-    ast.actors.values().any(|a| walk(&a.body))
-}
-
-fn tier_used(ast: &Ast) -> bool {
-    fn walk(nodes: &[Node]) -> bool {
-        nodes.iter().any(|n| match n {
-            Node::Used { .. } => true,
-            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
-            | Node::Submit { body, .. } | Node::Span { body, .. } => walk(body),
-            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
-            _ => false,
-        })
-    }
-    ast.actors.values().any(|a| walk(&a.body))
-}
-
-fn tier_sets(ast: &Ast) -> bool {
-    fn walk(nodes: &[Node]) -> bool {
-        nodes.iter().any(|n| match n {
-            Node::Holds { .. } | Node::Set { .. } => true,
-            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
-            | Node::Submit { body, .. } | Node::Span { body, .. } => walk(body),
-            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
-            _ => false,
-        })
-    }
-    ast.actors.values().any(|a| walk(&a.body))
-}
-
-fn probe_over_tiers(ast: &Ast) -> bool {
-    fn walk(nodes: &[Node]) -> bool {
-        nodes.iter().any(|n| match n {
-            Node::Probe { tiers, .. } => tiers.is_some(),
-            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } | Node::Timeline { body, .. }
-            | Node::Submit { body, .. } | Node::Span { body, .. } => walk(body),
-            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
-            _ => false,
-        })
-    }
-    ast.actors.values().any(|a| walk(&a.body))
-}
-
-fn span_outside_a_timeline(ast: &Ast) -> bool {
-    fn walk(nodes: &[Node]) -> bool {
-        nodes.iter().any(|n| match n {
-            Node::Span { .. } => true,
-            Node::Loop { body, .. } | Node::Parallel { body, .. } | Node::Loader { body, .. } | Node::Phase { body, .. } => walk(body),
-            Node::Cond { then, otherwise, .. } => walk(then) || otherwise.as_deref().is_some_and(walk),
-            _ => false,
-        })
-    }
-    ast.actors.values().any(|a| walk(&a.body))
-}
+/// Empty since the floor rose to 0.29 (2026-11-23, brief item 82 stage 2): every row until
+/// then, 0.24 to 0.28, is below it.
+pub const SINCE: &[Since] = &[];
 
 /// The lowest contract version that holds what the document uses, and the thing in it that
 /// needs that version (`None` at the floor).
@@ -330,14 +262,15 @@ struct ActorState<'a> {
     timeline: Option<(&'a str, BTreeSet<&'a str>)>,
     /// V32: the loops enclosing the node being checked.
     loops: usize,
-    /// V33: the enclosing timeline's caches, each tier with its unit.
-    caches: HashMap<&'a str, Vec<(&'a str, TierUnit, Full)>>,
+    /// V33: the enclosing timeline's caches, each with its unit and what it does when full.
+    caches: HashMap<&'a str, (CacheUnit, Full)>,
     /// V31: the next `body` is a `loop`'s.
     loop_next: bool,
-    /// V33: checking a tier's `order`, where `cached` may be read.
+    /// V33: checking a cache's `order`, where `cached` may be read.
     in_order: bool,
-    /// V33: checking a tier's `evict` `when` and `count`, where `tier` may be read.
-    in_evict: bool,
+    /// V33: checking a cache's `evict` `when` and `count`, where `used` and `entries` read that
+    /// cache at the tick (contract 0.29).
+    in_evict: Option<&'a str>,
     /// V35: checking an `on_evict` body, where `victim` may be read.
     in_on_evict: bool,
     /// V35, V36 (contract 0.22): checking a body that only issues ops, an `on_evict`'s or a
@@ -460,7 +393,7 @@ fn expr_refs<'a>(e: &'a Expr, out: &mut BTreeSet<&'a str>) {
             out.insert(name.as_str());
         }
         ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_)
-        | ExprNode::Now(_) | ExprNode::Cached(_) | ExprNode::Tier(_) | ExprNode::Victim(_) => {}
+        | ExprNode::Now(_) | ExprNode::Cached(_) | ExprNode::Used(_) | ExprNode::Entries(_) | ExprNode::Victim(_) => {}
         ExprNode::Published(arg) => arg.group().into_iter().for_each(|g| expr_refs(g, out)),
         ExprNode::Entry { group, index, .. } => {
             group.iter().for_each(|g| expr_refs(g, out));
@@ -533,7 +466,10 @@ fn unpositional(v: &ExprLike) -> Option<&'static str> {
         match n.as_ref() {
             ExprNode::Published(_) | ExprNode::Entry { .. } | ExprNode::Now(_) => Some("V30"),
             ExprNode::Prev { .. } => Some("V31"),
-            ExprNode::At { index, .. } | ExprNode::Elem { index, .. } | ExprNode::Run { from: index, .. } | ExprNode::Below { bound: index, .. } => walk(index),
+            // what a cache holds as the step being walked sees it (contract 0.29: these stand
+            // where a `probe` and a `used` bound a name)
+            ExprNode::Run { .. } | ExprNode::Below { .. } | ExprNode::Used(_) | ExprNode::Entries(_) => Some("V33r"),
+            ExprNode::At { index, .. } | ExprNode::Elem { index, .. } => walk(index),
             ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
             | ExprNode::Max(a) | ExprNode::Eq(a) | ExprNode::Ne(a) | ExprNode::Lt(a) | ExprNode::Le(a) | ExprNode::Gt(a) | ExprNode::Ge(a) => a.iter().find_map(walk),
             ExprNode::And(a) | ExprNode::Or(a) => a.iter().find_map(walk),
@@ -560,7 +496,7 @@ fn evict_bans(nodes: &[Node], pp: &P, out: &mut Vec<(P, &'static str)>) {
     for (i, n) in nodes.iter().enumerate() {
         let np = p(pp, &[&i.to_string()]);
         match n {
-            Node::Compute { .. } | Node::Probe { .. } | Node::Used { .. } | Node::Holds { .. } | Node::Touch { .. } | Node::Store { .. } | Node::Acquire { .. }
+            Node::Compute { .. } | Node::Holds { .. } | Node::Touch { .. } | Node::Store { .. } | Node::Acquire { .. }
             | Node::Release { .. } | Node::Publish { .. } | Node::Parallel { .. } | Node::Loader { .. } | Node::Channel { .. } | Node::Put { .. }
             | Node::Take { .. } | Node::Barrier { .. } | Node::Timeline { .. } | Node::Trace { .. } | Node::Submit { .. } | Node::Span { .. } => out.push((np, n.kind())),
             Node::Loop { body, .. } | Node::Phase { body, .. } => evict_bans(body, &p(&np, &[n.kind(), "body"]), out),
@@ -635,15 +571,15 @@ fn holds<'a>(nodes: &'a [Node], out: &mut BTreeSet<&'a str>) {
     }
 }
 
-/// V33: the first thing a tier's `order` reads that it may not (an order reads parameters,
+/// V33: the first thing a cache's `order` reads that it may not (an order reads parameters,
 /// literals, and `cached`, through arithmetic, comparisons, and `cond`), by its JSON key.
 fn order_reads(e: &Expr) -> Option<&'static str> {
     plan_reads(e, Some("cached"))
 }
 
-/// V33 (contract 0.19): what a tier's `evict` reads that it may not: its `when` and `count`
-/// read parameters, literals, and `tier` (`also` "tier"), its `every` and an `on_evict`'s
-/// `lanes` only parameters and literals (`also` `None`).
+/// V33 (contract 0.19): what a cache's `evict` reads that it may not: its `when` and `count`
+/// read parameters, literals, and the cache's `used` and `entries` (`also` "used"), its `every`
+/// and an `on_evict`'s `lanes` only parameters and literals (`also` `None`).
 fn plan_reads(e: &Expr, also: Option<&'static str>) -> Option<&'static str> {
     let Expr::Node(n) = e else { return None };
     let like = |l: &ExprLike| match l {
@@ -654,7 +590,8 @@ fn plan_reads(e: &Expr, also: Option<&'static str>) -> Option<&'static str> {
     match n.as_ref() {
         ExprNode::Param(_) => None,
         ExprNode::Cached(_) => if also == Some("cached") { None } else { Some("cached") },
-        ExprNode::Tier(_) => if also == Some("tier") { None } else { Some("tier") },
+        ExprNode::Used(_) => if also == Some("used") { None } else { Some("used") },
+        ExprNode::Entries(_) => if also == Some("used") { None } else { Some("entries") },
         ExprNode::Victim(_) => Some("victim"),
         ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
         | ExprNode::Max(a) | ExprNode::Eq(a) | ExprNode::Ne(a) | ExprNode::Lt(a) | ExprNode::Le(a) | ExprNode::Gt(a) | ExprNode::Ge(a) => a.iter().find_map(r),
@@ -1141,7 +1078,7 @@ impl<'a> Checker<'a> {
         };
         match &**n {
             ExprNode::Index(_) | ExprNode::At { .. } | ExprNode::Published(_) | ExprNode::Entry { .. } | ExprNode::Prev { .. } | ExprNode::Now(_)
-            | ExprNode::Cached(_) | ExprNode::Tier(_) | ExprNode::Victim(_) => true,
+            | ExprNode::Cached(_) | ExprNode::Used(_) | ExprNode::Entries(_) | ExprNode::Victim(_) => true,
             ExprNode::Ref(name) => scope.is_varying(name),
             ExprNode::Draw(_) => !scope.indices.is_empty(),
             ExprNode::Len(a) => scope.taken.contains(a.as_str()),
@@ -1499,103 +1436,93 @@ impl<'a> Checker<'a> {
                 }
                 st.caches.clear();
                 let mut on_evict: Vec<(&'a [Node], P)> = Vec::new();
-                for (i, c) in caches.iter().enumerate() {
-                    let cp = p(pp, &["caches", &i.to_string()]);
-                    if !is_ident(&c.name) {
-                        self.err(&p(&cp, &["name"]), "not an identifier");
+                // declared to the timeline's body only once every one is checked: a capacity or
+                // an order reads no cache, and a rule its own alone
+                let mut declared: HashMap<&'a str, (CacheUnit, Full)> = HashMap::new();
+                for (i, t) in caches.iter().enumerate() {
+                    let tp = p(pp, &["caches", &i.to_string()]);
+                    if !is_ident(&t.name) {
+                        self.err(&p(&tp, &["name"]), "not an identifier");
                     }
-                    if st.caches.contains_key(c.name.as_str()) {
-                        self.err(&cp, format!("cache `{}` declared twice (V33)", c.name));
+                    if declared.contains_key(t.name.as_str()) {
+                        self.err(&tp, format!("cache `{}` declared twice (V33)", t.name));
                         continue;
                     }
-                    if c.tiers.is_empty() {
-                        self.err(&cp, format!("cache `{}` has no tiers (V33)", c.name));
+                    if t.capacity.is_none() {
+                        if t.order.is_some() {
+                            self.err(&tp, format!("cache `{}`: an `order` with no `capacity`, so nothing is ever evicted (V33)", t.name));
+                        }
+                        if t.full != Full::Skip {
+                            self.err(&tp, format!("cache `{}`: `full` `{}` with no `capacity`, so it is never full (V33)", t.name, t.full.name()));
+                        }
                     }
-                    let mut tiers: Vec<(&'a str, TierUnit, Full)> = Vec::new();
-                    for (j, t) in c.tiers.iter().enumerate() {
-                        let tp = p(&cp, &["tiers", &j.to_string()]);
-                        if !is_ident(&t.name) {
-                            self.err(&p(&tp, &["name"]), "not an identifier");
+                    if t.order.as_ref().is_some_and(|o| o.is_empty()) {
+                        self.err(&p(&tp, &["order"]), format!("cache `{}`: an empty `order` (V33)", t.name));
+                    }
+                    if let Some(e) = &t.capacity {
+                        self.expr(e, &p(&tp, &["capacity"]), scope, st, None);
+                        self.int(e, &p(&tp, &["capacity"]), scope);
+                    }
+                    for (o, e) in t.order.iter().flatten().enumerate() {
+                        let op = p(&tp, &["order", &o.to_string()]);
+                        if let Some(k) = order_reads(e) {
+                            self.err(&op, format!("cache `{}`: its `order` reads `{k}`; an order reads only parameters, literals, and `cached` (V33)", t.name));
+                            continue;
                         }
-                        if tiers.iter().any(|(n, _, _)| *n == t.name) {
-                            self.err(&tp, format!("tier `{}` declared twice in cache `{}` (V33)", t.name, c.name));
-                        }
+                        st.in_order = true;
+                        self.expr(e, &op, scope, st, None);
+                        st.in_order = false;
+                        self.int(e, &op, scope);
+                    }
+                    if let Some(ev) = &t.evict {
+                        let ep = p(&tp, &["evict"]);
                         if t.capacity.is_none() {
-                            if t.order.is_some() {
-                                self.err(&tp, format!("tier `{}`: an `order` with no `capacity`, so nothing is ever evicted (V33)", t.name));
-                            }
-                            if t.full != Full::Skip {
-                                self.err(&tp, format!("tier `{}`: `full` `{}` with no `capacity`, so it is never full (V33)", t.name, t.full.name()));
-                            }
+                            self.err(&tp, format!("cache `{}`: `evict` with no `capacity` (V33)", t.name));
                         }
-                        if t.order.as_ref().is_some_and(|o| o.is_empty()) {
-                            self.err(&p(&tp, &["order"]), format!("tier `{}`: an empty `order` (V33)", t.name));
+                        if t.order.is_none() {
+                            self.err(&tp, format!("cache `{}`: `evict` with no `order`, so it has no victims (V33)", t.name));
                         }
-                        if let Some(e) = &t.capacity {
-                            self.expr(e, &p(&tp, &["capacity"]), scope, st, None);
-                            self.int(e, &p(&tp, &["capacity"]), scope);
+                        if t.full == Full::Wait {
+                            self.err(&tp, format!("cache `{}`: `evict` with `full` `wait`; a timed cache's room comes at its ticks, not at a release (V33)", t.name));
                         }
-                        for (o, e) in t.order.iter().flatten().enumerate() {
-                            let op = p(&tp, &["order", &o.to_string()]);
-                            if let Some(k) = order_reads(e) {
-                                self.err(&op, format!("tier `{}`: its `order` reads `{k}`; an order reads only parameters, literals, and `cached` (V33)", t.name));
+                        for (k, e, also) in [("every", &ev.every, None), ("when", &ev.when, Some("used")), ("count", &ev.count, Some("used"))] {
+                            let fp = p(&ep, &[k]);
+                            if let Some(r) = plan_reads(e, also) {
+                                let what = if also.is_some() { "parameters, literals, and its own `used` and `entries`" } else { "parameters and literals" };
+                                self.err(&fp, format!("cache `{}`: its `evict` `{k}` reads `{r}`; it reads only {what} (V33)", t.name));
                                 continue;
                             }
-                            st.in_order = true;
-                            self.expr(e, &op, scope, st, None);
-                            st.in_order = false;
-                            self.int(e, &op, scope);
-                        }
-                        if let Some(ev) = &t.evict {
-                            let ep = p(&tp, &["evict"]);
-                            if t.capacity.is_none() {
-                                self.err(&tp, format!("tier `{}`: `evict` with no `capacity` (V33)", t.name));
-                            }
-                            if t.order.is_none() {
-                                self.err(&tp, format!("tier `{}`: `evict` with no `order`, so it has no victims (V33)", t.name));
-                            }
-                            if t.full == Full::Wait {
-                                self.err(&tp, format!("tier `{}`: `evict` with `full` `wait`; a timed tier's room comes at its ticks, not at a release (V33)", t.name));
-                            }
-                            for (k, e, also) in [("every", &ev.every, None), ("when", &ev.when, Some("tier")), ("count", &ev.count, Some("tier"))] {
-                                let fp = p(&ep, &[k]);
-                                if let Some(r) = plan_reads(e, also) {
-                                    let what = if also.is_some() { "parameters, literals, and `tier`" } else { "parameters and literals" };
-                                    self.err(&fp, format!("tier `{}`: its `evict` `{k}` reads `{r}`; it reads only {what} (V33)", t.name));
-                                    continue;
-                                }
-                                st.in_evict = true;
-                                self.expr(e, &fp, scope, st, None);
-                                st.in_evict = false;
-                                if k != "when" {
-                                    self.int(e, &fp, scope);
-                                }
+                            st.in_evict = Some(t.name.as_str());
+                            self.expr(e, &fp, scope, st, None);
+                            st.in_evict = None;
+                            if k != "when" {
+                                self.int(e, &fp, scope);
                             }
                         }
-                        if let Some(oe) = &t.on_evict {
-                            let op = p(&tp, &["on_evict"]);
-                            if t.order.is_none() {
-                                self.err(&tp, format!("tier `{}`: `on_evict` with no `order`, so nothing is evicted (V35)", t.name));
-                            }
-                            let lp = p(&op, &["lanes"]);
-                            if let Some(r) = plan_reads(&oe.lanes, None) {
-                                self.err(&lp, format!("tier `{}`: its `on_evict` `lanes` reads `{r}`; it reads only parameters and literals (V35)", t.name));
-                            } else {
-                                self.expr(&oe.lanes, &lp, scope, st, None);
-                                self.int(&oe.lanes, &lp, scope);
-                            }
-                            let bp = p(&op, &["body"]);
-                            let mut bans = Vec::new();
-                            evict_bans(&oe.body, &bp, &mut bans);
-                            for (bp2, what) in bans {
-                                self.err(&bp2, format!("a `{what}` in an `on_evict` body, which only issues the victim's ops at its tick (V35)"));
-                            }
-                            on_evict.push((&oe.body, bp));
-                        }
-                        tiers.push((t.name.as_str(), t.unit, t.full));
                     }
-                    st.caches.insert(c.name.as_str(), tiers);
+                    if let Some(oe) = &t.on_evict {
+                        let op = p(&tp, &["on_evict"]);
+                        if t.order.is_none() {
+                            self.err(&tp, format!("cache `{}`: `on_evict` with no `order`, so nothing is evicted (V35)", t.name));
+                        }
+                        let lp = p(&op, &["lanes"]);
+                        if let Some(r) = plan_reads(&oe.lanes, None) {
+                            self.err(&lp, format!("cache `{}`: its `on_evict` `lanes` reads `{r}`; it reads only parameters and literals (V35)", t.name));
+                        } else {
+                            self.expr(&oe.lanes, &lp, scope, st, None);
+                            self.int(&oe.lanes, &lp, scope);
+                        }
+                        let bp = p(&op, &["body"]);
+                        let mut bans = Vec::new();
+                        evict_bans(&oe.body, &bp, &mut bans);
+                        for (bp2, what) in bans {
+                            self.err(&bp2, format!("a `{what}` in an `on_evict` body, which only issues the victim's ops at its tick (V35)"));
+                        }
+                        on_evict.push((&oe.body, bp));
+                    }
+                    declared.insert(t.name.as_str(), (t.unit, t.full));
                 }
+                st.caches = declared;
                 st.resources.clear();
                 for (i, r) in resources.iter().enumerate() {
                     let rp = p(pp, &["resources", &i.to_string()]);
@@ -1648,22 +1575,9 @@ impl<'a> Checker<'a> {
                 st.holds.clear();
                 st.workers.clear();
             }
-            Node::Used { cache, tier, bind } => {
-                // a tier's fill read by a lane (contract 0.27); as check.py's `n_used`
-                match st.caches.get(cache.as_str()) {
-                    None => self.err(pp, format!("used: no timeline declares cache `{cache}` around it (V33)")),
-                    Some(tiers) if !tiers.iter().any(|(n, _, _)| n == tier) => self.err(pp, format!("used: cache `{cache}` has no tier `{tier}` (V33)")),
-                    _ => {}
-                }
-                if !is_ident(bind) {
-                    self.err(&p(pp, &["bind"]), "not an identifier");
-                }
-                scope.bind(bind, &LOOKUP_DEF, true, Some("int"), (None, None));
-                scope.unpositional.insert(bind.as_str(), "V33");
-            }
-            Node::Holds { cache, tier, keys, bind } => {
-                // every index of a key range a tier holds (contract 0.28); as check.py's `n_holds`
-                self.keys_stmt("holds", cache, &[tier.as_str()], keys, pp, scope, st);
+            Node::Holds { cache, keys, bind } => {
+                // every index of a key range a cache holds (contract 0.28); as check.py's `n_holds`
+                self.keys_stmt("holds", cache, keys, pp, scope, st);
                 self.set_bind("holds", bind, pp, scope);
             }
             Node::Set { bind, op, of } => {
@@ -1683,64 +1597,10 @@ impl<'a> Checker<'a> {
                 }
                 self.set_bind("set", bind, pp, scope);
             }
-            Node::Probe { cache, tier, tiers, keys, bind, held } => {
-                // over several tiers (contract 0.25): `tiers`, two or more and none twice, in
-                // place of `tier`, and `held`, an array a tier, only with it; as check.py's
-                match (tier, tiers) {
-                    (Some(_), Some(_)) => self.err(pp, "probe: `tier` and `tiers` both; it names one tier or a list of them (V33)"),
-                    (None, None) => self.err(pp, "probe: neither `tier` nor `tiers` (V33)"),
-                    _ => {}
-                }
-                let mut named: Vec<&str> = Vec::new();
-                match tiers {
-                    Some(ts) => {
-                        if ts.len() < 2 {
-                            self.err(pp, format!("probe: `tiers` names {} tier; a probe of one tier names it by `tier` (V33)", ts.len()));
-                        }
-                        let mut twice: Vec<&str> = Vec::new();
-                        for t in ts {
-                            if !named.contains(&t.as_str()) {
-                                named.push(t);
-                            } else if !twice.contains(&t.as_str()) {
-                                twice.push(t);
-                                self.err(pp, format!("probe: tier `{t}` named twice in `tiers` (V33)"));
-                            }
-                        }
-                    }
-                    None => named.extend(tier.as_deref()),
-                }
-                self.keys_stmt("probe", cache, &named, keys, pp, scope, st);
-                if let Some(hs) = held {
-                    match tiers {
-                        None => self.err(pp, "probe: `held` without `tiers`; a probe of one tier binds its run alone (V33)"),
-                        Some(ts) if ts.len() != hs.len() => self.err(pp, format!("probe: `held` names {} arrays for {} tiers (V33)", hs.len(), ts.len())),
-                        _ => {}
-                    }
-                    for (i, h) in hs.iter().enumerate() {
-                        let hp = p(pp, &["held", &i.to_string()]);
-                        if !is_ident(h) {
-                            self.err(&hp, "not an identifier");
-                        }
-                        if hs[..i].contains(h) {
-                            self.err(&hp, format!("probe: `held` `{h}` named twice (V33)"));
-                        }
-                        if self.ast.params.contains_key(h) {
-                            self.err(&hp, format!("probe: `held` `{h}` has the name of a parameter, which `elem` and `len` also read (V32)"));
-                        }
-                        scope.arrays.insert(h.as_str());
-                        scope.taken.insert(h.as_str());
-                    }
-                }
-                if !is_ident(bind) {
-                    self.err(&p(pp, &["bind"]), "not an identifier");
-                }
-                scope.bind(bind, &LOOKUP_DEF, true, Some("int"), (None, None));
-                scope.unpositional.insert(bind.as_str(), "V33");
+            Node::Touch { cache, keys } => {
+                self.keys_stmt("touch", cache, keys, pp, scope, st);
             }
-            Node::Touch { cache, tier, keys } => {
-                self.keys_stmt("touch", cache, &[tier.as_str()], keys, pp, scope, st);
-            }
-            Node::Store { cache, tier, keys, size, present, hold, found, bind, taken } => {
+            Node::Store { cache, keys, size, present, hold, found, taken } => {
                 if let Some(a) = taken {
                     if !is_ident(a) {
                         self.err(&p(pp, &["taken"]), "not an identifier");
@@ -1749,14 +1609,14 @@ impl<'a> Checker<'a> {
                         self.err(&p(pp, &["taken"]), format!("store: `taken` `{a}` has the name of a parameter, which `elem` and `len` also read (V32)"));
                     }
                 }
-                if let Some((unit, full)) = self.keys_stmt("store", cache, &[tier.as_str()], keys, pp, scope, st) {
+                if let Some((unit, full)) = self.keys_stmt("store", cache, keys, pp, scope, st) {
                     match (unit, size) {
-                        (TierUnit::Bytes, None) => self.err(pp, format!("store: tier `{tier}` counts bytes, so the store needs a `size` (V33)")),
-                        (TierUnit::Entries, Some(_)) => self.err(pp, format!("store: tier `{tier}` counts entries, so the store takes no `size` (V33)")),
+                        (CacheUnit::Bytes, None) => self.err(pp, format!("store: cache `{cache}` counts bytes, so the store needs a `size` (V33)")),
+                        (CacheUnit::Entries, Some(_)) => self.err(pp, format!("store: cache `{cache}` counts entries, so the store takes no `size` (V33)")),
                         _ => {}
                     }
                     if full == Full::Wait && *present != Present::Touch {
-                        self.err(pp, format!("store: tier `{tier}` waits when full, which only a store of `present: touch` decides before it changes anything (V33)"));
+                        self.err(pp, format!("store: cache `{cache}` waits when full, which only a store of `present: touch` decides before it changes anything (V33)"));
                     }
                 }
                 if let Some(h) = hold {
@@ -1771,14 +1631,12 @@ impl<'a> Checker<'a> {
                     self.expr(e, &p(pp, &["size"]), scope, st, None);
                     self.int(e, &p(pp, &["size"]), scope);
                 }
-                for (k, b) in [("found", found), ("bind", bind)] {
-                    if let Some(b) = b {
-                        if !is_ident(b) {
-                            self.err(&p(pp, &[k]), "not an identifier");
-                        }
-                        scope.bind(b, &LOOKUP_DEF, true, Some("int"), (None, None));
-                        scope.unpositional.insert(b.as_str(), "V33");
+                if let Some(b) = found {
+                    if !is_ident(b) {
+                        self.err(&p(pp, &["found"]), "not an identifier");
                     }
+                    scope.bind(b, &LOOKUP_DEF, true, Some("int"), (None, None));
+                    scope.unpositional.insert(b.as_str(), "V33");
                 }
                 if let Some(a) = taken {
                     scope.arrays.insert(a.as_str());
@@ -2251,7 +2109,7 @@ impl<'a> Checker<'a> {
                 _ => None,
             },
             ExprNode::Index(_) | ExprNode::Actor(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Len(_) | ExprNode::Run { .. } | ExprNode::Below { .. } | ExprNode::Published(_) | ExprNode::Size(_)
-            | ExprNode::Offset(_) | ExprNode::UnitIndex(_) | ExprNode::Units(_) | ExprNode::Chunks(_) | ExprNode::Now(_) | ExprNode::Cached(_) | ExprNode::Tier(_) | ExprNode::Victim(_) => Some("int"),
+            | ExprNode::Offset(_) | ExprNode::UnitIndex(_) | ExprNode::Units(_) | ExprNode::Chunks(_) | ExprNode::Now(_) | ExprNode::Cached(_) | ExprNode::Used(_) | ExprNode::Entries(_) | ExprNode::Victim(_) => Some("int"),
             ExprNode::Eq(_) | ExprNode::Ne(_) | ExprNode::Lt(_) | ExprNode::Le(_) | ExprNode::Gt(_) | ExprNode::Ge(_) | ExprNode::And(_)
             | ExprNode::Or(_) | ExprNode::Not(_) => Some("bool"),
             ExprNode::Cond(c) => {
@@ -2410,23 +2268,10 @@ impl<'a> Checker<'a> {
         scope.sets.insert(bind);
     }
 
-    fn keys_stmt(&mut self, what: &str, cache: &str, named: &[&str], keys: &'a Keys, pp: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) -> Option<(TierUnit, Full)> {
-        // the tiers named, one but for a `probe` over several (contract 0.25), each once
-        let mut found = None;
-        let mut missing = Vec::new();
-        match st.caches.get(cache) {
-            None => self.err(pp, format!("{what}: no timeline declares cache `{cache}` around it (V33)")),
-            Some(tiers) => {
-                for tier in named {
-                    match tiers.iter().find(|(n, _, _)| n == tier) {
-                        None => missing.push(*tier),
-                        Some((_, u, f)) => found = Some((*u, *f)),
-                    }
-                }
-            }
-        }
-        for tier in missing {
-            self.err(pp, format!("{what}: cache `{cache}` has no tier `{tier}` (V33)"));
+    fn keys_stmt(&mut self, what: &str, cache: &str, keys: &'a Keys, pp: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) -> Option<(CacheUnit, Full)> {
+        let found = st.caches.get(cache).copied();
+        if found.is_none() {
+            self.err(pp, format!("{what}: no timeline declares cache `{cache}` around it (V33)"));
         }
         let kp = p(pp, &["keys"]);
         if !is_ident(&keys.index) {
@@ -2605,17 +2450,27 @@ impl<'a> Checker<'a> {
             }
             ExprNode::Cached(a) => {
                 if !st.in_order {
-                    self.err(path, format!("cached `{}`: outside a tier's `order` (V33)", a.name()));
+                    self.err(path, format!("cached `{}`: outside a cache's `order` (V33)", a.name()));
                 }
             }
-            ExprNode::Tier(a) => {
-                if !st.in_evict {
-                    self.err(path, format!("tier `{}`: outside a tier's `evict` (V33)", a.name()));
+            // a cache's fill (contract 0.29): on a lane of the timeline that declares it, at the
+            // lane's planned instant, or in the cache's own `evict`; as check.py's
+            ExprNode::Used(c) | ExprNode::Entries(c) => {
+                let what = if matches!(node, ExprNode::Used(_)) { "used" } else { "entries" };
+                match st.in_evict {
+                    Some(own) if own != c => self.err(path, format!("{what}: cache `{c}` in the `evict` of cache `{own}`, which reads its own alone (V33)")),
+                    Some(_) => {}
+                    None => {
+                        if !st.caches.contains_key(c.as_str()) {
+                            self.err(path, format!("{what}: no timeline declares cache `{c}` around it (V33)"));
+                        }
+                        self.reads_state(what, path, st);
+                    }
                 }
             }
             ExprNode::Victim(_) => {
                 if !st.in_on_evict {
-                    self.err(path, "victim: outside a tier's `on_evict` body (V35)");
+                    self.err(path, "victim: outside a cache's `on_evict` body (V35)");
                 }
             }
             ExprNode::Published(arg) => {
@@ -2650,7 +2505,7 @@ impl<'a> Checker<'a> {
                     Some(_) => {}
                 }
                 if scope.unpositional.get(name.as_str()) == Some(&"V33") {
-                    self.err(path, format!("prev: `{name}` is bound by a `probe`, a `used`, or a `store`, not a `let` (V31)"));
+                    self.err(path, format!("prev: `{name}` is bound by a `store`, not a `let` (V31)"));
                 }
                 self.expr(init, &p(path, &["init"]), scope, st, None);
             }
@@ -2772,7 +2627,9 @@ impl<'a> Checker<'a> {
             self.err(path, format!("`{name} @` names a binding of this loop body, so its index must be {{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1"));
         }
         if scope.unpositional.get(name) == Some(&"V33") {
-            self.err(path, format!("`{name} @`: it is bound by a `probe`, a `used`, or a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)"));
+            self.err(path, format!("`{name} @`: it is bound by a `store`, whose value is the one the step being walked sees, which `@` cannot recompute at another index (V33)"));
+        } else if scope.unpositional.get(name) == Some(&"V33r") {
+            self.err(path, format!("`{name} @`: its definition reads `run`, `below`, `used`, or `entries`, what a cache holds as the step being walked sees it, which `@` cannot recompute at another index; carry it with `prev` (V33)"));
         } else if let Some(rule) = scope.unpositional.get(name) {
             self.err(path, format!("`{name} @`: its definition reads `published`, `entry`, `now`, or `prev`, whose value is the one the step being walked sees, which `@` cannot recompute at another index; carry it with `prev` ({rule})"));
         }
