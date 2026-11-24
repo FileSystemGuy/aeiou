@@ -532,8 +532,8 @@ so G2 above G3 (NVIDIA's names, adopted the same day) and LMCache's planned drop
 written in the abstract; rule V35. ~~Not yet written with them: the KV abstract's G2 and G3.~~
 Written with them (2026-11-13, the user's choices): `lmcache_local_disk_tiered`, beside
 `lmcache_local_disk` in its mechanism, the AgentX session generator (`kit/agentx.py sessions`)
-on one engine with G1, G2, and G3 at the WG's example sizes and the in-process connector's traced
-chunk calls, its case `agentx-tiered` unsettled ~~and dry-run only until item 72 (7); the older
+on one engine with G1, G2, and G3 at the WG's example sizes and ~~the in-process connector's traced
+chunk calls~~ (since 2026-11-23, brief item 70) the multi-process server's `fs_native` adapter's calls and lookup rules, the G4 abstract's with one adapter, its case `agentx-tiered` unsettled ~~and dry-run only until item 72 (7); the older
 abstract and its four cases stay runnable until then~~, run since item 72 (7); the older
 abstract (the slot model) and its four cases retired 2026-11-14, their captures kept as the
 kit's evidence (`kit/captures/`). Its G1 and G2 issue no ops, only G3 does;

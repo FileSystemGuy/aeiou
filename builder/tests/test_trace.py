@@ -660,37 +660,6 @@ def test_diskann_build_abstract_matches_the_trace(tmp_path):
     assert t["counts"]["unlink"] - d["counts"]["unlink"] == 14
 
 
-@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
-@pytest.mark.parametrize("direct, capture", [(False, "sharegpt-chat/2026-11-05"), (False, "sharegpt-chat/2026-11-05-strace"),
-                                             (True, "agentx-odirect/replay-2gib-pool"), (True, "agentx-odirect/replay-2gib-pool-strace")])
-def test_kv_tiered_chunk_calls_are_the_traced_ones(tmp_path, direct, capture):
-    """`lmcache_local_disk_tiered`'s calls on a chunk file are those of vLLM with LMCache's local-disk
-    backend, traced 2026-10-02 and again 2026-11-05 under each source (the captures of the slot-model
-    abstract's cases, kept as the kit's evidence since it was retired, 2026-11-14, DESIGN_REVIEW.md §3.99,
-    the addendum "The slot model retired"). Buffered (ShareGPT): Python's `open` around one `read` or
-    `write`, so one open, fstat, ioctl, lseek, and close per data call. `O_DIRECT` (LMCache's
-    `use_odirect`, the AgentX replay): `openat(O_WRONLY|O_CREAT|O_DIRECT)`, `write`, `close`, and
-    `openat(O_RDONLY|O_DIRECT|O_CLOEXEC)`, `fstat`, `read`, `close`. The counts differ (other loads); the
-    shape of the calls on a chunk is the same. The abstract's evictions are its `unlink`s, which the
-    traces, with stores that never filled, do not have."""
-    case = case_dir("lmcache_local_disk_tiered", "agentx-tiered")
-    dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk_tiered")), "--gpus", "1", "--seed", "1",
-                        "--params-file", str(case / "params.json"), "--param", "sessions=6", "--param", "slots=6",
-                        "--param", "chunk_bytes=4096", "--param", "g1_bytes=16384000", "--param", "g2_bytes=1228800",
-                        "--param", "g3_bytes=12288000", "--param", f"direct={str(direct).lower()}", "--metrics-json", str(dry)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    t, d = json.loads((KIT_CAPTURES / capture / "trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
-    assert d["read"] > 0 and d["write"] > 0 and d.get("unlink", 0) > 0
-    for c in (t, d):
-        if direct:
-            assert c["open"] == c["close"] == c["read"] + c["write"] and c["fstat"] == c["read"] and "ioctl" not in c and "lseek" not in c, c
-        else:
-            assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"] == c["read"] + c["write"], c
-    assert set(t) - set(d) == {"mkdir", "stat"}           # of the cache directory, once at start
-
-
 def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path):
     """The ShareGPT case's `params.json` is `fit.py` on its capture's two logs: the load's, and
     LMCache's line per request from the server's. `keep` is a product-limit estimate: a
@@ -800,7 +769,16 @@ def test_kv_tiered_issues_storage_ops_on_g3_alone(tmp_path):
     namespace and no eviction body, so their hits, stores, drops, and evictions shape the counts and
     issue nothing; every op on a path is on G3's `kv` namespace: its hits read, what it takes
     written, its victims unlinked, each victim a file it wrote. Small tiers so that G2 drops, G3
-    evicts, and G1 (just above the longest context) loses chunks to G3's reads."""
+    evicts, and G1 (just above the longest context) loses chunks to G3's reads.
+
+    Since 2026-11-23 (brief item 70) its calls and its rules are those of LMCache's multi-process
+    server with one `fs_native` adapter, the `_g4` abstract's with G4 left out: a store is
+    `NAME.tmp` opened `O_WRONLY|O_CREAT|O_TRUNC` with mode 0644, one write, a close, and a rename
+    to `NAME.data`, never of a chunk G3 holds; a load open, one read, close; a `stat` of every
+    key looked up and before every store; the adapter's four workers carrying all of them but
+    the unlinks; the lookup and the load two spans in turn; no `direct` parameter, the adapter's
+    own `O_DIRECT` option not traced. The in-process connector's calls it had before (Python's
+    `open` with its `fstat`, `ioctl`, `lseek`; the `O_DIRECT` path) are in `kit/captures/`."""
     case = case_dir("lmcache_local_disk_tiered", "agentx-tiered")
     out = tmp_path / "trace.jsonl"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk_tiered")), "--gpus", "1", "--seed", "1",
@@ -808,21 +786,48 @@ def test_kv_tiered_issues_storage_ops_on_g3_alone(tmp_path):
                         "--param", "chunk_bytes=4096", "--param", "g1_bytes=16384000", "--param", "g2_bytes=1228800",
                         "--param", "g3_bytes=12288000", "--emit-trace", str(out)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+    recs = [json.loads(line) for line in out.read_text().splitlines()[1:]]
     ops, paths, written, unlinked = {}, set(), set(), set()
-    for line in out.read_text().splitlines()[1:]:
-        o = json.loads(line)
+    for o in recs:
         ops[o["op"]] = ops.get(o["op"], 0) + 1
         if "path" in o:
             paths.add(o["path"].split("/")[0])
-            if o["op"] == "open" and "WRONLY" in o["flags"]:
-                written.add(o["path"])
+            if o["op"] == "rename":
+                written.add(o["to"])
             elif o["op"] == "unlink":
                 unlinked.add(o["path"])
     assert paths == {"kv"}
-    assert set(ops) == {"open", "fstat", "ioctl", "lseek", "read", "write", "close", "unlink"}
+    assert set(ops) == {"stat", "open", "read", "write", "close", "rename", "unlink"}
     assert ops["read"] > 0 and ops["write"] > 0 and ops["unlink"] > 0
-    assert ops["open"] == ops["close"] == ops["read"] + ops["write"]
+    assert ops["open"] == ops["close"] == ops["read"] + ops["write"] and ops["rename"] == ops["write"]
     assert unlinked <= written
+    opens = [o for o in recs if o["op"] == "open"]
+    stores = [o for o in opens if "WRONLY" in o["flags"]]
+    assert all(o["flags"] == ["WRONLY", "CREAT", "TRUNC"] and o["mode"] == 0o644 and o["path"].endswith(".tmp") for o in stores)
+    assert all(o["flags"] == ["RDONLY"] and o["path"].endswith(".data") for o in opens if "WRONLY" not in o["flags"])
+    assert sorted((o["path"], o["to"]) for o in recs if o["op"] == "rename") == sorted((o["path"], o["path"][:-4] + ".data") for o in stores)
+    # a chunk G3 holds is never written again: a file is renamed into place once between unlinks
+    live = set()
+    for o in recs:
+        if o["op"] == "rename":
+            assert o["to"] not in live, o
+            live.add(o["to"])
+        elif o["op"] == "unlink":
+            live.discard(o["path"])
+    # every file written was statted, and more keys are statted than written (the lookups)
+    statted = {o["path"] for o in recs if o["op"] == "stat"}
+    assert written <= statted and ops["stat"] > 2 * ops["write"]
+    # the adapter's four workers carry the stats, loads, and stores; the unlinks are on other lanes
+    workers = {o["lane"] for o in recs if o["op"] in ("stat", "open", "rename")}
+    assert len(workers) == 4 and not workers & {o["lane"] for o in recs if o["op"] == "unlink"}
+    ast = json.loads(ast_path("lmcache_local_disk_tiered").read_text())
+    assert "direct" not in ast["params"] and ast["ast"] == "0.28"
+    assert not [p for p in walk(ast, "probe") if "tiers" in p]
+    held = list(walk(ast, "holds"))
+    assert held and [h["tier"] for h in held] == ["g2", "g3"] * (len(held) // 2)
+    spans = list(walk(ast, "span"))
+    assert spans and [s["name"] for s in spans] == ["lookup", "load"] * (len(spans) // 2)
+    assert not [s for s in walk(ast, "store") if s.get("present") == "renew"]
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")

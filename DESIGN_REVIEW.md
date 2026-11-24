@@ -13651,6 +13651,58 @@ user's "Yes, draft the design for item 2" and "proceed with the two spans").**
   builder's, the description's; `test_trace.py`'s document test of the G4 abstract.
   `ARCHITECTURE.md`'s tables: `holds` under `read`, `set` with no effect.
 
+**Item 70: the single-tier abstract on the adapter; and stage 2 designed (2026-11-23; the
+user's "Proceed with the plan for item 70", then "Approved; raise the floor, item 70 first as you
+recommend").**
+
+- *Item 70's step, built.* `lmcache_local_disk_tiered` had the in-process connector's calls and
+  rules; the mechanism was redefined on 2026-11-10 as the multi-process server's `fs_native`
+  adapter. `chunk_ops` is now one function over a list of adapters, G3 alone here and G3 and
+  G4 in `_g4`: the lookup's `stat`s and the loads on the adapter's workers in the spans
+  `lookup` and `load`, every chunk of the hit G2 lacks loaded, all or none by G2's room, a
+  store a temporary file renamed, a held chunk never rewritten. `_g4`'s AST and lock are
+  byte for byte what they were, the check that the generalisation changed nothing. Gone with
+  the old form: `chunk_read`, `chunk_write`, the `direct` parameter, `present: renew`'s only
+  use, and `test_kv_tiered_chunk_calls_are_the_traced_ones`, which held the abstract to the
+  in-process captures (they stay in `kit/captures/`).
+- *What it rests on, and what was decided with it.* Three recommendations were put to the user
+  and taken with "as you recommend" (my reading of it: the sentence named the order, and the
+  three had been listed as what going first needs): build from the source and the two-adapter
+  capture, no capture of a one-adapter server first; the `O_DIRECT` variant dropped until
+  `fs_native`'s option is traced. The equivalence to LMCache's own `LRUEvictionPolicy`
+  (§3.99, addendum "Built") was of the in-process form and is not held for this one.
+- *The case.* `agentx-tiered` at seed 1: 89,806 files written, 1,048,256 chunks read (32.0
+  TiB), 2,133,110 stats, no unlink (G3 never reaches its watermark), over 51.9 planned hours;
+  before, 87,868 written and 186,137 read. The reads are 5.6 times as many by the rule that
+  the server loads what the GPU already holds, read and not traced: the largest consequence of
+  a source reading in this mechanism, and the first thing a capture should confirm or refute.
+- *Stage 2 of item 82, designed and approved, not built.* A cache is one layer: a timeline's
+  `caches` is a list of `{name, order, capacity, unit, full, evict, on_evict}`, the `tiers`
+  level gone; `store`, `touch`, `holds` lose `tier`. A cache's fill is two expressions,
+  `used: CACHE` and `entries: CACHE`, on a lane and in its own eviction rule; the `used`
+  statement and the rule's `tier: used|entries` go (the user asked whether `used: g2` is
+  `g2.used`: it is, the first the contract's spelling and the second the builder's). Removed:
+  the probe over several tiers; the one-tier `probe` statement (the builder keeps
+  `c.probe` as a function, one `holds` and the expression `run`, a statement for a statement
+  so that no site moves); a store's `bind`; `present: renew`. Kept: a store of `present:
+  touch` with `hold` and `found` on a waiting cache (one decision that may wait, so `found`
+  cannot be a set read before it), `taken`, timed eviction, `on_evict`, `acquire` and
+  `release`. The builder: `g2 = cache("g2", ...)` an object, `g2.used` and `g2.entries`,
+  statements still the cursor's (`c.holds(g2, keys, bind)`), an eviction rule a function of
+  its cache (`evict=lambda me: timed(...)`). The floor rises from 0.23 to 0.29 (the user's
+  decision of 2026-11-22 for this stage of the project): every AST re-stamped, every lock,
+  workload id, and shape hash changed, no fingerprint. Accepted when every committed abstract
+  keeps its fingerprint.
+- *The user's other question, answered:* whether math functions simplify other primitives.
+  Yes for the read side of the cache statements (both probes, a store's `bind`, `used`); no
+  for what changes state or involves time (a store that may wait, timed eviction and its
+  victims, which would need a cache's contents as a value, resources, the timeline's log,
+  loaders, channels, barriers); the sequence functions and the eviction rules are already of
+  that kind; and probably yes for the vector database work (item 81): a graph search reads
+  the nodes of a frontier neither visited nor cached, which is `holds` and `minus`.
+- *Tests.* Written first, seen red: `test_kv_tiered_issues_storage_ops_on_g3_alone`, the
+  single-tier abstract's calls, stats, workers, spans, and that no held file is renamed over.
+
 **Spans in the checkpoint abstracts; the search's left out (2026-11-22; the user's "proceed with
 the three spans as recommended").** The recommendation was one span outside a timeline
 (contract 0.24) in each of `dcp_save` (a checkpoint's write), `dcp_load` (a checkpoint's load),

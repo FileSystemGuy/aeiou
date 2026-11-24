@@ -9,9 +9,20 @@ chunks), G3 a 7.68 TB drive (228,881 chunks), at the model's 128 KiB of KV a tok
 Its kind is not settled: `aeiou run` refuses a timeline until brief item 72 (7) is built, so the
 case is checked and dry-run only; 40 sessions over an hour on 16 slots is the scratch port's load,
 not the WG's operating point (item 72 (1), the ramp, and item 74's retargeting decide it); and the
-calls on a chunk file are the in-process connector's, until item 74 captures the multi-process
-`fs_native` adapter. At these sizes G3 never reaches its watermark within the run, so no file is
+~~calls on a chunk file are the in-process connector's, until item 74 captures the multi-process
+`fs_native` adapter~~ calls on a chunk file and the rules of a lookup are, since 2026-11-23 (brief
+item 70), those of LMCache's multi-process server with one `fs_native` adapter, the `_g4`
+abstract's with G4 left out (captured with two adapters; one alone read from the source, not
+traced). At these sizes G3 never reaches its watermark within the run, so no file is
 unlinked; G1 and G2 hold far less than the sessions' contexts, so most reuse is read from G3.
+
+Its sample and its counts changed with that. At seed 1 and one GPU, over the plan's 51.9 hours
+(the sessions arrive in the first): 89,806 files written, 1,048,256 chunks read (32.0 TiB), and
+2,133,110 stats, where the in-process form had 87,868 written and 186,137 read. The reads are
+5.6 times as many because the server loads every chunk of a hit that G2 lacks, the ones the GPU
+already holds too, where the in-process connector read from the chunk the GPU held on; that rule
+is read from the server's source and not traced. The first planned hour holds 34,352 of the
+writes and 48,943 of the reads.
 
 No capture: the tiers' behaviour is held to LMCache 0.5.5's own `LRUEvictionPolicy` request by
 request (`DESIGN_REVIEW.md` §3.99, addendum "Built"), not to a trace.

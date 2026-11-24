@@ -205,8 +205,8 @@ fn an_eviction_at_a_store_waits_for_the_storing_lane() {
 }
 
 /// The tiered KV abstract's case through the executor on storage of a fixed latency, at
-/// `AEIOU_TEST_SESSIONS` sessions (2 unless set; the case's 40 runs its 2,998,578 ops in about
-/// 25 s in a release build): every op the plan holds is issued, and how long the plan and the
+/// `AEIOU_TEST_SESSIONS` sessions (2 unless set; the case's 40 planned 2,998,578 ops in about
+/// 25 s in a release build with the in-process connector's calls, 5,637,102 with the adapter's): every op the plan holds is issued, and how long the plan and the
 /// executor take and what they hold.
 #[test]
 fn agentx_tiered_through_the_executor() {

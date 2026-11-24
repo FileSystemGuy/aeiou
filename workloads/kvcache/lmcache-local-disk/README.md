@@ -308,6 +308,11 @@ chunk file 3,145,728 bytes with no header; G3 a 2 GB directory, G4 6 GB):
   all or nothing, by the room G2 has (the same source; contract 0.27 in the G4 abstract). Since
   contract 0.28 the G4 abstract writes this lookup from sets (`holds` of each tier, the hit the
   leading run of their union, each adapter's load a difference), the rules its own lines.
+- *One adapter* (2026-11-23, brief item 70): `lmcache_local_disk_tiered` is the same code path
+  with G3 alone, in place of the in-process connector's calls it had (their captures stay in
+  `kit/captures/` as evidence, and `kit/lmcache.agentx.odirect.yaml`'s `O_DIRECT` run with
+  them: the abstract has no `direct` parameter now, `fs_native`'s own option not traced). A
+  server with one adapter was not captured; that it does as each of two does is read.
 - *An eviction:* `unlink`, in batches of 20 % of the files at 0.8 of the capacity, each adapter
   by its own count.
 - *Threads:* an adapter's four workers issue all of its calls, stats, stores, loads, and

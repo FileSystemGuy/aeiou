@@ -1544,6 +1544,13 @@ numbers; the order is this note's.
     store and its file per object group are in the abstract, real metadata accesses. How the score
     counts a domain of more than one engine is answered in phase 2 (item 72 (5)).
 
+    *Built 2026-11-23 (the user's "item 70 first as you recommend"; `DESIGN_REVIEW.md` §3.100, the
+    note "Item 70: the single-tier abstract on the adapter"):* `lmcache_local_disk_tiered` has the
+    `fs_native` adapter's calls and the server's lookup rules, one code path with `_g4`, the list
+    of adapters the difference; its `direct` parameter is gone. Read and not traced: a server with
+    one adapter. **Not started:** tensor-parallel engines (the TP 2 capture), the attention family
+    as a parameter, local and shared paths as a parameter, layer-wise mode.
+
 71. **The KV request stream from a session generator written in the abstract (decided by the user
     2026-11-10, `DESIGN_REVIEW.md` §3.99 item 10 and the notes "The fifth generator held out" and
     "The generator in the abstract, a shared tier, and events between runners"; started 2026-11-10).**
@@ -1749,8 +1756,8 @@ numbers; the order is this note's.
     server loads"); ~~its loads submitted only once every adapter's lookup has answered (read the same day, no
     design yet)~~ (built the same day, the user's "proceed with the two spans": a span `lookup`
     and a span `load` in turn, no contract change; the note "Two spans"); ~~its all-or-nothing load when G2 cannot take the buffers~~ (built the same
-    day: contract 0.27, `used`, a tier's fill read by a lane; the note "Contract 0.27"); the single-tier
-    abstract keeps the in-process connector's calls. The rest of this item is not started.
+    day: contract 0.27, `used`, a tier's fill read by a lane; the note "Contract 0.27"); ~~the single-tier
+    abstract keeps the in-process connector's calls~~ (moved to the adapter's 2026-11-23, item 70). The rest of this item is not started.
 
 75. **A cache construct, a stack of tiers (decided by the user 2026-11-10, `DESIGN_REVIEW.md`
     §3.99 note "The generator in the abstract, a shared tier, and events between runners"; not
@@ -2002,8 +2009,11 @@ numbers; the order is this note's.
     one-tier probe (it is `holds` and `run`); a store's `present` as a store of a difference
     and a touch of an intersection. A breaking change to contracts 0.23 to 0.28 for the two
     tiered abstracts. *Asked by the user the same day, to be answered:* whether the technique
-    simplifies other primitives of the DSL. Item 70's move of the single-tier abstract to the
-    `fs_native` calls waits for this, so that it is written once.
+    simplifies other primitives of the DSL (answered the same day, the note "Stage 2 designed"). ~~Item 70's move of the single-tier abstract to the
+    `fs_native` calls waits for this, so that it is written once.~~ *Stage 2 designed and approved by
+    the user 2026-11-23 ("Approved; raise the floor, item 70 first as you recommend"), not built:*
+    the design is in the note "Stage 2 designed"; item 70's move was built first (the same day),
+    so that the floor is raised once, with `present: renew` already without a user.
 
 ## 7. Environment
 

@@ -7,41 +7,45 @@ main agent and its sub-agents, from the session generator fitted to the AgentX c
 (`kit/agentx.py sessions`, `kit/sessions.fit.json`, the scratch's `gen6`: planned-time order).
 Every request takes one of `slots` (first come first, waiting in planned time), then holds its
 prompt and its reply's blocks in G1, vLLM's KV pool in HBM (a held tier, freed least recently first
-and a request's tail first, `full: wait`). LMCache then looks the prompt up in G2 (host DRAM) from
-its start and in G3 (node-local NVMe, the directory under test) past G2's hit; it reads G3's hits
-from the chunk holding the tokens the GPU held, stores the chunks past both hits in G2 (a planned
-drop when G2 is full), and in G3 the chunks G2 newly took, writing a file for each (rewriting one G3
-already holds) on one of `store_lanes` store workers, never on the request's lane (contract 0.20's
-`submit`; the unfinished writes' bytes held in G2, the workers' staging); a request's G3 reads are
-its span `load`, the storage wait a run judges it by; at a request's end every chunk of its prompt
-is touched in G2. G2 and G3 evict as
-LMCache 0.5.5 does: every second, at 0.8 of the capacity, 20 % of the keys (at least one), least
-recently touched first and a request's tail first; a G3 victim's file is unlinked on `evict_lanes`
-eviction lanes (the connector's delete workers). Held request by request and unlink by unlink to
-LMCache's own `LRUEvictionPolicy` driven by the walk's planned events (DESIGN_REVIEW.md §3.99,
-addendum "Built", seven configurations).
+and a request's tail first, `full: wait`). LMCache's multi-process server then looks the prompt up
+in G2 (host DRAM) from its start and, past G2's hit, in its L2 adapter G3 (node-local NVMe, the
+directory under test); the hit is the leading run G2 or G3 holds, and every chunk of it G2 lacks
+is loaded from G3, whatever the GPU holds, all of them when G2 has room and none when it has not;
+the chunks past the hit are stored in G2 (a planned drop when G2 is full), and in G3 those G2
+newly took that G3 lacks, a file written for each on one of the adapter's `store_lanes` workers
+(contract 0.20's `submit`; the unfinished writes' bytes held in G2, the workers' staging); at a
+request's end every chunk of its prompt is touched in G2. G2 and G3 evict as LMCache 0.5.5 does:
+every second, at 0.8 of the capacity, 20 % of the keys (at least one), least recently touched
+first and a request's tail first; a G3 victim's file is unlinked on `evict_lanes` eviction lanes.
 
-The calls on a chunk file are those traced under LMCache's in-process connector (2026-10-02, the
-slot-model abstract `lmcache_local_disk`, retired 2026-11-14, its captures in `kit/captures/`): Python's `open` around one `read` or one `write`,
-or the `O_DIRECT` path; an eviction is one `unlink`. The second abstract, `_g4`, has the calls
-of LMCache's multi-process `fs_native` adapter instead, the mechanism's target (brief item 70),
-captured 2026-11-22 (item 74, `kit/captures/agentx-mp/`): a store is `NAME.tmp` opened
-`O_WRONLY|O_CREAT|O_TRUNC`, one write, close, and a `rename` to `NAME.data`, never of a chunk the
-adapter holds; a load is open, one read, close; a lookup is a `stat` of every key past G2's hit
-in each adapter, in the request's span `lookup`, and a store stats each chunk first, on the
-adapter's store workers (since 2026-11-23). The lookup's stats and the loads are on the
-adapter's workers too, the request's spans waiting for them (contract 0.26's joined `submit`),
-the loads in a span `load` of their own, submitted only once every adapter's lookup has
-answered (the server's load phase, its source read 2026-11-23), so an
-adapter's `store_lanes` lanes carry its lookups, loads, and stores; its unlinks stay on eviction
-lanes of their own, where a run times each batch. This abstract, with one adapter, keeps the
-in-process calls and its reads on the request's lane.
+The calls on a chunk file are those of the server's `fs_native` adapter, the mechanism's target
+(brief item 70), captured 2026-11-22 with two adapters (item 74, `kit/captures/agentx-mp/`): a
+store is `NAME.tmp` opened `O_WRONLY|O_CREAT|O_TRUNC`, one write, close, and a `rename` to
+`NAME.data`, never of a chunk the adapter holds; a load is open, one read, close; a lookup is a
+`stat` of every key past G2's hit, in the request's span `lookup`, and a store stats each chunk
+first. The lookup's stats and the loads are on the adapter's workers, the request's spans waiting
+for them (contract 0.26's joined `submit`), the loads in a span `load` of their own, submitted
+only once the lookup has answered (the server's load phase, its source read 2026-11-23); its
+unlinks stay on eviction lanes of their own, where a run times each batch. The lookup is written
+from sets (contract 0.28). The second abstract, `_g4`, is the same with a second adapter, G4, on
+shared storage: one code path, the list of adapters the difference.
+
+Until 2026-11-23 this abstract had the in-process connector's calls (Python's `open` around one
+`read` or `write`, or the `O_DIRECT` path, traced 2026-10-02 and 2026-11-05, the captures in
+`kit/captures/`), read G3's hits from the chunk the GPU held on, on the request's lane, and
+rewrote a chunk G3 held; in that form its tiers were held request by request and unlink by
+unlink to LMCache's own `LRUEvictionPolicy` (DESIGN_REVIEW.md §3.99, addendum "Built", seven
+configurations), which is the in-process policy and is not held again for this form. A server
+with one adapter has not been captured: the adapter's calls are the captured ones, that one
+adapter behaves as each of two is read from the source. No `direct` parameter: `fs_native`'s own
+`O_DIRECT` option is not traced.
 
 `aeiou run` runs it since brief item 72 (7) (2026-11-13/14); its case is `unsettled`. Not built yet:
 sessions arrive uniformly over `window_s`
 (the WG's ramp, item 72 (1), is not yet written); a session's service time is the corpus's
 measured `api_time`, not a model of prefill and decode on an accelerator (item 70).
 """
+import functools
 import json
 import pathlib
 
@@ -97,10 +101,6 @@ def shape(name, doc, g4):
     w.param("evict_lanes", 4, unit="count", doc="LMCache's delete workers (the connector's num_workers, 4 in 0.5.5)")
     w.param("store_lanes", 4, unit="count", doc="LMCache's store workers: a chunk's write queued to them, the forward step waiting only "
             "for its copy to host memory (0.5.5's local-disk path, read 2026-11-09, DESIGN_REVIEW.md §3.99 item 13 (4))")
-    if not g4:                                      # fs_native's own `odirect` path is not traced, so the G4 abstract has none
-        w.param("direct", False, doc="[config] LMCache's `use_odirect`: every chunk opened with `O_DIRECT` by `os.open` and read or "
-                "written in one call (traced 2026-10-07, §3.63); LMCache takes this path only when chunk_bytes is a multiple of the "
-                "file system's block size")
     w.param("tab", tab, doc="[load, fitted] the fit's quantile tables, fixed point × 1e6, one row a table on the fit's grid")
     w.param("prof", [round(x * S) for x in G['prof']], doc="[load, fitted] the main agent's growth by tenth of its session")
     w.param("p_sub", [round(c['p_sub'] * S) for c in CL], doc="[load, fitted] a session has sub-agents, by class")
@@ -123,47 +123,14 @@ def shape(name, doc, g4):
     G2_CHUNKS = P.g2_bytes // P.chunk_bytes
     G3_CHUNKS = P.g3_bytes // P.chunk_bytes
 
-    if not g4:
-        kv = w.namespace("kv", pattern="kv/{key:016x}.pt", fields={"key": int}, size=P.chunk_bytes, seed=0x5eed_da85)   # one flat directory (traced)
-        final = lambda ns, key: ns.object(key=key)                     # noqa: E731
-    else:                                           # fs_native: `NAME.tmp` renamed to `NAME.data`; G4's directory a namespace of its own, so `--endpoint kv4=DIR` places it on the shared system
+    # fs_native: `NAME.tmp` renamed to `NAME.data`, one flat directory an adapter (traced 2026-11-22)
+    kv = w.namespace("kv", pattern="kv/{key:016x}.{ext}", fields={"key": int, "ext": str}, size=P.chunk_bytes, seed=0x5eed_da85)
+    final = lambda ns, key: ns.object(key=key, ext="data")             # noqa: E731
+    ADAPTERS = [("g3", kv, "store")]                # each L2 adapter: its tier, its namespace, its workers
+    if g4:                                          # G4's directory a namespace of its own, so `--endpoint kv4=DIR` places it on the shared system
         G4_CHUNKS = P.g4_bytes // P.chunk_bytes
-        kv = w.namespace("kv", pattern="kv/{key:016x}.{ext}", fields={"key": int, "ext": str}, size=P.chunk_bytes, seed=0x5eed_da85)
         kv4 = w.namespace("kv4", pattern="kv4/{key:016x}.{ext}", fields={"key": int, "ext": str}, size=P.chunk_bytes, seed=0x5eed_da86)
-        final = lambda ns, key: ns.object(key=key, ext="data")         # noqa: E731
-
-
-    def opened(a, b, flags):
-        """Python's open(): the six calls around one chunk, less the data call."""
-        a.open(b, flags)
-        a.fstat(b)
-        a.ioctl(b, "TCGETS", expect=["ENOTTY"])
-        a.lseek(b, 0, "CUR")
-
-
-    def chunk_read(a, b):
-        """One chunk read whole: Python's open() around it, or LMCache's `O_DIRECT` path (`direct`)."""
-        with a.when(P.direct == False):                                  # noqa: E712
-            opened(a, b, "RDONLY|CLOEXEC")
-            a.read(b, P.chunk_bytes)
-            a.close(b)
-        with a.when(P.direct == True):                                   # noqa: E712
-            a.open(b, "RDONLY|DIRECT|CLOEXEC")
-            a.fstat(b)
-            a.read(b, P.chunk_bytes)
-            a.close(b)
-
-
-    def chunk_write(a, b):
-        """One chunk written whole: Python's open() around it, or `os.open`, `os.write`, `os.close`."""
-        with a.when(P.direct == False):                                  # noqa: E712
-            opened(a, b, "WRONLY|CREAT|TRUNC|CLOEXEC")
-            a.write(b, P.chunk_bytes)
-            a.close(b)
-        with a.when(P.direct == True):                                   # noqa: E712
-            a.open(b, "WRONLY|CREAT|DIRECT|CLOEXEC")
-            a.write(b, P.chunk_bytes)
-            a.close(b)
+        ADAPTERS.append(("g4", kv4, "store4"))
 
 
     _n = [0]
@@ -294,37 +261,17 @@ def shape(name, doc, g4):
 
 
     def chunk_ops(c, tag, sq, gh):
-        """LMCache 0.5.5 over G2 and G3: the leading chunks in G2, then those in G3 past them; G3's hits read
-        (loaded, and touched in G3) from the chunk holding the tokens the GPU held; the chunks past both hits
-        stored in G2, and those G2 newly took stored in G3, each file G3 took written."""
+        """LMCache 0.5.5's multi-process server over G2 and its L2 adapters, G3 alone or G3 and G4
+        (its `distributed` controllers, read 2026-11-22: `store_policy.py`, `prefetch_policy.py`,
+        `prefetch_controller.py`): the leading chunks in G2, then the chunks past them looked up in
+        every adapter; the leading run G2 or some adapter holds is the hit, and each of its chunks G2
+        lacks, whatever the GPU holds, is loaded by the first adapter that holds it, G3 before G4,
+        which alone is touched for it, all of them when G2 has room for them and none when it has
+        not; every chunk G2 newly took is stored in each adapter that lacks it, each adapter's write
+        on its own workers. The calls on a chunk file are `fs_native`'s, traced 2026-11-22 with two
+        adapters (brief item 74); with one, the same adapter's code, read and not traced (item 70)."""
         n = c.let(tag + "nch", seq_len(sq) // P.per)
         h2 = c.probe("lm", "g2", chunk_keys(sq, P.per), tag + "h2")
-        if g4:
-            return chunk_ops_g4(c, tag, sq, gh, n, h2)
-        h3 = c.probe("lm", "g3", chunk_keys(sq, P.per, h2), tag + "h3")
-        hit = c.let(tag + "hit", h2 + h3)
-        first = c.let(tag + "first", max_(h2, min_(gh * BL, seq_len(sq) * BL - 1) // (BL * P.per)))
-        # D: the request's own storage wait; its reads load into G2, the pool the pending stores
-        # hold (item 13 (4)), so they draw on the store workers' staging (contract 0.21)
-        with c.span("load", staging="store"):
-            with c.loop(tag + "r", hit, start=first) as j:
-                chunk_read(c, c.let(tag + "rf", kv.object(key=chunk_key(sq, j, P.per))))
-        c.touch("lm", "g3", chunk_keys(sq, P.per, first, hit - first))
-        t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")   # what G2 newly took: chunk indices
-        t3 = c.store("lm", "g3", chunk_keys(sq, P.per, chunks=t2), present="renew", taken=tag + "t3")   # indices into t2
-        with c.loop(tag + "w", t3.len) as j:
-            with c.submit("store"):                                     # on a store worker, never the request's lane
-                chunk_write(c, c.let(tag + "wf", kv.object(key=chunk_key(sq, t2[t3[j]], P.per))))
-
-
-    def chunk_ops_g4(c, tag, sq, gh, n, h2):
-        """The same with two L2 adapters, G3 and G4 (LMCache 0.5.5's `distributed` controllers, read
-        2026-11-22: `store_policy.py`, `prefetch_policy.py`, `prefetch_controller.py`): the chunks past
-        G2's hit are looked up in both, the leading run G2 or some adapter holds is the hit, and each of
-        its chunks G2 lacks, whatever the GPU holds, is loaded by the first adapter that holds it, G3
-        before G4, which alone is touched for it, all of them when G2 has room for them and none
-        when it has not; every chunk G2 newly took is stored in each adapter that lacks it, each adapter's write on
-        its own workers. The calls on a chunk file are `fs_native`'s, traced 2026-11-22 (brief item 74)."""
         # every chunk of that run is loaded, the ones the GPU holds too: the connector's lookup is the
         # whole prompt and carries no GPU hit, and the server's prefetch loads the run before the
         # connector frees what vLLM had computed (source read 2026-11-23, not traced:
@@ -335,15 +282,16 @@ def shape(name, doc, g4):
         # the hit past it is the leading run of what any holds; G3 loads those of the run G2
         # lacks, and G4 those neither G2 nor G3 has (the lowest adapter that holds a key loads it)
         past = chunk_keys(sq, P.per, h2)
-        s2, s3, s4 = (c.holds("lm", t, past, tag + "s" + t[1]) for t in ("g2", "g3", "g4"))
-        h3 = c.let(tag + "h3", c.union(tag + "any", s2, s3, s4).run(h2))
-        a3, a4 = c.minus(tag + "a3", s3, s2), c.minus(tag + "a4", s4, s2, s3)
-        n3, n4 = c.let(tag + "n3", a3.below(h2 + h3)), c.let(tag + "n4", a4.below(h2 + h3))
+        s2 = c.holds("lm", "g2", past, tag + "s2")
+        held = [c.holds("lm", t, past, tag + "s" + t[1]) for t, _, _ in ADAPTERS]
+        h3 = c.let(tag + "h3", c.union(tag + "any", s2, *held).run(h2))
+        loads = [c.minus(tag + "a" + t[1], s, s2, *held[:k]) for k, ((t, _, _), s) in enumerate(zip(ADAPTERS, held))]
+        counts = [c.let(tag + "n" + t[1], a.below(h2 + h3)) for (t, _, _), a in zip(ADAPTERS, loads)]
         # the load is all or nothing (contract 0.27; `prefetch_controller.py`, `_reserve_load_buffers`,
         # read 2026-11-23): the server takes a G2 buffer for every chunk it would load, and when G2
         # has not the room nothing is loaded, the hit is G2's own, and the engine computes and
         # stores the rest again; G2's room is its planned one at the request's instant
-        fits = c.let(tag + "fits", n3 + n4 <= G2_CHUNKS - c.used("lm", "g2", tag + "u2"))
+        fits = c.let(tag + "fits", functools.reduce(lambda x, y: x + y, counts) <= G2_CHUNKS - c.used("lm", "g2", tag + "u2"))
         hit = c.let(tag + "hit", h2 + when(fits, h3, 0))
         # the request waits for its lookup and its loads, which each adapter's workers carry (contract
         # 0.26; traced 2026-11-22: an adapter's four threads issue all its calls): worker q of an
@@ -354,22 +302,24 @@ def shape(name, doc, g4):
         with c.span("lookup"):
             # the lookup: every key past G2's hit statted in each adapter, whatever the other holds
             # (0.5.5's storage_manager.py), a key it lacks ENOENT
-            for tg, ns, wk in (("q3", kv, "store"), ("q4", kv4, "store4")):
+            for t, ns, wk in ADAPTERS:
+                tg = "q" + t[1]
                 with c.loop(tag + tg, min_(P.store_lanes, n - h2)) as q:
                     with c.submit(wk, join=True):
                         with c.loop(tag + tg + "i", ceil_div(n - h2 - q, P.store_lanes)) as i:
                             c.stat(final(ns, chunk_key(sq, h2 + q + i * P.store_lanes, P.per)), expect=["ENOENT"])
         with c.when(fits):
             with c.span("load", staging="store"):
-                for tg, ns, arr, cnt, wk in (("r3", kv, a3, n3, "store"), ("r4", kv4, a4, n4, "store4")):
+                for (t, ns, wk), arr, cnt in zip(ADAPTERS, loads, counts):
+                    tg = "r" + t[1]
                     with c.loop(tag + tg, min_(P.store_lanes, cnt)) as q:
                         with c.submit(wk, join=True):
                             with c.loop(tag + tg + "i", ceil_div(cnt - q, P.store_lanes)) as i:
                                 native_read(c, c.let(tag + tg + "f", final(ns, chunk_key(sq, arr[q + i * P.store_lanes], P.per))))
-            c.touch("lm", "g3", chunk_keys(sq, P.per, chunks=a3, count=n3))
-            c.touch("lm", "g4", chunk_keys(sq, P.per, chunks=a4, count=n4))
+            for (t, _, _), arr, cnt in zip(ADAPTERS, loads, counts):
+                c.touch("lm", t, chunk_keys(sq, P.per, chunks=arr, count=cnt))
         t2 = c.store("lm", "g2", chunk_keys(sq, P.per, hit, n - hit), taken=tag + "t2")
-        for tr, ns, wk in (("g3", kv, "store"), ("g4", kv4, "store4")):
+        for tr, ns, wk in ADAPTERS:
             with c.loop(tag + "c" + tr, t2.len) as j:                   # a store's check: each chunk statted first, on the adapter's workers
                 with c.submit(wk):
                     c.stat(final(ns, chunk_key(sq, t2[j], P.per)), expect=["ENOENT"])
