@@ -1263,3 +1263,60 @@ def test_diskann_search_kit_marks_every_query_and_searches_as_the_case_says(monk
             assert (ix["num_nodes_to_cache"], ix["cache_mechanism"]) == (10000, 2)
             assert [c["call"] for c in calls[2:]] == ["stat", "search"] * 3
             assert {(c["dim"], c["k"], c["complexity"], c["beam"]) for c in calls[3::2]} == {(4, 10, 100, 4)}
+
+
+def _preq(t, h, api=0.5, model="m"):
+    return {"t": t, "hash_ids": h, "api_time": api, "model": model}
+
+
+# One session for `prefix_source.py`: sub-agent groups A (0), B (1), C (2) with D (3) nested in it,
+# and E (4); the main agent sends during A, B, and E.
+PREFIX_SESSION = [
+    _preq(0, [1, 2, 3]), _preq(1, [1, 2, 3, 4]),
+    {"type": "subagent", "requests": [_preq(2, [1, 2, 3, 9], 1), _preq(2.5, [1, 2, 3, 9, 10])]},
+    {"type": "subagent", "requests": [_preq(2.6, [1, 2, 3, 9, 77], 0.2)]},
+    _preq(2.7, [1, 2, 3, 4, 9], 0.1), _preq(2.9, [1, 2, 3, 9, 10, 5], 0.1),
+    {"type": "subagent", "requests": [
+        _preq(5, [1, 2, 3, 9, 77, 11], 0.1),
+        {"type": "subagent", "requests": [_preq(5.5, [1, 2, 3, 9, 77, 11, 12], 0.1)]},
+        _preq(5.7, [1, 2, 3, 9, 77, 11, 12, 13], 0.1)]},
+    _preq(6, [1, 2, 3], 0.1, "m2"),
+    {"type": "subagent", "requests": [_preq(7, [1, 2, 3, 4, 9, 8], 1), _preq(7.5, [60, 61, 62], 0.1)]},
+    _preq(7.2, [60, 61], 0.1),
+]
+
+
+def test_prefix_source_credits_a_shared_prefix_to_own_ancestor_finished_and_concurrent_in_layers(monkeypatch, tmp_path):
+    """`prefix_source.py`: a request's blocks walked down the prefix tree of the earlier requests of
+    its session and model, what it shares credited to its own agent, then what an ancestor adds
+    (sent before this branch was spawned), then a branch that had finished, then one running beside
+    it; an ancestor's request sent after the spawn is concurrent; another model shares nothing."""
+    ps = _kit(monkeypatch, "prefix_source")
+    p = tmp_path / "traces.jsonl"
+    p.write_text(json.dumps({"requests": PREFIX_SESSION}) + "\n" + json.dumps({"requests": [_preq(0, [1, 2])]}) + "\n")
+    rows, T = ps.measure(p, 1)
+    assert [(r.group, r.t, r.own, r.ancestor, r.finished, r.concurrent) for r in rows] == [
+        (-1, 0, 0, 0, 0, 0), (-1, 1, 3, 0, 0, 0),
+        (0, 2, 0, 3, 0, 0),            # A opens with what the main agent sent before it was spawned
+        (0, 2.5, 4, 0, 0, 0),
+        (1, 2.6, 0, 3, 0, 1),          # B: one block more from A, still running
+        (-1, 2.7, 4, 0, 0, 0),
+        (-1, 2.9, 3, 0, 1, 1),         # the main agent: B had finished, A had not
+        (2, 5, 0, 4, 1, 0),            # C: the main agent's, then one block of B's, finished before C began
+        (3, 5.5, 0, 6, 0, 0),          # D, nested in C: C is its ancestor
+        (2, 5.7, 6, 0, 0, 1),          # C again: its nested group ran beside it
+        (-1, 6, 0, 0, 0, 0),           # another model
+        (4, 7, 0, 5, 0, 0),
+        (-1, 7.2, 0, 0, 0, 0),
+        (4, 7.5, 0, 0, 0, 2)]          # E: what the main agent sent after spawning it
+    assert [r.first for r in rows if r.group >= 0] == [True, False, True, True, True, False, True, False]
+    assert (T["sessions"], T["sessions_with_subagents"], T["groups"], T["top_groups"], T["top_groups_main_sent_during"]) == (1, 1, 5, 4, 3)
+    assert (T["main", "requests"], T["main", "blocks"], T["main", "own"], T["main", "req_nothing_shared"]) == (6, 23, 10, 3)
+    assert (T["sub", "ancestor"], T["sub", "finished"], T["sub", "concurrent"], T["sub", "req_concurrent"], T["sub", "req_concurrent_only"]) == (21, 1, 4, 3, 1)
+    assert ps.measure(p)[1]["sessions"] == 2
+    out = _run(KV / "prefix_source.py", p)
+    assert out.returncode == 0, out.stderr
+    assert "('sub', 'concurrent') 4" in out.stdout and "sessions 2" in out.stdout
+    assert "sub first-of-group n 1 blocks added 1 " in out.stdout and "sub later n 2 blocks added 3 " in out.stdout
+    assert "main later n 1 blocks added 1 " in out.stdout
+    assert _run(KV / "prefix_source.py").returncode == 2

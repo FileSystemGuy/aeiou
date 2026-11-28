@@ -526,6 +526,18 @@ behaviour is outside the model, and a system that cannot keep up with the plan g
 or failing run rather than a gentler one (revisited and kept by the user on 2026-11-14 for the
 would-be drop).
 
+**One input will cross (decided 2026-11-27, not built; `DESIGN_REVIEW.md` §3.100, the note
+"Decided: the rule weakened by one input").** Everything above describes the runner as it is.
+For a timeline that opts in, the KV abstracts on vLLM with LMCache, the order of the events that
+touch shared cache state is to cross from run to plan, and nothing else: which tier holds a
+chunk when it is asked for then follows the run, the demand (sessions, arrivals, prompts, keys,
+think and tool times) stays the plan's alone. The reasons the wall was absolute are answered
+one by one: the slower system receives the same requests, and more loads rather than fewer; the
+demand's fingerprint names the workload before the run and the run's logged order, replayed in
+a dry run, reproduces its ops; the zero-latency dry run still says what ideal storage would be
+asked. The planner can then not run ahead of a request whose readiness is unknown, the largest
+change. Every other abstract keeps the wall as written.
+
 ## Part III: The library
 
 ### 16. Lowering (new, short; not yet written)

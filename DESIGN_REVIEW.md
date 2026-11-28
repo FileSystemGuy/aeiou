@@ -13882,6 +13882,475 @@ the reading removes the user.
   `--endpoint`, each tier's hits read from its own directory, the run's fingerprint the
   plan's; `test_trace.py`, the new abstract's planned trace at test sizes.
 
+**Is the KV model high-fidelity at scale? Not yet; KV finished before the vector database work;
+G3's visibility not assumed (2026-11-24; raised by the user; recorded as brief item 83, queued,
+what "finished" means not yet agreed).** *The question.* The user: training and checkpointing
+are a high-fidelity model that scales out keeping its fidelity; is the KV model too? *The
+answer given: no.* Training scales by independence: a GPU's ops are a function of its global id,
+GPUs meet only at the shared dataset, the shuffle, and the barrier, so the per-GPU stream held to
+a capture is the stream at N GPUs. KV engines are not independent once they share a cache: one
+engine's store is another's hit, so fidelity at scale needs the sharing modelled, and it is not:
+`--gpus N` is N independent engines at TP 1; a domain of several engines and the routing across
+them (brief item 72 (5) phase 2), G4 shared by several engines (item 78), and tensor parallelism
+(item 70, the TP 2 capture) are not built; what an engine holds is drawn at one reference engine
+(item 24). Nor is one engine held to a trace: both tiered cases are `unsettled`, neither has a
+capture judged against it (their tiers are held to LMCache's `LRUEvictionPolicy` request by
+request), the one-adapter calls and the load rule that sets the reads (every hit chunk G2 lacks,
+5.6 times the reads) are read from the source, not traced; the generator's held-out ramp writes
+(−9 ± 4 %) fall outside the ±7 % item 71 claims and its reads reproduce the pool model on this
+corpus only; item 74's retargeting and tolerance file are not started; no run at the case's sizes
+(the note "The plan is 51.9 hours"). The shared-path pair (`lmcache-shared-fs`, `sharegpt-chat`)
+is judged within tolerance against captures, at a toy scale and under the in-process connector.
+On training's side, stated with it: the coordinator has met only `localhost`, the committed
+traces are judged on block metrics until item 34, and three container mechanisms are untraced
+(item 36).
+*The user's decision:* "I'd like to 'finish' KVCache before moving on to VDB (where 'finish'
+means a level of feature support that we need to define and agree upon before we're done with
+KVCache)." Item 81 waits for item 83; item 83's first step is that definition.
+*G3's visibility (the user):* "G3 assumes that the G3 cache is visible to only a single system
+(ie: 8 GPUs), while G4 is visible to all the systems in a pod. There are some systems that can
+bring node-local NVMe drive(s) into visibility for the whole pod, blurring the G3 and G4 layers,
+while still providing the lower-latency and higher-B/W that G3 (node-local NVMe) is supposed to
+bring. As we build out scale-out support, I'd like to keep that in mind, that we cannot assume
+that G3 has only single-system visibility." NVIDIA's definition of G3 is "tied to a single node"
+(the note "Tier names"); the user's point is that a product can break that tie, so the scale-out
+work must not build it in. *My reading (proposed, not decided):* the interposition test (brief
+§5) separates two cases.
+1. The application is configured as for a private G3 (each engine's adapter on its own path)
+   and the storage backs that path with NVMe the whole pod can see. The op stream is the private
+   one; the pod visibility, and the latency and bandwidth of the local drive, are the solution's,
+   judged as the performance it delivers. Nothing in the abstract changes.
+2. The application is configured to share it (engines' adapters on one pod-visible path, each
+   finding the others' chunks by `stat`, as item 70's shared-path parameter has it). The op
+   stream changes (hits on chunks other engines stored, fewer stores, reads of chunks another
+   node wrote): another workload, a case of its own.
+So which engines see a cache is a parameter of each cache, apart from its G number, as its API
+already is (the note "Tier names"): an engine, a node, or a pod, never derived from "G3" or "G4".
+What follows for the scale-out design, to be settled with item 83 (a): item 72 (5) defines a
+domain as the engines sharing *one* storage tier; with G3 per node and G4 per pod they are two
+scopes, so a scope per cache, nested (engine within node within pod), and a node-scoped G3 and a
+pod-scoped G3 are both expressible; the run side's rule that rank 0 alone empties namespace roots
+and writes their manifests (CLAUDE.md) assumes every namespace is shared storage, and a
+node-private G3 needs each host's root emptied by that host; and how capacity and eviction count
+when several engines' adapters share one directory (each tracking only the keys it stored, or
+one capacity) is to be read from LMCache's source before it is designed.
+
+**Task scheduling that follows KV residency: can "never learn from the run" be weakened by one
+input? (raised by the user 2026-11-25, recorded 2026-11-27 at the user's "Please record this
+discussion in your notes, I don't want to lose this while we debate this some more"; ~~under
+debate: proposed, not decided~~ decided 2026-11-27, the note "Decided: the rule weakened by one
+input" below; nothing built, nothing measured on a system; brief item 83 (i)).** *The user's text, in
+full:*
+
+> We've spent a lot of time working on modelling the behavior of different levels of caching in
+> the inference stack, to some good level of success. During inferencing, the GPU has several
+> "tasks" it could work on at any given time, but if a task has cached KV blocks that it would
+> like to load, it will only work on that task if/when all of those KV blocks are in HBM. In other
+> words, task scheduling depends upon KV block residency in HBM, and KV block residency depends
+> upon instantaneous SUT latency and B/W determining which KV block reads finish first.
+>
+> A fixed stream of I/O operations emitted by a simulator cannot model the behavior of a dynamic
+> task scheduling model, even one that accurately models hits and misses in those caches. The
+> order of I/O completion changes the order of task execution, which in turn directly affects the
+> future order of I/O initiations on the SUT. Those together have a big enough impact on the SUT
+> that we very much want to model that "task scheduling" aspect in the benchmark.
+>
+> We have a "never learn from the run" rule, which appears to preclude aeiou from simulating this
+> adaptive behavior. I'd like to discuss how we might be able to weaken that rule as little as
+> possible in order to support this task-scheduling behavior.
+>
+> A task that is eligible to execute by virtue of a new user-initiated query or tool completion
+> arriving will initiate the reading of any KV blocks that it needs that are not currently in HBM.
+> When they're all present in HBM, the task can execute and thereby generate new KV block(s) as a
+> result. Those new KV blocks are stored in HBM until they're evicted to lower layers of the
+> caching hierarchy by pressure from reading other KV blocks into HBM for other tasks. Rinse and
+> repeat.
+>
+> Mechanically, and separately from the "don't learn from the run" rule, we could model the
+> dynamism as a dependency graph. Each task would be dependent upon the current list of KV blocks
+> being in HBM, then that task generating new KV block(s) that future interactions on that lane
+> are dependent upon. The order of fine-grained task execution would be modelled, but perhaps the
+> order of queries and time gaps at the macro level could be fixed?
+>
+> How far would the changes to the current architecture for KVCache need to go if we had to treat
+> each session truly independently and let them execute in the manner of data-flow architectures?
+> I know that we risk comparability between different runs of the benchmark, but do you have any
+> type of estimate of that risk level if we went this direction? If the trace we're fitting to is
+> the same across all storage systems we're testing, ie: the sequence of queries and tool calls
+> and human/agent think times are all the same, we would end up with different micro-level
+> operation sequences, but would the macro-level be different enough to be incomparable?
+>
+> What do you think? Do you have any suggestions on how to improve this approach? Do you have any
+> alternative architecture you think might be valuable to look into?
+
+*The answer given (Claude, 2026-11-25; an assessment, every number in it arithmetic from the
+case's parameters, none measured).* The premise holds: a fixed op stream cannot carry that
+feedback. What the run decides today is when an op issues (`launch = plan + L`, the note of
+2026-11-09); the tiers' contents, the GPU's slots, and every hit and miss are computed in planned
+time, in which a load takes no time. The abstract already has one rule where the difference is
+recorded and not detected: G2's "load every chunk of the hit if there is room, none if not"
+(contract 0.27, the note "What a tier holds") is decided on G2's planned contents, and the server
+decides on what G2 holds at that real moment, loads in flight included.
+
+*The narrow weakening proposed: one input more.* The run would decide, beside when an op issues,
+**the order in which requests become ready** (all of a request's loads complete), and nothing
+else.
+- Fixed before the run, as now: sessions, arrival times, each request's tokens and chunk keys,
+  think times, tool-call gaps, the caches' rules; so every lookup and `stat`.
+- Following the run: which tier holds a chunk when it is asked for, so the loads from each tier,
+  the stores made again after an eviction, and the unlinks.
+- Still forbidden: whatever changes the demand (a timeout, a retry, a dropped store, routing on
+  real queue depth). The decision of 2026-11-14 (a would-be drop is a gate failure) is not
+  reopened by this.
+The op set becomes a function of the abstract, its parameters, the seeds, the counts, **and that
+order**. If the run logs the order, a dry run fed the log reproduces the op multiset exactly:
+deterministic given the schedule, as a record-and-replay debugger is.
+
+*How far the changes would go.*
+- *The contract:* probably little; a timeline's lanes, caches, `holds`, `store`, `acquire`,
+  `submit` with `join`, and spans already state the dependency graph. Opt-in per timeline, so
+  every abstract outside `kvcache/` keeps its fingerprint. Not read for this answer: how the
+  abstract states the GPU's compute and G1's admission; to be read before any design.
+- *The planner* (`vm::drive`, pulled 10 s of planned time ahead with the caches' state): the
+  largest change. It could not plan past a request whose readiness is not yet known, which is
+  reason (iv) of the 2026-11-14 note on the would-be drop.
+- *The wall* (`ARCHITECTURE.md` §15): "what crosses from run to plan: nothing" becomes one
+  thing.
+- *Several hosts:* a cache one engine owns (G1, G2, the slots) needs no message. A cache shared
+  across hosts needs one authority for its order, and the coordinator's latency then changes
+  which ops issue, where today it changes only when (item 72 (5)'s events were designed to
+  change only when). To be designed with item 83 (a) and the scope per cache.
+- *The fingerprint:* of the ops, known only after the run, checked by replaying the log. A
+  second one, of the demand (requests and keys), stays known before the run and equal for
+  every system under test. Tests stay deterministic by injecting an order.
+- *CLOSED:* "every system under test sees the same operation sequence" would hold for these
+  cases at the demand only. A WG-level decision, and a change to brief §5.
+
+*The comparability risk, as estimated; no number is measured.*
+- Probably not small at the case's sizes. A full context of 131,072 tokens at 128 KiB a token is
+  16 GiB, so its load takes 2 to 8 s at 8 to 2 GiB/s; G2's 490 GiB is about 30 such contexts and
+  G1 about 10, against 40 sessions on 16 slots. The window in which requests can change places
+  is comparable with G2's turnover. (Most contexts are smaller than the full one; the ratio is
+  the point, not the figures.)
+- Lookups, stats, and a chunk's first write follow the demand and barely move (the server
+  stores a request's new chunks at the request, not at an eviction from G1, as the abstract has
+  it). Loads, repeated stores, and unlinks move.
+- The feedback is damped for a system that keeps up and amplifying near saturation: slow loads
+  keep more tasks waiting, their buffers add pressure, pressure evicts, evictions cause loads.
+  Expected: passing systems cluster, failing ones diverge widely, and the gate on D already
+  separates them.
+- Bytes and ops stop being comparable between systems, since each moved different ones.
+  Request-level results stay comparable (a span's D, requests completed, the time tasks sat
+  unrunnable for KV), as in any closed-loop benchmark, whose op sequences also follow the run.
+- New costs: two runs on one system no longer issue the same ops, so repeated runs and a
+  stated spread; the benchmark host's own jitter and the coordinator's latency change the
+  workload and not only its timestamps; the pre-run proof (equal fingerprints) is replaced by
+  the demand's fingerprint, the logged order, and a replay.
+- Against reason (ii) of 2026-11-14 ("a slower system would get an easier workload"): not
+  expected here, the requests being fixed and pressure adding loads, so the slower system more
+  likely gets the harder workload, as it would in production. Not shown.
+
+*Suggestions, in the order proposed.*
+1. *Read the source first.* Whether vLLM, at the version traced and under `LMCacheMPConnector`,
+   parks a request while its KV loads and runs others, or loads inside the scheduler's step and
+   stalls the whole engine. From memory of vLLM's connector API and not verified at 0.30: a
+   connector may answer either way. If it stalls, there is no reordering by readiness and the
+   model is a lag of the whole engine, far simpler. The user's description (KV evicted to lower
+   tiers by pressure in HBM) and the abstract's (stores at the request) also differ and are to be
+   reconciled against the source.
+2. *Measure the real effect.* The Qwen rig under the same AgentX replay twice, the G3 path
+   throttled in one (cgroup `io.max` or `dm-delay`), the two captures' op mixes compared.
+3. *Readiness times as an input of the planner.* Zero latency is today's plan. A latency model
+   in a dry run (a bandwidth and a fixed delay), swept from slow to fast, gives the risk estimate
+   asked for, with no change to the executor or the rule. The same code would later take its
+   input from the run, if that is decided.
+4. *If the run feeds it, coarsen it:* one event a request, never one an op, read at the engine
+   scheduler's ticks, ties in the plan's order. A race of microseconds then changes nothing, and
+   hosts agree with one message a tick.
+5. *Bound the divergence:* each run's loads and stores per tier reported against the
+   zero-latency plan, under a tolerance of the case.
+
+*An alternative that keeps the rule whole.* A reference latency in the plan: a load takes planned
+time, WG-fixed or calibrated in a short declared run beforehand and frozen in the lock (a
+storage-reported number, which the workload id already leaves out). Scheduling by readiness is
+then modelled and the op set is fixed before the run; the feedback follows a modelled system, not
+the real one, and a replay of the plan in the observed order after the run would report how far
+the two differ (the "middle way" of 2026-11-14, for this case). Named and set aside: running the
+real engine's scheduler over a stub model, an emulator.
+
+*Recommended, not decided:* steps 1 to 3, none of which changes a rule, step 3 being needed by
+either path; then the choice between an order fed by the run and a reference latency, on the
+measured numbers. *Open for the debate:* whether the engine reorders at all (step 1); the size of
+the effect (steps 2 and 3); what CLOSED means for these cases; the order's authority across
+hosts; whether "finished" (item 83) includes any of this.
+
+*The debate continued (2026-11-27; the user's three messages and the answers; one direction
+chosen by the user, the rest proposed, nothing built or measured).*
+
+*Verified in the source: vLLM reorders by KV readiness.* Asked by the user ("Please do verify if
+vLLM reorders the execution of tasks based upon which tasks have a complete set of KV blocks in
+HBM"). Read: vLLM 0.30.0's `vllm/v1/core/sched/scheduler.py` and
+`vllm/distributed/kv_transfer/kv_connector/v1/lmcache_mp_connector.py`, in
+`~/MLPerfStorage/venvllm`, the only install on the machine (LMCache 0.5.5 beside it). Read, not run and not traced; the
+scheduling policy the rig used not checked, the first-come-first-served path described.
+- The lookup is asynchronous: `get_num_new_matched_tokens` returns `None` while LMCache has not
+  answered, the request is put on the skipped queue and the scheduler goes on to the next.
+- A hit past the GPU's own returns `need_to_load, need_to_load > 0`: an asynchronous load. The
+  scheduler allocates the request's blocks, sets `WAITING_FOR_REMOTE_KVS`, and goes on admitting
+  others.
+- A parked request holds its HBM blocks for the whole transfer and is not preempted there; an
+  asynchronous load is admitted only if it fits in the free blocks less the reservations of the
+  loads in flight (`_inflight_prefill_reserved_blocks`).
+- A finished load (`finished_recving`) promotes the request to `WAITING`; under FCFS the skipped
+  queue is served before the waiting one, so it goes ahead of new arrivals.
+- A request at the head that cannot get its blocks stops admission behind it (`break`).
+- The connector builds store requests from the tokens scheduled, as chunks are computed, not
+  when HBM evicts them (the user's description had eviction by pressure).
+So step 1 of the suggestions is answered: the engine reorders, and the simpler whole-engine lag is
+not the model.
+
+*Two levels (the user).* Reaction to the system under test at the micro level (tasks reordered by
+what HBM holds) and at the macro level (a session as a state machine, a delay then a prompt, in
+place of an absolute timeline, which the user holds unrealistic). The answer: the macro level's
+timing is today's design (rule (2) of 2026-11-09: only a session's arrival is absolute, every
+later op at its planned time plus the lag); what stays planned is the caches' contents. Both
+levels are one architectural change, the caches' state following the real order of events; they
+differ in size, the micro displacement one load's time, the macro one the accumulated lag, which
+grows, so a bound on the divergence from the zero-latency plan (suggestion 5 above) does not hold
+once the macro level follows the run. ~~Suggestion 5~~ withdrawn for that case.
+
+*Two corrections offered to the user's logic.* (1) Rewarding the faster system does not need
+responsive scheduling, a fixed plan already giving it the lower D and lag; what it buys is the
+fidelity of the load. (2) Reordering hides storage slowness from the GPU: a parked request idles
+the GPU only if nothing else is runnable, so GPU stall is far less than the sum of the load waits,
+and it is a simulated number, no GPU being run.
+
+*The cap.* Proposed by Claude: a load must beat recomputing the same tokens. The user: the major
+inference shops build for the "golden hour", the hour of most users and activity the data centre
+is to carry at a level of responsiveness, so a KV read always saves GPU cycles however long it
+takes. ~~The break-even cap~~ withdrawn (vLLM itself always loads on a hit and weighs nothing).
+Qualified: a load is not free on the GPU, its blocks held for the transfer; and the user's
+premise holds the bound, the responsiveness level.
+
+*What the SLA is judged on.* The user: a cap on each load would be too sensitive to its p99, where
+a shop would use "max user visible latency". Agreed: the judged number is user-visible latency of
+a turn (from the human's input to the answer, the stalls of its sub-agents inside it), at a
+percentile and threshold the WG fixes, not a latency per load.
+
+*HBM-seconds.* Proposed by Claude as a reported cost; the user doubted it is the metric that
+shows HBM congestion's effect, and that we know the ratio of HBM needed to computation time.
+Answer: not known. If the SLA is user-visible latency and the score is users carried, HBM
+congestion is already in the score; what is worth reporting is its effect, the time requests wait
+at admission for blocks that parked loads hold, a diagnostic. The abstract already has the
+admission (`g1` is a cache `full: wait`, `admit` in `lmcache_local_disk_tiered.py`), so a dry run
+can count how often admission waits on G1 with ideal storage, and under a latency model later.
+
+*The score: the load (chosen by the user, 2026-11-27).* "I think making the load the score would
+be the easiest for the submitters and the public viewing the published results to understand. It
+says that the BigSystem model 9000 can support 300 users during golden hour at the required SLA,
+while SmallSystem 4500 can only support 250 users. If that makese sense, then let's use that
+metric." It does: the score is the number of users (sessions) carried at the required SLA, as
+training's is accelerators at an AU threshold. Normalising the measured numbers by the load was
+the user's other option and was advised against (latency against load is not linear). Not
+settled: what a user is in the trace's mix; that session *i* is the same session at every N; the
+application side WG-fixed, or engines scaled with users (item 83 (a)); the ceiling the GPUs alone
+set, from the zero-latency plan; the search over N the WG driver's, aeiou running one point; the
+length of a point (the plan is 51.9 hours). With several runs a point and a point counted only if
+all pass (the user: "require multple runs to verify that the 'pass' was not a fluke"), agreed as
+good-enough comparability, on conditions: the same demand at a given N, the application side
+fixed, session arrivals on absolute time, the SLA on user-visible latency, the benchmark host's
+own lateness gated; and a difference in N smaller than the spread between runs means nothing.
+
+*Replay, and what the zero-time plan is compared on.* The user took the proposal for a
+comparison of op order, global or per session, between the dry run and the real run. Neither. (a)
+The replay compares a run with itself: the run logs the order of the events that touch shared
+state (session arrivals and timed eviction ticks among them, and the real value of any clock
+read), and a dry run fed the log reproduces that run's ops, whatever the lag; it proves the runner
+kept its rules and says nothing of comparability. (b) The zero-time plan is compared on the
+demand (identical), on the op mix per tier (a reported difference), and as the ideal timeline
+latency is measured against; never on order. A session's *requests* are the same whatever the
+lag; its ops are not, since which tier serves its chunks follows the other sessions.
+The user: under macro responsiveness no fixed cache state can be defined to compare a run
+against, shared caches across hosts included. Agreed, and none is needed: a run's cache state is
+what its order of events produced. Across hosts what is needed is one agreed order for each
+shared cache during the run.
+
+*Found reading the script for this: two things the direction needs.*
+1. *Order leaks into the demand today, within a session.* `reused` in
+   `lmcache_local_disk_tiered.py` builds a fresh prompt from "the prompts already sent", the
+   session's timeline group (`tl.published`, `tl.entry`), read at the lane's planned instant. A
+   session's main line and its asynchronous sub-agents would drift under the run's order, the
+   pool at a lane's instant would differ, and so would the prompt and its keys. Across sessions
+   nothing leaks (a group a session; every draw positional). Proposed: the demand stays in
+   planned time (the pool read in planned order, a session's requests a function of the seed and
+   the session alone) and only the cache statements follow the run.
+2. *A miss costs no GPU time in the model.* A request's compute is `api`, drawn, the same
+   whatever was hit. If the run's order causes misses, user-visible latency would not show their
+   recomputation. A score on user-visible latency needs compute as a function of the tokens not
+   hit (the retired slot model had `prefill_per_token` and `decode_per_token`).
+
+*Agreed by the user (2026-11-27, later):* the SLA on user-visible latency of a turn; HBM
+congestion reported as its effect at admission, a diagnostic; the load as the score; several
+runs a point as good-enough comparability; the replay as a run compared with itself. *Raised by
+the user, under debate:* a session's main line and its sub-agents as a DAG, a node running only
+when the nodes before it are complete, so that the demand is fixed whatever the order. Answered:
+the lanes' causal edges are already that DAG, but the premise that every sub-agent resolves back
+to the main line before the next input does not hold in the generator (a batch is synchronous
+only with probability `p_sync`; an asynchronous one runs beside the main line's later turns), and
+branches a DAG leaves unordered would still be read by `reused` in the order they happened. The
+demand is fixed if a node's prompt is built only from its ancestors' prompts; that is another
+demand model than today's pool (everything sent before the planned instant), so the fit of brief
+item 71 would be judged again. The alternative keeps today's fit: the pool read in planned
+order. Not decided. *The user's two goals, restated by the user:* a KV workload generator of
+good-enough fidelity, and a programmable generator whose primitives the KV problem proves; the
+earlier warning against building a vLLM simulator stands. The line proposed: the runner gains
+only general mechanisms (state that follows the order of events, the log and its replay); vLLM's
+scheduling rules and any compute that depends on misses stay in the abstract's script, each
+admitted only when a capture shows it moves the op mix or user-visible latency past a tolerance.
+
+*Later the same day (2026-11-27).* The user on the DAG: asynchronous sub-agents are frequent,
+so the ancestors-only DAG is risky; and, no prompt text being in the trace, how is the DAG of
+contributions known at all? Answered: it is not, and it is not needed. A KV key is a hash chained
+over the prefix, so only the prefix a prompt shares with an earlier one moves any key, and the
+corpus gives that (each request's 64-token blocks as hash ids, `kit/agentx.py`): for a request,
+which earlier request's prefix it opens with and for how many blocks, and whether that request
+is an ancestor or a branch running beside it. Proposed, not done: measure in the corpus how
+often a prompt's shared prefix comes from a concurrent branch, not an ancestor; that number
+decides between ancestors-only and the pool read in planned order. The user on a shared G4: an
+agreed order seemed to need predicting from absolute time. Answered: it is not predicted, it is
+arbitrated as the run goes, as a lock's or a commit log's order is, and written to the log; one
+authority a shared cache (the coordinator, or the host that owns the cache) numbers the events,
+its messages' latency then part of the workload. Named beside it, not proposed: the storage as
+the arbiter, as LMCache itself has it (an adapter's `stat` answers whether a chunk is there),
+which makes a hit the system under test's answer. Agreed by the user: other frameworks (Dynamo)
+get abstracts of their own, this one is vLLM with LMCache; the line against a simulator.
+
+*A shared cache's arbiter, the two paths set side by side (2026-11-27, the user's question; not
+decided, and nothing rests on it until engines on several hosts share a cache, item 83 (a)).* The
+`stat` is in the load today (every key looked up and before every store, as the `fs_native`
+adapter was captured), so nothing is missing from what the system under test receives. *A
+coordinator numbers the events:* the runner keeps the books, a hit never depends on what the
+storage answers, the structural checks stand; its messages' latency moves which ops issue, and it
+is in the path of every request. *The storage arbitrates, by the `stat` already issued:* no
+authority and no message, each engine keeping only its own books as LMCache does; but a hit is
+then the storage's answer, so a client's attribute or negative-lookup caching changes the
+workload (as it would the application's), a wrong answer cannot be told from a right one, the
+races the application handles need rules (present at the `stat`, unlinked before the `open`), and
+the log must hold the answers. Suggested first, whichever way: the coordinator's books, with each
+`stat`'s answer compared against them and the disagreements counted, which measures how much the
+second path would move. *The DAG, narrowed (the user):* the prompts form a prefix tree, used as
+it is; sub-agents each have their own goal, so no two share a whole prefix. Agreed, with what is
+shared named: the leading stretch (the sub-agents' tools and system prompt, the abstract's second
+prefix), and a chain opened from an earlier prompt of its session. Expected, not measured: nearly
+all sharing is with an ancestor or one of the two fixed prefixes, and the generator's pool, drawn
+from every prompt the session sent, sibling branches included, is looser than the corpus.
+
+*The corpus measured: where a prompt's shared prefix comes from (2026-11-27; the user's "Yes,
+please run the corpus measurement"; the script kept as
+`workloads/kvcache/lmcache-local-disk/kit/prefix_source.py` at the user's word).* Over all 393 AgentX sessions (98,827 requests, 338.1 M blocks of 64 tokens; 175
+sessions with sub-agents, 1,697 sub-agent groups, the main agent sending a request during 426 of
+them, 25 %), each request's blocks walked down a prefix tree of the earlier requests of its
+session and model, and what it shares credited in layers: its own agent first, then what an
+ancestor adds (sent before this branch was spawned), then a branch that had finished, then a
+branch running beside it.
+
+| | Blocks | Own agent | Ancestor adds | Finished branch adds | Concurrent branch adds | Shared with nothing |
+|---|---|---|---|---|---|---|
+| Main agent, 56,798 requests | 278.3 M | 98.76 % | 0 | 0.009 % | 0.003 % (13 requests) | 1.2 % |
+| Sub-agents, 42,029 requests | 59.8 M | 93.94 % | 0.12 % | 1.28 % | 0.76 % (865 requests) | 3.9 % |
+
+All together a concurrent branch supplies 0.14 % of the blocks and a finished one 0.23 %. Of the
+865 sub-agent requests that take from a concurrent branch, 511 are a group's first request (30 %
+of the groups), a median of 316 blocks of a 525-block prompt, the size of a shared tools and
+system prompt; the other 354 share nothing with their own group before (another model, or a
+chain opened inside the group). So what crosses branches is at a chain's opening and is, by its
+size, the sub-agents' common prefix first sent by a sibling, which the abstract already holds as
+a fixed prefix no run writes; not proved to be that prefix, the text not being in the corpus.
+Limits: same model only (LMCache keys by model); hash ids are local to a session, so nothing
+across sessions; concurrency judged from `t` and `api_time`. *What it supports, not decided:* the
+demand can be fixed without a planned clock, a prompt built from its own agent's earlier prompts
+and the fixed prefixes, at a cost of at most 0.4 % of the blocks; the generator's `reused`, which
+draws from every prompt the session has sent, would be narrowed to the lane's own, and the fit of
+brief item 71 judged again.
+
+*How sub-agents come to share blocks, and the shape of an agent's chain (2026-11-27; explained
+at the user's questions, recorded at the user's word; from how agent harnesses such as Claude
+Code work and from KV keys being chained over the prefix, the corpus holding no text).* Nothing
+passes between concurrent sub-agents, and nothing is read from storage as text. Each agent sends
+its whole prompt with every request, and an agent has **one** chain of blocks, in this order:
+(1) its tools and system prompt, token for token the same for every sub-agent of its kind, so
+these blocks are shared, whichever request arrives first computing them and the others finding
+them; (2) the task its parent wrote for it, its own, every block from here on its own; (3) its
+own history, replies and tool results, appended turn by turn, the part that grows. The parent's
+conversation is not in it; a forked sub-agent, which opens with the parent's whole chain, is the
+exception (the table's "ancestor adds", 0.12 % of the sub-agents' blocks). Position decides what
+is shared: a key covers everything before its block, so the common text is shared only because
+it comes first. The main agent's chain has the same shape, with its own opening, the abstract's
+other fixed prefix. Where intermediate results do move (up to the parent as a tool result, down
+in the task a parent writes for a later sub-agent, sideways through a file one writes and
+another reads), they land in the middle or at the tail of the receiver's chain, past what is its
+own, and so make no shared key: for the cache they are not there. Not explained: 354 of the 865
+requests that take from a concurrent branch are not their group's first, and a few share far
+more than a system prompt (90th percentile 2,050 blocks, the largest 13,511); 0.08 % of the
+blocks. ~~The script needs a test in `builder/tests/test_kits.py` before it is committed.~~ Tested
+the same day (`test_prefix_source_credits_a_shared_prefix_to_own_ancestor_finished_and_concurrent_in_layers`,
+one session with every class, each row derived by hand), the script made functions for it, the
+corpus's numbers the same after.
+
+*Recomputation: a gate and a count, not a model (2026-11-27; the user's "Yes, please record it
+that way").* The user's worry: compute that depends on misses would change the demand, by a time
+no one knows. Two meanings of a miss were apart: storage failing to return a chunk the runner's
+books hold fails the run, as now; a chunk no tier holds any more is the cache's own rule, and the
+engine recomputes it. Recomputation issues no op and is not demand, but it is a delay that needs
+a prefill time per token for the target accelerator, which we do not have (a request's `api` is
+drawn from the corpus). ~~Compute as a function of the tokens not hit~~ is off the open list,
+replaced by: (1) the lowest tier sized to hold the run, and a gate: a request that finds missing
+a chunk the run stored earlier makes the run invalid, the case mis-sized (the single-tier case
+at seed 1 plans no unlink; whether the G4 case's G4 ever evicts not checked); (2) the events of
+the rule "G2 has no room, so nothing is loaded and the rest of the hit is recomputed" counted
+and reported with the tokens each would recompute, the count the evidence, if large, that
+miss-dependent compute has earned its place. *The user's position, the same message:* "Assuming
+we agree upon the following questions, we should commit to weaken the rule, fidelity goes up at
+a (relatively) minor cost." Not yet a decision; the questions, CLOSED and what a user is, below.
+
+*Two kinds of comparability, the replay with every submission, and a list for the WG's rules
+(2026-11-27, the user).* Agreed by the user: CLOSED for these cases is the session tree fixed
+for every submitter, the interposition test and its boundary unmoved (Claude's correction: what
+an unmodified application does in reaction to timing is the application's); the replay from the
+logged order is needed for CLOSED to be checked, with every submission run and not for
+exploration runs; the score's N counts session roots, not users, the conversion left to the
+reader, correlated activity of one user's roots ignored and said so; training and checkpointing
+keep operation-level comparability (their ops are fixed by the sampler and the checkpoint's
+layout; completion order moves only when), so the suite has two kinds, each workload saying
+which; the rule is bent further only on "clear and present evidence that bending the rule
+further will have a signficant-enough advantage to the fidelity of the benchmark". Regretted by
+the user and accepted: the demand is now more sensitive to the machine running the benchmark,
+which aeiou set out to reduce. The replay's cost, estimated and not measured: a dry run, no I/O,
+minutes after the run (the catalog plans all 26 cases in about five), and one log record an
+event during it. With these the user's conditions for committing to weaken the rule are met;
+**the invariants in `CLAUDE.md`, brief §5, and `ARCHITECTURE.md` §15 are not yet edited, waiting
+for the user's word.** `WGRulesToDo.md` (new, repo root, WG process): what the WG's `Rules.md`
+will need to say, 35 entries, each agreed, proposed, or open.
+
+**Decided: the rule weakened by one input (2026-11-27; the user's "we should commit to weaken
+the rule, fidelity goes up at a (relatively) minor cost", its conditions agreed the same day,
+and "Yes, proceed with editing the invariants to record the decision"; not built).** "Never
+learn from the run" gains one exception, for a timeline that opts in: the order of the events
+that touch shared cache state follows the run. The demand never does. What was agreed with it:
+CLOSED as the fixed session tree, the interposition boundary unmoved; two kinds of
+comparability, operation-level and demand-level, each workload saying which; the demand's
+fingerprint, the logged order, and its replay in a dry run with every submission run; the score
+N session roots at the SLA on user-visible latency, several runs a point; recomputation a gate
+and a count; the rule bent further only on clear and present evidence; the greater dependence on
+the benchmark host accepted with regret. Recorded in `CLAUDE.md` (the invariant, the
+interposition bullet, the reading list), brief §5 (a row) and item 83 (i), `ARCHITECTURE.md` §15,
+and `WGRulesToDo.md`. *Not decided:* the arbiter of a cache shared across hosts; whether a prompt
+is built from its own agent's prompts alone (supported by the corpus); the SLA's percentile and
+threshold, the runs a point, the length of a point; the limits on the host's lateness. *Not
+built, any of it:* the opt-in in the contract, the planner fed by the run, the log and its
+replay, the demand's fingerprint, the gate and the count, load points; and nothing is measured
+on a system (the throttled capture). `README.md`'s Status not touched, nothing built.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

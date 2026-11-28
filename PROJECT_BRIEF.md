@@ -138,6 +138,7 @@ with; paths in it are the new ones.
 | Use cases, benchmark rules, and the lock | **Decided 2026-10-21 and 2026-10-22** (`DESIGN_REVIEW.md` §3.78; not yet built, §6 item 33). Four layers that only narrow: the abstract (the application's and library's values), the use case (a job on an accelerator: `unet3d-h100`), the benchmark rules (a file that names no parameter: it freezes by state and holds constraints over the runner's `fact.` and `result.` names), and the submission (the scale and the system under test's settings, never shipped). Every value is locked, default, or required; fragments of one layer combine by agreement, never last-one-wins. Resolving them writes a JSON **lock**, the one file a run names (`--case`, `--case-file`), pinning its abstract by its path under `workloads/` and its `ast_sha256`; it has a file hash and a **workload id** (its canonical resolved values), and results are compared by the id. The fingerprint is the op multiset and does not cover compute. Made by `aeiou-params lock`, remade by `aeiou-build` for the committed cases of what it rebuilt; CI refuses a case with no lock or a stale one, and the runner an abstract whose hash is not its lock's. A run that does not pass a result constraint completes and exits 3. `st_blksize` is read from the storage at the gate (`{"from": "st_blksize"}`), the system under test's to report. |
 | Page cache | The main concern: Linux gets non-linearly slower at finding pages to evict as memory fills, even with clean pages. This motivates O_DIRECT / io_uring / DONTCACHE. |
 | Reproducibility | **Exact** run-to-run reproducibility of each GPU's op stream is required; training-style randomness across runs is not needed. Plan: positional RNG keyed on `(seed, gpu, site, loop indices)` with no per-actor counters; consumer position by formula `g + G·(b·B + j)` with `drop_last` epochs; finite producers; an **order-independent** fingerprint (sum of per-op hashes, summed by the coordinator), since issue order within a GPU's workers is timing-dependent. `--dry-run` computes the fingerprint and can print any GPU's op stream for any step range. |
+| Comparability of a workload whose application reacts to storage timing | **Decided 2026-11-27, not built** (`DESIGN_REVIEW.md` §3.100, the notes from "Task scheduling that follows KV residency" to "Decided: the rule weakened by one input"; §6 item 83 (i); the WG's side in `WGRulesToDo.md`). Two kinds of comparability, each workload saying which it has. *Operation-level* (training, checkpointing, every abstract without the opt-in): the same POSIX operations for every system under test, as before. *Demand-level* (the KV abstracts on vLLM with LMCache): the same session trees (sessions, arrival times, each turn's prompt and keys, think and tool times); the order of the events that touch shared cache state follows the run, the one input by which "never learn from the run" is weakened, so the loads, repeated stores, and unlinks differ between systems. CLOSED for such a workload is the fixed session tree; the interposition test and its boundary are unmoved. Checked by the demand's fingerprint (before the run), the run's logged order, and a dry run fed that log reproducing the run's ops, with every submission run. The score is the load: N session roots carried at the required SLA on the user-visible latency of a turn, several runs a point (N counts session roots, never users). Recomputation is not modelled: a stored chunk found missing is an invalid run, the lowest tier sized to hold the run, and the "G2 has no room" events are counted. Accepted with regret: more dependence on the benchmark host. Weakened further only on clear and present evidence. |
 | Dataset identity | The dataset definition has its own seed, separate from `--seed`. `datagen` writes a manifest at the corpus root (pattern, count, size distribution, dataset seed, generator version); the runner validates the abstract against it before starting. **Extended 2026-09-30 (reasoning in `DESIGN_REVIEW.md` §3.21; contract in `schema/README.md` §6):** the manifest is `.aeiou-dataset.json` at each dataset's root, and its normative part is the *resolved dataset definition*, the dataset's `datasets` entry with every referenced parameter substituted, in canonical JSON, plus what the abstract does not know (payload generator and version, dedupe/compression settings, block size, format-class writer version). `aeiou run` resolves the same closure from its own abstract and the parameters in effect and requires an exact match; it never compares the whole parameter set (most parameters do not shape the dataset) nor the abstract hash (one corpus legitimately serves several abstracts). The abstract's hash and name and the full parameter values at datagen time are recorded as provenance, not compared. The manifest's canonical hash is the dataset id, printed with every result next to the AST hash and the parameters in effect. The seed alone is not the identity: it fixes the bytes given a definition, not the definition. |
 | Backend order | The blocking thread pool (one OS thread per worker actor) is the **fidelity reference** and is built first. io_uring is the scaling lever. Both sit behind one trait. Spike 1 tests the hypothesis that O_DIRECT reads on NFS complete asynchronously and so keep the io-wq worker count bounded, while opens/closes still punt. **Built 2026-09-30:** `sync` and `sync-direct` as `aeiou run` (`runner/REFERENCE.md` §4, `DESIGN_REVIEW.md` §3.23); ~~the asynchronous backends need a resumable VM, which comes with `io_uring`.~~ **Built 2026-10-01:** the resumable VM and `io_uring` / `io_uring-direct` as one event loop per thread (`runner/REFERENCE.md` §8, `DESIGN_REVIEW.md` §3.29); the Spike 1 measurement itself still waits for the real target. |
 | Measurement | Per-step stall time per GPU (not per-op logs); histograms bucketed by step range so steady state is selected after the run; `--dry-run` prints total bytes per host against host DRAM. Read sink buffers are sized larger than L3 so copies cost what a real loader's do. |
@@ -1982,7 +1983,8 @@ numbers; the order is this note's.
     `ast_sha256` does not cover them, a shape's does, so `agentx-tiered`'s shape records the
     new file hash, its numbers as they were).
 81. **Primitives for the vector database cases (queued by the user 2026-11-22, `DESIGN_REVIEW.md`
-    §3.100, the note "Spans in the checkpoint abstracts"; not started, not designed).** The
+    §3.100, the note "Spans in the checkpoint abstracts"; not started, not designed; since
+    2026-11-24 waits for item 83, the KV workloads finished first, the user's decision).** The
     user: "We have more work to do on the VDB cases, akin to how we creates the cache
     primitive in support of KVCache workloads." The vector search abstracts (`diskann_search`,
     `diskann_build`, `faiss_ivf_ondisk`) are written from the general statements, draws and
@@ -2028,6 +2030,71 @@ numbers; the order is this note's.
     that waits it is one decision); the eviction rules, the resources, and the timeline's log
     as functions (answered no in the note "Stage 2 designed"); the functions for the vector
     database work (item 81).
+
+83. **The KV workloads finished before the vector database work (queued by the user 2026-11-24,
+    `DESIGN_REVIEW.md` §3.100, the note "Is the KV model high-fidelity at scale?"; not started;
+    what "finished" means not yet defined).** The user asked whether the KV abstracts are, as
+    training and checkpointing are, a high-fidelity model that scales out keeping its fidelity;
+    the answer was no (the note). The user: "I'd like to 'finish' KVCache before moving on to
+    VDB (where 'finish' means a level of feature support that we need to define and agree upon
+    before we're done with KVCache)." Item 81 waits for this item. **First step: the definition,
+    agreed with the user**: which of the gaps below are in "finished", which stay as stated
+    limits, and the acceptance test of each. The gaps, as found 2026-11-24:
+    (a) *Scale-out, engines that share a cache.* `--gpus N` is N independent engines at TP 1. Not
+        built: a domain of several engines and the routing of contexts across them (item 72 (5)
+        phase 2, a WG-fixed rule no trace supports); G4 shared by several engines (item 78); a
+        scope per cache (below); a run on real hosts (the coordinator has met only `localhost`).
+    (b) *Engines larger than one GPU.* The TP 2 capture, which may split the abstract; the
+        attention family (sharded per rank, or the first rank only) as a parameter; LMCache's
+        layer-wise mode (item 70; README Status, item 20's TP sharding of a chunk).
+    (c) *What an engine holds* derived from its pool, not drawn at one reference engine (item 24).
+    (d) *One engine held to a trace.* Both tiered cases `unsettled`, neither with a capture judged
+        against it, no KV use case; the calls of a server with one adapter (captured with two
+        only) and the load rule that sets the reads (every hit chunk G2 lacks, the GPU's own
+        included, 5.6 times the reads) read from the source, not traced; an adapter's unlinks on
+        its workers (item 74).
+    (e) *The request stream.* The case retargeted at the WG's operating point with its tolerance
+        file (item 74, not started; the load today is the scratch port's 40 sessions on 16
+        slots); the generator's held-out ramp writes (−9 ± 4 %) outside the ±7 % item 71 claims;
+        reads that reproduce the pool model on this corpus only; the steady-state writes' excess
+        (item 71, not diagnosed).
+    (f) *A run at the case's sizes*, in a lab (the plan is 51.9 hours; the note "The plan is 51.9
+        hours").
+    (g) *The shared path on the multi-process server.* `lmcache-shared-fs`'s cases are the
+        in-process connector's; local and shared paths as one mechanism, the sharing a parameter
+        (item 70, decided 2026-11-10, not built).
+    (h) *Other tiers and engines*, in or out of "finished" to be decided: G3.5 and Dynamo's tiers
+        (item 76).
+    (i) *Task scheduling that follows KV residency* (raised by the user 2026-11-25, recorded
+        2026-11-27; `DESIGN_REVIEW.md` §3.100, the note "Task scheduling that follows KV
+        residency"; ~~under debate, nothing decided~~ **decided 2026-11-27**, §5's row "Comparability of
+        a workload whose application reacts to storage timing"; nothing built, nothing measured on
+        a system). A task runs only when
+        its KV is in HBM, so the order in which loads complete sets the order of tasks and the
+        later I/O; a fixed op stream cannot carry that. Proposed: the rule "never learn from the
+        run" weakened by one input, the order in which requests become ready, the demand
+        (sessions, requests, keys, gaps) fixed as now; or, the rule kept, a reference latency in
+        the plan. Recommended first, changing no rule: read whether the engine reorders or
+        stalls under `LMCacheMPConnector`; trace the rig with G3 throttled against not; make
+        readiness times an input of the planner and sweep a latency model in a dry run.
+        *Since, 2026-11-27 (the note's "The debate continued"):* read in vLLM 0.30.0's source,
+        the engine does reorder (a request parked while its KV loads, its HBM blocks held,
+        others admitted). **Chosen by the user: the score is the load**, the users (sessions)
+        carried at the required SLA, several runs a point; the SLA on user-visible latency of a
+        turn, not on each load. Found in the script, to be designed: the session's prompt pool
+        is read in planned order, so order would leak into the demand within a session; a miss
+        costs no GPU time in the model.
+    *G3's visibility is not assumed (the user, 2026-11-24):* "G3 assumes that the G3 cache is
+    visible to only a single system (ie: 8 GPUs), while G4 is visible to all the systems in a pod.
+    There are some systems that can bring node-local NVMe drive(s) into visibility for the whole
+    pod, blurring the G3 and G4 layers, while still providing the lower-latency and higher-B/W that
+    G3 (node-local NVMe) is supposed to bring. As we build out scale-out support, I'd like to keep
+    that in mind, that we cannot assume that G3 has only single-system visibility." So (a) never
+    derives which engines see a cache from its G number. Proposed in the note, not decided: a
+    private G3 backed by pod-visible NVMe is the solution's and the same workload; a G3 the
+    application shares across nodes is another case; which engines see a cache (an engine, a node,
+    a pod) a parameter of each cache, as its API is; a domain a scope per cache, nested, in place
+    of item 72 (5)'s one storage tier; a node-private namespace's root emptied by its own host.
 
 ## 7. Environment
 
